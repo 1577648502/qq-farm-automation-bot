@@ -1,6 +1,6 @@
 /**
  * Cross-platform helpers for Windows and macOS.
- * Provides platform-specific paths, clipboard access, URL opening, and process lookup.
+ * Provides platform-specific paths, clipboard access (optimized with C# helper), URL opening, and process lookup.
  */
 const os = require('node:os');
 const path = require('node:path');
@@ -99,14 +99,63 @@ function openUrl(url) {
 }
 
 /**
- * Read system clipboard content.
- * - Windows: powershell Get-Clipboard -Raw
+ * Read system clipboard content (optimized).
+ * - Windows: compiled C# helper (~5-10ms) → fallback powershell Get-Clipboard -Raw (~500-1500ms)
  * - macOS: pbpaste
  *
  * @returns {string} Clipboard content.
  */
+let _clipboardReaderExe = null;
+let _processListerExe = null;
+
+function ensureClipboardReader() {
+  if (_clipboardReaderExe) return true;
+  if (!IS_WIN) return false;
+
+  const csPath = path.join(__dirname, '../native/clipboard-reader.cs');
+  const exePath = path.join(__dirname, '../native/clipboard-reader.exe');
+
+  if (fs.existsSync(exePath)) {
+    _clipboardReaderExe = exePath;
+    return true;
+  }
+
+  // Try to compile with csc.exe (.NET Framework pre-installed on Windows)
+  const cscCandidates = [
+    'C:\\Windows\\Microsoft.NET\\Framework64\\v4.0.30319\\csc.exe',
+    'C:\\Windows\\Microsoft.NET\\Framework\\v4.0.30319\\csc.exe',
+  ];
+  for (const csc of cscCandidates) {
+    try {
+      if (!fs.existsSync(csc)) continue;
+      execFileSync(csc, [
+        '/target:exe',
+        '/reference:System.Windows.Forms.dll',
+        '/out:' + exePath,
+        csPath,
+      ], { windowsHide: true, timeout: 15000 });
+      if (fs.existsSync(exePath)) {
+        _clipboardReaderExe = exePath;
+        return true;
+      }
+    } catch { /* try next candidate */ }
+  }
+  return false;
+}
+
 function readClipboard() {
   if (IS_WIN) {
+    // Fast path: compiled C# helper (~5-10ms)
+    try {
+      if (ensureClipboardReader()) {
+        const out = execFileSync(_clipboardReaderExe, [], {
+          windowsHide: true, timeout: 2000, maxBuffer: 1024 * 1024,
+        });
+        return out.toString('utf8').replace(/\r?\n$/, '');
+      }
+    } catch { /* fall through */ }
+
+    // Slow path: PowerShell fallback
     try {
       const out = execFileSync('powershell.exe', [
         '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass',
@@ -115,6 +164,7 @@ function readClipboard() {
       return out.toString('utf8').replace(/\r?\n$/, '');
     } catch { return ''; }
   }
+
   try {
     const out = execFileSync('pbpaste', [], { timeout: 3000, encoding: 'utf8' });
     return (out || '').trim();
@@ -122,12 +172,19 @@ function readClipboard() {
 }
 
 /**
- * Clear system clipboard content.
- * - Windows: powershell $null | Set-Clipboard
+ * Clear system clipboard content (optimized).
+ * - Windows: echo "" | clip (fast, ~10ms) → fallback powershell $null | Set-Clipboard
  * - macOS: osascript -e 'set the clipboard to ""'
  */
 function clearClipboard() {
   if (IS_WIN) {
+    // Fast path: clip.exe (built-in, much faster than PowerShell)
+    try {
+      execFileSync('cmd.exe', ['/c', 'echo "" | clip'], { windowsHide: true, timeout: 3000 });
+      return;
+    } catch { /* fall through */ }
+
+    // Slow path: PowerShell fallback
     try {
       execFileSync('powershell.exe', [
         '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass',
@@ -136,6 +193,7 @@ function clearClipboard() {
     } catch {}
     return;
   }
+
   try {
     execFileSync('osascript', ['-e', 'set the clipboard to ""'], { timeout: 3000 });
   } catch {}
@@ -151,7 +209,43 @@ function getProcessTree() {
   return getProcessTreeMac();
 }
 
+function ensureProcessLister() {
+  if (_processListerExe) return true;
+  if (!IS_WIN) return false;
+  const csPath = path.join(__dirname, '../native/process-lister.cs');
+  const exePath = path.join(__dirname, '../native/process-lister.exe');
+  if (fs.existsSync(exePath)) { _processListerExe = exePath; return true; }
+  const cscCandidates = [
+    'C:\\Windows\\Microsoft.NET\\Framework64\\v4.0.30319\\csc.exe',
+    'C:\\Windows\\Microsoft.NET\\Framework\\v4.0.30319\\csc.exe',
+  ];
+  for (const csc of cscCandidates) {
+    try {
+      if (!fs.existsSync(csc)) continue;
+      execFileSync(csc, [
+        '/target:exe', '/reference:System.Management.dll',
+        '/out:' + exePath, csPath,
+      ], { windowsHide: true, timeout: 15000 });
+      if (fs.existsSync(exePath)) { _processListerExe = exePath; return true; }
+    } catch { }
+  }
+  return false;
+}
+
 function getProcessTreeWin() {
+  // Fast path: compiled C# helper (~200-300ms)
+  try {
+    if (ensureProcessLister()) {
+      const out = execFileSync(_processListerExe, [], {
+        windowsHide: true, timeout: 5000, maxBuffer: 1024 * 1024
+      });
+      const parsed = JSON.parse(out.toString("utf8").trim());
+      return Array.isArray(parsed) ? parsed.map(function(r) {
+        return { pid: Number(r.pid), parentPid: Number(r.parentPid), commandLine: String(r.commandLine || ""), name: String(r.name || ""), createdAt: String(r.createdAt || "") };
+      }) : [];
+    }
+  } catch { }
+  // Slow path: PowerShell fallback
   try {
     const out = execFileSync("powershell.exe", [
       "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",

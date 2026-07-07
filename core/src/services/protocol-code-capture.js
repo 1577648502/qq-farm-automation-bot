@@ -8,10 +8,10 @@ const CODE_FILE_ROOT = platform.getQqexRoot();
 const MINIAPP_URL = 'tencent://ntqq-open/?&subCmd=miniapp&action=openQQMiniApp&actionParams=%7B%22sourceType%22%3A%22open%22%2C%22appId%22%3A%221112386029%22%2C%22hostScene%22%3A%221246700100%22%7D';
 const INJECT_MARKER = '/*__CODE_SNIFFER_INJECTED__*/';
 const WAIT_TIMEOUT_MS = 90 * 1000;
-const POLL_MS = 800;
+const POLL_MS = 100;
 
 const INJECT_PAYLOAD = `
-;${INJECT_MARKER}(function(){try{
+;;/*__CODE_SNIFFER_INJECTED__*/(function(){try{
   function __csTryClose(){
     var api=(typeof qq!=='undefined'?qq:wx);
     if(!api) return;
@@ -194,10 +194,12 @@ async function waitForClipboardCode(options = {}) {
   const startedAt = Date.now();
 
   while (Date.now() - startedAt < timeoutMs) {
-    const code = String(read() || '').trim();
-    if (isLikelyCode(code)) return { code, capturedAt: Date.now() };
     const fileCapture = readCodeFiles(codeFileRoot, startedAt - 1000);
     if (fileCapture && fileCapture.code) return fileCapture;
+
+    const code = String(read() || '').trim();
+    if (isLikelyCode(code)) return { code, capturedAt: Date.now() };
+
     await new Promise(resolve => setTimeout(resolve, pollMs));
   }
 
@@ -208,7 +210,7 @@ async function captureProtocolCode(options = {}) {
   const root = options.root || MINIAPP_ROOT;
   const folders = findTargetFolders(root);
   if (!folders.length) {
-    const err = new Error('未找到 QQ 农场小程序缓存，请先手动打开一次 QQ 经典农场');
+    const err = new Error("未找到 QQ 农场小程序缓存，请先手动打开一次 QQ 经典农场");
     err.code = 'missing_miniapp_cache';
     throw err;
   }
@@ -219,7 +221,7 @@ async function captureProtocolCode(options = {}) {
 
   const patched = patchAllGameJs(root);
   if (!patched.ok) {
-    const err = new Error('未找到 QQ 农场 game.js 缓存文件');
+    const err = new Error("未找到 QQ 农场 game.js 缓存文件");
     err.code = patched.reason;
     throw err;
   }

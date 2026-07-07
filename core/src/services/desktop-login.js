@@ -1,4 +1,4 @@
-﻿/**
+/**
  * 桌面登录服务
  */
 const { spawn } = require("node:child_process");
@@ -383,62 +383,39 @@ function findQQUserDataDir() {
 
     function getQQFarmCandidateProcesses(mainPid) {
         return new Promise(function(resolve) {
-            var escapedMainPid = Number(mainPid || 0);
-            var command = [
-                "$items = Get-CimInstance Win32_Process | Where-Object {",
-                "  $_.Name -eq 'QQEX.exe' -or ($_.Name -eq 'QQ.exe' -and $_.CommandLine -match '--type=renderer' -and $_.ParentProcessId -eq " + escapedMainPid + ")",
-                "} | Select-Object @{n='pid';e={$_.ProcessId}},@{n='name';e={$_.Name}},@{n='parentPid';e={$_.ParentProcessId}},@{n='createdAt';e={$_.CreationDate}},@{n='commandLine';e={$_.CommandLine}};",
-                "$items | ConvertTo-Json -Compress"
-            ].join(" ");
-            var ps = spawn("powershell", ["-NoProfile", "-Command", command], { windowsHide: true, stdio: ["ignore", "pipe", "ignore"] });
-            var out = "";
-            ps.stdout.on("data", function(d) { out += d.toString(); });
-            ps.on("close", function() {
-                try {
-                    var parsed = JSON.parse(out.trim() || "[]");
-                    var rows = Array.isArray(parsed) ? parsed : (parsed ? [parsed] : []);
-                    resolve(rows.map(function(row) {
-                        return {
-                            pid: Number(row.pid),
-                            name: row.name || "",
-                            parentPid: Number(row.parentPid || 0),
-                            createdAt: row.createdAt || "",
-                            commandLine: row.commandLine || "",
-                        };
-                    }).filter(function(row) { return row.pid; }));
-                } catch(e) { resolve([]); }
-            });
-            ps.on("error", function() { resolve([]); });
+            try {
+                var allRows = platform.getProcessTree();
+                var escapedMainPid = Number(mainPid || 0);
+                var rows = allRows.filter(function(row) {
+                    return row.name === 'QQEX.exe' || (row.name === 'QQ.exe' && String(row.commandLine).indexOf('--type=renderer') >= 0 && Number(row.parentPid) === escapedMainPid);
+                }).map(function(row) {
+                    return {
+                        pid: Number(row.pid || row.ProcessId),
+                        name: String(row.name || row.Name || ""),
+                        parentPid: Number(row.parentPid || row.ParentProcessId),
+                        createdAt: String(row.createdAt || row.CreationDate || ""),
+                        commandLine: String(row.commandLine || ""),
+                    };
+                });
+                resolve(rows);
+            } catch(e) { resolve([]); }
         });
     }
 
     function getQQProcessTreeSnapshot() {
         return new Promise(function(resolve) {
-            var command = [
-                "$items = Get-CimInstance Win32_Process | Where-Object {",
-                "  $_.Name -eq 'QQ.exe' -or $_.Name -eq 'QQEX.exe' -or $_.Name -eq 'crashpad_handler.exe'",
-                "} | Select-Object @{n='pid';e={$_.ProcessId}},@{n='name';e={$_.Name}},@{n='parentPid';e={$_.ParentProcessId}},@{n='createdAt';e={$_.CreationDate}},@{n='commandLine';e={$_.CommandLine}};",
-                "$items | ConvertTo-Json -Compress"
-            ].join(" ");
-            var ps = spawn("powershell", ["-NoProfile", "-Command", command], { windowsHide: true, stdio: ["ignore", "pipe", "ignore"] });
-            var out = "";
-            ps.stdout.on("data", function(d) { out += d.toString(); });
-            ps.on("close", function() {
-                try {
-                    var parsed = JSON.parse(out.trim() || "[]");
-                    var rows = Array.isArray(parsed) ? parsed : (parsed ? [parsed] : []);
-                    resolve(rows.map(function(row) {
-                        return {
-                            pid: Number(row.pid),
-                            name: row.name || "",
-                            parentPid: Number(row.parentPid || 0),
-                            createdAt: row.createdAt || "",
-                            commandLine: row.commandLine || "",
-                        };
-                    }).filter(function(row) { return row.pid; }));
-                } catch(e) { resolve([]); }
-            });
-            ps.on("error", function() { resolve([]); });
+            try {
+                var rows = platform.getProcessTree();
+                resolve(rows.map(function(row) {
+                    return {
+                        pid: Number(row.pid || row.ProcessId),
+                        name: String(row.name || row.Name || ""),
+                        parentPid: Number(row.parentPid || row.ParentProcessId),
+                        createdAt: String(row.createdAt || row.CreationDate || ""),
+                        commandLine: String(row.commandLine || ""),
+                    };
+                }));
+            } catch(e) { resolve([]); }
         });
     }
 
@@ -472,7 +449,7 @@ function findQQUserDataDir() {
     }
 
     async function closeFarmProcesses(mainPid, beforePids, farmPids) {
-        await waitMs(800);
+        await waitMs(50);
         var targets = filterFarmCloseTargets(farmPids, mainPid, beforePids);
         try {
             if (!targets.length) {
@@ -522,7 +499,7 @@ function findQQUserDataDir() {
     logInfo("QQ 已在运行 (PID: " + session.pid + ")");
     return { pid: session.pid, alreadyRunning: true };
   }
-  // macOS: detect existing QQ process or open QQ
+  // macOS: detect existing QQ process || open QQ
   if (platform.IS_MAC) {
     var loginCookies = resolveLaunchCookies(cookies, session);
     try { fs.mkdirSync(userDataDir, { recursive: true }); } catch(e) {}
@@ -660,10 +637,10 @@ function findQQUserDataDir() {
         logInfo("使用协议抓包获取 Code");
         try {
             protocolCaptured = await captureProtocolCode({ log: logInfo });
-            protocolFarmPids = await detectFarmProcessIds(s.pid, farmPidsBefore, 8000);
+            protocolFarmPids = await detectFarmProcessIds(s.pid, farmPidsBefore, 2000);
         } catch(e) {
             try {
-                protocolFarmPids = await detectFarmProcessIds(s.pid, farmPidsBefore, 3000);
+                protocolFarmPids = await detectFarmProcessIds(s.pid, farmPidsBefore, 1000);
                 if (protocolFarmPids.length) {
                     await closeFarmProcesses(s.pid, farmPidsBefore, protocolFarmPids);
                 }
