@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { useIntervalFn } from '@vueuse/core'
-import { onMounted, onBeforeUnmount, ref, computed } from 'vue'
+import { onMounted, onBeforeUnmount, ref, computed, nextTick } from 'vue'
 import BaseButton from '@/components/ui/BaseButton.vue'
 import { useDesktopLoginStore, type DesktopSession } from '@/stores/desktop-login'
 import { useAccountStore } from '@/stores/account'
@@ -89,7 +89,7 @@ async function handleStop(uin: string) {
 }
 
 async function handleLaunchFromSession(s: DesktopSession) {
-  const ok = await store.launchQQ(s.uin, '', s.nickname, s.autoLogin, s.qqPath || '')
+  const ok = await store.launchQQ(s.uin, '', s.nickname, s.autoLogin, s.processPath || '')
   if (ok) {
     toast.success('QQ 已启动')
   } else {
@@ -101,6 +101,7 @@ async function handleOpenFarm(uin: string) {
   if (openingFarmUin.value) return
   openingFarmUin.value = uin
   toast.info('正在获取新 Code...')
+  await nextTick()
   try {
     const result = await store.openFarm(uin)
     if (result?.code) {
