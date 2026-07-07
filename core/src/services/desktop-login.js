@@ -1,4 +1,4 @@
-/**
+﻿/**
  * 桌面登录服务
  */
 const { spawn } = require("node:child_process");
@@ -324,7 +324,8 @@ function createDesktopLoginService(options) {
         }
         // QQ \u8def\u5f84\u672a\u914d\u7f6e\u6216\u4e0d\u5b58\u5728\uff0c\u629b\u51fa\u660e\u786e\u9519\u8bef
         var hint = customPath ? ("\u2018" + customPath + "\u2019 \u4e0d\u5b58\u5728") : "\u672a\u914d\u7f6e";
-        throw new Error("QQ 路径" + hint + "，Windows 系统请检查 QQ.exe 路径配置");
+        var isMac = require("../utils/platform").IS_MAC;
+        throw new Error("QQ 路径" + hint + (isMac ? "，macOS 系统请检查 QQ.app 路径配置" : "，Windows 系统请检查 QQ.exe 路径配置"));
     }
     
 function findQQUserDataDir() {
@@ -514,7 +515,6 @@ function findQQUserDataDir() {
 
     async function launchQQ(uin, cookies, nickname, autoLogin, ownerUsername, preferQQPath) {
   logInfo("正在启动 QQ (uin: " + uin + ")");
-  var qqPath = findQQPath(preferQQPath);
   var userDataDir = getQQUserDataDirForUin(uin);
   var session = sessionsDb.findByUin(uin);
   var currentState = getLiveSessionState(session);
@@ -547,14 +547,10 @@ function findQQUserDataDir() {
       createdAt: session && session.createdAt ? session.createdAt : Date.now(),
       lastActiveAt: Date.now()
     });
-    var macLaunchedSession = sessionsDb.findByUin(uin);
-    if (macLaunchedSession && macLaunchedSession.boundAccountId && macLaunchedSession.autoRefreshCode !== false) {
-      sessionsDb.update(uin, { nextCodeRefreshAt: Date.now() + FARM_CODE_REFRESH_INTERVAL_MS });
-      startCodeRefreshTimer(uin);
-    }
     return { pid: pid, alreadyRunning: !!pid };
   }
   // Windows: launch QQ.exe
+  var qqPath = findQQPath(preferQQPath);
   var loginCookies = resolveLaunchCookies(cookies, session);
   try { fs.mkdirSync(userDataDir, { recursive: true }); } catch(e) {}
   var args = buildQQLaunchArgs(uin);
