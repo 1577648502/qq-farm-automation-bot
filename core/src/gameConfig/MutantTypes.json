@@ -1,0 +1,133 @@
+{
+  "mutationTypes": {
+    "月华": {
+      "quality": "天工",
+      "qualityRank": 0,
+      "effect": "装扮",
+      "description": "种植琉璃宝荷有概率出现，产出月华宝荷装扮",
+      "probability": 6.6,
+      "color": "#FF6B35",
+      "icon": "🌙"
+    },
+    "塔塔": {
+      "quality": "天工",
+      "qualityRank": 0,
+      "effect": "装扮",
+      "description": "种植哈哈南瓜有概率出现，产出哈哈南瓜塔装扮",
+      "probability": 6.6,
+      "color": "#FF6B35",
+      "icon": "🗼"
+    },
+    "荷华_珍品": {
+      "quality": "珍品",
+      "qualityRank": 1,
+      "effect": "荷花",
+      "description": "种植荷风游记稀有种子有概率出现，产出荷花",
+      "probability": 13.28,
+      "color": "#A855F7",
+      "icon": "🌼"
+    },
+    "荷华_稀有": {
+      "quality": "稀有",
+      "qualityRank": 2,
+      "effect": "荷花",
+      "description": "种植荷风游记稀有种子有概率出现，产出荷花",
+      "probability": 9.63,
+      "color": "#3B82F6",
+      "icon": "🌼"
+    },
+    "黄金_天工": {
+      "quality": "天工",
+      "qualityRank": 0,
+      "effect": "黄金果实",
+      "description": "稀有作物生长过程中随机出现，产出黄金果实",
+      "probability": 9.63,
+      "color": "#FF6B35",
+      "icon": "⭐"
+    },
+    "黄金_珍品": {
+      "quality": "珍品",
+      "qualityRank": 1,
+      "effect": "黄金果实",
+      "description": "稀有作物生长过程中随机出现，产出黄金果实",
+      "probability": 8.51,
+      "color": "#A855F7",
+      "icon": "⭐"
+    },
+    "黄金_稀有": {
+      "quality": "稀有",
+      "qualityRank": 2,
+      "effect": "黄金果实",
+      "description": "稀有作物生长过程中随机出现，产出黄金果实",
+      "probability": 7.6,
+      "color": "#3B82F6",
+      "icon": "⭐"
+    },
+    "冰冻": {
+      "quality": "无",
+      "qualityRank": 3,
+      "effect": "果实售价×3",
+      "description": "作物生长过程中随机出现，果实售价×3倍",
+      "probability": 3.2,
+      "color": "#06B6D4",
+      "icon": "❄️"
+    },
+    "爱心": {
+      "quality": "无",
+      "qualityRank": 3,
+      "effect": "果实数量×3",
+      "description": "作物生长过程中随机出现，果实数量×3倍",
+      "probability": 3.2,
+      "color": "#EC4899",
+      "icon": "❤️"
+    },
+    "暗化": {
+      "quality": "无",
+      "qualityRank": 3,
+      "effect": "果实售价×2",
+      "description": "作物生长过程中随机出现，果实售价×2倍",
+      "probability": 4.8,
+      "color": "#6B7280",
+      "icon": "🌑"
+    },
+    "湿润": {
+      "quality": "无",
+      "qualityRank": 3,
+      "effect": "果实数量×2",
+      "description": "作物生长过程中随机出现，果实数量×2倍",
+      "probability": 4.8,
+      "color": "#3B82F6",
+      "icon": "💧"
+    }
+  },
+  "qualityColors": {
+    "天工": {
+      "bg": "bg-orange-100",
+      "text": "text-orange-700",
+      "darkBg": "dark:bg-orange-900/30",
+      "darkText": "dark:text-orange-400",
+      "border": "border-orange-300"
+    },
+    "珍品": {
+      "bg": "bg-purple-100",
+      "text": "text-purple-700",
+      "darkBg": "dark:bg-purple-900/30",
+      "darkText": "dark:text-purple-400",
+      "border": "border-purple-300"
+    },
+    "稀有": {
+      "bg": "bg-blue-100",
+      "text": "text-blue-700",
+      "darkBg": "dark:bg-blue-900/30",
+      "darkText": "dark:text-blue-400",
+      "border": "border-blue-300"
+    },
+    "无": {
+      "bg": "bg-gray-100",
+      "text": "text-gray-600",
+      "darkBg": "dark:bg-gray-800",
+      "darkText": "dark:text-gray-400",
+      "border": "border-gray-300"
+    }
+  }
+}

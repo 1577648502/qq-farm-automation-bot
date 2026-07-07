@@ -1,0 +1,105 @@
+syntax = "proto3";
+
+package gamepb.seasonpb;
+
+import "corepb.proto";
+
+message ActivityBrief {
+    int64 activity_id = 1;
+    int32 activity_type = 2;
+    string activity_name = 3;
+    int64 start_time = 4;
+    int64 end_time = 5;
+}
+
+message SeasonInfo {
+    int64 season_id = 1;
+    string season_name = 2;
+    int32 phase = 3;
+    int64 preheat_start_time = 4;
+    int64 active_start_time = 5;
+    int64 active_end_time = 6;
+    int64 server_time = 7;
+    repeated ActivityBrief activities = 8;
+    SeasonInfo next_season_preheat = 9;
+    BattlePassInfo battlepass = 10;
+}
+
+message BattlePassInfo {
+    int64 battlepass_id = 1;
+    int64 level = 2;
+    int64 total_exp = 3;
+    int64 current_level_exp = 4;
+    int64 next_level_need_exp = 5;
+    int64 max_level = 6;
+    bool is_premium = 7;
+    repeated BattlePassLevelReward levels = 8;
+    int64 free_claimed_level = 9;
+    int64 premium_claimed_level = 10;
+    int64 last_notified_level = 11;
+    int64 last_notified_exp = 12;
+    bool opening_shown = 13;
+    repeated corepb.Item opening_preview_rewards = 14;
+    int64 premium_price = 15;
+    string name = 16;
+    string desc = 17;
+    bool premium_purchase_warning = 18;
+}
+
+message BattlePassLevelReward {
+    int64 level = 1;
+    repeated corepb.Item free_rewards = 2;
+    repeated corepb.Item premium_rewards = 3;
+    bool is_key_level = 4;
+    string level_tag = 5;
+}
+
+message GetSeasonInfoRequest {
+    bool skip_update_notified_level = 1;
+}
+
+message GetSeasonInfoReply {
+    SeasonInfo current_season = 1;
+}
+
+message ClaimBattlePassRewardsRequest {}
+
+message ClaimBattlePassRewardsReply {
+    repeated corepb.Item rewards = 1;
+    repeated int64 claimed_levels = 2;
+    BattlePassInfo battlepass = 3;
+    bool bag_overflow = 4;
+}
+
+message BuyPremiumBattlePassRequest {}
+
+message BuyPremiumBattlePassReply {
+    bool success = 1;
+    repeated corepb.Item buy_rewards = 2;
+    BattlePassInfo battlepass = 3;
+}
+
+message MarkSeasonOpeningShownRequest {}
+
+message MarkSeasonOpeningShownReply {
+    bool success = 1;
+}
+
+message SeasonChangeNotify {
+    SeasonInfo new_season = 1;
+    int64 old_season_id = 2;
+}
+
+enum BattlePassChangeType {
+    BATTLE_PASS_CHANGE_TYPE_UNKNOWN = 0;
+    BATTLE_PASS_CHANGE_TYPE_LEVEL_UP = 1;
+    BATTLE_PASS_CHANGE_TYPE_PREMIUM_BUY = 2;
+    BATTLE_PASS_CHANGE_TYPE_REWARD_CLAIM = 3;
+    BATTLE_PASS_CHANGE_TYPE_EXP_CHANGE = 4;
+}
+
+message BattlePassChangeNotify {
+    BattlePassChangeType type = 1;
+    BattlePassInfo battlepass = 2;
+    repeated corepb.Item rewards = 3;
+}

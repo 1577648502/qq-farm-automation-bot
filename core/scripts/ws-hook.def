@@ -1,0 +1,10 @@
+LIBRARY ws-hook.dll
+
+EXPORTS
+DllEntry
+DllMain
+HookProc
+_dllstart
+_edata
+_end
+_etext

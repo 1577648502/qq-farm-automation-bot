@@ -1,0 +1,138 @@
+/* Global Scrollbar Customization */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background-color: #cbd5e1; /* slate-300 */
+  border-radius: 9999px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background-color: #94a3b8; /* slate-400 */
+}
+
+/* Dark mode scrollbar */
+.dark ::-webkit-scrollbar-thumb {
+  background-color: #475569; /* slate-600 */
+}
+
+.dark ::-webkit-scrollbar-thumb:hover {
+  background-color: #64748b; /* slate-500 */
+}
+
+/* Base styles to reset some defaults if needed, though UnoCSS reset handles most */
+html,
+body {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  overflow: hidden; /* App handles scrolling */
+}
+
+/* NProgress Customization */
+#nprogress .bar {
+  background: #10b981 !important; /* emerald-500 */
+  height: 3px !important;
+}
+
+#nprogress .peg {
+  box-shadow:
+    0 0 10px #10b981,
+    0 0 5px #10b981 !important;
+}
+
+
+
+/* ===== Hide scrollbar for horizontal scroll containers (keep functionality) ===== */
+.scrollbar-none::-webkit-scrollbar {
+  display: none;
+}
+.scrollbar-none {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+/* ===== Enhanced Mobile Responsive ===== */
+@media (max-width: 640px) {
+  /* Ensure tables don'''t break layout */
+  table {
+    min-width: 100%;
+  }
+  /* Prevent horizontal overflow on page containers */
+  .mx-auto {
+    overflow-x: hidden;
+  }
+  /* Better spacing for mobile cards */
+  .rounded-2xl {
+    border-radius: 0.75rem !important;
+  }
+  /* Make form inputs more touchable */
+  input, select, textarea {
+    font-size: 16px !important; /* Prevents iOS zoom on focus */
+  }
+}
+
+/* ===== Prevent text overflow ===== */
+.truncate-multiline {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+
+/* ===== Mobile Responsive Overrides ===== */
+@media (max-width: 640px) {
+  .p-6 {
+    padding: 1rem !important;
+  }
+  .px-6 {
+    padding-left: 1rem !important;
+    padding-right: 1rem !important;
+  }
+  .p-5 {
+    padding: 1rem !important;
+  }
+  .w-64 {
+    width: 85vw !important;
+    max-width: 320px;
+  }
+  button, a, [role="button"], input, select, textarea {
+    touch-action: manipulation;
+  }
+  .gap-6 {
+    gap: 1rem !important;
+  }
+  .gap-4 {
+    gap: 0.75rem !important;
+  }
+}
+
+@media (max-width: 380px) {
+  .text-lg {
+    font-size: 0.95rem !important;
+  }
+  .text-xl {
+    font-size: 1.05rem !important;
+  }
+  .text-2xl {
+    font-size: 1.15rem !important;
+  }
+}
+
+*, *::before, *::after {
+  box-sizing: border-box;
+}
+
+img {
+  max-width: 100%;
+  height: auto;
+}

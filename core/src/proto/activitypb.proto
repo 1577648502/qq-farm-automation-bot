@@ -1,0 +1,300 @@
+syntax = "proto3";
+
+package gamepb.activitypb;
+
+import "corepb.proto";
+
+message ListRequest {}
+
+message ListReply {
+    repeated ActivityGroup groups = 1;
+    repeated ActivitySummary all_activities = 2;
+}
+
+message GetGroupRequest {
+    int64 group_id = 1;
+}
+
+message GetGroupReply {
+    ActivityGroup group = 1;
+}
+
+message SetSplashedRequest {
+    int64 id = 1;
+}
+
+message SetSplashedReply {}
+
+message ActivityGroup {
+    ActivityHead head = 1;
+    repeated ActivityData children = 2;
+}
+
+message ActivityHead {
+    int64 id = 1;
+    int64 group_id = 2;
+    int64 type = 3;
+    string name = 4;
+    string desc = 5;
+    int64 start_time = 6;
+    int64 end_time = 7;
+    int64 client_id = 8;
+    int32 status = 20;
+    int64 splash_order = 21;
+    bool splashed = 22;
+    bool has_red_dot = 23;
+}
+
+message ActivityData {
+    ActivityHead head = 1;
+    ActivityBodyEmpty empty = 100;
+    ActivityBodyRandShop rand_shop = 101;
+    ActivityBodyShop shop = 102;
+    ActivityBodyDailySignin daily_signin = 103;
+    ActivityBodyDraw draw = 104;
+    ActivityBodyLottery lottery = 105;
+    ActivityBodyEmpty qqgroup = 106;
+    ActivityBodyCampCheer camp_cheer = 107;
+    ActivityBodyQingmei qingmei = 108;
+}
+
+message ActivityBodyEmpty {}
+message ActivityBodyRandShop {}
+message ActivityBodyCampCheer {}
+
+message ActivityBodyShop {
+    repeated ShopGoodsInfo goods = 1;
+}
+
+message ShopGoodsInfo {
+    int64 id = 1;
+    repeated ShopItemInfo item = 2;
+    repeated ShopItemInfo cost = 3;
+    int64 purchase_limit = 4;
+    int64 purchased_count = 5;
+    int64 order = 6;
+    string name = 7;
+    string desc = 8;
+    int64 diamond_cost_count = 9;
+    int64 background_type = 10;
+    int64 restriction_type = 11;
+}
+
+message ShopItemInfo {
+    int64 id = 1;
+    int64 count = 2;
+}
+
+message ShopBuyReq {
+    int64 goods_id = 1;
+    int64 count = 2;
+}
+
+message ShopBuyRsp {
+    repeated corepb.Item awards = 1;
+    repeated corepb.Item costs = 2;
+}
+
+message RandShopBuyReq {
+    int64 goods_id = 1;
+    int64 count = 2;
+}
+
+message RandShopBatchBuyReq {}
+
+message RandShopBuyRsp {
+    repeated corepb.Item awards = 1;
+    repeated corepb.Item costs = 2;
+}
+
+message RandShopRefreshRsp {}
+
+message ActivityBodyDailySignin {
+    bool claimed_today = 1;
+    repeated DailySigninRewardInfo rewards = 2;
+}
+
+message DailySigninRewardInfo {
+    int64 id = 1;
+    string desc = 2;
+    repeated corepb.Item item = 3;
+}
+
+message DailySigninClaimReq {
+    int64 reward_id = 1;
+}
+
+message DailySigninClaimRsp {
+    repeated corepb.Item awards = 1;
+}
+
+message ActivityBodyDraw {}
+
+message ActivityBodyQingmei {
+    int64 brewed_gold = 1;
+    int64 brewed_count = 2;
+    int64 brew_limit = 3;
+    repeated int64 brew_price_counts = 4;
+    repeated int64 brew_gold_counts = 5;
+    bool has_critical = 6;
+    int64 min_price = 7;
+    repeated int64 cost_item_ids = 8;
+    int64 max_price = 9;
+}
+
+message DrawReq {
+    int64 count = 1;
+}
+
+message DrawRsp {
+    repeated corepb.Item awards = 1;
+    repeated corepb.Item costs = 2;
+}
+
+message DrawGetHistoryReq {}
+message DrawGetHistoryRsp {}
+
+message ActivitySummary {
+    int64 id = 1;
+    string name = 2;
+    int64 start_time = 3;
+    int64 end_time = 4;
+}
+
+message ActivityBodyLottery {
+    int64 free_draw_remaining = 1;
+    int64 free_draw_daily_limit = 2;
+    int64 paid_draw_remaining = 3;
+    int64 paid_draw_daily_limit = 4;
+    int64 paid_draw_cost_id = 5;
+    int64 paid_draw_cost_count = 6;
+    int64 paid_draw_diamond_cost = 7;
+    repeated LotteryPreviewGoods preview_goods = 8;
+}
+
+message LotteryPreviewGoods {
+    int64 goods_id = 1;
+    int64 quality = 2;
+    repeated corepb.Item items = 3;
+    int64 pool_type = 4;
+    bool is_display_up_tag = 5;
+    string display_up_tag_value = 6;
+}
+
+message LotteryDrawReq {
+    int64 free_count = 1;
+    int64 paid_count = 2;
+}
+
+message LotteryDrawRsp {
+    repeated LotteryDrawResultItem results = 1;
+    repeated corepb.Item total_rewards = 2;
+    repeated corepb.Item costs = 3;
+    bool partial_success = 4;
+    int64 error_code = 5;
+    string error_msg = 6;
+}
+
+message LotteryDrawResultItem {
+    int64 goods_id = 1;
+    repeated corepb.Item items = 2;
+    int64 quality = 3;
+    bool is_guarantee = 4;
+}
+
+message LotteryGetHistoryReq {
+    int64 page = 1;
+    int64 page_size = 2;
+}
+
+message LotteryGetHistoryRsp {}
+
+message CampCheerJoinReq {}
+message CampCheerJoinRsp {}
+message CampCheerSubmitReq {}
+message CampCheerSubmitRsp {}
+message CampCheerClaimRewardReq {}
+message CampCheerClaimRewardRsp {}
+
+message QingmeiBatchBrewItem {
+    int64 item_uid = 1;
+    int64 count = 2;
+}
+
+message QingmeiBatchBrewReq {
+    repeated QingmeiBatchBrewItem items = 1;
+}
+
+message QingmeiBrewReq {}
+
+message QingmeiSellReq {
+    int64 sell_type = 1;
+}
+
+message QingmeiBatchBrewRsp {
+    int64 gold = 1;
+}
+
+message QingmeiBrewRsp {
+    int64 brewed_count = 1;
+    int64 price = 2;
+    int64 total_gold = 3;
+    bool critical = 4;
+}
+
+message QingmeiSellRsp {
+    int64 sell_type = 1;
+    int64 gold = 2;
+    corepb.Item award = 3;
+}
+
+message OperateRequest {
+    int64 id = 1;
+    int64 cmd = 2;
+    bool placeholder = 100;
+    ShopBuyReq shop_buy = 101;
+    RandShopBuyReq rand_shop_buy = 102;
+    DailySigninClaimReq daily_signin_claim = 103;
+    DrawReq draw = 104;
+    DrawGetHistoryReq draw_get_history = 105;
+    RandShopBatchBuyReq rand_shop_batch_buy = 106;
+    LotteryDrawReq lottery_draw = 107;
+    LotteryGetHistoryReq lottery_get_history = 108;
+    CampCheerJoinReq camp_cheer_join = 109;
+    CampCheerSubmitReq camp_cheer_submit = 110;
+    CampCheerClaimRewardReq camp_cheer_claim_reward = 111;
+    QingmeiBatchBrewReq qingmei_batch_brew = 112;
+    QingmeiBrewReq qingmei_brew = 113;
+    QingmeiSellReq qingmei_sell = 114;
+}
+
+message OperateReply {
+    int64 id = 1;
+    int64 cmd = 2;
+    ActivityData activity = 3;
+    bool placeholder = 100;
+    ShopBuyRsp shop_buy = 101;
+    RandShopBuyRsp rand_shop_buy = 102;
+    RandShopRefreshRsp rand_shop_refresh = 103;
+    DailySigninClaimRsp daily_signin_claim = 104;
+    DrawRsp draw = 105;
+    DrawGetHistoryRsp draw_get_history = 106;
+    RandShopBuyRsp rand_shop_batch_buy = 107;
+    LotteryDrawRsp lottery_draw = 108;
+    LotteryGetHistoryRsp lottery_get_history = 109;
+    CampCheerJoinRsp camp_cheer_join = 110;
+    CampCheerSubmitRsp camp_cheer_submit = 111;
+    CampCheerClaimRewardRsp camp_cheer_claim_reward = 112;
+    QingmeiBatchBrewRsp qingmei_batch_brew = 113;
+    QingmeiBrewRsp qingmei_brew = 114;
+    QingmeiSellRsp qingmei_sell = 115;
+}
+
+message ActiviesChangeNotify {
+    repeated int64 close_groups = 1;
+    repeated ActivityGroup groups = 2;
+}
+
+message CloseGroup {
+    int64 group_id = 1;
+}
