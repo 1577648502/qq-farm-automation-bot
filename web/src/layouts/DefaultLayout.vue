@@ -37,12 +37,12 @@ watch(() => r.path, () => {
 
     <main class="relative h-full min-w-0 flex flex-1 flex-col overflow-hidden">
       <!-- Top Bar (Mobile/Tablet only or for additional actions) -->
-      <header class="h-14 flex shrink-0 items-center justify-between border-b border-gray-100 bg-white px-4 lg:hidden dark:border-gray-700/50 dark:bg-gray-800">
+      <header class="h-14 flex shrink-0 items-center justify-between border-b border-gray-100 bg-white/95 backdrop-blur-sm px-4 lg:hidden dark:border-gray-700/30 dark:bg-gray-800/95">
         <div class="text-base font-bold truncate max-w-[70vw]">
           QQ农场智能助手
         </div>
         <button
-          class="flex items-center justify-center rounded-lg p-2 text-gray-500 min-h-[44px] min-w-[44px] hover:bg-gray-100 dark:text-gray-400 dark:hover:bg-gray-700"
+          class="flex items-center justify-center rounded-lg p-2 text-gray-500 min-h-[44px] min-w-[44px] transition-colors hover:bg-gray-100 dark:text-gray-400 dark:hover:bg-gray-700"
           @click="appStore.toggleSidebar"
         >
           <div class="i-carbon-menu text-xl" />

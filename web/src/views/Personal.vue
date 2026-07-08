@@ -11,7 +11,7 @@ const currentTab = ref<'farm' | 'bag' | 'task'>('farm')
   <div class="h-full flex flex-col p-3 sm:p-4">
     <div class="mb-4 flex flex-wrap gap-2">
       <button
-        class="min-h-[44px] rounded-lg px-4 py-2 font-medium transition-colors"
+        class="min-h-[44px] rounded-lg px-4 py-2.5 font-medium transition-all"
         :class="currentTab === 'farm'
           ? 'text-white shadow-md'
           : 'bg-white text-gray-600 hover:bg-gray-100 dark:bg-gray-800 dark:text-gray-300 dark:hover:bg-gray-700'"
@@ -24,7 +24,7 @@ const currentTab = ref<'farm' | 'bag' | 'task'>('farm')
         </div>
       </button>
       <button
-        class="min-h-[44px] rounded-lg px-4 py-2 font-medium transition-colors"
+        class="min-h-[44px] rounded-lg px-4 py-2.5 font-medium transition-all"
         :class="currentTab === 'bag'
           ? 'text-white shadow-md'
           : 'bg-white text-gray-600 hover:bg-gray-100 dark:bg-gray-800 dark:text-gray-300 dark:hover:bg-gray-700'"
@@ -37,7 +37,7 @@ const currentTab = ref<'farm' | 'bag' | 'task'>('farm')
         </div>
       </button>
       <button
-        class="min-h-[44px] rounded-lg px-4 py-2 font-medium transition-colors"
+        class="min-h-[44px] rounded-lg px-4 py-2.5 font-medium transition-all"
         :class="currentTab === 'task'
           ? 'text-white shadow-md'
           : 'bg-white text-gray-600 hover:bg-gray-100 dark:bg-gray-800 dark:text-gray-300 dark:hover:bg-gray-700'"

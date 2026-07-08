@@ -73,7 +73,7 @@ function formatGiftProgress(gift: any) {
 <template>
   <div class="flex flex-col gap-4">
     <!-- Daily Gifts Grid -->
-    <div class="rounded-lg bg-white p-4 shadow dark:bg-gray-800">
+    <div class="card p-4">
       <h3 class="mb-3 flex items-center gap-2 font-medium">
         <div class="i-carbon-gift text-pink-500" />
         <span>每日礼包 & 任务</span>

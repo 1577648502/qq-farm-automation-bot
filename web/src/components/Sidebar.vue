@@ -197,7 +197,7 @@ const navItems = computed(() => {
   return menuRoutes
     .filter(item => !item.adminOnly || isAdmin)
     .filter(item => {
-      // ?????????????
+      // 根据活动状态过滤菜单项
       if (item.activityKey) {
         return as[item.activityKey as keyof typeof as] !== false
       }
@@ -244,7 +244,7 @@ const announcementShowOnce = ref(true)
 const announcementSaving = ref(false)
 const announcementLoading = ref(false)
 const currentAnnouncement = ref<{ content: string, showOnce: boolean, updatedAt: number, shouldShow?: boolean } | null>(null)
-// ????
+// 忽略错误
 const activityStatus = ref({
   heFengEnabled: true,
   qingNiangEnabled: true,
@@ -260,7 +260,7 @@ async function loadActivityStatus() {
       }
     }
   } catch {
-    // ????
+    // 忽略错误
   }
 }
 

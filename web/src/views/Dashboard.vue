@@ -476,7 +476,7 @@ useIntervalFn(updateCountdowns, 1000)
     <!-- Status Cards -->
     <div class="grid grid-cols-1 gap-4 lg:grid-cols-3 sm:grid-cols-2">
       <!-- Account & Exp -->
-      <div class="flex flex-col rounded-lg bg-white p-4 shadow dark:bg-gray-800">
+      <div class="flex flex-col card p-4">
         <div class="mb-2 flex items-start justify-between">
           <div class="flex items-center gap-1.5 text-sm text-gray-500">
             <div class="i-fas-user-circle" />
@@ -513,7 +513,7 @@ useIntervalFn(updateCountdowns, 1000)
       </div>
 
       <!-- Assets & Status -->
-      <div class="flex flex-col justify-between rounded-lg bg-white p-4 shadow dark:bg-gray-800">
+      <div class="flex flex-col justify-between card p-4">
         <div class="flex justify-between">
           <div>
             <div class="flex items-center gap-1.5 text-xs text-gray-500">
@@ -581,7 +581,7 @@ useIntervalFn(updateCountdowns, 1000)
       </div>
 
       <!-- Items (Fertilizer & Collection) -->
-      <div class="flex flex-col justify-between rounded-lg bg-white p-4 shadow dark:bg-gray-800">
+      <div class="flex flex-col justify-between card p-4">
         <div class="mb-2 flex items-center gap-1.5 text-sm text-gray-500">
           <div class="i-fas-flask text-emerald-400" />
           化肥容器
@@ -696,7 +696,7 @@ useIntervalFn(updateCountdowns, 1000)
             </div>
           </div>
 
-          <div ref="logContainer" class="max-h-[50vh] min-h-0 flex-1 overflow-y-auto rounded bg-gray-50 p-4 text-sm leading-relaxed font-mono dark:bg-gray-900" @scroll="onLogScroll">
+          <div ref="logContainer" class="max-h-[50vh] min-h-0 flex-1 overflow-y-auto rounded-lg bg-gray-50 p-4 text-sm leading-relaxed font-mono dark:bg-gray-900/50" @scroll="onLogScroll">
             <div v-if="!allLogs.length" class="py-8 text-center text-gray-400">
               暂无日志
             </div>
@@ -713,7 +713,7 @@ useIntervalFn(updateCountdowns, 1000)
       <!-- Right Column Stack -->
       <div class="flex flex-col gap-6 md:w-1/4">
         <!-- Next Checks -->
-        <div class="flex flex-col rounded-lg bg-white p-6 shadow dark:bg-gray-800">
+        <div class="card flex flex-col p-5">
           <h3 class="mb-4 flex items-center gap-2 text-lg font-medium">
             <div class="i-carbon-hourglass" />
             <span>下次巡查倒计时</span>
@@ -750,12 +750,12 @@ useIntervalFn(updateCountdowns, 1000)
         </div>
 
         <!-- Operations Grid -->
-        <div class="flex-1 rounded-lg bg-white p-4 shadow dark:bg-gray-800">
-          <h3 class="mb-3 flex items-center gap-2 text-lg font-medium">
+        <div class="card p-4">
+          <h3 class="section-title mb-3">
             <div class="i-carbon-chart-column" />
             <span>今日统计</span>
           </h3>
-          <div v-if="!status?.connection?.connected" class="flex flex-col items-center justify-center gap-4 rounded-lg bg-white p-12 text-center text-gray-500 shadow dark:bg-gray-800">
+          <div v-if="!status?.connection?.connected" class="card flex flex-col items-center justify-center gap-4 p-12 text-center">
             <div class="i-carbon-connection-signal-off text-4xl text-gray-400" />
             <div class="flex flex-col">
               <div class="text-lg text-gray-700 font-medium dark:text-gray-300">
@@ -770,7 +770,7 @@ useIntervalFn(updateCountdowns, 1000)
             <div
               v-for="(val, key) in filteredOperations"
               :key="key"
-              class="flex items-center justify-between rounded bg-gray-50 px-3 py-2 dark:bg-gray-700/30"
+              class="flex items-center justify-between rounded-lg bg-gray-50/80 px-3 py-2 dark:bg-gray-700/20"
             >
               <div class="flex items-center gap-2">
                 <div class="text-base 2xl:text-lg" :class="[getOpIcon(key), getOpColor(key)]" />

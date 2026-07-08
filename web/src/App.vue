@@ -25,11 +25,14 @@ onMounted(() => {
   </div>
 </template>
 
+
 <style>
 /* Global styles */
 body {
   margin: 0;
   font-family: 'DM Sans', sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
 
 /* Color theme variables */
@@ -39,6 +42,9 @@ body {
   --theme-primary: #3b82f6;
   --theme-secondary: #2563eb;
   --theme-gradient: linear-gradient(135deg, #60a5fa 0%, #3b82f6 100%);
+  --card-bg: #ffffff;
+  --card-border: rgba(0,0,0,0.06);
+  --surface-bg: rgba(0,0,0,0.02);
 }
 
 /* Override fixed background colors with theme colors */
@@ -59,7 +65,7 @@ body {
   background-color: color-mix(in srgb, var(--theme-bg) 85%, transparent) !important;
 }
 
-/* Use CSS variables for theme colors */
+/* Theme-based styling */
 .btn-primary {
   background: var(--theme-gradient);
   border-color: var(--theme-primary);
@@ -106,3 +112,4 @@ body {
   opacity: 0.8;
 }
 </style>
+
