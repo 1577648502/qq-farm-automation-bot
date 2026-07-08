@@ -108,7 +108,7 @@ onUnmounted(() => {
 
 <template>
   <div class="space-y-4">
-    <div class="rounded-lg card">
+    <div class="rounded-lg bg-white shadow dark:bg-gray-800">
       <!-- Header with Title and Actions -->
       <div class="flex flex-col items-center justify-between gap-3 sm:gap-4 border-b border-gray-100 p-3 sm:p-4 sm:flex-row dark:border-gray-700">
         <h3 class="flex items-center gap-2 text-lg font-bold">

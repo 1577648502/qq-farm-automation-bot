@@ -38,7 +38,7 @@ function getBorderColor(type: string) {
       <div
         v-for="toast in toasts"
         :key="toast.id"
-        class="w-80 flex items-start gap-3 rounded-xl p-4 shadow-elevated transition-all duration-300"
+        class="w-80 flex items-start gap-3 rounded p-4 shadow-lg transition-all duration-300"
         :class="[getBgColor(toast.type), getBorderColor(toast.type)]"
       >
         <div :class="getIcon(toast.type)" class="mt-0.5 shrink-0 text-xl" />

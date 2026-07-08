@@ -1,29 +1,4 @@
-﻿/* ============================================================
-   QQ 农场智能助手 - 全局样式系统
-   设计理念：清新、简洁、自然
-   ============================================================ */
-
-/* ---------- Design Tokens (CSS Custom Properties) ---------- */
-:root {
-  --radius-sm: 8px;
-  --radius-md: 12px;
-  --radius-lg: 16px;
-  --radius-xl: 20px;
-  --radius-full: 9999px;
-  --shadow-card: 0 1px 3px rgba(0,0,0,0.06), 0 1px 2px rgba(0,0,0,0.04);
-  --shadow-elevated: 0 4px 12px rgba(0,0,0,0.08), 0 2px 4px rgba(0,0,0,0.04);
-  --shadow-modal: 0 20px 60px rgba(0,0,0,0.15), 0 4px 12px rgba(0,0,0,0.1);
-  --transition-fast: 150ms ease;
-  --transition-base: 200ms ease;
-  --transition-slow: 300ms ease;
-  --spacing-xs: 4px;
-  --spacing-sm: 8px;
-  --spacing-md: 16px;
-  --spacing-lg: 24px;
-  --spacing-xl: 32px;
-}
-
-/* ---------- Scrollbar Customization ---------- */
+/* Global Scrollbar Customization */
 ::-webkit-scrollbar {
   width: 8px;
   height: 8px;
@@ -34,46 +9,49 @@
 }
 
 ::-webkit-scrollbar-thumb {
-  background-color: rgba(156, 163, 175, 0.25);
+  background-color: #cbd5e1; /* slate-300 */
   border-radius: 9999px;
   border: 2px solid transparent;
   background-clip: content-box;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background-color: rgba(156, 163, 175, 0.45);
+  background-color: #94a3b8; /* slate-400 */
 }
 
+/* Dark mode scrollbar */
 .dark ::-webkit-scrollbar-thumb {
-  background-color: rgba(148, 163, 184, 0.2);
+  background-color: #475569; /* slate-600 */
 }
 
 .dark ::-webkit-scrollbar-thumb:hover {
-  background-color: rgba(148, 163, 184, 0.35);
+  background-color: #64748b; /* slate-500 */
 }
 
-/* ---------- Base ---------- */
+/* Base styles to reset some defaults if needed, though UnoCSS reset handles most */
 html,
 body {
   height: 100%;
   margin: 0;
   padding: 0;
-  overflow: hidden;
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
+  overflow: hidden; /* App handles scrolling */
 }
 
-/* ---------- NProgress ---------- */
+/* NProgress Customization */
 #nprogress .bar {
-  background: #10b981 !important;
+  background: #10b981 !important; /* emerald-500 */
   height: 3px !important;
 }
 
 #nprogress .peg {
-  box-shadow: 0 0 10px #10b981, 0 0 5px #10b981 !important;
+  box-shadow:
+    0 0 10px #10b981,
+    0 0 5px #10b981 !important;
 }
 
-/* ---------- Utility: Hide scrollbar ---------- */
+
+
+/* ===== Hide scrollbar for horizontal scroll containers (keep functionality) ===== */
 .scrollbar-none::-webkit-scrollbar {
   display: none;
 }
@@ -82,270 +60,27 @@ body {
   scrollbar-width: none;
 }
 
-/* ---------- Card Styles ---------- */
-.card {
-  background: var(--card-bg, #ffffff);
-  border: 1px solid var(--card-border, rgba(0,0,0,0.06));
-  border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-card);
-  transition: box-shadow var(--transition-base), transform var(--transition-base);
-}
-
-.dark .card {
-  background: var(--card-bg, #1e293b);
-  border-color: var(--card-border, rgba(255,255,255,0.06));
-}
-
-.card-hover:hover {
-  box-shadow: var(--shadow-elevated);
-  transform: translateY(-2px);
-}
-
-/* ---------- Glass Effect ---------- */
-.glass {
-  background: rgba(255, 255, 255, 0.7);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
-  border: 1px solid rgba(255, 255, 255, 0.2);
-}
-
-.dark .glass {
-  background: rgba(30, 41, 59, 0.7);
-  border: 1px solid rgba(255, 255, 255, 0.06);
-}
-
-/* ---------- Gradient Text ---------- */
-.text-gradient {
-  background: var(--theme-gradient);
-  -webkit-background-clip: text;
-  background-clip: text;
-  color: transparent;
-}
-
-/* ---------- Status Dots ---------- */
-.status-dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  display: inline-block;
-  position: relative;
-}
-
-.status-dot::after {
-  content: '';
-  position: absolute;
-  inset: -2px;
-  border-radius: 50%;
-  border: 2px solid transparent;
-  animation: pulse-ring 2s ease-out infinite;
-}
-
-.status-dot.online { background-color: #22c55e; }
-.status-dot.online::after { border-color: rgba(34, 197, 94, 0.4); }
-.status-dot.offline { background-color: #94a3b8; }
-.status-dot.error { background-color: #ef4444; }
-.status-dot.error::after { border-color: rgba(239, 68, 68, 0.4); }
-
-@keyframes pulse-ring {
-  0% { transform: scale(1); opacity: 1; }
-  100% { transform: scale(2); opacity: 0; }
-}
-
-/* ---------- Section Title ---------- */
-.section-title {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 1rem;
-  font-weight: 600;
-  color: var(--theme-text, #1f2937);
-  margin-bottom: 16px;
-}
-
-.dark .section-title {
-  color: var(--theme-text, #f3f4f6);
-}
-
-.section-title::before {
-  content: '';
-  width: 3px;
-  height: 18px;
-  border-radius: 2px;
-  background: var(--theme-gradient);
-  flex-shrink: 0;
-}
-
-/* ---------- Stats Card ---------- */
-.stat-card {
-  background: var(--card-bg, #ffffff);
-  border: 1px solid var(--card-border, rgba(0,0,0,0.06));
-  border-radius: var(--radius-md);
-  padding: 16px;
-  transition: all var(--transition-base);
-}
-
-.dark .stat-card {
-  background: var(--card-bg, #1e293b);
-  border-color: var(--card-border, rgba(255,255,255,0.06));
-}
-
-.stat-card:hover {
-  box-shadow: var(--shadow-elevated);
-  transform: translateY(-2px);
-}
-
-/* ---------- Tab Styles ---------- */
-.tab-group {
-  display: flex;
-  gap: 4px;
-  background: rgba(0,0,0,0.03);
-  border-radius: var(--radius-md);
-  padding: 4px;
-  overflow-x: auto;
-}
-
-.dark .tab-group {
-  background: rgba(255,255,255,0.04);
-}
-
-.tab-item {
-  padding: 8px 16px;
-  border-radius: var(--radius-sm);
-  font-size: 0.875rem;
-  font-weight: 500;
-  white-space: nowrap;
-  color: #64748b;
-  transition: all var(--transition-fast);
-  cursor: pointer;
-  border: none;
-  background: transparent;
-}
-
-.tab-item:hover {
-  color: var(--theme-text, #1f2937);
-  background: rgba(0,0,0,0.04);
-}
-
-.dark .tab-item:hover {
-  color: #e2e8f0;
-  background: rgba(255,255,255,0.06);
-}
-
-.tab-item.active {
-  background: #ffffff;
-  color: var(--theme-primary);
-  box-shadow: 0 1px 3px rgba(0,0,0,0.1);
-}
-
-.dark .tab-item.active {
-  background: rgba(255,255,255,0.1);
-  box-shadow: none;
-}
-
-/* ---------- Badge ---------- */
-.badge {
-  display: inline-flex;
-  align-items: center;
-  padding: 2px 10px;
-  border-radius: var(--radius-full);
-  font-size: 0.75rem;
-  font-weight: 600;
-  line-height: 1.4;
-}
-
-.badge-primary {
-  background: color-mix(in srgb, var(--theme-primary) 12%, transparent);
-  color: var(--theme-primary);
-}
-
-.badge-success {
-  background: rgba(34, 197, 94, 0.12);
-  color: #16a34a;
-}
-
-.badge-warning {
-  background: rgba(250, 204, 21, 0.12);
-  color: #ca8a04;
-}
-
-.badge-error {
-  background: rgba(239, 68, 68, 0.12);
-  color: #dc2626;
-}
-
-/* ---------- Page Header ---------- */
-.page-header {
-  margin-bottom: 24px;
-}
-
-.page-header h1 {
-  font-size: 1.5rem;
-  font-weight: 700;
-  color: var(--theme-text, #1f2937);
-  margin: 0;
-}
-
-.dark .page-header h1 {
-  color: var(--theme-text, #f3f4f6);
-}
-
-.page-header p {
-  font-size: 0.875rem;
-  color: #64748b;
-  margin-top: 4px;
-}
-
-/* ---------- Divider ---------- */
-.divider {
-  height: 1px;
-  background: linear-gradient(to right, transparent, rgba(0,0,0,0.08), transparent);
-  margin: 16px 0;
-}
-
-.dark .divider {
-  background: linear-gradient(to right, transparent, rgba(255,255,255,0.06), transparent);
-}
-
-/* ---------- Skeleton Loading ---------- */
-.skeleton {
-  background: linear-gradient(90deg, rgba(0,0,0,0.04) 25%, rgba(0,0,0,0.08) 50%, rgba(0,0,0,0.04) 75%);
-  background-size: 200% 100%;
-  animation: skeleton-shimmer 1.5s ease-in-out infinite;
-  border-radius: var(--radius-sm);
-}
-
-.dark .skeleton {
-  background: linear-gradient(90deg, rgba(255,255,255,0.03) 25%, rgba(255,255,255,0.06) 50%, rgba(255,255,255,0.03) 75%);
-  background-size: 200% 100%;
-}
-
-@keyframes skeleton-shimmer {
-  0% { background-position: 200% 0; }
-  100% { background-position: -200% 0; }
-}
-
-/* ---------- Mobile Responsive ---------- */
+/* ===== Enhanced Mobile Responsive ===== */
 @media (max-width: 640px) {
+  /* Ensure tables don'''t break layout */
   table {
     min-width: 100%;
   }
-
+  /* Prevent horizontal overflow on page containers */
   .mx-auto {
     overflow-x: hidden;
   }
-
-  .rounded-2xl,
-  .card,
-  .stat-card {
-    border-radius: var(--radius-md) !important;
+  /* Better spacing for mobile cards */
+  .rounded-2xl {
+    border-radius: 0.75rem !important;
   }
-
+  /* Make form inputs more touchable */
   input, select, textarea {
-    font-size: 16px !important;
+    font-size: 16px !important; /* Prevents iOS zoom on focus */
   }
 }
 
-/* ---------- Truncate Multiline ---------- */
+/* ===== Prevent text overflow ===== */
 .truncate-multiline {
   display: -webkit-box;
   -webkit-line-clamp: 2;
@@ -353,7 +88,8 @@ body {
   overflow: hidden;
 }
 
-/* ---------- Mobile Overrides ---------- */
+
+/* ===== Mobile Responsive Overrides ===== */
 @media (max-width: 640px) {
   .p-6 {
     padding: 1rem !important;
@@ -362,34 +98,21 @@ body {
     padding-left: 1rem !important;
     padding-right: 1rem !important;
   }
-
   .p-5 {
     padding: 1rem !important;
   }
-
   .w-64 {
     width: 85vw !important;
     max-width: 320px;
   }
-
   button, a, [role="button"], input, select, textarea {
     touch-action: manipulation;
   }
-
   .gap-6 {
     gap: 1rem !important;
   }
-
   .gap-4 {
     gap: 0.75rem !important;
-  }
-
-  .page-header h1 {
-    font-size: 1.25rem !important;
-  }
-
-  .page-header {
-    margin-bottom: 16px !important;
   }
 }
 
@@ -403,13 +126,8 @@ body {
   .text-2xl {
     font-size: 1.15rem !important;
   }
-
-  .section-title {
-    font-size: 0.9rem !important;
-  }
 }
 
-/* ---------- Box Sizing ---------- */
 *, *::before, *::after {
   box-sizing: border-box;
 }
@@ -417,5 +135,4 @@ body {
 img {
   max-width: 100%;
   height: auto;
-  vertical-align: middle;
 }

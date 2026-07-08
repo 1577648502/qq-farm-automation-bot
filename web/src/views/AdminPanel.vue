@@ -1531,8 +1531,8 @@ onMounted(() => {
           </h3>
 
           <div class="space-y-4">
-            <div class="card p-4">
-              <h4 class="section-title mb-3 text-base">
+            <div class="border border-gray-200 rounded-lg bg-white p-4 dark:border-gray-700 dark:bg-gray-800">
+              <h4 class="mb-3 flex items-center gap-2 text-base text-gray-900 font-bold dark:text-gray-100">
                 <div class="i-carbon-settings" />
                 系统配置
               </h4>
@@ -1608,8 +1608,8 @@ onMounted(() => {
               </div>
             </div>
 
-            <div class="card p-4">
-              <h4 class="section-title mb-3 text-base">
+            <div class="border border-gray-200 rounded-lg bg-white p-4 dark:border-gray-700 dark:bg-gray-800">
+              <h4 class="mb-3 flex items-center gap-2 text-base text-gray-900 font-bold dark:text-gray-100">
                 <div class="i-carbon-events" />
                 活动开关
               </h4>
@@ -1658,8 +1658,8 @@ onMounted(() => {
               </div>
             </div>
 
-            <div class="card p-4">
-              <h4 class="section-title mb-3 text-base">
+            <div class="border border-gray-200 rounded-lg bg-white p-4 dark:border-gray-700 dark:bg-gray-800">
+              <h4 class="mb-3 flex items-center gap-2 text-base text-gray-900 font-bold dark:text-gray-100">
                 <div class="i-carbon-logo-wechat" />
                 微信配置
               </h4>

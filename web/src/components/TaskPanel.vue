@@ -65,7 +65,7 @@ function formatTaskProgress(task: any) {
     <DailyOverview :daily-gifts="dailyGifts" />
 
     <!-- Growth Task -->
-    <div class="flex flex-col card p-4">
+    <div class="flex flex-col rounded-lg bg-white p-4 shadow dark:bg-gray-800">
       <div class="mb-3 flex items-center justify-between">
         <h3 class="flex items-center gap-2 font-medium">
           <div class="i-carbon-growth text-green-500" />
