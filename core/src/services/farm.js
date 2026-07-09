@@ -566,6 +566,7 @@ async function plantSeeds(seedId, landIds, options = {}) {
     const pendingLandIds = new Set((Array.isArray(landIds) ? landIds : []).map(id => toNum(id)).filter(Boolean));
     const plantSize = getPlantSizeBySeedId(seedId);
     const autoSlave = plantSize > 1;
+    let hadRealError = false;
 
     for (const rawLandId of landIds) {
         const landId = toNum(rawLandId);
@@ -596,6 +597,7 @@ async function plantSeeds(seedId, landIds, options = {}) {
             const isExpectedBigCropCandidateError = autoSlave
                 && (errorMessage.includes('code=1001008') || errorMessage.includes('code=1001052'));
             if (!isExpectedBigCropCandidateError) {
+                hadRealError = true;
                 logWarn('种植', `土地#${landId} 失败: ${errorMessage}`);
             }
         }
@@ -605,6 +607,7 @@ async function plantSeeds(seedId, landIds, options = {}) {
         planted: successCount,
         plantedLandIds,
         occupiedLandIds: [...occupiedLandIds],
+        hadRealError,
     };
 }
 
@@ -720,16 +723,24 @@ async function plantFromBagSeeds(landsToPlant) {
         }
 
         if (result.planted < maxPlantCount && remainingLandIds.length > 0) {
-            fallbackAllowed = false;
-            logWarn('种植', `背包种子 ${seed.name} 实际种植 ${result.planted}/${maxPlantCount}，为避免误购商店种子，本轮不执行第二优先策略`, {
-                module: 'farm',
-                event: '种植种子',
-                result: 'partial_bag_failure',
+            // 仅在有真正异常错误时才禁止回退（2x2 布局预期错误不阻断回退）
+            const isPureLayoutFailure = result.hadRealError === false && result.planted === 0;
+            if (!isPureLayoutFailure) {
+                fallbackAllowed = false;
+                logWarn('种植', `背包种子 ${seed.name} 实际种植 ${result.planted}/${maxPlantCount}，为避免误购商店种子，本轮不执行第二优先策略`, {
                 seedId: seed.seedId,
                 requested: maxPlantCount,
                 planted: result.planted,
-            });
-        }
+                });
+            } else {
+                logWarn('种植', `背包种子 ${seed.name} 实际种植 ${result.planted}/${maxPlantCount}，没有满足种植条件的土地，本轮执行第二优先策略`, {
+                seedId: seed.seedId,
+                requested: maxPlantCount,
+                planted: result.planted,
+                });
+            }
+
+
     }
 
     if (usedSeedLogs.length > 0) {
