@@ -376,7 +376,12 @@ module.exports = {
         try {
             const reply = await getTaskInfo();
             const ti = reply && reply.task_info ? reply.task_info : {};
-            const growthList = Array.isArray(ti.growth_tasks) ? ti.growth_tasks : [];
+            let growthList = Array.isArray(ti.growth_tasks) ? ti.growth_tasks : [];
+            if (growthList.length === 0) {
+                // fallback: 从 tasks 中按 task_type=1（成长任务）筛选
+                const allTasks = Array.isArray(ti.tasks) ? ti.tasks : [];
+                growthList = allTasks.filter((t) => toNum(t && t.task_type) === 1);
+            }
             const tasks = growthList.map((t) => {
                 const progress = Math.max(0, toNum(t && t.progress));
                 const totalProgress = Math.max(0, toNum(t && t.total_progress));

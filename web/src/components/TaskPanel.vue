@@ -1,4 +1,4 @@
-<script setup lang="ts">
+﻿<script setup lang="ts">
 import { storeToRefs } from 'pinia'
 import { computed, onMounted, watch } from 'vue'
 import DailyOverview from '@/components/DailyOverview.vue'
@@ -21,9 +21,7 @@ async function refresh() {
     if (!realtimeConnected.value) {
       await statusStore.fetchStatus(currentAccountId.value)
     }
-    if (acc.running && status.value?.connection?.connected) {
-      statusStore.fetchDailyGifts(currentAccountId.value)
-    }
+    statusStore.fetchDailyGifts(currentAccountId.value)
   }
 }
 
