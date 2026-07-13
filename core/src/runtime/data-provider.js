@@ -552,13 +552,9 @@ function createDataProvider(options) {
 
         // 获取链
 
-                getPetShopItems: (accountRef) => callWorkerApi(resolveAccountRefId(accountRef), 'getPetShopItems'),
-
-        buyPetShopGoods: (accountRef, goodsId, count, price) => callWorkerApi(resolveAccountRefId(accountRef), 'buyPetShopGoods', goodsId, count, price),
+        activateDog: (accountRef, dogTypeId) => callWorkerApi(resolveAccountRefId(accountRef), 'activateDog', dogTypeId),
 
         feedDog: (accountRef, itemId, count) => callWorkerApi(resolveAccountRefId(accountRef), 'feedDog', itemId, count),
-
-        changeDoghouse: (accountRef, itemId) => callWorkerApi(resolveAccountRefId(accountRef), 'changeDoghouse', itemId),
 
         getDogStatus: (accountRef, friendGid) => callWorkerApi(resolveAccountRefId(accountRef), 'getDogStatus', friendGid),
 
@@ -568,7 +564,7 @@ function createDataProvider(options) {
 
         deployDog: (accountRef, dogTypeId) => callWorkerApi(resolveAccountRefId(accountRef), 'deployDog', dogTypeId),
 
-        recallDog: (accountRef, dogId) => callWorkerApi(resolveAccountRefId(accountRef), 'recallDog', dogId),
+        withdrawDog: (accountRef) => callWorkerApi(resolveAccountRefId(accountRef), 'withdrawDog'),
 
         getPetBagInfo: (accountRef, friendGid) => callWorkerApi(resolveAccountRefId(accountRef), 'getPetBagInfo', friendGid),
 
@@ -581,10 +577,6 @@ function createDataProvider(options) {
         getCapitalMode: (accountRef) => callWorkerApi(resolveAccountRefId(accountRef), 'getCapitalMode'),
 
         setCapitalMode: (accountRef, config) => callWorkerApi(resolveAccountRefId(accountRef), 'setCapitalMode', config),
-
-        getIllustratedList: (accountRef, refresh) => callWorkerApi(resolveAccountRefId(accountRef), 'getIllustratedList', refresh),
-
-        claimAllIllustratedRewards: (accountRef) => callWorkerApi(resolveAccountRefId(accountRef), 'claimAllIllustratedRewards'),
 
         getActivityOverview: (accountRef, options) => callWorkerApi(resolveAccountRefId(accountRef), 'getActivityOverview', options),
 

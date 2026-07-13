@@ -31,7 +31,7 @@ const { sellAllFruits, getBag, getBagItems, openFertilizerGiftPacksSilently } = 
 if (parentPort && workerData && workerData.accountId && !process.env.FARM_ACCOUNT_ID) {
     process.env.FARM_ACCOUNT_ID = String(workerData.accountId);
 }
-const { getPetShopItems, buyPetShopGoods, feedDog, changeDoghouse, getDogStatus, getPetBagInfo, getDogFoodList, getPetList, deployDog, recallDog, getGuardLogs, getGuardReward, claimGuardReward, getCapitalMode, setCapitalMode, getIllustratedList, claimAllIllustratedRewards } = require('../services/pet');
+const { activateDog, deployDog, withdrawDog, feedDog, getDogStatus, getPetBagInfo, getDogFoodList, getPetList, getGuardLogs, getGuardReward, claimGuardReward, getCapitalMode, setCapitalMode } = require('../services/pet');
 const { connect, reconnect, cleanup, getWs, getUserState, networkEvents } = require('../utils/network');
 const { loadProto } = require('../utils/proto');
 const { setLogHook, log, toNum } = require('../utils/utils');
@@ -815,22 +815,14 @@ async function handleApiCall(msg) {
             case 'exchangeActivityGoods':
                 result = await exchangeShopGoods(args[0] || {});
                 break;
-             case 'getPetShopItems':
-                 result = await getPetShopItems();
-                 break;
-             case 'buyPetShopGoods': {
-                 const [buyGoodsId, buyCount, buyPrice] = args;
-                 result = await buyPetShopGoods(buyGoodsId, buyCount, buyPrice);
+             case 'activateDog': {
+                 const [activateTypeId] = args;
+                 result = await activateDog(activateTypeId);
                  break;
              }
              case 'feedDog': {
                  const [feedItemId, feedCount] = args;
                  result = await feedDog(feedItemId, feedCount);
-                 break;
-             }
-             case 'changeDoghouse': {
-                 const [houseItemId] = args;
-                 result = await changeDoghouse(houseItemId);
                  break;
              }
              case 'getDogStatus':
@@ -847,11 +839,9 @@ async function handleApiCall(msg) {
                  result = await deployDog(deployTypeId);
                  break;
              }
-             case 'recallDog': {
-                 const [recallDogId] = args;
-                 result = await recallDog(recallDogId);
+             case 'withdrawDog':
+                 result = await withdrawDog();
                  break;
-             }
              case 'getPetBagInfo':
                  result = await getPetBagInfo(args[0] || null);
                  break;
@@ -874,12 +864,6 @@ async function handleApiCall(msg) {
                  result = await setCapitalMode(capitalConfig);
                  break;
              }
-             case 'getIllustratedList':
-                 result = await getIllustratedList(args[0] || false);
-                 break;
-             case 'claimAllIllustratedRewards':
-                 result = await claimAllIllustratedRewards();
-                 break;
             default:
                 error = 'Unknown method';
         }

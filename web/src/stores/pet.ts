@@ -144,15 +144,11 @@ export const DOG_DESCRIPTIONS: Record<number, string> = {
 }
 
 export const usePetStore = defineStore('pet', () => {
-  const currentTab = ref<'overview' | 'food' | 'logs' | 'rewards' | 'capital' | 'shop'>('overview')
+  const currentTab = ref<'overview' | 'food' | 'logs' | 'capital'>('overview')
   const loading = ref(false)
   const dogStatus = ref<DogStatusData | null>(null)
   const dogFoods = ref<DogFoodItem[]>([])
-  const doghouses = ref<DoghouseItem[]>([])
-  const shopItems = ref<PetShopGoods[]>([])
-  const shopLoading = ref(false)
   const feedLoading = ref(false)
-  const doghouseLoading = ref(false)
   const overview = ref<DogOverview | null>(null)
   const dogs = ref<DogItem[]>([])
   const guardLogs = ref<GuardLogEntry[]>([])
@@ -198,7 +194,7 @@ export const usePetStore = defineStore('pet', () => {
 
   function clear() {
     overview.value = null; dogs.value = []; guardLogs.value = []
-    guardLogTotal.value = 0; shopItems.value = []; dogStatus.value = null
+    guardLogTotal.value = 0; dogStatus.value = null
   }
 
   // ============ 核心：从 /api/pet/status 获取完整狗狗数据 ============
@@ -313,16 +309,6 @@ export const usePetStore = defineStore('pet', () => {
     }
   }
 
-  async function fetchDogs(accountId: string) {
-    try {
-      await fetchPetStatus(accountId)
-      const d = dogStatus.value
-      if (d && d.dogTypes && d.dogTypes.length > 0) {
-        dogs.value = buildDogsFromStatus(d)
-      }
-    } catch { /* ignore */ }
-  }
-
   async function deployDog(accountId: string, dogId: number) {
     try {
       const res = await api.post('/api/pet/deploy', { dogTypeId: dogId }, { headers: { 'x-account-id': accountId } })
@@ -331,12 +317,20 @@ export const usePetStore = defineStore('pet', () => {
     } catch { return { ok: false, error: '上阵失败' } }
   }
 
-  async function recallDog(accountId: string, dogId: number) {
+  async function activateDog(accountId: string, dogId: number) {
     try {
-      const res = await api.post('/api/pet/recall', { dogId }, { headers: { 'x-account-id': accountId } })
+      const res = await api.post('/api/pet/activate', { dogTypeId: dogId }, { headers: { 'x-account-id': accountId } })
       if (res.data?.ok) { await fetchOverview(accountId) }
       return res.data
-    } catch { return { ok: false, error: '收起失败' } }
+    } catch { return { ok: false, error: '激活失败' } }
+  }
+
+  async function withdrawDog(accountId: string) {
+    try {
+      const res = await api.post('/api/pet/recall', {}, { headers: { 'x-account-id': accountId } })
+      if (res.data?.ok) { await fetchOverview(accountId) }
+      return res.data
+    } catch { return { ok: false, error: '收回失败' } }
   }
 
   async function fetchFoodItems(accountId: string) {
@@ -389,20 +383,6 @@ export const usePetStore = defineStore('pet', () => {
     } catch { /* ignore */ }
     finally { loading.value = false }
   }
-  async function fetchRewards(accountId: string) {
-    try {
-      const res = await api.get('/api/pet/rewards', { headers: { 'x-account-id': accountId } })
-      if (res.data?.ok) return res.data.data
-    } catch { /* ignore */ }
-    return { has_huzhu_dog: false, can_claim: false, rewards: [] }
-  }
-
-  async function claimRewards(accountId: string) {
-    try {
-      const res = await api.post('/api/pet/rewards/claim', {}, { headers: { 'x-account-id': accountId } })
-      return res.data
-    } catch { return { ok: false, error: '领取失败' } }
-  }
 
   async function fetchCapitalMode(accountId: string) {
     try {
@@ -439,37 +419,10 @@ export const usePetStore = defineStore('pet', () => {
     } finally { feedLoading.value = false }
   }
 
-  async function changeDoghouse(accountId: string, itemId: number) {
-    doghouseLoading.value = true
-    try {
-      const res = await api.post('/api/pet/doghouse', { itemId }, { headers: { 'x-account-id': accountId } })
-      if (res.data?.ok) { await fetchPetStatus(accountId); return res.data.data }
-      throw new Error(res.data?.error || '更换狗屋失败')
-    } finally { doghouseLoading.value = false }
-  }
-
-  async function buyPetShopGoods(accountId: string, goodsId: number, count = 1, price = 0) {
-    const res = await api.post('/api/pet/shop/buy', { goodsId, count, price }, { headers: { 'x-account-id': accountId } })
-    if (res.data?.ok) { await fetchPetShop(accountId); return res.data.data }
-    throw new Error(res.data?.error || '购买失败')
-  }
-
-  async function fetchPetShop(accountId: string) {
-    shopLoading.value = true
-    try {
-      const res = await api.get('/api/pet/shop', { headers: { 'x-account-id': accountId } })
-      if (res.data?.ok) { shopItems.value = res.data.data || [] }
-    } catch { /* ignore */ }
-    finally { shopLoading.value = false }
-  }
-
   function syncFromBag(items: Array<{ id: number; count: number; name?: string }>) {
     dogFoods.value = items.filter(item => [90004, 90005, 90006].includes(item.id)).map(item => ({
       id: item.id, count: item.count, name: DOG_FOOD_NAMES[item.id] || '狗粮 #' + item.id,
       days: DOG_FOOD_DAYS[item.id] || 0,
-    }))
-    doghouses.value = items.filter(item => item.id >= 205001 && item.id < 207000).map(item => ({
-      id: item.id, count: item.count, name: item.name || '狗屋 #' + item.id,
     }))
   }
 
@@ -478,22 +431,18 @@ export const usePetStore = defineStore('pet', () => {
       case 'overview': await fetchOverview(accountId); break
       case 'food': await Promise.all([fetchFoodItems(accountId), fetchPetStatus(accountId)]); break
       case 'logs': await fetchGuardLogs(accountId); break
-      case 'rewards': await fetchOverview(accountId); break
-      case 'capital': await Promise.all([fetchCapitalMode(accountId), fetchDogs(accountId)]); break
-      case 'shop': await fetchPetShop(accountId); break
+      case 'capital': await Promise.all([fetchCapitalMode(accountId), fetchOverview(accountId)]); break
     }
   }
 
   return {
-    currentTab, loading, dogStatus, dogFoods, doghouses,
-    shopItems, shopLoading, feedLoading, doghouseLoading,
+    currentTab, loading, dogStatus, dogFoods, feedLoading,
     overview, dogs, guardLogs, guardLogTotal, capitalMode,
     hasActiveDog, availableDogFoods,
-    fetchPetStatus, fetchPetShop, fetchOverview, fetchDogs,
-    deployDog, recallDog, fetchFoodItems,
-    fetchGuardLogs, fetchRewards, claimRewards,
-    fetchCapitalMode, saveCapitalMode,
-    feedDog, changeDoghouse, buyPetShopGoods, syncFromBag,
+    fetchPetStatus, fetchOverview,
+    activateDog, deployDog, withdrawDog, fetchFoodItems,
+    fetchGuardLogs, fetchCapitalMode, saveCapitalMode,
+    feedDog, syncFromBag,
     refreshCurrentTab, clear,
     getQualityName, getQualityColor, getGuardRate,
     formatRemainTime, getDogImageUrl, getDogFoodImageUrl, describeDog,

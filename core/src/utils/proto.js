@@ -145,10 +145,12 @@ async function loadProto() {
     types.DogFoodInfo = root.lookupType('gamepb.dogpb.DogFoodInfo');
     types.GetPetListRequest = root.lookupType('gamepb.dogpb.GetPetListRequest');
     types.GetPetListReply = root.lookupType('gamepb.dogpb.GetPetListReply');
+    types.ActivateDogRequest = root.lookupType('gamepb.dogpb.ActivateDogRequest');
+    types.ActivateDogReply = root.lookupType('gamepb.dogpb.ActivateDogReply');
     types.DeployDogRequest = root.lookupType('gamepb.dogpb.DeployDogRequest');
     types.DeployDogReply = root.lookupType('gamepb.dogpb.DeployDogReply');
-    types.RecallDogRequest = root.lookupType('gamepb.dogpb.RecallDogRequest');
-    types.RecallDogReply = root.lookupType('gamepb.dogpb.RecallDogReply');
+    types.WithdrawDogRequest = root.lookupType('gamepb.dogpb.WithdrawDogRequest');
+    types.WithdrawDogReply = root.lookupType('gamepb.dogpb.WithdrawDogReply');
     types.GetDogFoodListRequest = root.lookupType('gamepb.dogpb.GetDogFoodListRequest');
     types.GetDogFoodListReply = root.lookupType('gamepb.dogpb.GetDogFoodListReply');
     types.GetGuardLogsRequest = root.lookupType('gamepb.dogpb.GetGuardLogsRequest');

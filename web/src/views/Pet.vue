@@ -37,6 +37,14 @@ function formatGuardTime(ts: number | string): string {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
 }
 
+async function handleActivate(dogId: number) {
+  const id = currentAccountId.value
+  if (!id) return
+  const result = await petStore.activateDog(id, dogId)
+  if (result?.ok) toast.success("激活成功")
+  else toast.error(result?.error || "激活失败")
+}
+
 async function handleDeploy(dogId: number) {
   const id = currentAccountId.value
   if (!id) return
@@ -45,10 +53,10 @@ async function handleDeploy(dogId: number) {
   else toast.error(result?.error || "上阵失败")
 }
 
-async function handleRecall(dogId: number) {
+async function handleWithdraw() {
   const id = currentAccountId.value
   if (!id) return
-  const result = await petStore.recallDog(id, dogId)
+  const result = await petStore.withdrawDog(id)
   if (result?.ok) toast.success("已收起")
   else toast.error(result?.error || "操作失败")
 }
@@ -89,7 +97,7 @@ async function refreshCurrentTab() {
     case "overview": await petStore.fetchOverview(id); break
     case "food": await petStore.fetchFoodItems(id); break
     case "logs": await petStore.fetchGuardLogs(id); break
-    case "capital": await Promise.all([petStore.fetchCapitalMode(id), petStore.fetchDogs(id)]); break
+    case "capital": await Promise.all([petStore.fetchCapitalMode(id), petStore.fetchOverview(id)]); break
   }
 }
 
@@ -276,16 +284,18 @@ onMounted(() => { if (currentAccountId.value) refreshCurrentTab() })
               <button
                 v-else-if="dog.status === 'guarding'"
                 class="w-full rounded-lg bg-red-500 py-2 text-sm font-medium text-white transition-opacity hover:opacity-90"
-                @click="handleRecall(dog.dogId)"
+                @click="handleWithdraw()"
               >
                 收起
               </button>
-              <div
+              <button
                 v-else
-                class="w-full rounded-lg bg-gray-100 py-2 text-center text-sm text-gray-400 dark:bg-gray-700"
+                class="w-full rounded-lg py-2 text-sm font-medium text-white transition-opacity hover:opacity-90"
+                :style="{ backgroundColor: 'var(--theme-primary)' }"
+                @click="handleActivate(dog.dogId)"
               >
-                未激活
-              </div>
+                激活
+              </button>
             </div>
           </div>
         </div>

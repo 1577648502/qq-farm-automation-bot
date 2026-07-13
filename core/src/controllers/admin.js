@@ -2720,26 +2720,16 @@ app.use('/api', (req, res, next) => {
 
     
     // ============ Pet (宠物) API ============
-    app.get('/api/pet/shop', async (req, res) => {
+    app.post('/api/pet/activate', async (req, res) => {
         if (!provider) return res.json({ ok: false, error: 'Provider not ready' });
-        try { res.json({ ok: true, data: await provider.getPetShopItems(req.headers['x-account-id'] || '') }); }
-        catch (e) { res.json({ ok: false, error: e.message }); }
-    });
-    app.post('/api/pet/shop/buy', async (req, res) => {
-        if (!provider) return res.json({ ok: false, error: 'Provider not ready' });
-        const { goodsId, count, price } = req.body || {};
-        try { res.json({ ok: true, data: await provider.buyPetShopGoods(req.headers['x-account-id'] || '', goodsId, count, price) }); }
+        const { dogTypeId } = req.body || {};
+        try { res.json({ ok: true, data: await provider.activateDog(req.headers['x-account-id'] || '', dogTypeId) }); }
         catch (e) { res.json({ ok: false, error: e.message }); }
     });
     app.post('/api/pet/feed', async (req, res) => {
         if (!provider) return res.json({ ok: false, error: 'Provider not ready' });
         const { itemId, count } = req.body || {};
         try { res.json({ ok: true, data: await provider.feedDog(req.headers['x-account-id'] || '', itemId, count || 1) }); }
-        catch (e) { res.json({ ok: false, error: e.message }); }
-    });
-    app.post('/api/pet/doghouse', async (req, res) => {
-        if (!provider) return res.json({ ok: false, error: 'Provider not ready' });
-        try { res.json({ ok: true, data: await provider.changeDoghouse(req.headers['x-account-id'] || '', (req.body || {}).itemId) }); }
         catch (e) { res.json({ ok: false, error: e.message }); }
     });
     app.get('/api/pet/status', async (req, res) => {
@@ -2769,8 +2759,7 @@ app.use('/api', (req, res, next) => {
     // API: 收起狗
     app.post('/api/pet/recall', async (req, res) => {
         if (!provider) return res.json({ ok: false, error: 'Provider not ready' });
-        const { dogId } = req.body || {};
-        try { res.json({ ok: true, data: await provider.recallDog(req.headers['x-account-id'] || '', dogId) }); }
+        try { res.json({ ok: true, data: await provider.withdrawDog(req.headers['x-account-id'] || '') }); }
         catch (e) { res.json({ ok: false, error: e.message }); }
     });
 
@@ -2815,21 +2804,6 @@ app.use('/api', (req, res, next) => {
     app.post('/api/pet/capital-mode/save', async (req, res) => {
         if (!provider) return res.json({ ok: false, error: 'Provider not ready' });
         try { res.json({ ok: true, data: await provider.setCapitalMode(req.headers['x-account-id'] || '', req.body) }); }
-        catch (e) { res.json({ ok: false, error: e.message }); }
-    });
-
-    // API: 图鉴列表
-    app.get('/api/pet/illustrated', async (req, res) => {
-        if (!provider) return res.json({ ok: false, error: 'Provider not ready' });
-        const refresh = req.query.refresh === 'true';
-        try { res.json({ ok: true, data: await provider.getIllustratedList(req.headers['x-account-id'] || '', refresh) }); }
-        catch (e) { res.json({ ok: false, error: e.message }); }
-    });
-
-    // API: 一键领取图鉴奖励
-    app.post('/api/pet/illustrated/claim-all', async (req, res) => {
-        if (!provider) return res.json({ ok: false, error: 'Provider not ready' });
-        try { res.json({ ok: true, data: await provider.claimAllIllustratedRewards(req.headers['x-account-id'] || '') }); }
         catch (e) { res.json({ ok: false, error: e.message }); }
     });
 // ============ Activity (活动) API ============

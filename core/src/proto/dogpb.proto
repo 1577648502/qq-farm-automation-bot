@@ -38,6 +38,12 @@ message GetPetListReply {
     repeated DogFoodInfo food_items = 5;
 }
 
+// ============ ActivateDog (激活) ============
+message ActivateDogRequest {
+    int64 dog_type_id = 1;
+}
+message ActivateDogReply {}
+
 // ============ DeployDog (上阵) ============
 message DeployDogRequest {
     int64 dog_type_id = 1;
@@ -46,9 +52,9 @@ message DeployDogReply {
     int64 dog_type_id = 1;
 }
 
-// ============ RecallDog (收起) ============
-message RecallDogRequest {}
-message RecallDogReply {}
+// ============ WithdrawDog (收回) ============
+message WithdrawDogRequest {}
+message WithdrawDogReply {}
 
 // ============ FeedDog (喂食) ============
 message FeedDogRequest {

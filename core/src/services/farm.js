@@ -14,7 +14,7 @@ const { createScheduler } = require('./scheduler');
 const { recordOperation } = require('./stats');
 const { getBagSeeds, getBag, getBagItems, getContainerHoursFromBagItems } = require('./warehouse');
 const { autoBuyFertilizer, checkAndBuyFertilizerBoth } = require('./mall');
-const { getCapitalModeConfig, deployDog, recallDog, DOG_TYPE_NAMES } = require('./pet');
+const { getCapitalModeConfig, deployDog, withdrawDog, DOG_TYPE_NAMES } = require('./pet');
 
 // ============ 内部状态 ============
 let isCheckingFarm = false;
@@ -1733,7 +1733,7 @@ async function runFarmOperation(opType) {
                 const capCfg = getCapitalModeConfig();
                 if (capCfg.enabled && capCfg.selectedDogId) {
                     await sleep(5000);
-                    await recallDog(0);
+                    await withdrawDog();
                     log('宠物', '资本模式: 已收回狗');
                 }
             } catch (e) {
