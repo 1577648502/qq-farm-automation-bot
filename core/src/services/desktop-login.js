@@ -8,6 +8,7 @@ const { QRLoginSession } = require("./qrlogin");
 const sessionsDb = require("../models/desktop-sessions");
 const { createDesktopFarmCapture } = require("./desktop-farm-capture");
 const { captureProtocolCode } = require("./protocol-code-capture");
+const { isQcbyCodeEnabled } = require("./qcby-code-config");
 const platform = require("../utils/platform");
 const FRIDA_AGENT_PATH = path.join(__dirname, "../utils/desktop-login-agent.js");
 // FRIDA_FARM_AGENT_PATH removed
@@ -244,6 +245,7 @@ function createDesktopLoginService(options) {
     }
 
     function startCodeRefreshTimer(uin) {
+        if (isQcbyCodeEnabled()) return; // qcby 取码已接管，禁用 QQ NT 自动刷新
         var key = String(uin || "").trim();
         if (!key || codeRefreshTimers[key]) return;
         var session = sessionsDb.findByUin(key);

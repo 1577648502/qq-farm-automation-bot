@@ -10,6 +10,8 @@ const { createDataProvider } = require('./data-provider')
 const { createReloginReminderService } = require('./relogin-reminder')
 const { createRuntimeState } = require('./runtime-state')
 const { createWorkerManager } = require('./worker-manager')
+const { loadQcbyCodeConfig } = require('../services/qcby-code-config')
+const { createQcbyCodeScheduler } = require('./qcby-code-scheduler')
 
 const OPERATION_KEYS = ['harvest', 'water', 'weed', 'bug', 'fertilize', 'plant', 'steal', 'helpWater', 'helpWeed', 'helpBug', 'taskClaim', 'sell', 'upgrade']
 
@@ -24,6 +26,7 @@ function createRuntimeEngine(options = {}) {
   const startAdminServer = typeof options.startAdminServer === 'function' ? options.startAdminServer : null
 
   const workerControls = { startWorker: null, restartWorker: null, refreshWorkerCode: null }
+  let qcbyScheduler = null
   const runtimeState = createRuntimeState({
     store,
     operationKeys: OPERATION_KEYS,
@@ -156,12 +159,29 @@ function createRuntimeEngine(options = {}) {
       startAdminServer(dataProvider)
     }
 
+    // 启动 qcby 自动取 code 调度器（通过 qcby-vxcode API 周期性获取农场 code）
+    try {
+      const qcbyConfig = loadQcbyCodeConfig()
+      if (qcbyConfig.fileCreated) {
+        log('系统', `已生成 qcby 取码配置示例: ${qcbyConfig.configFile}（填好后将 enabled 改为 true 并重启）`)
+      }
+      qcbyScheduler = createQcbyCodeScheduler({
+        config: qcbyConfig,
+        refreshAccountCode: dataProvider.refreshAccountCode,
+        log,
+      })
+      qcbyScheduler.start()
+    } catch (err) {
+      log('系统', 'qcby 取码调度器启动失败: ' + (err && err.message ? err.message : String(err)))
+    }
+
     if (shouldAutoStartAccounts) {
       startAllAccounts()
     }
   }
 
   function stopAllAccounts() {
+    if (qcbyScheduler) qcbyScheduler.stop()
     for (const accountId of Object.keys(workers)) {
       stopWorker(accountId)
     }
