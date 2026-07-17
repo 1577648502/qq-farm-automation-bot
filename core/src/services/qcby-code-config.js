@@ -12,18 +12,18 @@ const CONFIG_FILENAME = 'qcby-code.json';
 const DEFAULT_INTERVAL_MS = 5 * 60 * 1000;
 
 const DEFAULT_CONFIG = {
-    _说明: '通过 qcby-vxcode API 自动获取「经典农场」小程序 code。填好后将 enabled 改为 true 并重启。',
+    _说明: '通过 qcby 公开接口 GET /mywc?wxid=&appId= 自动获取「经典农场」小程序 code。填好后将 enabled 改为 true 并重启。',
     enabled: false,
     baseUrl: 'http://127.0.0.1:8110',
-    protocol: 'vx',
+    protocol: 'mywc',
     intervalMs: DEFAULT_INTERVAL_MS,
     runOnStart: true,
     appid: '',
     authHeader: '',
     codePath: '',
-    _accounts说明: 'accounts: 每个映射把一个 qcby 账号(wxid 或 yyb 的 ref)与农场实例 accountId 绑定；appid 留空则用顶层 appid。',
+    _accounts说明: 'accounts: 把 qcby 账号与农场实例 accountId 绑定；mywc/vx 用 wxid，yyb 用 ref；appid、protocol 可按账号覆盖顶层。',
     accounts: [
-        { accountId: '', wxid: '', ref: '', appid: '' },
+        { accountId: '', wxid: '', appid: '', protocol: '' },
     ],
 };
 
@@ -76,7 +76,7 @@ function loadQcbyCodeConfig(env = process.env) {
     const merged = {
         enabled: toBool(env.QCBY_ENABLED, fileCfg.enabled === true),
         baseUrl: String(env.QCBY_BASE_URL || fileCfg.baseUrl || DEFAULT_CONFIG.baseUrl).trim(),
-        protocol: String(env.QCBY_PROTOCOL || fileCfg.protocol || 'vx').trim().toLowerCase(),
+        protocol: String(env.QCBY_PROTOCOL || fileCfg.protocol || 'mywc').trim().toLowerCase(),
         intervalMs: Math.max(30 * 1000, Number(env.QCBY_INTERVAL_MS || fileCfg.intervalMs || DEFAULT_INTERVAL_MS)),
         runOnStart: toBool(env.QCBY_RUN_ON_START, fileCfg.runOnStart !== false),
         appid: String(env.QCBY_APPID || fileCfg.appid || '').trim(),

@@ -2,8 +2,9 @@
  * qcby-vxcode 取 code 客户端
  *
  * 通过 qcby-vxcode（微信协议 API 服务）获取「经典农场」小程序登录 code：
- *   - vx  协议：POST /api/Wxapp/JSLogin   body { Appid, Wxid }         （返回授权后的 code）
- *   - yyb 协议：POST /api/Yyb/GetCode     body { ref, app_id, tcp_proxy, payload }
+ *   - mywc 协议（默认，公开无鉴权）：GET /mywc?wxid=<wxid>&appId=<appId>
+ *   - vx   协议：POST /api/Wxapp/JSLogin   body { Appid, Wxid }
+ *   - yyb  协议：POST /api/Yyb/GetCode     body { ref, app_id, tcp_proxy, payload }
  *
  * 返回统一信封 { Code, Success, Message, Data }，code 位于 Data 中；不同版本字段名
  * 可能不同，这里用可配置 codePath + 多字段/深度兜底提取，保证鲁棒。
@@ -110,7 +111,7 @@ function buildAuthHeaders(authHeader) {
 async function fetchFarmCode(options = {}) {
     const {
         baseUrl,
-        protocol = 'vx',
+        protocol = 'mywc',
         wxid = '',
         ref = '',
         appid = '',
@@ -124,31 +125,54 @@ async function fetchFarmCode(options = {}) {
     if (!baseUrl) return { ok: false, reason: 'missing_base_url' };
     if (!appid) return { ok: false, reason: 'missing_appid' };
 
-    let url;
-    let body;
-    if (String(protocol).toLowerCase() === 'yyb') {
+    const proto = String(protocol).toLowerCase();
+    const headers = Object.assign({ 'Content-Type': 'application/json' }, buildAuthHeaders(authHeader));
+
+    let reqConfig;
+    if (proto === 'yyb') {
         const refId = String(ref || wxid || '').trim();
         if (!refId) return { ok: false, reason: 'missing_ref' };
-        url = joinUrl(baseUrl, '/api/Yyb/GetCode');
-        body = { ref: refId, app_id: appid, tcp_proxy: tcpProxy || '', payload: payload || {} };
-    } else {
+        reqConfig = {
+            method: 'post',
+            url: joinUrl(baseUrl, '/api/Yyb/GetCode'),
+            data: { ref: refId, app_id: appid, tcp_proxy: tcpProxy || '', payload: payload || {} },
+        };
+    } else if (proto === 'vx') {
         const id = String(wxid || '').trim();
         if (!id) return { ok: false, reason: 'missing_wxid' };
-        url = joinUrl(baseUrl, '/api/Wxapp/JSLogin');
-        body = { Appid: appid, Wxid: id };
+        reqConfig = {
+            method: 'post',
+            url: joinUrl(baseUrl, '/api/Wxapp/JSLogin'),
+            data: { Appid: appid, Wxid: id },
+        };
+    } else {
+        // 默认：公开无鉴权接口 GET /mywc?wxid=<wxid>&appId=<appId>
+        const id = String(wxid || ref || '').trim();
+        if (!id) return { ok: false, reason: 'missing_wxid' };
+        reqConfig = {
+            method: 'get',
+            url: joinUrl(baseUrl, '/mywc'),
+            params: { wxid: id, appId: appid },
+        };
     }
-
-    const headers = Object.assign({ 'Content-Type': 'application/json' }, buildAuthHeaders(authHeader));
 
     let res;
     try {
-        res = await axios.post(url, body, { headers, timeout: timeoutMs, validateStatus: () => true });
+        res = await axios(Object.assign(reqConfig, { headers, timeout: timeoutMs, validateStatus: () => true }));
     } catch (err) {
         return { ok: false, reason: 'request_failed:' + (err && err.message ? err.message : String(err)) };
     }
 
-    const data = res && res.data;
-    if (data && Number(data.Code) === -401) {
+    let data = res && res.data;
+    // 若接口以文本返回 JSON 字符串，尝试解析以便统一提取
+    if (typeof data === 'string') {
+        const trimmed = data.trim();
+        if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
+            try { data = JSON.parse(trimmed); } catch (_) { /* 保持原始字符串 */ }
+        }
+    }
+
+    if (data && typeof data === 'object' && Number(data.Code) === -401) {
         return { ok: false, reason: 'not_activated', status: res.status, raw: data };
     }
     if (res && res.status >= 400) {
