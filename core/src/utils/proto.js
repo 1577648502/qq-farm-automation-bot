@@ -34,6 +34,7 @@ async function loadProto() {
         getResourcePath('proto', 'interactpb.proto'),
         getResourcePath('proto', 'activitypb.proto'),
         getResourcePath('proto', 'seasonpb.proto'),
+        getResourcePath('proto', 'mysteryshoppb.proto'),
     ], { keepCase: true });
 
     // 网关
@@ -209,6 +210,16 @@ async function loadProto() {
     types.GetSeasonInfoReply = root.lookupType('gamepb.seasonpb.GetSeasonInfoReply');
     types.ClaimBattlePassRewardsRequest = root.lookupType('gamepb.seasonpb.ClaimBattlePassRewardsRequest');
     types.ClaimBattlePassRewardsReply = root.lookupType('gamepb.seasonpb.ClaimBattlePassRewardsReply');
+
+    // 图鉴 (补充: 列表条目与奖励类型)
+    types.IllustratedItem = root.lookupType('gamepb.illustratedpb.IllustratedItem');
+    types.IllustratedReward = root.lookupType('gamepb.illustratedpb.IllustratedReward');
+
+    // 神秘商店
+    types.GetActiveNPCRequest = root.lookupType('gamepb.mysteryshoppb.GetActiveNPCRequest');
+    types.GetActiveNPCReply = root.lookupType('gamepb.mysteryshoppb.GetActiveNPCReply');
+    types.MysteryNPC = root.lookupType('gamepb.mysteryshoppb.MysteryNPC');
+    types.MysteryGoods = root.lookupType('gamepb.mysteryshoppb.MysteryGoods');
 
         // Proto 加载完成
     log('系统', 'Protobuf 定义加载完成');

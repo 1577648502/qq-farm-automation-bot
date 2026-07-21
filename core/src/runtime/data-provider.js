@@ -199,6 +199,8 @@ function createDataProvider(options) {
         doFriendOp: (accountRef, gid, opType) => callWorkerApi(resolveAccountRefId(accountRef), 'doFriendOp', gid, opType),
 
         getBag: (accountRef) => callWorkerApi(resolveAccountRefId(accountRef), 'getBag'),
+        getIllustrated: (accountRef) => callWorkerApi(resolveAccountRefId(accountRef), 'getIllustrated'),
+        claimIllustrated: (accountRef) => callWorkerApi(resolveAccountRefId(accountRef), 'claimIllustrated'),
 
         getBagSeeds: (accountRef) => callWorkerApi(resolveAccountRefId(accountRef), 'getBagSeeds'),
 

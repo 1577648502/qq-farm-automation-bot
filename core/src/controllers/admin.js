@@ -1299,6 +1299,40 @@ app.use('/api', (req, res, next) => {
     });
 
     // API: 背包物品
+    // API: 图鉴列表
+    app.get('/api/illustrated', async (req, res) => {
+        const id = getAccId(req);
+        if (!id) return res.status(400).json({ ok: false });
+
+        if (!checkAccountAccess(req, id)) {
+            return res.status(403).json({ ok: false, error: '无权访问此账号' });
+        }
+
+        try {
+            const data = await provider.getIllustrated(id);
+            res.json({ ok: true, data });
+        } catch (e) {
+            handleApiError(res, e);
+        }
+    });
+
+    // API: 领取图鉴奖励
+    app.post('/api/illustrated/claim', async (req, res) => {
+        const id = getAccId(req);
+        if (!id) return res.status(400).json({ ok: false });
+
+        if (!checkAccountAccess(req, id)) {
+            return res.status(403).json({ ok: false, error: '无权访问此账号' });
+        }
+
+        try {
+            const data = await provider.claimIllustrated(id);
+            res.json({ ok: true, data });
+        } catch (e) {
+            handleApiError(res, e);
+        }
+    });
+
     app.get('/api/bag', async (req, res) => {
         const id = getAccId(req);
         if (!id) return res.status(400).json({ ok: false });

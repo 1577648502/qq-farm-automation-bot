@@ -9,15 +9,24 @@ message GetIllustratedListV2Request {
     bool full = 2;
 }
 
+// 图鉴条目奖励 (抓包实测: field6 为嵌套消息 {item_id, count})
+message IllustratedReward {
+    int64 item_id = 1;
+    int64 count = 2;
+}
+
+// 抓包实测字段布局:
+//   1 seed_id, 2 unlock_status(品质/档位 1-4, 对应领奖阈值 10/40/80/200),
+//   3 planted(已解锁/种植过), 4 planted_count(领奖所需收获数, 未解锁为 0),
+//   5 harvest_count(收获数), 6 reward(嵌套), 7 has_reward(奖励已领取)
 message IllustratedItem {
     int64 seed_id = 1;
-    bool unlocked = 2;
+    int32 unlock_status = 2;
     bool planted = 3;
     int32 planted_count = 4;
     int32 harvest_count = 5;
-    int32 category = 6;
-    bytes reward_info = 7;
-    bool has_reward = 8;
+    IllustratedReward reward = 6;
+    bool has_reward = 7;
 }
 
 message GetIllustratedListV2Reply {

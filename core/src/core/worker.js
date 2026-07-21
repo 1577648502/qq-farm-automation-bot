@@ -722,6 +722,21 @@ async function handleApiCall(msg) {
             case 'getBag':
                 result = await require('../services/warehouse').getBagDetail();
                 break;
+            case 'getIllustrated': {
+                const { getIllustratedOverview } = require('../services/illustrated');
+                const { getPlantNameBySeedId, getSeedImageBySeedId } = require('../config/gameConfig');
+                const overview = await getIllustratedOverview();
+                overview.items = (overview.items || []).map((it) => ({
+                    ...it,
+                    name: getPlantNameBySeedId(it.seedId),
+                    image: getSeedImageBySeedId(it.seedId),
+                }));
+                result = overview;
+                break;
+            }
+            case 'claimIllustrated':
+                result = await require('../services/illustrated').claimIllustratedRewards();
+                break;
             case 'getBagSeeds':
                 result = await require('../services/warehouse').getBagSeeds();
                 break;
