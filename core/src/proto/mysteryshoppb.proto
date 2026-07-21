@@ -1,0 +1,34 @@
+syntax = "proto3";
+
+package gamepb.mysteryshoppb;
+
+import "corepb.proto";
+
+// ============ 神秘商店 (mysteryshoppb) ============
+// 逆向状态: 抓包时无激活 NPC, GetActiveNPC 请求/响应 body 均为空。
+// 下列 NPC/商品字段为占位骨架, 待抓到有激活 NPC 时按实际 body 补全字段号。
+
+// 神秘商店商品 (占位, 字段待补)
+message MysteryGoods {
+    int64 goods_id = 1;
+    int64 item_id = 2;         // 出售物品 (待确认)
+    int64 count = 3;           // 数量 (待确认)
+    int64 price = 4;           // 价格 (待确认)
+    int64 currency_id = 5;     // 货币类型 (待确认)
+    bool sold_out = 6;         // 是否售罄 (待确认)
+}
+
+// 神秘商店 NPC (占位, 字段待补)
+message MysteryNPC {
+    int64 npc_id = 1;
+    int64 expire_time = 2;              // NPC 消失时间 (待确认)
+    repeated MysteryGoods goods = 3;    // 在售商品 (待确认)
+}
+
+// 查询当前激活的神秘商店 NPC (实测请求 body 为空)
+message GetActiveNPCRequest {}
+
+// 实测无激活 NPC 时响应 body 为空; 有 NPC 时字段布局待补
+message GetActiveNPCReply {
+    MysteryNPC npc = 1;   // 待确认字段号
+}
