@@ -533,6 +533,13 @@ async function buyGoods(goodsId, num, price) {
     return types.BuyGoodsReply.decode(replyBody);
 }
 
+async function buySeed(goodsId, num, price) {
+    const reply = await buyGoods(goodsId, num, price);
+    const getItems = (reply.get_items || []).map(it => ({ id: toNum(it.id), count: toNum(it.count) }));
+    const costItems = (reply.cost_items || []).map(it => ({ id: toNum(it.id), count: toNum(it.count) }));
+    return { ok: true, getItems, costItems };
+}
+
 // ============ 种植 ============
 
 function encodePlantRequest(seedId, landIds, autoSlave = false) {
@@ -1984,6 +1991,7 @@ module.exports = {
     getAllLands,
     getLandsDetail,
     getAvailableSeeds,
+    buySeed,
     runFarmOperation,
     runFertilizerByConfig,
     buildLandMap,

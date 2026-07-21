@@ -12,7 +12,7 @@ const { getLevelExpProgress } = require('../config/gameConfig');
 const { getAutomation, getPreferredSeed, getConfigSnapshot, applyConfigSnapshot, getFertilizerBuyType, getFertilizerBuyCount } = require('../models/store');
 const { checkAndClaimEmails } = require('../services/email');
 const { getEmailDailyState } = require('../services/email');
-const { checkFarm, startFarmCheckLoop, stopFarmCheckLoop, refreshFarmCheckLoop, getLandsDetail, getAvailableSeeds, runFarmOperation, runFertilizerByConfig } = require('../services/farm');
+const { checkFarm, startFarmCheckLoop, stopFarmCheckLoop, refreshFarmCheckLoop, getLandsDetail, getAvailableSeeds, buySeed, runFarmOperation, runFertilizerByConfig } = require('../services/farm');
 const { checkFriends, startFriendCheckLoop, stopFriendCheckLoop, refreshFriendCheckLoop, runBadOnceOnStartup, isHelpExpLimitReached, getFriendsList, getFriendLandsDetail, doFriendOperation } = require('../services/friend');
 const { getInteractRecords } = require('../services/interact');
 const { processInviteCodes } = require('../services/invite');
@@ -716,9 +716,20 @@ async function handleApiCall(msg) {
             case 'doFriendOp':
                 result = await doFriendOperation(args[0], args[1]);
                 break;
-            case 'getSeeds':
-                result = await getAvailableSeeds();
+            case 'getSeeds': {
+                const { getSeedImageBySeedId } = require('../config/gameConfig');
+                const seeds = await getAvailableSeeds();
+                result = (seeds || []).map(s => ({
+                    ...s,
+                    image: getSeedImageBySeedId(s.seedId),
+                }));
                 break;
+            }
+            case 'buySeed': {
+                const [goodsId, num, price] = args;
+                result = await buySeed(goodsId, num, price);
+                break;
+            }
             case 'getBag':
                 result = await require('../services/warehouse').getBagDetail();
                 break;

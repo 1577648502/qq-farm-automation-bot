@@ -212,6 +212,8 @@ function createDataProvider(options) {
 
         getSeeds: (accountRef) => callWorkerApi(resolveAccountRefId(accountRef), 'getSeeds'),
 
+        buySeed: (accountRef, goodsId, num, price) => callWorkerApi(resolveAccountRefId(accountRef), 'buySeed', goodsId, num, price),
+
 
 
         setAutomation: async (accountRef, key, value) => {

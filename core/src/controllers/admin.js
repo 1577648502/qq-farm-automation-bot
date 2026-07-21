@@ -1298,6 +1298,28 @@ app.use('/api', (req, res, next) => {
         }
     });
 
+    // API: 购买种子
+    app.post('/api/seeds/buy', async (req, res) => {
+        const id = getAccId(req);
+        if (!id) return res.status(400).json({ ok: false });
+
+        if (!checkAccountAccess(req, id)) {
+            return res.status(403).json({ ok: false, error: '无权访问此账号' });
+        }
+
+        const { goodsId, num, price } = req.body || {};
+        if (!goodsId || !num || num <= 0) {
+            return res.status(400).json({ ok: false, error: '参数错误' });
+        }
+
+        try {
+            const data = await provider.buySeed(id, goodsId, num, price);
+            res.json({ ok: true, data });
+        } catch (e) {
+            handleApiError(res, e);
+        }
+    });
+
     // API: 背包物品
     // API: 图鉴列表
     app.get('/api/illustrated', async (req, res) => {
