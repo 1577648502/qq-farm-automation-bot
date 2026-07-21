@@ -112,6 +112,9 @@ function createRuntimeEngine(options = {}) {
     refreshWorkerCode,
   })
 
+  // 暴露 qcby 取码调度器热重载能力，供管理面板保存配置后立即生效（免重启）
+  dataProvider.reloadQcbyScheduler = reloadQcbyScheduler
+
   runtimeEvents.on('log', (entry) => {
     if (onLog) onLog(entry, entry && entry.accountId ? entry.accountId : '', entry && entry.accountName ? entry.accountName : '')
   })
@@ -187,6 +190,26 @@ function createRuntimeEngine(options = {}) {
     }
   }
 
+  // 重新加载 qcby 取码配置并重建调度器（停旧 → 读盘 → 重建 → 启动），实现免重启热更新
+  function reloadQcbyScheduler() {
+    try {
+      if (qcbyScheduler) qcbyScheduler.stop()
+      const qcbyConfig = loadQcbyCodeConfig()
+      qcbyScheduler = createQcbyCodeScheduler({
+        config: qcbyConfig,
+        refreshAccountCode: dataProvider.refreshAccountCode,
+        log,
+      })
+      const started = qcbyScheduler.start()
+      log('系统', `qcby 取码配置已热重载（启用=${qcbyConfig.enabled}，账号=${qcbyConfig.accounts.length}，运行=${started}）`)
+      return { ok: true, started, enabled: qcbyConfig.enabled, accounts: qcbyConfig.accounts.length }
+    } catch (err) {
+      const reason = err && err.message ? err.message : String(err)
+      log('系统', 'qcby 取码调度器热重载失败: ' + reason)
+      return { ok: false, reason }
+    }
+  }
+
   return {
     store,
     runtimeEvents,
@@ -201,6 +224,7 @@ function createRuntimeEngine(options = {}) {
     restartWorker,
     callWorkerApi,
     refreshWorkerCode,
+    reloadQcbyScheduler,
     log,
     addAccountLog,
   }

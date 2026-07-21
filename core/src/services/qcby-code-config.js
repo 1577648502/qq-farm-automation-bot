@@ -91,6 +91,71 @@ function loadQcbyCodeConfig(env = process.env) {
 }
 
 /**
+ * 规范化整份配置（用于保存到文件 / 供 UI 展示）。
+ * 与 loadQcbyCodeConfig 不同：不叠加环境变量，也不过滤掉暂时留空的账号行，
+ * 以便管理面板能完整回显用户填写的内容。
+ */
+function normalizeQcbyConfigForStore(input) {
+    const src = (input && typeof input === 'object') ? input : {};
+    const rawAccounts = Array.isArray(src.accounts) ? src.accounts : [];
+    return {
+        enabled: toBool(src.enabled, false),
+        baseUrl: String(src.baseUrl || '').trim() || DEFAULT_CONFIG.baseUrl,
+        protocol: String(src.protocol || 'mywc').trim().toLowerCase() || 'mywc',
+        intervalMs: Math.max(30 * 1000, Number(src.intervalMs) || DEFAULT_INTERVAL_MS),
+        runOnStart: src.runOnStart !== false,
+        appid: String(src.appid || '').trim(),
+        authHeader: String(src.authHeader || '').trim(),
+        codePath: String(src.codePath || '').trim(),
+        accounts: rawAccounts.map(item => ({
+            accountId: String((item && item.accountId) || '').trim(),
+            wxid: String((item && item.wxid) || '').trim(),
+            ref: String((item && item.ref) || '').trim(),
+            appid: String((item && item.appid) || '').trim(),
+            protocol: String((item && item.protocol) || '').trim().toLowerCase(),
+        })),
+    };
+}
+
+/**
+ * 读取纯文件配置（不叠加环境变量），供管理面板回显。
+ */
+function readQcbyCodeConfigForUI() {
+    const file = getDataFile(CONFIG_FILENAME);
+    try {
+        if (!fs.existsSync(file)) return normalizeQcbyConfigForStore(DEFAULT_CONFIG);
+        const cfg = JSON.parse(fs.readFileSync(file, 'utf-8')) || {};
+        return normalizeQcbyConfigForStore(cfg);
+    } catch (_) {
+        return normalizeQcbyConfigForStore(DEFAULT_CONFIG);
+    }
+}
+
+/**
+ * 保存配置到 data/qcby-code.json（合并已有文件 → 规范化 → 落盘），返回规范化后的结果。
+ * 保存后调用方应触发调度器热重载以立即生效。
+ */
+function saveQcbyCodeConfig(partial) {
+    ensureDataDir();
+    const file = getDataFile(CONFIG_FILENAME);
+    let existing = {};
+    try {
+        if (fs.existsSync(file)) existing = JSON.parse(fs.readFileSync(file, 'utf-8')) || {};
+    } catch (_) {
+        existing = {};
+    }
+    const merged = { ...existing, ...(partial && typeof partial === 'object' ? partial : {}) };
+    const normalized = normalizeQcbyConfigForStore(merged);
+    const toWrite = {
+        _说明: existing._说明 || DEFAULT_CONFIG._说明,
+        ...normalized,
+        _accounts说明: existing._accounts说明 || DEFAULT_CONFIG._accounts说明,
+    };
+    fs.writeFileSync(file, JSON.stringify(toWrite, null, 2), 'utf-8');
+    return normalized;
+}
+
+/**
  * 轻量判断 qcby 取码是否启用（不创建/写入配置文件，供其它模块安全调用）。
  */
 function isQcbyCodeEnabled(env = process.env) {
@@ -110,6 +175,9 @@ function isQcbyCodeEnabled(env = process.env) {
 module.exports = {
     loadQcbyCodeConfig,
     isQcbyCodeEnabled,
+    normalizeQcbyConfigForStore,
+    readQcbyCodeConfigForUI,
+    saveQcbyCodeConfig,
     CONFIG_FILENAME,
     DEFAULT_INTERVAL_MS,
 };

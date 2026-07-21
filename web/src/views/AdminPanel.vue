@@ -4,6 +4,7 @@ import { computed, onMounted, ref, watch } from 'vue'
 import api from '@/api'
 import BaseButton from '@/components/ui/BaseButton.vue'
 import BaseInput from '@/components/ui/BaseInput.vue'
+import BaseSelect from '@/components/ui/BaseSelect.vue'
 import BaseSwitch from '@/components/ui/BaseSwitch.vue'
 import ConfirmModal from '@/components/ConfirmModal.vue'
 import { useToastStore } from '@/stores/toast'
@@ -840,12 +841,129 @@ async function handleResetSystemConfig() {
   }
 }
 
+// ========== qcby 自动取码配置 ==========
+interface QcbyAccountRow { accountId: string, wxid: string, ref: string, appid: string, protocol: string }
+
+const qcbyConfigSaving = ref(false)
+const qcbyConfigLoading = ref(false)
+
+const qcbyProtocolOptions = [
+  { label: 'mywc（公开无鉴权，用 wxid）', value: 'mywc' },
+  { label: 'vx（JSLogin，用 wxid）', value: 'vx' },
+  { label: 'yyb（应用宝，用 ref）', value: 'yyb' },
+]
+
+const qcbyProtocolRowOptions = [
+  { label: '继承全局', value: '' },
+  ...qcbyProtocolOptions,
+]
+
+const localQcbyConfig = ref({
+  enabled: false,
+  baseUrl: 'http://127.0.0.1:8110',
+  protocol: 'mywc',
+  intervalMs: 300000,
+  runOnStart: true,
+  appid: '',
+  authHeader: '',
+  codePath: '',
+  accounts: [] as QcbyAccountRow[],
+})
+
+const qcbyAccountOptions = ref<{ label: string, value: string }[]>([])
+
+const qcbyIntervalSec = computed({
+  get: () => Math.round((Number(localQcbyConfig.value.intervalMs) || 0) / 1000),
+  set: (v: number | string) => {
+    localQcbyConfig.value.intervalMs = Math.max(30, Number(v) || 30) * 1000
+  },
+})
+
+async function fetchQcbyAccountOptions() {
+  try {
+    const { data } = await api.get('/api/accounts')
+    if (data?.ok && data.data?.accounts) {
+      qcbyAccountOptions.value = data.data.accounts.map((a: any) => ({
+        value: String(a.id),
+        label: `${a.remark || a.nick || a.name || a.id}（ID:${a.id}）`,
+      }))
+    }
+  }
+  catch (e: any) {
+    console.error('加载账号列表失败:', e)
+  }
+}
+
+async function loadQcbyConfig() {
+  qcbyConfigLoading.value = true
+  try {
+    const { data } = await api.get('/api/admin/qcby-config')
+    if (data?.ok && data.data) {
+      localQcbyConfig.value = {
+        ...localQcbyConfig.value,
+        ...data.data,
+        accounts: Array.isArray(data.data.accounts)
+          ? data.data.accounts.map((a: any) => ({
+            accountId: String(a.accountId || ''),
+            wxid: String(a.wxid || ''),
+            ref: String(a.ref || ''),
+            appid: String(a.appid || ''),
+            protocol: String(a.protocol || ''),
+          }))
+          : [],
+      }
+    }
+  }
+  catch (e: any) {
+    console.error('加载 qcby 取码配置失败:', e)
+  }
+  finally {
+    qcbyConfigLoading.value = false
+  }
+}
+
+function addQcbyAccount() {
+  localQcbyConfig.value.accounts.push({ accountId: '', wxid: '', ref: '', appid: '', protocol: '' })
+}
+
+function removeQcbyAccount(index: number) {
+  localQcbyConfig.value.accounts.splice(index, 1)
+}
+
+async function handleSaveQcbyConfig() {
+  qcbyConfigSaving.value = true
+  try {
+    const { data } = await api.post('/api/admin/qcby-config', localQcbyConfig.value)
+    if (data?.ok) {
+      const r = data.reload
+      if (r && r.ok) {
+        showAlert(`qcby 取码配置已保存并热重载生效（启用=${r.enabled ? '是' : '否'}，账号=${r.accounts}），无需重启`, 'primary')
+      }
+      else {
+        showAlert('qcby 取码配置已保存，但调度器热重载未生效，可能需要重启', 'danger')
+      }
+      await loadQcbyConfig()
+    }
+    else {
+      showAlert(`保存失败: ${data?.error || '未知错误'}`, 'danger')
+    }
+  }
+  catch (e: any) {
+    showAlert(`保存失败: ${e.message || '未知错误'}`, 'danger')
+  }
+  finally {
+    qcbyConfigSaving.value = false
+  }
+}
+
 onMounted(() => {
   fetchCards()
   fetchUsers()
   fetchLoginLogs()
   loadSystemConfig()
   loadWxConfig()
+  loadQcbyConfig()
+  fetchQcbyAccountOptions()
   fetchCardClaimStatus()
 })
 </script>
@@ -1724,6 +1842,142 @@ onMounted(() => {
                   @click="handleSaveWxConfig"
                 >
                   保存
+                </BaseButton>
+              </div>
+            </div>
+
+            <div class="border border-gray-200 rounded-lg bg-white p-4 dark:border-gray-700 dark:bg-gray-800">
+              <h4 class="mb-3 flex items-center gap-2 text-base text-gray-900 font-bold dark:text-gray-100">
+                <div class="i-carbon-password" />
+                qcby 自动取码
+              </h4>
+
+              <div class="mb-3 rounded p-2 text-xs" style="background-color: rgba(var(--theme-primary-rgb, 59, 130, 246), 0.1); color: var(--theme-primary);">
+                <div>• 通过 qcby-vxcode 协议服务周期性获取「经典农场」小程序 code，自动应用到对应账号（免扫码）</div>
+                <div>• 账号绑定：从下拉选择农场账号，mywc/vx 填 wxid，yyb 填 ref</div>
+                <div>• 保存后立即热重载生效，无需重启项目</div>
+              </div>
+
+              <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
+                <div class="col-span-2 flex flex-wrap gap-6">
+                  <BaseSwitch v-model="localQcbyConfig.enabled" label="启用自动取码" />
+                  <BaseSwitch v-model="localQcbyConfig.runOnStart" label="启动/保存后立即取一次" />
+                </div>
+                <BaseInput
+                  v-model="localQcbyConfig.baseUrl"
+                  label="服务地址 (baseUrl)"
+                  type="text"
+                  placeholder="http://127.0.0.1:8110"
+                  class="col-span-2"
+                />
+                <BaseSelect
+                  v-model="localQcbyConfig.protocol"
+                  label="默认协议"
+                  :options="qcbyProtocolOptions"
+                />
+                <BaseInput
+                  v-model="qcbyIntervalSec"
+                  label="取码间隔（秒）"
+                  type="number"
+                  placeholder="300"
+                />
+                <BaseInput
+                  v-model="localQcbyConfig.appid"
+                  label="默认 appid"
+                  type="text"
+                  placeholder="wx0132aa93a8b214ae"
+                />
+                <BaseInput
+                  v-model="localQcbyConfig.codePath"
+                  label="code 提取路径（codePath，可选）"
+                  type="text"
+                  placeholder="如 Data.Code"
+                />
+                <BaseInput
+                  v-model="localQcbyConfig.authHeader"
+                  label="鉴权头（authHeader，可选）"
+                  type="text"
+                  placeholder="Header-Name: value 或 Cookie 值"
+                  class="col-span-2"
+                />
+              </div>
+
+              <div class="mt-4">
+                <div class="mb-2 flex items-center justify-between">
+                  <span class="text-sm text-gray-700 font-medium dark:text-gray-300">账号绑定</span>
+                  <BaseButton variant="secondary" size="sm" @click="addQcbyAccount">
+                    添加账号
+                  </BaseButton>
+                </div>
+
+                <div
+                  v-if="!localQcbyConfig.accounts.length"
+                  class="rounded border border-gray-300 border-dashed p-3 text-center text-xs text-gray-400 dark:border-gray-600"
+                >
+                  暂无绑定，点击「添加账号」为农场账号配置取码身份
+                </div>
+
+                <div
+                  v-for="(row, index) in localQcbyConfig.accounts"
+                  :key="index"
+                  class="mb-2 rounded-lg border border-gray-200 p-3 dark:border-gray-700"
+                >
+                  <div class="grid grid-cols-1 sm:grid-cols-2 gap-2 text-sm">
+                    <BaseSelect
+                      v-model="row.accountId"
+                      label="农场账号"
+                      :options="qcbyAccountOptions"
+                      placeholder="选择账号"
+                    />
+                    <BaseSelect
+                      v-model="row.protocol"
+                      label="协议（可选）"
+                      :options="qcbyProtocolRowOptions"
+                    />
+                    <BaseInput
+                      v-model="row.wxid"
+                      label="wxid（mywc/vx）"
+                      type="text"
+                      placeholder="微信 wxid"
+                    />
+                    <BaseInput
+                      v-model="row.ref"
+                      label="ref（yyb）"
+                      type="text"
+                      placeholder="应用宝 ref"
+                    />
+                    <BaseInput
+                      v-model="row.appid"
+                      label="appid（可选，覆盖默认）"
+                      type="text"
+                      placeholder="留空则继承默认 appid"
+                      class="col-span-2"
+                    />
+                  </div>
+                  <div class="mt-2 flex justify-end">
+                    <BaseButton variant="danger" size="sm" @click="removeQcbyAccount(index)">
+                      删除
+                    </BaseButton>
+                  </div>
+                </div>
+              </div>
+
+              <div class="mt-3 flex justify-end gap-2">
+                <BaseButton
+                  variant="secondary"
+                  size="sm"
+                  :loading="qcbyConfigLoading"
+                  @click="loadQcbyConfig"
+                >
+                  重新加载
+                </BaseButton>
+                <BaseButton
+                  variant="primary"
+                  size="sm"
+                  :loading="qcbyConfigSaving"
+                  @click="handleSaveQcbyConfig"
+                >
+                  保存并热更新
                 </BaseButton>
               </div>
             </div>

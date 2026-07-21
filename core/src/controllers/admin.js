@@ -23,6 +23,7 @@ const { getSchedulerRegistrySnapshot } = require('../services/scheduler');
 const { createDesktopLoginService } = require('../services/desktop-login');
 const desktopSessions = require('../models/desktop-sessions');
 const userStore = require('../models/user-store');
+const { readQcbyCodeConfigForUI, saveQcbyCodeConfig } = require('../services/qcby-code-config');
 
 const hashPassword = (pwd) => crypto.createHash('sha256').update(String(pwd || '')).digest('hex');
 const adminLogger = createModuleLogger('admin');
@@ -1766,6 +1767,32 @@ app.use('/api', (req, res, next) => {
             const config = req.body || {};
             const saved = store.setGlobalWxConfig(config);
             res.json({ ok: true, data: saved });
+        } catch (e) {
+            res.status(500).json({ ok: false, error: e.message });
+        }
+    });
+
+    // ============ qcby 自动取码配置 API（仅管理员） ============
+
+    // 获取 qcby 自动取码配置
+    app.get('/api/admin/qcby-config', authRequired, adminRequired, (req, res) => {
+        try {
+            const config = readQcbyCodeConfigForUI();
+            res.json({ ok: true, data: config });
+        } catch (e) {
+            res.status(500).json({ ok: false, error: e.message });
+        }
+    });
+
+    // 保存 qcby 自动取码配置（落盘后热重载调度器，免重启立即生效）
+    app.post('/api/admin/qcby-config', authRequired, adminRequired, (req, res) => {
+        try {
+            const saved = saveQcbyCodeConfig(req.body || {});
+            let reload = { ok: false, reason: 'reload_not_supported' };
+            if (provider && typeof provider.reloadQcbyScheduler === 'function') {
+                reload = provider.reloadQcbyScheduler();
+            }
+            res.json({ ok: true, data: saved, reload });
         } catch (e) {
             res.status(500).json({ ok: false, error: e.message });
         }
