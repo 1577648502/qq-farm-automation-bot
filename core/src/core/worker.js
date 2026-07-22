@@ -735,13 +735,17 @@ async function handleApiCall(msg) {
                 break;
             case 'getIllustrated': {
                 const { getIllustratedOverview } = require('../services/illustrated');
-                const { getPlantNameBySeedId, getSeedImageBySeedId } = require('../config/gameConfig');
+                const { getPlantNameBySeedId, getSeedImageBySeedId, getPlantBySeedId } = require('../config/gameConfig');
                 const overview = await getIllustratedOverview();
-                overview.items = (overview.items || []).map((it) => ({
-                    ...it,
-                    name: getPlantNameBySeedId(it.seedId),
-                    image: getSeedImageBySeedId(it.seedId),
-                }));
+                overview.items = (overview.items || []).map((it) => {
+                    const plant = getPlantBySeedId(it.seedId);
+                    return {
+                        ...it,
+                        name: getPlantNameBySeedId(it.seedId),
+                        image: getSeedImageBySeedId(it.seedId),
+                        requiredLevel: plant ? (Number(plant.land_level_need) || 0) : 0,
+                    };
+                }).sort((a, b) => (a.requiredLevel - b.requiredLevel) || (a.seedId - b.seedId));
                 result = overview;
                 break;
             }

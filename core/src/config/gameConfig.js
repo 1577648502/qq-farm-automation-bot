@@ -419,7 +419,10 @@ function getPlantName(plantId) {
  */
 function getPlantNameBySeedId(seedId) {
     const plant = seedToPlant.get(seedId);
-    return plant ? plant.name : `种子${seedId}`;
+    if (plant && plant.name) return plant.name;
+    const seedItem = seedItemMap.get(Number(seedId) || 0);
+    if (seedItem && seedItem.name) return String(seedItem.name).replace(/种子$/, '');
+    return `种子${seedId}`;
 }
 
 /**
