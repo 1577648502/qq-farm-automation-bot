@@ -735,10 +735,10 @@ async function handleApiCall(msg) {
                 break;
             case 'getIllustrated': {
                 const { getIllustratedOverview } = require('../services/illustrated');
-                const { getPlantNameBySeedId, getSeedImageBySeedId, getPlantBySeedId } = require('../config/gameConfig');
+                const { getPlantNameBySeedId, getSeedImageBySeedId, getPlantBySeedId, getPlantByFruitId } = require('../config/gameConfig');
                 const overview = await getIllustratedOverview();
                 overview.items = (overview.items || []).map((it) => {
-                    const plant = getPlantBySeedId(it.seedId);
+                    const plant = getPlantBySeedId(it.seedId) || getPlantByFruitId(it.seedId);
                     return {
                         ...it,
                         name: getPlantNameBySeedId(it.seedId),

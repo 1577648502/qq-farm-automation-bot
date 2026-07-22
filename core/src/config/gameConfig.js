@@ -418,11 +418,17 @@ function getPlantName(plantId) {
  * @param {number} seedId - 种子ID
  */
 function getPlantNameBySeedId(seedId) {
-    const plant = seedToPlant.get(seedId);
+    const id = Number(seedId) || 0;
+    const plant = seedToPlant.get(id);
     if (plant && plant.name) return plant.name;
-    const seedItem = seedItemMap.get(Number(seedId) || 0);
+    // 图鉴用的是果实id(4xxxx)，按果实id反查植物名
+    const byFruit = fruitToPlant.get(id);
+    if (byFruit && byFruit.name) return byFruit.name;
+    const seedItem = seedItemMap.get(id);
     if (seedItem && seedItem.name) return String(seedItem.name).replace(/种子$/, '');
-    return `种子${seedId}`;
+    const info = itemInfoMap.get(id);
+    if (info && info.name) return String(info.name).replace(/种子$/, '');
+    return `种子${id}`;
 }
 
 /**
