@@ -218,8 +218,9 @@ async function loadProto() {
     // 神秘商店
     types.GetActiveNPCRequest = root.lookupType('gamepb.mysteryshoppb.GetActiveNPCRequest');
     types.GetActiveNPCReply = root.lookupType('gamepb.mysteryshoppb.GetActiveNPCReply');
-    types.MysteryNPC = root.lookupType('gamepb.mysteryshoppb.MysteryNPC');
     types.MysteryGoods = root.lookupType('gamepb.mysteryshoppb.MysteryGoods');
+    types.MysteryBuyRequest = root.lookupType('gamepb.mysteryshoppb.BuyRequest');
+    types.MysteryBuyReply = root.lookupType('gamepb.mysteryshoppb.BuyReply');
 
         // Proto 加载完成
     log('系统', 'Protobuf 定义加载完成');

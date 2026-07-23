@@ -27,6 +27,7 @@ const { setInitialValues, resetSessionGains, recordOperation, initStatsWithPersi
 const { initStatusBar, setStatusPlatform, statusData } = require('../services/status');
 const { setRecordGoldExpHook } = require('../services/status');
 const { cleanupTaskSystem, checkAndClaimTasks, getTaskClaimDailyState, getTaskDailyStateLikeApp, getGrowthTaskStateLikeApp } = require('../services/task');
+const { getActiveMysteryShop, buyMysteryGoods, checkAndBuyMysteryShop } = require('../services/mystery-shop');
 const { sellAllFruits, getBag, getBagItems, openFertilizerGiftPacksSilently } = require('../services/warehouse');
 if (parentPort && workerData && workerData.accountId && !process.env.FARM_ACCOUNT_ID) {
     process.env.FARM_ACCOUNT_ID = String(workerData.accountId);
@@ -157,6 +158,7 @@ async function runDailyRoutines(force = false) {
         await performDailyMonthCardGift(force);
         await buyFreeGifts(force);
         await performDailyVipGift(force);
+        await checkAndBuyMysteryShop();
     } catch (e) {
         log('系统', `每日任务调度失败: ${e.message}`, { module: 'system', event: '每日任务', result: 'error' });
     }
@@ -164,6 +166,7 @@ async function runDailyRoutines(force = false) {
 
 function stopDailyRoutineTimer() {
     workerScheduler.clear('daily_routine_interval');
+    workerScheduler.clear('mystery_shop_interval');
 }
 
 function startDailyRoutineTimer() {
@@ -178,6 +181,11 @@ function startDailyRoutineTimer() {
         lastDailyRunDate = today;
         runDailyRoutines(true).catch(() => null);
     });
+    // 神秘商店 NPC 会在一天中随时刷新，定时检测自动购买（开关关闭时内部直接返回）
+    workerScheduler.setIntervalTask('mystery_shop_interval', 10 * 60 * 1000, () => {
+        if (!loginReady) return;
+        checkAndBuyMysteryShop().catch(() => null);
+    }, { preventOverlap: true });
 }
 
 function normalizeIntervalRangeSec(minSec, maxSec, fallbackSec) {
@@ -420,6 +428,14 @@ function applyRuntimeConfig(snapshot, syncNow = false) {
                 // 保存设置时 /api/automation 可能触发多次 config_sync，这里做防抖且仅关->开触发
                 workerScheduler.setTimeoutTask('daily_routine_immediate', 400, () => {
                     runDailyRoutines(true).catch(() => null);
+                });
+            }
+
+            // 神秘商店自动购买 关->开 时立即检测一次
+            if (!(prevAuto && prevAuto.mystery_shop) && (nextAuto && nextAuto.mystery_shop)) {
+                workerScheduler.setTimeoutTask('mystery_shop_immediate', 500, () => {
+                    if (!loginReady) return;
+                    checkAndBuyMysteryShop().catch(() => null);
                 });
             }
 
@@ -730,6 +746,12 @@ async function handleApiCall(msg) {
                 result = await buySeed(goodsId, num, price);
                 break;
             }
+            case 'getMysteryShop':
+                result = await getActiveMysteryShop();
+                break;
+            case 'buyMystery':
+                result = await buyMysteryGoods(args[0]);
+                break;
             case 'getBag':
                 result = await require('../services/warehouse').getBagDetail();
                 break;

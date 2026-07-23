@@ -5,30 +5,43 @@ package gamepb.mysteryshoppb;
 import "corepb.proto";
 
 // ============ 神秘商店 (mysteryshoppb) ============
-// 逆向状态: 抓包时无激活 NPC, GetActiveNPC 请求/响应 body 均为空。
-// 下列 NPC/商品字段为占位骨架, 待抓到有激活 NPC 时按实际 body 补全字段号。
+// 实测字段布局 (2026-07 抓包, 有激活 NPC + 购买一次):
+//   GetActiveNPC 请求 body 为空; 无激活 NPC 时响应 body 也为空。
+//   有激活 NPC 时:
+//     GetActiveNPCReply { 1 npc_id, 2 goods(repeated), 3 start_time, 4 expire_time }
+//     goods 里 goods_id 即购买时要传的 id。
+//   Buy 请求只传 goods_id; 响应回 获得物品 + 更新后的商品(sold_out=1)。
 
-// 神秘商店商品 (占位, 字段待补)
+// 神秘商店商品
 message MysteryGoods {
-    int64 goods_id = 1;
-    int64 item_id = 2;         // 出售物品 (待确认)
-    int64 count = 3;           // 数量 (待确认)
-    int64 price = 4;           // 价格 (待确认)
-    int64 currency_id = 5;     // 货币类型 (待确认)
-    bool sold_out = 6;         // 是否售罄 (待确认)
-}
-
-// 神秘商店 NPC (占位, 字段待补)
-message MysteryNPC {
-    int64 npc_id = 1;
-    int64 expire_time = 2;              // NPC 消失时间 (待确认)
-    repeated MysteryGoods goods = 3;    // 在售商品 (待确认)
+    int64 goods_id = 1;      // 购买用的商品 id (Buy 请求传这个)
+    int64 item_id = 2;       // 出售的物品 id
+    int64 count = 3;         // 每次购买获得数量 (实测 3)
+    int64 field4 = 4;        // 待确认 (实测 3)
+    int64 currency_id = 5;   // 货币/价格类型 id (实测 1001)
+    int64 price = 6;         // 现价 (实测 5000)
+    int64 discount = 7;      // 折扣, 原价的百分比 (实测 50 = 5 折)
+    bool sold_out = 8;       // 已购买/售罄 (购买后响应里 =1)
+    int64 origin_price = 9;  // 原价 (实测 10000)
 }
 
 // 查询当前激活的神秘商店 NPC (实测请求 body 为空)
 message GetActiveNPCRequest {}
 
-// 实测无激活 NPC 时响应 body 为空; 有 NPC 时字段布局待补
+// 无激活 NPC 时响应 body 为空
 message GetActiveNPCReply {
-    MysteryNPC npc = 1;   // 待确认字段号
+    int64 npc_id = 1;                  // NPC id (实测 1)
+    repeated MysteryGoods goods = 2;   // 在售商品
+    int64 start_time = 3;              // 生效时间 (unix 秒)
+    int64 expire_time = 4;             // 失效时间 (unix 秒)
+}
+
+// 购买神秘商店商品
+message BuyRequest {
+    int64 goods_id = 1;
+}
+
+message BuyReply {
+    corepb.Item get_item = 1;   // 获得的物品
+    MysteryGoods goods = 2;     // 更新后的商品状态 (sold_out=1)
 }

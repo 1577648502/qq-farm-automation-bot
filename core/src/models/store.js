@@ -146,6 +146,7 @@ const DEFAULT_ACCOUNT_CONFIG = {
         fertilizer_gift: false,
         fertilizer_buy_organic: false,
         fertilizer_buy_normal: false,
+        mystery_shop: false, // 神秘商店自动购买
         sell: false,
         fertilizer: 'smart',
         fertilizer_multi_season: true,

@@ -1320,6 +1320,45 @@ app.use('/api', (req, res, next) => {
         }
     });
 
+    // API: 神秘商店当前激活 NPC 及在售商品
+    app.get('/api/mystery-shop', async (req, res) => {
+        const id = getAccId(req);
+        if (!id) return res.status(400).json({ ok: false });
+
+        if (!checkAccountAccess(req, id)) {
+            return res.status(403).json({ ok: false, error: '无权访问此账号' });
+        }
+
+        try {
+            const data = await provider.getMysteryShop(id);
+            res.json({ ok: true, data });
+        } catch (e) {
+            handleApiError(res, e);
+        }
+    });
+
+    // API: 购买神秘商店商品
+    app.post('/api/mystery-shop/buy', async (req, res) => {
+        const id = getAccId(req);
+        if (!id) return res.status(400).json({ ok: false });
+
+        if (!checkAccountAccess(req, id)) {
+            return res.status(403).json({ ok: false, error: '无权访问此账号' });
+        }
+
+        const { goodsId } = req.body || {};
+        if (!goodsId) {
+            return res.status(400).json({ ok: false, error: '参数错误' });
+        }
+
+        try {
+            const data = await provider.buyMystery(id, goodsId);
+            res.json({ ok: true, data });
+        } catch (e) {
+            handleApiError(res, e);
+        }
+    });
+
     // API: 背包物品
     // API: 图鉴列表
     app.get('/api/illustrated', async (req, res) => {

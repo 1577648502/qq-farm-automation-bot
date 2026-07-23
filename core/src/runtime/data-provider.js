@@ -214,6 +214,10 @@ function createDataProvider(options) {
 
         buySeed: (accountRef, goodsId, num, price) => callWorkerApi(resolveAccountRefId(accountRef), 'buySeed', goodsId, num, price),
 
+        getMysteryShop: (accountRef) => callWorkerApi(resolveAccountRefId(accountRef), 'getMysteryShop'),
+
+        buyMystery: (accountRef, goodsId) => callWorkerApi(resolveAccountRefId(accountRef), 'buyMystery', goodsId),
+
 
 
         setAutomation: async (accountRef, key, value) => {
