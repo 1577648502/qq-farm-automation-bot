@@ -56,6 +56,35 @@ message ActivityData {
     ActivityBodyEmpty qqgroup = 106;
     ActivityBodyCampCheer camp_cheer = 107;
     ActivityBodyQingmei qingmei = 108;
+    ActivityBodyStarRegister star_register = 110;
+}
+
+// ============ 观星礼录 (星宿活动, head.type=13) ============
+// 实测字段布局 (2026-07 抓包, 活动「心许千灯星垂野/千星同明」, uid=SAIJI_MEGA_EVENT):
+//   Operate cmd=21 为查询, 响应 activity 里 field 110 即本 body。
+//   rewards(4) 共28条=28星宿每日奖励; stars(5) 共28条=星宿信息(角宿/亢宿...)。
+//   实测第1天 unlocked=1 且 claimed=1, 其余天两标志均为0(未开放),
+//   两标志语义按活动说明推断(每日开放后可领取), 领取RPC尚未抓到。
+message ActivityBodyStarRegister {
+    int64 field1 = 1;   // 实测=1 (疑似当前已点亮天数, 未确认)
+    int64 field2 = 2;   // 实测=30 (疑似活动总天数, 未确认)
+    repeated StarDailyReward rewards = 4;
+    repeated StarInfo stars = 5;
+}
+
+message StarDailyReward {
+    int64 day = 1;                    // 1-28
+    bool unlocked = 2;
+    bool claimed = 3;
+    repeated corepb.Item items = 5;   // 当日奖励
+}
+
+message StarInfo {
+    int64 day = 1;
+    int64 field2 = 2;    // 实测=1, 未确认
+    string name = 3;     // 星宿名(角宿/亢宿...)
+    string events = 4;   // 实测形如 "0;0:1;1:0;..." 的编码串
+    string extra = 5;    // JSON: {"category":"青龙","explain":"..."}
 }
 
 message ActivityBodyEmpty {}
@@ -266,6 +295,7 @@ message OperateRequest {
     QingmeiBatchBrewReq qingmei_batch_brew = 112;
     QingmeiBrewReq qingmei_brew = 113;
     QingmeiSellReq qingmei_sell = 114;
+    StarLightUpReq star_light_up = 119;   // 实测 cmd=21 (观星礼录 点亮/领取)
 }
 
 message OperateReply {
@@ -288,6 +318,16 @@ message OperateReply {
     QingmeiBatchBrewRsp qingmei_batch_brew = 113;
     QingmeiBrewRsp qingmei_brew = 114;
     QingmeiSellRsp qingmei_sell = 115;
+    StarLightUpRsp star_light_up = 120;   // 实测 cmd=21 响应
+}
+
+// 观星礼录 点亮/领取 (实测: 小程序打开活动页即发 cmd=21 + 本空请求体,
+// 响应 activity 带最新 star_register 状态, star_light_up 带当日星宿奖励列表)
+message StarLightUpReq {}
+
+message StarLightUpRsp {
+    string field1 = 1;                // 实测为空串, 含义未确认
+    repeated corepb.Item awards = 2;  // 实测=当日星宿奖励(29003×2, 21353×28)
 }
 
 message ActiviesChangeNotify {

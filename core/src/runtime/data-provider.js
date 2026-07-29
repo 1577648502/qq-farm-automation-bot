@@ -608,6 +608,16 @@ function createDataProvider(options) {
 
         exchangeActivityGoods: (accountRef, options) => callWorkerApi(resolveAccountRefId(accountRef), 'exchangeActivityGoods', options),
 
+        getStarActivity: (accountRef) => callWorkerApi(resolveAccountRefId(accountRef), 'getStarActivity'),
+
+        exchangeStarGoods: (accountRef, options) => callWorkerApi(resolveAccountRefId(accountRef), 'exchangeStarGoods', options),
+
+        lightUpStar: (accountRef, options) => callWorkerApi(resolveAccountRefId(accountRef), 'lightUpStar', options),
+
+        getSolarTerms: (accountRef) => callWorkerApi(resolveAccountRefId(accountRef), 'getSolarTerms'),
+
+        claimSolarTerms: (accountRef, termId) => callWorkerApi(resolveAccountRefId(accountRef), 'claimSolarTerms', termId),
+
 
 
 

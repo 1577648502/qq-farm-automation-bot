@@ -18,7 +18,7 @@ const { getInteractRecords } = require('../services/interact');
 const { processInviteCodes } = require('../services/invite');
 const { autoBuyOrganicFertilizer, autoBuyFertilizer, checkAndBuyFertilizerBoth, buyFreeGifts, getFreeGiftDailyState } = require('../services/mall');
 const { getMallCatalog, purchaseCatalogGoods } = require('../services/mall');
-const { getActivityOverview, drawLottery, drawActivity, claimBattlePassRewards, claimActivityTasks, claimDailySignin, exchangeShopGoods, performQingniangBrew, sellQingniangBrew, shareSellQingniangBrew } = require('../services/activity');
+const { getActivityOverview, drawLottery, drawActivity, claimBattlePassRewards, claimActivityTasks, claimDailySignin, exchangeShopGoods, performQingniangBrew, sellQingniangBrew, shareSellQingniangBrew, getStarActivityOverview, exchangeStarShopGoods, lightUpStarRegister, checkAndLightUpStar } = require('../services/activity');
 const { performDailyMonthCardGift, getMonthCardDailyState } = require('../services/monthcard');
 const { performDailyVipGift, getVipDailyState } = require('../services/qqvip');
 const { createScheduler, getSchedulerRegistrySnapshot } = require('../services/scheduler');
@@ -28,6 +28,7 @@ const { initStatusBar, setStatusPlatform, statusData } = require('../services/st
 const { setRecordGoldExpHook } = require('../services/status');
 const { cleanupTaskSystem, checkAndClaimTasks, getTaskClaimDailyState, getTaskDailyStateLikeApp, getGrowthTaskStateLikeApp } = require('../services/task');
 const { getActiveMysteryShop, buyMysteryGoods, checkAndBuyMysteryShop } = require('../services/mystery-shop');
+const { getSolarTerms, claimSolarTerms, checkAndClaimSolarTerms } = require('../services/solarterms');
 const { sellAllFruits, getBag, getBagItems, openFertilizerGiftPacksSilently } = require('../services/warehouse');
 if (parentPort && workerData && workerData.accountId && !process.env.FARM_ACCOUNT_ID) {
     process.env.FARM_ACCOUNT_ID = String(workerData.accountId);
@@ -159,6 +160,8 @@ async function runDailyRoutines(force = false) {
         await buyFreeGifts(force);
         await performDailyVipGift(force);
         await checkAndBuyMysteryShop();
+        await checkAndLightUpStar();
+        await checkAndClaimSolarTerms();
     } catch (e) {
         log('系统', `每日任务调度失败: ${e.message}`, { module: 'system', event: '每日任务', result: 'error' });
     }
@@ -436,6 +439,22 @@ function applyRuntimeConfig(snapshot, syncNow = false) {
                 workerScheduler.setTimeoutTask('mystery_shop_immediate', 500, () => {
                     if (!loginReady) return;
                     checkAndBuyMysteryShop().catch(() => null);
+                });
+            }
+
+            // 千星游记自动点亮 关->开 时立即执行一次
+            if (!(prevAuto && prevAuto.star_light_up) && (nextAuto && nextAuto.star_light_up)) {
+                workerScheduler.setTimeoutTask('star_light_up_immediate', 500, () => {
+                    if (!loginReady) return;
+                    checkAndLightUpStar().catch(() => null);
+                });
+            }
+
+            // 节令小礼自动领取 关->开 时立即执行一次
+            if (!(prevAuto && prevAuto.solar_terms) && (nextAuto && nextAuto.solar_terms)) {
+                workerScheduler.setTimeoutTask('solar_terms_immediate', 500, () => {
+                    if (!loginReady) return;
+                    checkAndClaimSolarTerms().catch(() => null);
                 });
             }
 
@@ -866,6 +885,21 @@ async function handleApiCall(msg) {
                 break;
             case 'exchangeActivityGoods':
                 result = await exchangeShopGoods(args[0] || {});
+                break;
+            case 'getStarActivity':
+                result = await getStarActivityOverview();
+                break;
+            case 'exchangeStarGoods':
+                result = await exchangeStarShopGoods(args[0] || {});
+                break;
+            case 'lightUpStar':
+                result = await lightUpStarRegister(args[0] || {});
+                break;
+            case 'getSolarTerms':
+                result = await getSolarTerms();
+                break;
+            case 'claimSolarTerms':
+                result = await claimSolarTerms(args[0]);
                 break;
              case 'activateDog': {
                  const [activateTypeId] = args;

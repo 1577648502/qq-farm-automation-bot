@@ -95,6 +95,15 @@ export const menuRoutes: MenuItem[] = [
   },
 
   {
+    path: 'star-activity',
+    name: 'star-activity',
+    label: '千星游记',
+    icon: 'i-carbon-star',
+    activityKey: 'qianXingEnabled',
+    component: () => import('@/views/StarActivity.vue'),
+  },
+
+  {
     path: 'pet',
     name: 'pet',
     label: '\u5ba0\u7269',

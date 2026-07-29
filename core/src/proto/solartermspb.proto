@@ -1,0 +1,42 @@
+syntax = "proto3";
+
+package gamepb.solartermspb;
+
+import "corepb.proto";
+
+// 节气/节令小礼 (实测 2026-07 抓包)
+// GetSolarTerms: 空请求 -> 全部节令列表(端午/夏至/小暑/大暑/立秋/七夕/处暑...)
+// ClaimSolarTerms: 请求只带 id -> 响应回奖励物品 + 更新后的节令状态
+// GetSolarTermsRedDot: 空请求 -> 红点标志
+
+message SolarTermInfo {
+    int64 id = 1;                     // 实测 101/102/103/201/202/203/204
+    int64 status = 2;                 // 实测: 大暑领取前=2 领取后=3; 未开始=1; 已过期=4/5(4与5区别未确认)
+    int64 start_time = 3;
+    int64 end_time = 4;
+    repeated corepb.Item items = 5;   // 节令小礼奖励(种子+点券)
+    string name = 6;                  // 大暑/立秋/七夕...
+}
+
+message GetSolarTermsRequest {}
+
+message GetSolarTermsReply {
+    repeated SolarTermInfo terms = 1;
+    int64 server_time = 2;            // 实测=当前服务器时间戳
+    // field 3/4: 关联活动配置(tips JSON等), 暂未建模
+}
+
+message ClaimSolarTermsRequest {
+    int64 id = 1;
+}
+
+message ClaimSolarTermsReply {
+    repeated corepb.Item awards = 1;  // 实测: 21353×20 + 1002(点券)×200
+    SolarTermInfo term = 2;           // 更新后的节令(status=3)
+}
+
+message GetSolarTermsRedDotRequest {}
+
+message GetSolarTermsRedDotReply {
+    bool red_dot = 1;                 // 实测=1(有可领取节令)
+}

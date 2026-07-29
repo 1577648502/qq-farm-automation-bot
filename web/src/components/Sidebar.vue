@@ -248,6 +248,7 @@ const currentAnnouncement = ref<{ content: string, showOnce: boolean, updatedAt:
 const activityStatus = ref({
   heFengEnabled: true,
   qingNiangEnabled: true,
+  qianXingEnabled: true,
 })
 
 async function loadActivityStatus() {
@@ -257,6 +258,7 @@ async function loadActivityStatus() {
       activityStatus.value = {
         heFengEnabled: res.data.heFengEnabled !== false,
         qingNiangEnabled: res.data.qingNiangEnabled !== false,
+        qianXingEnabled: res.data.qianXingEnabled !== false,
       }
     }
   } catch {

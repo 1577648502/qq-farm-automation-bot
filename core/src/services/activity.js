@@ -204,7 +204,8 @@ const {
 } = require('../config/gameConfig');
 const { sendMsgAsync } = require('../utils/network');
 const { types } = require('../utils/proto');
-const { toLong, toNum, log } = require('../utils/utils');
+const { toLong, toNum, log, logWarn } = require('../utils/utils');
+const { isAutomationOn } = require('../models/store');
 const path = require('node:path');
 const fs = require('node:fs');
 
@@ -239,6 +240,9 @@ const QINGNIANG_SEED_ID = 21221;    // 青梅种子ID
 const QINGNIANG_FRUIT_ID = 41221;   // 青梅果实ID
 const QINGNIANG_DAILY_SIGNIN_REWARD_ID = 1;
 const GOLD_ITEM_ID = 1001;          // 金币ID
+// 星宿活动(观星礼录+兑换商店), 实测 uid=SAIJI_MEGA_EVENT
+const XINGSU_ACTIVITY_NAME = '心许千灯星垂野';
+const XINGSU_ACTIVITY_ALIASES = ['心许千灯星垂野', '千星同明', '观星礼录', '星宿'];
 // 酿造/卖出操作后缓存的最新青酿活动状态，用于 overview 实时同步
 let _latestQingmeiState = null;
 let _latestBrewGold = 0;
@@ -282,6 +286,7 @@ const ACTIVITY_OPERATE = {
     QINGMEI_BATCH_BREW: 14,
     QINGMEI_BREW: 15,
     QINGMEI_SELL: 16,
+    STAR_LIGHT_UP: 21,   // 观星礼录 点亮/领取当日星宿
 };
 const OTHER_EVENT_NAME_TERMS = [
     '南瓜乐翻天',
@@ -594,6 +599,42 @@ function normalizeQingmeiBody(qingmei) {
     };
 }
 
+function normalizeStarRegister(star) {
+    if (!star) return null;
+    const rewards = (Array.isArray(star.rewards) ? star.rewards : []).map(reward => ({
+        day: toNum(reward && reward.day),
+        unlocked: !!(reward && reward.unlocked),
+        claimed: !!(reward && reward.claimed),
+        items: (Array.isArray(reward && reward.items) ? reward.items : []).map(normalizeRewardItem),
+    }));
+    const starByDay = new Map();
+    for (const info of (Array.isArray(star.stars) ? star.stars : [])) {
+        let category = '';
+        let explain = '';
+        try {
+            const extra = JSON.parse(String(info && info.extra || '') || '{}');
+            category = String(extra.category || '').trim();
+            explain = String(extra.explain || '').trim();
+        } catch (e) { /* extra 非 JSON 时忽略 */ }
+        starByDay.set(toNum(info && info.day), {
+            day: toNum(info && info.day),
+            name: String(info && info.name || ''),
+            category,
+            explain,
+        });
+    }
+    const days = rewards
+        .map(reward => ({ ...reward, star: starByDay.get(reward.day) || null }))
+        .sort((a, b) => a.day - b.day);
+    return {
+        totalDays: days.length,
+        unlockedCount: days.filter(d => d.unlocked).length,
+        claimedCount: days.filter(d => d.claimed).length,
+        claimableCount: days.filter(d => d.unlocked && !d.claimed).length,
+        days,
+    };
+}
+
 function normalizeShopGoods(goods) {
     const item = (Array.isArray(goods && goods.item) ? goods.item : []).map(normalizeShopItem);
     const cost = (Array.isArray(goods && goods.cost) ? goods.cost : []).map(normalizeShopItem);
@@ -648,9 +689,11 @@ function normalizeActivityData(data, groupHead = null) {
         qingmei: normalizeQingmeiBody(data.qingmei),
         shop: normalizeShop(data.shop),
         dailySignin: normalizeDailySignin(data.daily_signin),
+        starRegister: normalizeStarRegister(data.star_register),
     };
     activity.bodyType = activity.lottery ? 'lottery'
-        : activity.qingmei ? 'qingmei'
+        : activity.starRegister ? 'starRegister'
+            : activity.qingmei ? 'qingmei'
             : activity.shop ? 'shop'
                 : activity.dailySignin ? 'dailySignin'
                     : data.draw ? 'draw'
@@ -1114,6 +1157,135 @@ async function claimDailySignin(options = {}) {
     };
 }
 
+function selectStarEntries(reply) {
+    const entries = flattenActivityGroups(reply);
+    const registerEntry = entries.find(entry => entry.data && entry.data.star_register) || null;
+    const groupId = toNum(registerEntry && registerEntry.groupHead && registerEntry.groupHead.id);
+    const inGroup = groupId
+        ? entries.filter(entry => toNum(entry.groupHead && entry.groupHead.id) === groupId)
+        : entries.filter(entry => entryIncludes(entry, XINGSU_ACTIVITY_ALIASES)
+            || includesAny(String(entry.groupHead && entry.groupHead.name || ''), XINGSU_ACTIVITY_ALIASES));
+    const shopEntry = inGroup.find(entry => entry.data && entry.data.shop) || null;
+    return { entries, registerEntry, shopEntry };
+}
+
+async function getStarActivityOverview() {
+    const reply = await getActivityList();
+    const selection = selectStarEntries(reply);
+    const register = selection.registerEntry
+        ? normalizeActivityData(selection.registerEntry.data, selection.registerEntry.groupHead)
+        : null;
+    const shop = selection.shopEntry
+        ? normalizeActivityData(selection.shopEntry.data, selection.shopEntry.groupHead)
+        : null;
+
+    // 从商店售价里推断活动货币, 叠加背包持有数
+    let currency = null;
+    const shopGoodsList = shop && shop.shop ? shop.shop.goods : [];
+    let currencyId = 0;
+    for (const goods of shopGoodsList) {
+        for (const cost of (goods.cost || [])) {
+            if (toNum(cost.id) > 0) { currencyId = toNum(cost.id); break; }
+        }
+        if (currencyId) break;
+    }
+    if (currencyId > 0) {
+        let count = 0;
+        try {
+            const bagReply = await getBag();
+            const counts = buildBagCounts(getBagItems(bagReply));
+            count = counts.get(currencyId) || 0;
+        } catch (e) { /* 背包读取失败不阻断概览 */ }
+        currency = {
+            id: currencyId,
+            name: getPriceUnit(currencyId),
+            image: getItemImageById(currencyId),
+            count,
+        };
+    }
+
+    const group = (selection.registerEntry && selection.registerEntry.groupHead)
+        || (selection.shopEntry && selection.shopEntry.groupHead)
+        || null;
+    return {
+        updatedAt: Date.now(),
+        active: !!(register || shop),
+        group: normalizeHead(group),
+        register,
+        shop,
+        currency,
+    };
+}
+
+async function lightUpStarRegister(options = {}) {
+    let activityId = toNum(options.activityId);
+    if (!activityId) {
+        const listReply = await getActivityList();
+        const selection = selectStarEntries(listReply);
+        activityId = toNum(selection.registerEntry && selection.registerEntry.data
+            && selection.registerEntry.data.head && selection.registerEntry.data.head.id);
+    }
+    if (!activityId) throw new Error('没有找到观星礼录活动');
+
+    const reply = await operateActivity(activityId, ACTIVITY_OPERATE.STAR_LIGHT_UP, {
+        star_light_up: {},
+    });
+    const rsp = reply && reply.star_light_up ? reply.star_light_up : {};
+    const activity = normalizeActivityData(reply && reply.activity);
+    return {
+        activityId,
+        awards: (Array.isArray(rsp.awards) ? rsp.awards : []).map(normalizeRewardItem),
+        register: activity && activity.starRegister ? activity.starRegister : null,
+        activity,
+    };
+}
+
+// 千星游记自动点亮领取(开关关闭时直接返回); 活动不存在时静默跳过
+async function checkAndLightUpStar() {
+    if (!isAutomationOn('star_light_up')) return { skipped: true };
+    try {
+        const listReply = await getActivityList();
+        const selection = selectStarEntries(listReply);
+        const activityId = toNum(selection.registerEntry && selection.registerEntry.data
+            && selection.registerEntry.data.head && selection.registerEntry.data.head.id);
+        if (!activityId) return { skipped: true, reason: 'no_activity' };
+        const result = await lightUpStarRegister({ activityId });
+        const awardText = (result.awards || []).map(a => `${a.name}×${a.count}`).join('、');
+        log('活动', `千星游记自动点亮领取完成${awardText ? `: ${awardText}` : ''}`, { module: 'activity', event: '千星点亮', result: 'success' });
+        return result;
+    } catch (e) {
+        logWarn('活动', `千星游记自动点亮失败: ${e.message}`, { module: 'activity', event: '千星点亮', result: 'error' });
+        return { error: e.message };
+    }
+}
+
+async function exchangeStarShopGoods(options = {}) {
+    const goodsId = Math.max(0, toNum(options.goodsId));
+    const count = Math.max(1, Math.floor(Number(options.count) || 1));
+    if (!goodsId) throw new Error('缺少兑换商品 ID');
+
+    const reply0 = await getActivityList();
+    const selection = selectStarEntries(reply0);
+    const shopEntry = selection.shopEntry;
+    const activityId = toNum(options.activityId) || toNum(shopEntry && shopEntry.data && shopEntry.data.head && shopEntry.data.head.id);
+    if (!activityId) throw new Error('没有找到星宿兑换商店');
+
+    const reply = await operateActivity(activityId, ACTIVITY_OPERATE.SHOP_BUY, {
+        shop_buy: {
+            goods_id: toLong(goodsId),
+            count: toLong(count),
+        },
+    });
+    const rsp = reply && reply.shop_buy ? reply.shop_buy : {};
+    return {
+        goodsId,
+        count,
+        activity: normalizeActivityData(reply && reply.activity),
+        awards: (Array.isArray(rsp.awards) ? rsp.awards : []).map(normalizeRewardItem),
+        costs: (Array.isArray(rsp.costs) ? rsp.costs : []).map(normalizeRewardItem),
+    };
+}
+
 async function claimBattlePassRewards() {
     const body = types.ClaimBattlePassRewardsRequest.encode(types.ClaimBattlePassRewardsRequest.create({})).finish();
     const { body: replyBody } = await sendMsgAsync(SEASON_SERVICE, 'ClaimBattlePassRewards', body);
@@ -1214,9 +1386,14 @@ module.exports = {
     drawLottery,
     exchangeShopGoods,
     getActivityList,
+    XINGSU_ACTIVITY_NAME,
+    exchangeStarShopGoods,
     getActivityLiveState,
     getActivityOverview,
     getSeasonInfo,
+    getStarActivityOverview,
+    lightUpStarRegister,
+    checkAndLightUpStar,
     performQingniangBrew,
     sellQingniangBrew,
     shareSellQingniangBrew,

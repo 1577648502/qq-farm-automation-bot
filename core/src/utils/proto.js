@@ -35,6 +35,7 @@ async function loadProto() {
         getResourcePath('proto', 'activitypb.proto'),
         getResourcePath('proto', 'seasonpb.proto'),
         getResourcePath('proto', 'mysteryshoppb.proto'),
+        getResourcePath('proto', 'solartermspb.proto'),
     ], { keepCase: true });
 
     // 网关
@@ -221,6 +222,12 @@ async function loadProto() {
     types.MysteryGoods = root.lookupType('gamepb.mysteryshoppb.MysteryGoods');
     types.MysteryBuyRequest = root.lookupType('gamepb.mysteryshoppb.BuyRequest');
     types.MysteryBuyReply = root.lookupType('gamepb.mysteryshoppb.BuyReply');
+
+    // 节令小礼
+    types.GetSolarTermsRequest = root.lookupType('gamepb.solartermspb.GetSolarTermsRequest');
+    types.GetSolarTermsReply = root.lookupType('gamepb.solartermspb.GetSolarTermsReply');
+    types.ClaimSolarTermsRequest = root.lookupType('gamepb.solartermspb.ClaimSolarTermsRequest');
+    types.ClaimSolarTermsReply = root.lookupType('gamepb.solartermspb.ClaimSolarTermsReply');
 
         // Proto 加载完成
     log('系统', 'Protobuf 定义加载完成');

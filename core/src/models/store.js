@@ -147,6 +147,8 @@ const DEFAULT_ACCOUNT_CONFIG = {
         fertilizer_buy_organic: false,
         fertilizer_buy_normal: false,
         mystery_shop: false, // 神秘商店自动购买
+        star_light_up: false, // 千星游记自动点亮领取
+        solar_terms: false,   // 节令小礼自动领取
         sell: false,
         fertilizer: 'smart',
         fertilizer_multi_season: true,
@@ -603,6 +605,7 @@ function loadGlobalConfig() {
                     os: String(data.systemConfig.os || 'iOS').trim(),
                     activityHeFeng: data.systemConfig.activityHeFeng !== false,
                     activityQingNiang: data.systemConfig.activityQingNiang !== false,
+                    activityQianXing: data.systemConfig.activityQianXing !== false,
                 };
             }
 
@@ -1303,6 +1306,7 @@ function setSystemConfig(config) {
         os: String(config.os || 'iOS').trim(),
         activityHeFeng: config.activityHeFeng !== false,
         activityQingNiang: config.activityQingNiang !== false,
+        activityQianXing: config.activityQianXing !== false,
     };
     saveGlobalConfig();
     return { ...globalConfig.systemConfig };
@@ -1313,6 +1317,7 @@ function getActivityStatus() {
     return {
         heFengEnabled: cfg.activityHeFeng !== false,
         qingNiangEnabled: cfg.activityQingNiang !== false,
+        qianXingEnabled: cfg.activityQianXing !== false,
     };
 }
 

@@ -67,6 +67,7 @@ async function getActivityStatus() {
       cachedActivityStatus = {
         heFengEnabled: res.data.heFengEnabled !== false,
         qingNiangEnabled: res.data.qingNiangEnabled !== false,
+        qianXingEnabled: res.data.qianXingEnabled !== false,
       }
       return cachedActivityStatus
     }
@@ -108,6 +109,7 @@ router.beforeEach(async (to, _from) => {
   const activityRouteMap: Record<string, string> = {
     activity: 'heFengEnabled',
     qingniang: 'qingNiangEnabled',
+    'star-activity': 'qianXingEnabled',
   }
   const activityKey = to.name ? activityRouteMap[String(to.name)] : undefined
   if (activityKey) {

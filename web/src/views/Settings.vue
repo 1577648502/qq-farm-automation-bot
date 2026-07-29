@@ -586,6 +586,8 @@ const localAutomationSettings = ref({
     fertilizer_buy_organic: false,
     fertilizer_buy_normal: false,
     mystery_shop: false,
+    star_light_up: false,
+    solar_terms: false,
     fertilizer: 'normal',
     skip_own_weed_bug: false,
     fertilizer_multi_season: false,
@@ -625,6 +627,8 @@ function syncLocalAutomationSettings() {
         fertilizer_buy_organic: false,
         fertilizer_buy_normal: false,
         mystery_shop: false,
+        star_light_up: false,
+        solar_terms: false,
         fertilizer: 'none',
         skip_own_weed_bug: false,
         fertilizer_multi_season: false,
@@ -648,6 +652,8 @@ function syncLocalAutomationSettings() {
         fertilizer_buy_organic: false,
         fertilizer_buy_normal: false,
         mystery_shop: false,
+        star_light_up: false,
+        solar_terms: false,
         fertilizer: 'none',
         skip_own_weed_bug: false,
         fertilizer_multi_season: false,
@@ -1399,6 +1405,8 @@ async function handleTestOffline() {
             <BaseSwitch v-model="localAutomationSettings.automation.fertilizer_buy_organic" label="自动购买有机化肥" />
             <BaseSwitch v-model="localAutomationSettings.automation.fertilizer_buy_normal" label="自动购买无机化肥" />
             <BaseSwitch v-model="localAutomationSettings.automation.mystery_shop" label="自动购买神秘商店" />
+            <BaseSwitch v-model="localAutomationSettings.automation.star_light_up" label="千星游记自动点亮领取" />
+            <BaseSwitch v-model="localAutomationSettings.automation.solar_terms" label="节令小礼自动领取" />
             <BaseSwitch v-model="localAutomationSettings.automation.skip_own_weed_bug" label="不除自己草虫" />
           </div>
 

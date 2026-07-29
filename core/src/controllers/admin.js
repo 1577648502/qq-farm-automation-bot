@@ -1820,8 +1820,8 @@ app.use('/api', (req, res, next) => {
     // 保存系统配置
     app.post('/api/admin/system-config', authRequired, adminRequired, (req, res) => {
         try {
-            const { serverUrl, clientVersion, platform, os, activityHeFeng, activityQingNiang } = req.body || {};
-            const newConfig = { serverUrl, clientVersion, platform, os, activityHeFeng, activityQingNiang };
+            const { serverUrl, clientVersion, platform, os, activityHeFeng, activityQingNiang, activityQianXing } = req.body || {};
+            const newConfig = { serverUrl, clientVersion, platform, os, activityHeFeng, activityQingNiang, activityQianXing };
             const saved = store.setSystemConfig(newConfig);
             updateRuntimeConfig(saved);
             const current = getRuntimeConfig();
@@ -3034,6 +3034,61 @@ app.use('/api', (req, res, next) => {
         const accountId = req.headers['x-account-id'] || '';
         try {
             const result = await provider.exchangeActivityGoods(accountId, req.body || {});
+            res.json({ ok: true, data: result });
+        } catch (e) {
+            res.status(500).json({ ok: false, error: e.message });
+        }
+    });
+
+    app.get('/api/activity/star', async (req, res) => {
+        if (!provider) return res.json({ ok: false, error: 'Provider not ready' });
+        const accountId = req.headers['x-account-id'] || '';
+        try {
+            const result = await provider.getStarActivity(accountId);
+            res.json({ ok: true, data: result });
+        } catch (e) {
+            res.status(500).json({ ok: false, error: e.message });
+        }
+    });
+
+    app.post('/api/activity/star/exchange', async (req, res) => {
+        if (!provider) return res.json({ ok: false, error: 'Provider not ready' });
+        const accountId = req.headers['x-account-id'] || '';
+        try {
+            const result = await provider.exchangeStarGoods(accountId, req.body || {});
+            res.json({ ok: true, data: result });
+        } catch (e) {
+            res.status(500).json({ ok: false, error: e.message });
+        }
+    });
+
+    app.post('/api/activity/star/light-up', async (req, res) => {
+        if (!provider) return res.json({ ok: false, error: 'Provider not ready' });
+        const accountId = req.headers['x-account-id'] || '';
+        try {
+            const result = await provider.lightUpStar(accountId, req.body || {});
+            res.json({ ok: true, data: result });
+        } catch (e) {
+            res.status(500).json({ ok: false, error: e.message });
+        }
+    });
+
+    app.get('/api/solar-terms', async (req, res) => {
+        if (!provider) return res.json({ ok: false, error: 'Provider not ready' });
+        const accountId = req.headers['x-account-id'] || '';
+        try {
+            const result = await provider.getSolarTerms(accountId);
+            res.json({ ok: true, data: result });
+        } catch (e) {
+            res.status(500).json({ ok: false, error: e.message });
+        }
+    });
+
+    app.post('/api/solar-terms/claim', async (req, res) => {
+        if (!provider) return res.json({ ok: false, error: 'Provider not ready' });
+        const accountId = req.headers['x-account-id'] || '';
+        try {
+            const result = await provider.claimSolarTerms(accountId, (req.body || {}).id);
             res.json({ ok: true, data: result });
         } catch (e) {
             res.status(500).json({ ok: false, error: e.message });
