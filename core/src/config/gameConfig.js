@@ -284,32 +284,6 @@ function loadConfigs() {
         console.warn('[配置] 加载 Plant.json 失败:', e.message);
     }
 
-    // 合并同步目录(data/gameConfig)里新增的植物：内置 Plant.json 的等级数据经过人工校正，
-    // 因此只追加内置缺少的新植物，不覆盖已有条目
-    try {
-        const syncedPlantPath = path.join(getDataDir(), 'gameConfig', 'Plant.json');
-        if (fs.existsSync(syncedPlantPath)) {
-            const syncedPlants = JSON.parse(fs.readFileSync(syncedPlantPath, 'utf8'));
-            let added = 0;
-            for (const plant of syncedPlants) {
-                if (!plant || !plant.id || plantMap.has(plant.id)) continue;
-                plantMap.set(plant.id, plant);
-                if (plant.seed_id && !seedToPlant.has(plant.seed_id)) {
-                    seedToPlant.set(plant.seed_id, plant);
-                }
-                if (plant.fruit && plant.fruit.id && !fruitToPlant.has(plant.fruit.id)) {
-                    fruitToPlant.set(plant.fruit.id, plant);
-                }
-                if (Array.isArray(plantConfig)) plantConfig.push(plant);
-                added++;
-            }
-            if (added > 0) {
-                console.warn(`[配置] 已合并同步目录新增植物 (${added} 种)`);
-            }
-        }
-    } catch (e) {
-        console.warn('[配置] 合并同步 Plant.json 失败:', e.message);
-    }
 
         // 加载变异类型配置
     try {
@@ -348,6 +322,38 @@ function loadConfigs() {
         }
     } catch (e) {
         console.warn('[配置] 加载 ItemInfo.json 失败:', e.message);
+    }
+
+    // 合并同步目录(data/gameConfig)里新增的植物：内置 Plant.json 的等级数据经过人工校正，
+    // 因此只追加内置缺少的新植物，不覆盖已有条目；
+    // 同步源的 land_level_need 不准，新植物用 ItemInfo 种子物品的 level 校正
+    try {
+        const syncedPlantPath = path.join(getDataDir(), 'gameConfig', 'Plant.json');
+        if (fs.existsSync(syncedPlantPath)) {
+            const syncedPlants = JSON.parse(fs.readFileSync(syncedPlantPath, 'utf8'));
+            let added = 0;
+            for (const plant of syncedPlants) {
+                if (!plant || !plant.id || plantMap.has(plant.id)) continue;
+                const seedItem = plant.seed_id ? seedItemMap.get(Number(plant.seed_id)) : null;
+                if (seedItem && Number(seedItem.level) > 0) {
+                    plant.land_level_need = Number(seedItem.level);
+                }
+                plantMap.set(plant.id, plant);
+                if (plant.seed_id && !seedToPlant.has(plant.seed_id)) {
+                    seedToPlant.set(plant.seed_id, plant);
+                }
+                if (plant.fruit && plant.fruit.id && !fruitToPlant.has(plant.fruit.id)) {
+                    fruitToPlant.set(plant.fruit.id, plant);
+                }
+                if (Array.isArray(plantConfig)) plantConfig.push(plant);
+                added++;
+            }
+            if (added > 0) {
+                console.warn(`[配置] 已合并同步目录新增植物 (${added} 种)`);
+            }
+        }
+    } catch (e) {
+        console.warn('[配置] 合并同步 Plant.json 失败:', e.message);
     }
 
     // 加载种子图片映射（seed_images_named）

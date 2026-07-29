@@ -658,16 +658,22 @@ async function getBagSeeds() {
         const count = toNum(item && item.count);
         if (seedId <= 0 || count <= 0) continue;
 
+        // 优先用植物表；新种子可能尚未进 Plant.json，回退 ItemInfo(type=5 种子物品)
         const plant = getPlantBySeedId(seedId);
-        if (!plant) continue;
+        const seedItem = plant ? null : getItemById(seedId);
+        if (!plant && !(seedItem && Number(seedItem.type) === 5)) continue;
 
         const current = merged.get(seedId) || {
             seedId,
-            name: String(plant.name || `种子#${seedId}`),
+            name: plant
+                ? String(plant.name || `种子#${seedId}`)
+                : String(seedItem.name || `种子#${seedId}`).replace(/种子$/, ''),
             count: 0,
-            requiredLevel: Math.max(0, Number(plant.land_level_need || 0)),
+            requiredLevel: plant
+                ? Math.max(0, Number(plant.land_level_need || 0))
+                : Math.max(0, Number(seedItem.level || 0)),
             image: getSeedImageBySeedId(seedId) || getItemImageById(seedId),
-            plantSize: Math.max(1, Number(plant.size || 1)),
+            plantSize: Math.max(1, Number((plant && plant.size) || 1)),
         };
         current.count += count;
         merged.set(seedId, current);
