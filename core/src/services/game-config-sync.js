@@ -55,13 +55,43 @@ function filesEqual(leftPath, rightPath) {
     return fs.readFileSync(leftPath).equals(fs.readFileSync(rightPath));
 }
 
+function appendNewPlantsToBundled(itemSourcePath, plantSourcePath) {
+    const bundledPlantPath = getResourcePath('gameConfig', 'Plant.json');
+    if (!fs.existsSync(bundledPlantPath) || !fs.existsSync(plantSourcePath)) return false;
+    const bundledPlants = readJson(bundledPlantPath);
+    const bundledIds = new Set(bundledPlants.map(plant => Number(plant && plant.id) || 0));
+    const seedLevelById = new Map();
+    if (fs.existsSync(itemSourcePath)) {
+        for (const item of readJson(itemSourcePath)) {
+            if (Number(item && item.type) === 5 && Number(item.id) > 0) {
+                seedLevelById.set(Number(item.id), Number(item.level) || 0);
+            }
+        }
+    }
+    let added = 0;
+    for (const plant of readJson(plantSourcePath)) {
+        const id = Number(plant && plant.id) || 0;
+        if (id <= 0 || bundledIds.has(id)) continue;
+        const seedLevel = plant.seed_id ? seedLevelById.get(Number(plant.seed_id)) : 0;
+        if (seedLevel > 0) plant.land_level_need = seedLevel;
+        bundledPlants.push(plant);
+        bundledIds.add(id);
+        added++;
+    }
+    if (added > 0) writeJsonAtomic(bundledPlantPath, bundledPlants);
+    return added > 0;
+}
+
 function overwriteBundledConfigs(itemSourcePath, plantSourcePath, imageSourceDir) {
     if (isPackaged) return false;
     const bundledItemPath = getResourcePath('gameConfig', 'ItemInfo.json');
     let updated = false;
-    // 同步 ItemInfo.json（Plant.json 等级数据不准确，跳过覆盖）
+    // 同步 ItemInfo.json（Plant.json 已有条目的等级数据经过人工校正，不覆盖，只追加新植物）
     if (!filesEqual(itemSourcePath, bundledItemPath)) {
         writeAtomic(bundledItemPath, fs.readFileSync(itemSourcePath));
+        updated = true;
+    }
+    if (appendNewPlantsToBundled(itemSourcePath, plantSourcePath)) {
         updated = true;
     }
     // 同步种子图片到内置目录（前端从 src/gameConfig/seed_images_named 加载）
@@ -342,7 +372,22 @@ function resolveNativeAsset(bundleConfig, bundleConfigUrl, cacheList, assetIndex
     baseUrl.pathname = baseUrl.pathname.replace(/config\.[^/]+\.json$/, '');
     const prefix = new URL(`native/${uuid.slice(0, 2)}/${uuid}.${version}.`, baseUrl).toString();
     const cachedUrl = Object.keys(cacheList.files || {}).find(url => url.startsWith(prefix));
-    return { uuid, url: cachedUrl || `${prefix}png` };
+    // 浏览器无法渲染 .astc 纹理，CDN 同时提供 png 变体，优先取 png
+    if (cachedUrl && /\.astc$/i.test(cachedUrl)) {
+        return { uuid, url: `${prefix}png`, fallbackUrl: cachedUrl };
+    }
+    return { uuid, url: cachedUrl || `${prefix}png`, fallbackUrl: '' };
+}
+
+async function readNativeAssetContent(cache, cacheList, nativeAsset) {
+    try {
+        return await readCachedOrRemote(cache, cacheList, nativeAsset.url);
+    } catch (error) {
+        if (nativeAsset.fallbackUrl) {
+            return readCachedOrRemote(cache, cacheList, nativeAsset.fallbackUrl);
+        }
+        throw error;
+    }
 }
 
 async function mapLimit(values, limit, worker) {
@@ -408,11 +453,13 @@ async function syncSeedImages(cache, cacheList, plantBundle, items, outputDir) {
             return true;
         };
 
+        const buildFilename = (ext) => `${Number(item.id)}_${displayName}_${mappedAssetName}_Seed${ext}`;
+
         const candidate = getSeedAssetCandidates(item).find(name => assetIndex.has(name));
         if (!candidate) {
             if (useBundledFallback()) return;
             // fallback: generate placeholder for missing image
-            writePlaceholderPng(path.join(outputDir, filename), displayName || String(item.id));
+            writePlaceholderPng(path.join(outputDir, buildFilename('.png')), displayName || String(item.id));
             syncedCount++;
             return;
         }
@@ -426,7 +473,7 @@ async function syncSeedImages(cache, cacheList, plantBundle, items, outputDir) {
         if (!nativeAsset) {
             if (useBundledFallback()) return;
             // fallback: generate placeholder for missing image
-            writePlaceholderPng(path.join(outputDir, filename), displayName || String(item.id));
+            writePlaceholderPng(path.join(outputDir, buildFilename('.png')), displayName || String(item.id));
             syncedCount++;
             return;
         }
@@ -434,9 +481,9 @@ async function syncSeedImages(cache, cacheList, plantBundle, items, outputDir) {
         const cachedEntry = cacheList.files && cacheList.files[nativeAsset.url];
         const cachedPath = qqFileUrlToPath(cache.gameCachesDir, cachedEntry && cachedEntry.url);
         const ext = path.extname(new URL(nativeAsset.url).pathname) || '.png';
-        const filename = `${Number(item.id)}_${displayName}_${mappedAssetName}_Seed${ext}`;
+        const filename = buildFilename(ext);
         try {
-            const content = await readCachedOrRemote(cache, cacheList, nativeAsset.url);
+            const content = await readNativeAssetContent(cache, cacheList, nativeAsset);
             writeAtomic(path.join(outputDir, filename), content);
             syncedCount++;
             if (cachedPath && fs.existsSync(cachedPath)) cachedCount++;
@@ -559,7 +606,7 @@ async function syncOtherItemImages(cache, cacheList, bundles, items, outputDir) 
         const cachedPath = qqFileUrlToPath(cache.gameCachesDir, cachedEntry && cachedEntry.url);
         const ext = path.extname(new URL(nativeAsset.url).pathname) || '.png';
         try {
-            const content = await readCachedOrRemote(cache, cacheList, nativeAsset.url);
+            const content = await readNativeAssetContent(cache, cacheList, nativeAsset);
             writeAtomic(path.join(outputDir, `${itemId}_${displayName}_${tag || 'icon'}${ext}`), content);
             syncedCount++;
             if (cachedPath && fs.existsSync(cachedPath)) cachedCount++;
@@ -589,7 +636,7 @@ async function syncGameConfigFromQQCache(options = {}) {
     const statePath = path.join(outputDir, 'sync-state.json');
     const previousState = fs.existsSync(statePath) ? readJson(statePath) : {};
     const canSkip = !options.force
-        && Number(previousState.imageSchemaVersion) === 2
+        && Number(previousState.imageSchemaVersion) === 3
         && previousState.itemInfoUrl === itemInfoUrl
         && previousState.plantUrl === plantUrl
         && previousState.plantBundleUrl === plantBundle.sourceUrl
@@ -650,7 +697,7 @@ async function syncGameConfigFromQQCache(options = {}) {
         itemCount: itemImages.syncedCount,
     };
     writeJsonAtomic(statePath, {
-        imageSchemaVersion: 2,
+        imageSchemaVersion: 3,
         itemInfoUrl,
         plantUrl,
         plantBundleUrl: plantBundle.sourceUrl,
