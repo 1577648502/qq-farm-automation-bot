@@ -61,6 +61,18 @@ interface SolarTerm {
   items: RewardItem[]
 }
 
+interface BattlePassState {
+  battlepassId: number
+  name: string
+  description: string
+  level: number
+  currentLevelExp: number
+  nextLevelNeedExp: number
+  maxLevel: number
+  isPremium: boolean
+  claimableCount: number
+}
+
 interface StarOverview {
   updatedAt: number
   active: boolean
@@ -83,6 +95,12 @@ interface StarOverview {
     image: string
     count: number
   } | null
+  season: {
+    seasonId: number
+    name: string
+    activeEndTime: number
+  } | null
+  battlePass: BattlePassState | null
 }
 
 const accountStore = useAccountStore()
@@ -100,6 +118,7 @@ const solarTerms = ref<SolarTerm[]>([])
 const accountReady = computed(() => !!currentAccountId.value && !!currentAccount.value?.running)
 const activityName = computed(() => overview.value?.group?.name || '心许千灯星垂野')
 const register = computed(() => overview.value?.register?.starRegister || null)
+const battlePass = computed(() => overview.value?.battlePass || null)
 const shopGoods = computed(() => overview.value?.shop?.shop?.goods || [])
 const currency = computed(() => overview.value?.currency || null)
 
@@ -227,6 +246,33 @@ async function lightUpStar() {
   }
 }
 
+async function claimBattlePass() {
+  const accountId = String(currentAccountId.value || '')
+  if (!accountId || actionLoading.value)
+    return
+  actionLoading.value = 'battle-pass'
+  try {
+    const res = await api.post('/api/activity/battle-pass/claim', {}, {
+      headers: { 'x-account-id': accountId },
+    })
+    if (!res.data?.ok)
+      throw new Error(res.data?.error || '领取失败')
+    const rewards = formatRewardList(res.data.data?.rewards)
+    if (res.data.data?.bagOverflow)
+      toast.error('背包已满，部分奖励未能领取')
+    else
+      toast.success(rewards ? `领取成功：${rewards}` : '已领取游记进度奖励')
+    await fetchOverview()
+    await statusStore.fetchStatus(accountId)
+  }
+  catch (e: any) {
+    toast.error(e?.response?.data?.error || e?.message || '领取失败')
+  }
+  finally {
+    actionLoading.value = ''
+  }
+}
+
 async function claimSolarTerm(term: SolarTerm) {
   const accountId = String(currentAccountId.value || '')
   if (!accountId || actionLoading.value)
@@ -347,6 +393,57 @@ watch(currentAccountId, refreshAll)
     </div>
 
     <template v-else-if="overview">
+      <section v-if="battlePass" class="space-y-3">
+        <div class="flex flex-wrap items-center justify-between gap-3">
+          <h2 class="text-lg text-gray-900 font-bold dark:text-white">
+            游记进度
+          </h2>
+          <span v-if="overview.season?.activeEndTime" class="text-sm text-gray-500 dark:text-gray-400">
+            截止 {{ formatEndTime(overview.season.activeEndTime) }}
+          </span>
+        </div>
+
+        <article class="border border-gray-200 rounded-xl bg-white p-4 shadow-sm dark:border-gray-700 dark:bg-gray-800">
+          <div class="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <h3 class="text-lg text-gray-900 font-bold dark:text-white">
+                Lv{{ formatNumber(battlePass.level) }}
+                <span class="text-sm text-gray-400 font-normal dark:text-gray-500">/ {{ formatNumber(battlePass.maxLevel) }}</span>
+              </h3>
+              <p class="mt-1 text-sm text-gray-600 dark:text-gray-300">
+                本级进度 {{ formatNumber(battlePass.currentLevelExp) }} / {{ formatNumber(battlePass.nextLevelNeedExp) }}
+              </p>
+            </div>
+            <div class="flex flex-wrap items-center gap-2 text-sm text-gray-500 dark:text-gray-400">
+              <span v-if="battlePass.isPremium" class="rounded-md bg-amber-100 px-2 py-0.5 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300">已购进阶</span>
+              <span :class="battlePass.claimableCount ? 'rounded-md bg-amber-100 px-2 py-0.5 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300' : ''">
+                可领取 {{ formatNumber(battlePass.claimableCount) }} 档
+              </span>
+            </div>
+          </div>
+
+          <div class="mt-3 h-2 w-full overflow-hidden rounded-full bg-gray-100 dark:bg-gray-700">
+            <div
+              class="h-full rounded-full"
+              :style="{
+                background: 'var(--theme-primary)',
+                width: `${battlePass.nextLevelNeedExp ? Math.min(100, (battlePass.currentLevelExp / battlePass.nextLevelNeedExp) * 100) : 0}%`,
+              }"
+            />
+          </div>
+
+          <BaseButton
+            class="mt-4"
+            size="sm"
+            :loading="actionLoading === 'battle-pass'"
+            :disabled="!accountReady || !battlePass.claimableCount"
+            @click="claimBattlePass"
+          >
+            <span class="i-carbon-download mr-1" />一键领取
+          </BaseButton>
+        </article>
+      </section>
+
       <section v-if="register" class="space-y-3">
         <div class="flex flex-wrap items-center justify-between gap-3">
           <h2 class="text-lg text-gray-900 font-bold dark:text-white">

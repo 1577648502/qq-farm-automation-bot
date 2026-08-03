@@ -1204,16 +1204,26 @@ async function getStarActivityOverview() {
         };
     }
 
+    // 千星游记进度(赛季手册): 一键领取奖励用
+    let season = null;
+    try {
+        const seasonReply = await getSeasonInfo(true);
+        season = normalizeSeasonInfo(seasonReply && seasonReply.current_season);
+    } catch (e) { /* 赛季读取失败不阻断概览 */ }
+    const battlePass = season ? season.battlePass : null;
+
     const group = (selection.registerEntry && selection.registerEntry.groupHead)
         || (selection.shopEntry && selection.shopEntry.groupHead)
         || null;
     return {
         updatedAt: Date.now(),
-        active: !!(register || shop),
+        active: !!(register || shop || battlePass),
         group: normalizeHead(group),
         register,
         shop,
         currency,
+        season,
+        battlePass,
     };
 }
 
