@@ -1,0 +1,25 @@
+{
+  "date": "2026-08-26",
+  "operations": {
+    "harvest": 0,
+    "water": 0,
+    "weed": 0,
+    "bug": 0,
+    "fertilize": 0,
+    "plant": 0,
+    "steal": 0,
+    "helpWater": 25,
+    "helpWeed": 24,
+    "helpBug": 21,
+    "taskClaim": 0,
+    "sell": 0,
+    "upgrade": 0,
+    "levelUp": 0
+  },
+  "initialState": {
+    "gold": 138551313,
+    "exp": 7998294,
+    "coupon": 1471
+  },
+  "savedAt": 1787730378983
+}

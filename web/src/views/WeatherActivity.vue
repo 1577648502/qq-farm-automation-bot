@@ -6,6 +6,7 @@ import { useToastStore } from '@/stores/toast'
 
 interface RewardItem {
   id: number
+  name: string
   count: number
   image: string
 }
@@ -98,6 +99,10 @@ function fmtRange(begin: number, end: number) {
   return `${fmtTime(begin)} ~ ${fmtTime(end)}`
 }
 
+function extractError(e: any): string {
+  return e?.response?.data?.error || e?.message || ''
+}
+
 async function loadOverview() {
   loading.value = true
   try {
@@ -108,7 +113,7 @@ async function loadOverview() {
       toast.error(data?.error || '加载失败')
     }
   } catch (e: any) {
-    toast.error(e.message || '加载失败')
+    toast.error(extractError(e) || '加载失败')
   } finally {
     loading.value = false
   }
@@ -135,7 +140,7 @@ async function handleBuyBottle() {
       toast.error(data?.error || '购买失败')
     }
   } catch (e: any) {
-    toast.error(e.message || '购买失败')
+    toast.error(extractError(e) || '购买失败')
   } finally {
     busy.value = false
   }
@@ -156,7 +161,7 @@ async function handleUseOnFriend() {
       toast.error(data?.error || '使用失败')
     }
   } catch (e: any) {
-    toast.error(e.message || '使用失败')
+    toast.error(extractError(e) || '使用失败')
   } finally {
     busy.value = false
   }
@@ -173,7 +178,7 @@ async function handleUseThunder() {
       toast.error(data?.error || '使用失败')
     }
   } catch (e: any) {
-    toast.error(e.message || '使用失败')
+    toast.error(extractError(e) || '使用失败')
   } finally {
     busy.value = false
   }
@@ -184,13 +189,13 @@ async function handleUpgradeResearch(tierId: number) {
   try {
     const { data } = await api.post('/api/weather/upgrade-research', { tierId })
     if (data?.ok) {
-      toast.success(`档位 ${tierId} 升级成功`)
+      toast.success(`档位 ${tierId} 奖励已领取`)
       await loadOverview()
     } else {
-      toast.error(data?.error || '升级失败')
+      toast.error(data?.error || '领取失败')
     }
   } catch (e: any) {
-    toast.error(e.message || '升级失败')
+    toast.error(extractError(e) || '领取失败')
   } finally {
     busy.value = false
   }
@@ -208,7 +213,7 @@ async function handleRunTasksNow() {
       toast.error(data?.error || '执行失败')
     }
   } catch (e: any) {
-    toast.error(e.message || '执行失败')
+    toast.error(extractError(e) || '执行失败')
   } finally {
     busy.value = false
   }
@@ -220,14 +225,14 @@ async function handleRunResearchNow() {
     const { data } = await api.post('/api/weather/run-research')
     if (data?.ok) {
       const r = data.data || {}
-      const upCount = (r.upgraded || []).length
-      toast.success(`已执行研究升级: 升级 ${upCount} 档`)
+      const cnt = (r.upgraded || r.claimed || []).length
+      toast.success(cnt > 0 ? `已领取 ${cnt} 档达标奖励` : '当前无可领取的达标奖励')
       await loadOverview()
     } else {
       toast.error(data?.error || '执行失败')
     }
   } catch (e: any) {
-    toast.error(e.message || '执行失败')
+    toast.error(extractError(e) || '执行失败')
   } finally {
     busy.value = false
   }
@@ -286,11 +291,12 @@ onMounted(async () => {
           <BaseButton
             variant="primary"
             size="sm"
-            :disabled="overview.bag.thunderBottle <= 0 || busy"
+            :disabled="overview.bag.thunderBottle <= 0 || busy || overview.weather?.isThunder"
             :loading="busy"
             @click="handleUseThunder"
           >
-            对自己使用雷雨召唤瓶（背包 {{ overview.bag.thunderBottle }}）
+            <template v-if="overview.weather?.isThunder">已是雷雨天气，无需召唤</template>
+            <template v-else>对自己使用雷雨召唤瓶（背包 {{ overview.bag.thunderBottle }}）</template>
           </BaseButton>
         </div>
       </div>
@@ -348,7 +354,7 @@ onMounted(async () => {
           />
         </div>
         <div v-if="overview.activity.taskProgress.stageReward" class="mt-2 text-xs text-gray-500 dark:text-gray-400">
-          阶段奖励：物品 #{{ overview.activity.taskProgress.stageReward.id }} × {{ overview.activity.taskProgress.stageReward.count }}
+          阶段奖励：{{ overview.activity.taskProgress.stageReward.name }} × {{ overview.activity.taskProgress.stageReward.count }}
         </div>
       </div>
 
@@ -360,10 +366,10 @@ onMounted(async () => {
         <div v-for="g in overview.activity.shop.goods" :key="g.id" class="mb-2 flex items-center justify-between rounded border border-gray-200 p-3 dark:border-gray-700">
           <div>
             <div class="font-medium">
-              {{ g.name || `物品 #${g.item.id}` }}
+              {{ g.name || g.item.name || `物品 #${g.item.id}` }}
             </div>
             <div class="mt-1 text-xs text-gray-500 dark:text-gray-400">
-              消耗：物品 #{{ g.cost.id }} × {{ g.cost.count }} · 剩余 {{ g.remaining }}/{{ g.purchaseLimit }}
+              消耗：{{ g.cost.name || `#${g.cost.id}` }} × {{ g.cost.count }} · 剩余 {{ g.remaining }}/{{ g.purchaseLimit }}
             </div>
           </div>
           <div class="flex items-center gap-2">
@@ -434,7 +440,7 @@ onMounted(async () => {
             </div>
           </div>
           <div class="text-xs text-gray-500 dark:text-gray-400">
-            奖励：#{{ t.reward.id }} × {{ t.reward.count }}
+            奖励：{{ t.reward.name || `#${t.reward.id}` }} × {{ t.reward.count }}
           </div>
         </div>
       </div>
@@ -443,10 +449,10 @@ onMounted(async () => {
       <div v-if="overview.activity?.research" class="rounded-lg border border-gray-200 bg-white p-4 dark:border-gray-700 dark:bg-gray-800">
         <div class="mb-3 flex items-center justify-between">
           <h3 class="text-sm text-gray-900 font-medium dark:text-white">
-            气象研究（雷电徽章消耗）
+            气象研究（雷电徽章达标领奖）
           </h3>
           <BaseButton variant="secondary" size="sm" :loading="busy" @click="handleRunResearchNow">
-            自动升级
+            一键领取
           </BaseButton>
         </div>
         <div class="grid grid-cols-2 gap-2 md:grid-cols-4">
@@ -463,16 +469,16 @@ onMounted(async () => {
             <div class="flex items-center justify-between">
               <span class="font-medium">档位 {{ t.tierId }}</span>
               <span class="text-xs">
-                <template v-if="t.upgraded">已完成</template>
-                <template v-else-if="t.upgradable">可升级</template>
-                <template v-else>未达到</template>
+                <template v-if="t.upgraded">已领取</template>
+                <template v-else-if="t.upgradable">可领取</template>
+                <template v-else>未达标</template>
               </span>
             </div>
             <div class="mt-1 text-xs text-gray-600 dark:text-gray-400">
-              消耗徽章 {{ t.cost.count }}
+              达标需 {{ t.cost.count }} 雷电徽章
             </div>
             <div class="text-xs text-gray-600 dark:text-gray-400">
-              奖励 #{{ t.reward.id }} × {{ t.reward.count }}
+              奖励 {{ t.reward.name || `#${t.reward.id}` }} × {{ t.reward.count }}
             </div>
             <BaseButton
               v-if="t.upgradable"
@@ -483,7 +489,7 @@ onMounted(async () => {
               :loading="busy"
               @click="handleUpgradeResearch(t.tierId)"
             >
-              升级
+              {{ overview.bag.thunderBadge < t.cost.count ? `徽章不足 (${overview.bag.thunderBadge}/${t.cost.count})` : '领取' }}
             </BaseButton>
           </div>
         </div>

@@ -1,0 +1,19 @@
+{
+  "accounts": [
+    {
+      "id": "1",
+      "name": "账号1",
+      "code": "c5605c345275b84a700cf480ccd8bf37",
+      "platform": "qq",
+      "uin": "",
+      "qq": "",
+      "avatar": "",
+      "username": "admin",
+      "createdAt": 1787728734892,
+      "updatedAt": 1787730208889,
+      "nick": "润出去",
+      "loginType": "manual"
+    }
+  ],
+  "nextId": 2
+}

@@ -1,0 +1,40 @@
+{
+  "logs": [
+    {
+      "id": "1787728695433qyb5k3evt",
+      "timestamp": 1787728695433,
+      "event": "login_success",
+      "username": "admin",
+      "errorType": null,
+      "ip": "127.0.0.1",
+      "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36"
+    },
+    {
+      "id": "1787729008547ka9r12apz",
+      "timestamp": 1787729008547,
+      "event": "login_success",
+      "username": "admin",
+      "errorType": null,
+      "ip": "127.0.0.1",
+      "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36"
+    },
+    {
+      "id": "1787729530279fr0bqnf1t",
+      "timestamp": 1787729530279,
+      "event": "login_success",
+      "username": "admin",
+      "errorType": null,
+      "ip": "127.0.0.1",
+      "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36"
+    },
+    {
+      "id": "17877302027224hei5sbnu",
+      "timestamp": 1787730202722,
+      "event": "login_success",
+      "username": "admin",
+      "errorType": null,
+      "ip": "127.0.0.1",
+      "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36"
+    }
+  ]
+}

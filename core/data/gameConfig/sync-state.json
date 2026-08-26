@@ -1,0 +1,18 @@
+{
+    "imageSchemaVersion": 3,
+    "itemInfoUrl": "https://cdn-resource.nqf.qq.com/release/remote/delayRes/import/54/54da07c3-8a3c-44fb-b50f-79af4a2ed78a.0f08f.json",
+    "plantUrl": "https://cdn-resource.nqf.qq.com/release/remote/delayRes/import/52/524bdf1d-e595-4a42-941c-556b06fdbb4b.2a6fb.json",
+    "plantBundleUrl": "https://cdn-resource.nqf.qq.com/release/remote/plant/config.1d263.json",
+    "extraResBundleUrl": "https://cdn-resource.nqf.qq.com/release/remote/extraRes/config.aca43.json",
+    "officialItemCount": 723,
+    "officialPlantCount": 256,
+    "mergedItemCount": 731,
+    "mergedPlantCount": 257,
+    "imageCount": 710,
+    "seedImageCount": 205,
+    "itemImageCount": 505,
+    "bundledImageCount": 5,
+    "missingImageCount": 20,
+    "imageErrorCount": 0,
+    "syncedAt": "2026-08-26T07:18:01.956Z"
+}

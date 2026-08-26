@@ -1,0 +1,20 @@
+{
+  "_说明": "通过 qcby 公开接口 GET /mywc?wxid=&appId= 自动获取「经典农场」小程序 code。填好后将 enabled 改为 true 并重启。",
+  "enabled": false,
+  "baseUrl": "http://127.0.0.1:8110",
+  "protocol": "mywc",
+  "intervalMs": 300000,
+  "runOnStart": true,
+  "appid": "",
+  "authHeader": "",
+  "codePath": "",
+  "_accounts说明": "accounts: 把 qcby 账号与农场实例 accountId 绑定；mywc/vx 用 wxid，yyb 用 ref；appid、protocol 可按账号覆盖顶层。",
+  "accounts": [
+    {
+      "accountId": "",
+      "wxid": "",
+      "appid": "",
+      "protocol": ""
+    }
+  ]
+}

@@ -23,7 +23,7 @@ const { toLong, toNum, log, logWarn, randomDelay } = require('../utils/utils');
 const { isAutomationOn } = require('../models/store');
 const { getBag, getBagItems } = require('./warehouse');
 const { getFriendsList } = require('./friend');
-const { getItemImageById } = require('../config/gameConfig');
+const { getItemImageById, getItemById } = require('../config/gameConfig');
 
 const WEATHER_SERVICE = 'gamepb.weatherpb.WeatherService';
 const ACTIVITY_SERVICE = 'gamepb.activitypb.ActivityService';
@@ -51,9 +51,26 @@ const CMD_UPGRADE_RESEARCH = 40;
 const FIELD_USE_BOTTLE_ON_FRIEND = 107;
 const FIELD_UPGRADE_RESEARCH = 140;
 
-// 天气类型 (抓包看到 type=1 时为普通天气; 雷雨值待补)
-// 用户描述: "已经是雷雨天气时无法使用雷雨召唤瓶"
+// 天气类型: 抓包确认真正的类型在 WeatherInfo.field2, 而非 field1(type, 恒=1)
+// field2=1 晴天/普通, field2=2 雷雨 (用户雨天时抓到 field2=2, 且此时无法再用雷雨召唤瓶)
 const WEATHER_TYPE_NORMAL = 1;
+const WEATHER_TYPE_THUNDER = 2;
+
+// 雨落成诗活动专属道具名称 (ItemInfo.json 未收录, 此处硬编码)
+const WEATHER_ITEM_NAMES = {
+    5001: '天气采集瓶',
+    5002: '雷雨召唤瓶',
+    1027: '雷电徽章',
+    1005: '金豆豆',
+};
+
+function getWeatherItemName(id) {
+    const nid = Number(id) || 0;
+    if (!nid) return '';
+    const cfg = getItemById(nid);
+    if (cfg && cfg.name) return String(cfg.name);
+    return WEATHER_ITEM_NAMES[nid] || `物品#${nid}`;
+}
 
 // ============ 底层 RPC ============
 
@@ -94,6 +111,7 @@ function normalizeItem(item, extra = {}) {
     const id = toNum(item && item.id);
     return {
         id,
+        name: id ? getWeatherItemName(id) : '',
         count: toNum(item && item.count),
         image: id ? getItemImageById(id) : '',
         ...extra,
@@ -185,27 +203,29 @@ function normalizeGroup(groupReply) {
 function normalizeWeather(weatherReply) {
     const w = weatherReply && weatherReply.weather;
     if (!w) return null;
-    const type = toNum(w.type);
+    // 真正的天气类型在 field2 (field1/type 恒为 1)
+    const weatherType = toNum(w.field2);
     return {
-        type,
-        typeName: describeWeatherType(type),
+        type: weatherType,
+        rawType: toNum(w.type),
+        typeName: describeWeatherType(weatherType),
         beginTime: toNum(w.begin_time),
         endTime: toNum(w.end_time),
-        isThunder: isThunderWeather(type),
+        isThunder: isThunderWeather(weatherType),
     };
 }
 
-// 已知 type=1 为普通(晴/多云); 雷雨天气 type 待补(有雷雨状态时应无法用雷雨召唤瓶)
-// 保守策略: 只有确认 type=1 时视为"非雷雨", 其他一律按"雷雨/未知"处理
+// 天气类型基于 field2: 1=晴天, 2=雷雨; 其他值未知
 function describeWeatherType(type) {
     switch (Number(type)) {
-        case 1: return '普通';
+        case WEATHER_TYPE_NORMAL: return '晴天';
+        case WEATHER_TYPE_THUNDER: return '雷雨';
         default: return `未知(${type})`;
     }
 }
 
 function isThunderWeather(type) {
-    return Number(type) !== WEATHER_TYPE_NORMAL;
+    return Number(type) === WEATHER_TYPE_THUNDER;
 }
 
 // ============ 对外 API ============
