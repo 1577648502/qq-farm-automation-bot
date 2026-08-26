@@ -1361,6 +1361,88 @@ app.use('/api', (req, res, next) => {
 
     // API: 背包物品
     // API: 图鉴列表
+    // API: 雨落成诗 概览
+    app.get('/api/weather/overview', async (req, res) => {
+        const id = getAccId(req);
+        if (!id) return res.status(400).json({ ok: false });
+        if (!checkAccountAccess(req, id)) return res.status(403).json({ ok: false, error: '无权访问此账号' });
+        try {
+            const data = await provider.getWeatherOverview(id);
+            res.json({ ok: true, data });
+        } catch (e) { handleApiError(res, e); }
+    });
+
+    // API: 购买天气采集瓶
+    app.post('/api/weather/buy-bottle', async (req, res) => {
+        const id = getAccId(req);
+        if (!id) return res.status(400).json({ ok: false });
+        if (!checkAccountAccess(req, id)) return res.status(403).json({ ok: false, error: '无权访问此账号' });
+        try {
+            const count = Number(req.body && req.body.count) || 1;
+            const data = await provider.buyWeatherBottle(id, count);
+            res.json({ ok: true, data });
+        } catch (e) { handleApiError(res, e); }
+    });
+
+    // API: 对好友使用采集瓶
+    app.post('/api/weather/use-on-friend', async (req, res) => {
+        const id = getAccId(req);
+        if (!id) return res.status(400).json({ ok: false });
+        if (!checkAccountAccess(req, id)) return res.status(403).json({ ok: false, error: '无权访问此账号' });
+        try {
+            const friendUid = req.body && req.body.friendUid;
+            if (!friendUid) return res.status(400).json({ ok: false, error: '缺少 friendUid' });
+            const data = await provider.useWeatherBottleOnFriend(id, friendUid);
+            res.json({ ok: true, data });
+        } catch (e) { handleApiError(res, e); }
+    });
+
+    // API: 对自己使用雷雨召唤瓶
+    app.post('/api/weather/use-thunder', async (req, res) => {
+        const id = getAccId(req);
+        if (!id) return res.status(400).json({ ok: false });
+        if (!checkAccountAccess(req, id)) return res.status(403).json({ ok: false, error: '无权访问此账号' });
+        try {
+            const data = await provider.useWeatherThunderBottle(id);
+            res.json({ ok: true, data });
+        } catch (e) { handleApiError(res, e); }
+    });
+
+    // API: 升级气象研究档位
+    app.post('/api/weather/upgrade-research', async (req, res) => {
+        const id = getAccId(req);
+        if (!id) return res.status(400).json({ ok: false });
+        if (!checkAccountAccess(req, id)) return res.status(403).json({ ok: false, error: '无权访问此账号' });
+        try {
+            const tierId = req.body && req.body.tierId;
+            if (!tierId) return res.status(400).json({ ok: false, error: '缺少 tierId' });
+            const data = await provider.upgradeWeatherResearch(id, tierId);
+            res.json({ ok: true, data });
+        } catch (e) { handleApiError(res, e); }
+    });
+
+    // API: 立即执行气象研究自动升级
+    app.post('/api/weather/run-research', async (req, res) => {
+        const id = getAccId(req);
+        if (!id) return res.status(400).json({ ok: false });
+        if (!checkAccountAccess(req, id)) return res.status(403).json({ ok: false, error: '无权访问此账号' });
+        try {
+            const data = await provider.runWeatherResearchNow(id);
+            res.json({ ok: true, data });
+        } catch (e) { handleApiError(res, e); }
+    });
+
+    // API: 立即执行雨落成诗每日自动化
+    app.post('/api/weather/run-now', async (req, res) => {
+        const id = getAccId(req);
+        if (!id) return res.status(400).json({ ok: false });
+        if (!checkAccountAccess(req, id)) return res.status(403).json({ ok: false, error: '无权访问此账号' });
+        try {
+            const data = await provider.runWeatherTasksNow(id);
+            res.json({ ok: true, data });
+        } catch (e) { handleApiError(res, e); }
+    });
+
     app.get('/api/illustrated', async (req, res) => {
         const id = getAccId(req);
         if (!id) return res.status(400).json({ ok: false });

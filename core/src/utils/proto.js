@@ -36,6 +36,7 @@ async function loadProto() {
         getResourcePath('proto', 'seasonpb.proto'),
         getResourcePath('proto', 'mysteryshoppb.proto'),
         getResourcePath('proto', 'solartermspb.proto'),
+        getResourcePath('proto', 'weatherpb.proto'),
     ], { keepCase: true });
 
     // 网关
@@ -228,6 +229,14 @@ async function loadProto() {
     types.GetSolarTermsReply = root.lookupType('gamepb.solartermspb.GetSolarTermsReply');
     types.ClaimSolarTermsRequest = root.lookupType('gamepb.solartermspb.ClaimSolarTermsRequest');
     types.ClaimSolarTermsReply = root.lookupType('gamepb.solartermspb.ClaimSolarTermsReply');
+
+    // 雨落成诗 (天气活动)
+    types.GetWeatherStatusRequest = root.lookupType('gamepb.weatherpb.GetWeatherStatusRequest');
+    types.GetWeatherStatusReply = root.lookupType('gamepb.weatherpb.GetWeatherStatusReply');
+    types.WeatherGroupReply = root.lookupType('gamepb.weatherpb.WeatherGroupReply');
+    types.WeatherUseBottleOnFriendReq = root.lookupType('gamepb.weatherpb.WeatherUseBottleOnFriendReq');
+    types.WeatherUpgradeResearchReq = root.lookupType('gamepb.weatherpb.WeatherUpgradeResearchReq');
+    types.WeatherUseItemOnSelfRequest = root.lookupType('gamepb.weatherpb.UseItemOnSelfRequest');
 
         // Proto 加载完成
     log('系统', 'Protobuf 定义加载完成');

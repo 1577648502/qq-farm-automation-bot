@@ -149,6 +149,8 @@ const DEFAULT_ACCOUNT_CONFIG = {
         mystery_shop: false, // 神秘商店自动购买
         star_light_up: false, // 千星游记自动点亮领取
         solar_terms: false,   // 节令小礼自动领取
+        weather_task: false,     // 雨落成诗: 每日自动买瓶+对好友使用采集瓶
+        weather_research: false, // 雨落成诗: 气象研究自动检查(升级协议待补)
         sell: false,
         fertilizer: 'smart',
         fertilizer_multi_season: true,

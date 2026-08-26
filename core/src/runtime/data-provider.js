@@ -201,6 +201,13 @@ function createDataProvider(options) {
         getBag: (accountRef) => callWorkerApi(resolveAccountRefId(accountRef), 'getBag'),
         getIllustrated: (accountRef) => callWorkerApi(resolveAccountRefId(accountRef), 'getIllustrated'),
         claimIllustrated: (accountRef) => callWorkerApi(resolveAccountRefId(accountRef), 'claimIllustrated'),
+        getWeatherOverview: (accountRef) => callWorkerApi(resolveAccountRefId(accountRef), 'getWeatherOverview'),
+        buyWeatherBottle: (accountRef, count) => callWorkerApi(resolveAccountRefId(accountRef), 'buyWeatherBottle', [count || 1]),
+        useWeatherBottleOnFriend: (accountRef, friendUid) => callWorkerApi(resolveAccountRefId(accountRef), 'useWeatherBottleOnFriend', [friendUid]),
+        runWeatherTasksNow: (accountRef) => callWorkerApi(resolveAccountRefId(accountRef), 'runWeatherTasksNow'),
+        useWeatherThunderBottle: (accountRef) => callWorkerApi(resolveAccountRefId(accountRef), 'useWeatherThunderBottle'),
+        upgradeWeatherResearch: (accountRef, tierId) => callWorkerApi(resolveAccountRefId(accountRef), 'upgradeWeatherResearch', [tierId]),
+        runWeatherResearchNow: (accountRef) => callWorkerApi(resolveAccountRefId(accountRef), 'runWeatherResearchNow'),
 
         getBagSeeds: (accountRef) => callWorkerApi(resolveAccountRefId(accountRef), 'getBagSeeds'),
 

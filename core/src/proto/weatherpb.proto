@@ -1,0 +1,157 @@
+syntax = "proto3";
+
+package gamepb.weatherpb;
+
+// ============ 天气状态 ============
+// 实测: WeatherService.GetWeatherStatus 空请求, 响应含当前天气类型与起止时间
+// 抓包示例: type=1 begin=1787711315 end=1787718515 (约2小时窗口)
+
+message GetWeatherStatusRequest {}
+
+message GetWeatherStatusReply {
+    WeatherInfo weather = 1;
+}
+
+message WeatherInfo {
+    int64 type = 1;         // 天气类型 (1=普通, 其他=雷雨/异常等 待补)
+    int64 field2 = 2;       // 未确认
+    int64 begin_time = 3;   // 开始时间戳(秒)
+    int64 end_time = 4;     // 结束时间戳(秒)
+    int64 field5 = 5;       // 未确认
+}
+
+// ============ 雨落成诗活动 (group_id=2026070300) ============
+// 用独立 GroupReply 复解 GetGroupReply, 避免与 activitypb.ActivityData 的 field 号冲突
+// (activitypb.ActivityData field 105=lottery, 而本活动 body 也在 field 105 但结构不同)
+
+message WeatherGroupReply {
+    WeatherGroup group = 1;
+}
+
+message WeatherGroup {
+    WeatherActivityHead head = 1;
+    repeated WeatherActivityData children = 2;
+}
+
+message WeatherActivityHead {
+    int64 id = 1;
+    int64 group_id = 2;
+    int64 type = 3;             // 3=shop, 6=daily_tasks, 8=task_progress, 17=research_enter, 20=research
+    string name = 4;
+    string desc = 5;
+    int64 start_time = 6;
+    int64 end_time = 7;
+    int64 client_id = 8;
+    int32 status = 20;
+}
+
+message WeatherActivityData {
+    WeatherActivityHead head = 1;
+    WeatherShopBody shop = 102;             // type=3 (子活动 2026070301)
+    WeatherTaskProgress task_progress = 105; // type=8 (子活动 2026070303)
+    string research_enter = 114;            // type=17(子活动 2026070302) 入口
+    WeatherDailyTasks daily_tasks = 117;    // type=6 (子活动 2026070305)
+    WeatherResearch research = 118;         // type=20(子活动 2026070304)
+}
+
+// ---- 商店 (类似 activitypb.ActivityBodyShop 但独立命名) ----
+message WeatherShopBody {
+    repeated WeatherShopGoods goods = 1;
+}
+
+message WeatherShopGoods {
+    int64 id = 1;
+    WeatherItem item = 2;
+    WeatherItem cost = 3;
+    int64 purchase_limit = 4;
+    int64 purchased_count = 5;
+    int64 order = 6;
+    string name = 7;
+    int64 diamond_cost_count = 9;
+    int64 background_type = 10;
+    int64 restriction_type = 11;
+}
+
+message WeatherItem {
+    int64 id = 1;
+    int64 count = 2;
+}
+
+// ---- 任务进度: 使用采集瓶累计次数与阶段奖励 ----
+message WeatherTaskProgress {
+    int64 current = 3;              // 当前已用次数
+    int64 target = 4;               // 目标次数(如10)
+    int64 item_id = 5;              // 使用的道具ID (5001=采集瓶)
+    int64 stage = 6;                // 阶段(未完全确认)
+    WeatherTaskReward reward = 8;   // 完成阶段奖励
+    int64 field9 = 9;
+}
+
+message WeatherTaskReward {
+    int64 reward_id = 1;
+    WeatherItem item = 3;
+    int64 field4 = 4;
+    bytes field6 = 6;
+}
+
+// ---- 每日任务列表 (2026070305 body field117) ----
+message WeatherDailyTasks {
+    repeated WeatherDailyTask tasks = 1;
+}
+
+message WeatherDailyTask {
+    int64 id = 1;
+    int64 target_item_id = 2;       // 使用的道具或作物ID(5001/5002 或 0)
+    WeatherItem reward = 3;         // 奖励(1027=雷电徽章)
+    string name = 4;
+    int64 target_count = 5;         // 目标数量
+}
+
+// ---- 气象研究 (2026070304 body field118): 分档消耗雷电徽章升级 ----
+message WeatherResearch {
+    WeatherResearchInner inner = 1;
+}
+
+message WeatherResearchInner {
+    int64 current_tier = 1;                 // 当前等级
+    repeated WeatherResearchTier tiers = 2; // 8 档升级
+}
+
+message WeatherResearchTier {
+    int64 tier_id = 1;              // 档位ID (1000-1008)
+    int64 field3 = 3;
+    int64 field5 = 5;
+    WeatherItem cost = 6;           // 消耗 (1027=雷电徽章)
+    WeatherItem reward = 7;         // 奖励
+    int64 field8 = 8;
+    int64 field9 = 9;
+}
+
+// ---- Operate 请求扩展 payload (weather 专用, cmd=9 用采集瓶给好友) ----
+// 用于手动构造 activitypb Operate 请求 field107 位置的载荷(避开与 LotteryDrawReq 冲突)
+message WeatherUseBottleOnFriendReq {
+    int64 field1 = 1;       // 未确认(可选)
+    int64 field2 = 2;       // 未确认(可选)
+    int64 friend_uid = 3;   // 好友 UID
+}
+
+// ---- 气象研究升级 (cmd=40, payload 在 field140) ----
+message WeatherUpgradeResearchReq {
+    int64 tier_id = 1;      // 档位ID 1000-1008
+}
+
+// ---- 雷雨召唤瓶自用: ItemService.Use 的变体载荷 ----
+// 抓包: { item: corepb.Item{id=5002,count=1,uid=<bag_item_uid>}, target: {uid=self_uid} }
+message UseItemOnSelfRequest {
+    UseItemInfo item = 1;
+    UseItemTarget target = 2;
+}
+message UseItemInfo {
+    int64 id = 1;
+    int64 count = 2;
+    int64 uid = 6;          // 背包物品实例 uid (来自 corepb.Item.uid)
+}
+message UseItemTarget {
+    int64 uid = 1;          // 目标玩家 UID (自用时=自己 UID)
+    int64 field3 = 3;       // 未确认, 默认 0
+}

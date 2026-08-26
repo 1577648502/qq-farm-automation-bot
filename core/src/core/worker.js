@@ -162,6 +162,8 @@ async function runDailyRoutines(force = false) {
         await checkAndBuyMysteryShop();
         await checkAndLightUpStar();
         await checkAndClaimSolarTerms();
+        await require('../services/weather').checkAndRunWeatherTasks();
+        await require('../services/weather').checkAndRunWeatherResearch();
     } catch (e) {
         log('系统', `每日任务调度失败: ${e.message}`, { module: 'system', event: '每日任务', result: 'error' });
     }
@@ -455,6 +457,22 @@ function applyRuntimeConfig(snapshot, syncNow = false) {
                 workerScheduler.setTimeoutTask('solar_terms_immediate', 500, () => {
                     if (!loginReady) return;
                     checkAndClaimSolarTerms().catch(() => null);
+                });
+            }
+
+            // 雨落成诗每日任务 关->开 时立即执行一次
+            if (!(prevAuto && prevAuto.weather_task) && (nextAuto && nextAuto.weather_task)) {
+                workerScheduler.setTimeoutTask('weather_task_immediate', 500, () => {
+                    if (!loginReady) return;
+                    require('../services/weather').checkAndRunWeatherTasks().catch(() => null);
+                });
+            }
+
+            // 雨落成诗气象研究 关->开 时立即执行一次
+            if (!(prevAuto && prevAuto.weather_research) && (nextAuto && nextAuto.weather_research)) {
+                workerScheduler.setTimeoutTask('weather_research_immediate', 500, () => {
+                    if (!loginReady) return;
+                    require('../services/weather').checkAndRunWeatherResearch().catch(() => null);
                 });
             }
 
@@ -773,6 +791,27 @@ async function handleApiCall(msg) {
                 break;
             case 'getBag':
                 result = await require('../services/warehouse').getBagDetail();
+                break;
+            case 'getWeatherOverview':
+                result = await require('../services/weather').getWeatherOverview();
+                break;
+            case 'buyWeatherBottle':
+                result = await require('../services/weather').buyCollectBottle(args[0] || 1);
+                break;
+            case 'useWeatherBottleOnFriend':
+                result = await require('../services/weather').useCollectBottleOnFriend(args[0]);
+                break;
+            case 'runWeatherTasksNow':
+                result = await require('../services/weather').autoRunDailyWeatherTasks();
+                break;
+            case 'useWeatherThunderBottle':
+                result = await require('../services/weather').useThunderBottleSelf();
+                break;
+            case 'upgradeWeatherResearch':
+                result = await require('../services/weather').upgradeResearchTier(args[0]);
+                break;
+            case 'runWeatherResearchNow':
+                result = await require('../services/weather').checkAndRunWeatherResearch();
                 break;
             case 'getIllustrated': {
                 const { getIllustratedOverview } = require('../services/illustrated');
