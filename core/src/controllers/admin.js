@@ -1902,8 +1902,8 @@ app.use('/api', (req, res, next) => {
     // 保存系统配置
     app.post('/api/admin/system-config', authRequired, adminRequired, (req, res) => {
         try {
-            const { serverUrl, clientVersion, platform, os, activityHeFeng, activityQingNiang, activityQianXing } = req.body || {};
-            const newConfig = { serverUrl, clientVersion, platform, os, activityHeFeng, activityQingNiang, activityQianXing };
+            const { serverUrl, clientVersion, platform, os, activityHeFeng, activityQingNiang, activityQianXing, activityYuLuoChengShi } = req.body || {};
+            const newConfig = { serverUrl, clientVersion, platform, os, activityHeFeng, activityQingNiang, activityQianXing, activityYuLuoChengShi };
             const saved = store.setSystemConfig(newConfig);
             updateRuntimeConfig(saved);
             const current = getRuntimeConfig();

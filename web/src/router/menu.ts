@@ -104,6 +104,15 @@ export const menuRoutes: MenuItem[] = [
   },
 
   {
+    path: 'weather-activity',
+    name: 'weather-activity',
+    label: '雨落成诗',
+    icon: 'i-carbon-rain-drop',
+    activityKey: 'yuLuoChengShiEnabled',
+    component: () => import('@/views/WeatherActivity.vue'),
+  },
+
+  {
     path: 'pet',
     name: 'pet',
     label: '\u5ba0\u7269',

@@ -608,6 +608,7 @@ function loadGlobalConfig() {
                     activityHeFeng: data.systemConfig.activityHeFeng !== false,
                     activityQingNiang: data.systemConfig.activityQingNiang !== false,
                     activityQianXing: data.systemConfig.activityQianXing !== false,
+                    activityYuLuoChengShi: data.systemConfig.activityYuLuoChengShi !== false,
                 };
             }
 
@@ -1309,6 +1310,7 @@ function setSystemConfig(config) {
         activityHeFeng: config.activityHeFeng !== false,
         activityQingNiang: config.activityQingNiang !== false,
         activityQianXing: config.activityQianXing !== false,
+        activityYuLuoChengShi: config.activityYuLuoChengShi !== false,
     };
     saveGlobalConfig();
     return { ...globalConfig.systemConfig };
@@ -1320,6 +1322,7 @@ function getActivityStatus() {
         heFengEnabled: cfg.activityHeFeng !== false,
         qingNiangEnabled: cfg.activityQingNiang !== false,
         qianXingEnabled: cfg.activityQianXing !== false,
+        yuLuoChengShiEnabled: cfg.activityYuLuoChengShi !== false,
     };
 }
 

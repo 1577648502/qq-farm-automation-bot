@@ -679,6 +679,7 @@ const localSystemConfig = ref({
   activityHeFeng: true,
   activityQingNiang: true,
   activityQianXing: true,
+  activityYuLuoChengShi: true,
 })
 
 const defaultSystemConfig = ref({
@@ -689,6 +690,7 @@ const defaultSystemConfig = ref({
   activityHeFeng: true,
   activityQingNiang: true,
   activityQianXing: true,
+  activityYuLuoChengShi: true,
 })
 
 const wxConfigSaving = ref(false)
@@ -701,6 +703,7 @@ async function handleSaveActivityConfig() {
       activityHeFeng: localSystemConfig.value.activityHeFeng,
       activityQingNiang: localSystemConfig.value.activityQingNiang,
       activityQianXing: localSystemConfig.value.activityQianXing,
+      activityYuLuoChengShi: localSystemConfig.value.activityYuLuoChengShi,
     })
     if (data?.ok) {
       showAlert('活动配置已保存，前端菜单已同步更新', 'primary')
@@ -718,6 +721,7 @@ async function handleResetActivityConfig() {
   localSystemConfig.value.activityHeFeng = true
   localSystemConfig.value.activityQingNiang = true
   localSystemConfig.value.activityQianXing = true
+  localSystemConfig.value.activityYuLuoChengShi = true
   await handleSaveActivityConfig()
 }
 
@@ -1768,6 +1772,17 @@ onMounted(() => {
                     </p>
                   </div>
                   <BaseSwitch v-model="localSystemConfig.activityQianXing" />
+                </div>
+                <div class="flex items-center justify-between rounded-lg border border-gray-200 bg-white p-4 dark:border-gray-700 dark:bg-gray-800">
+                  <div>
+                    <h4 class="text-sm text-gray-900 font-medium dark:text-white">
+                      雨落成诗
+                    </h4>
+                    <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                      关闭后前端菜单隐藏「雨落成诗」入口
+                    </p>
+                  </div>
+                  <BaseSwitch v-model="localSystemConfig.activityYuLuoChengShi" />
                 </div>
               </div>
 

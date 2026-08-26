@@ -1413,8 +1413,8 @@ async function handleTestOffline() {
             <BaseSwitch v-model="localAutomationSettings.automation.mystery_shop" label="自动购买神秘商店" />
             <BaseSwitch v-model="localAutomationSettings.automation.star_light_up" label="千星游记自动点亮领取" />
             <BaseSwitch v-model="localAutomationSettings.automation.solar_terms" label="节令小礼自动领取" />
-            <BaseSwitch v-model="localAutomationSettings.automation.weather_task" label="雨落成诗：每日买采集瓶+对好友使用（实验）" />
-            <BaseSwitch v-model="localAutomationSettings.automation.weather_research" label="雨落成诗：气象研究自动检查（升级协议待补）" />
+            <BaseSwitch v-model="localAutomationSettings.automation.weather_task" label="雨落成诗：每日买采集瓶+对好友使用+雷雨瓶自用" />
+            <BaseSwitch v-model="localAutomationSettings.automation.weather_research" label="雨落成诗：气象研究自动升级（消耗雷电徽章）" />
             <BaseSwitch v-model="localAutomationSettings.automation.skip_own_weed_bug" label="不除自己草虫" />
           </div>
 

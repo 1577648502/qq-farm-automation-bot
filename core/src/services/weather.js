@@ -214,11 +214,10 @@ function isThunderWeather(type) {
  * 获取雨落成诗完整概览: 天气 + 活动数据 + 相关背包数量
  */
 async function getWeatherOverview() {
-    const [weatherReply, groupReply, bagReply] = await Promise.all([
-        getWeatherStatusRaw().catch(e => { logWarn('活动', `获取天气状态失败: ${e.message}`); return null; }),
-        getWeatherGroupRaw().catch(e => { logWarn('活动', `获取雨落成诗活动失败: ${e.message}`); return null; }),
-        getBag().catch(() => null),
-    ]);
+    // 串行请求, 避免瞬时并发挤占心跳/核心接口导致连接超时断开
+    const weatherReply = await getWeatherStatusRaw().catch(e => { logWarn('活动', `获取天气状态失败: ${e.message}`); return null; });
+    const groupReply = await getWeatherGroupRaw().catch(e => { logWarn('活动', `获取雨落成诗活动失败: ${e.message}`); return null; });
+    const bagReply = await getBag().catch(() => null);
 
     const bagItems = bagReply ? getBagItems(bagReply) : [];
     const bagCounts = new Map();
@@ -369,15 +368,8 @@ async function autoRunDailyWeatherTasks() {
         }
     }
 
-    // 2) 遍历好友用采集瓶
-    // 重新查一次背包知道有多少瓶
-    let bagAfter;
-    try {
-        bagAfter = await getWeatherOverview();
-    } catch (e) {
-        bagAfter = overview;
-    }
-    let bottles = bagAfter.bag.collectBottle;
+    // 2) 遍历好友用采集瓶 (本地推算瓶数: 初始库存 + 本次购买, 避免再发一次 overview 请求)
+    let bottles = (overview.bag.collectBottle || 0) + (summary.bought || 0);
     if (bottles <= 0) {
         summary.skipped.push('无采集瓶, 跳过对好友使用');
         return summary;
@@ -458,28 +450,38 @@ async function checkAndRunWeatherResearch() {
     if (!isAutomationOn('weather_research')) return { skipped: true };
     const summary = { upgraded: [], skipped: [], errors: [] };
     try {
-        // 循环最多 10 次防死循环 (最多 8 档)
-        for (let round = 0; round < 10; round++) {
-            const overview = await getWeatherOverview();
-            const research = overview.activity && overview.activity.research;
-            if (!research) { summary.skipped.push('研究活动未开启'); break; }
-            const badge = overview.bag.thunderBadge || 0;
-            const candidate = (research.tiers || []).find(t => t.upgradable && badge >= toNum(t.cost && t.cost.count));
-            if (!candidate) {
-                summary.skipped.push(`本轮结束(徽章=${badge}, 无可升级档位)`);
+        // 只查询一次 overview, 之后本地推演逐档升级 (研究档位链式固定顺序 1000→1008)
+        // 避免每轮重复 getWeatherOverview 产生大量并发请求挤占连接
+        const overview = await getWeatherOverview();
+        const research = overview.activity && overview.activity.research;
+        if (!research) { summary.skipped.push('研究活动未开启'); return summary; }
+
+        // 从当前可升级档开始, 按数组顺序依次升级; 每升一档本地扣减徽章
+        const tiers = (research.tiers || []).slice().sort((a, b) => toNum(a.tierId) - toNum(b.tierId));
+        let badge = overview.bag.thunderBadge || 0;
+        let startIndex = tiers.findIndex(t => t.upgradable);
+        if (startIndex < 0) { summary.skipped.push(`无可升级档位(徽章=${badge})`); return summary; }
+
+        for (let i = startIndex; i < tiers.length; i++) {
+            const tier = tiers[i];
+            if (tier.upgraded) continue;
+            const cost = toNum(tier.cost && tier.cost.count);
+            if (badge < cost) {
+                summary.skipped.push(`徽章不足(剩 ${badge}, 需 ${cost}), 停止于档位 ${tier.tierId}`);
                 break;
             }
             try {
-                await upgradeResearchTier(candidate.tierId);
-                summary.upgraded.push(candidate.tierId);
-                log('活动', `雨落成诗气象研究: 升级档位 ${candidate.tierId} 成功 (消耗徽章 ${toNum(candidate.cost && candidate.cost.count)})`, {
-                    module: 'activity', event: '雨落成诗研究', result: 'upgrade_ok', tierId: candidate.tierId,
+                await upgradeResearchTier(tier.tierId);
+                badge -= cost;
+                summary.upgraded.push(tier.tierId);
+                log('活动', `雨落成诗气象研究: 升级档位 ${tier.tierId} 成功 (消耗徽章 ${cost}, 剩 ${badge})`, {
+                    module: 'activity', event: '雨落成诗研究', result: 'upgrade_ok', tierId: tier.tierId,
                 });
                 await randomDelay(800, 1500);
             } catch (e) {
-                summary.errors.push(`升级档位 ${candidate.tierId} 失败: ${e.message}`);
-                logWarn('活动', `雨落成诗气象研究: 升级档位 ${candidate.tierId} 失败: ${e.message}`, { module: 'activity', event: '雨落成诗研究', result: 'upgrade_error' });
-                break; // 遇错停止, 避免循环失败
+                summary.errors.push(`升级档位 ${tier.tierId} 失败: ${e.message}`);
+                logWarn('活动', `雨落成诗气象研究: 升级档位 ${tier.tierId} 失败: ${e.message}`, { module: 'activity', event: '雨落成诗研究', result: 'upgrade_error' });
+                break; // 遇错停止
             }
         }
         return summary;
