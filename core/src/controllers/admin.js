@@ -1443,6 +1443,62 @@ app.use('/api', (req, res, next) => {
         } catch (e) { res.json({ ok: false, error: e.message }); }
     });
 
+    // ===== 公益小红花 =====
+    // API: 概览
+    app.get('/api/charity/overview', async (req, res) => {
+        const id = getAccId(req);
+        if (!id) return res.status(400).json({ ok: false });
+        if (!checkAccountAccess(req, id)) return res.status(403).json({ ok: false, error: '无权访问此账号' });
+        try {
+            const data = await provider.getCharityOverview(id);
+            res.json({ ok: true, data });
+        } catch (e) { res.json({ ok: false, error: e.message }); }
+    });
+
+    // API: 领取公益礼包
+    app.post('/api/charity/claim-gift', async (req, res) => {
+        const id = getAccId(req);
+        if (!id) return res.status(400).json({ ok: false });
+        if (!checkAccountAccess(req, id)) return res.status(403).json({ ok: false, error: '无权访问此账号' });
+        try {
+            const data = await provider.claimCharityGift(id);
+            res.json({ ok: true, data });
+        } catch (e) { res.json({ ok: false, error: e.message }); }
+    });
+
+    // API: 送出爱心
+    app.post('/api/charity/send-love', async (req, res) => {
+        const id = getAccId(req);
+        if (!id) return res.status(400).json({ ok: false });
+        if (!checkAccountAccess(req, id)) return res.status(403).json({ ok: false, error: '无权访问此账号' });
+        try {
+            const data = await provider.sendCharityLove(id);
+            res.json({ ok: true, data });
+        } catch (e) { res.json({ ok: false, error: e.message }); }
+    });
+
+    // API: 分享
+    app.post('/api/charity/share', async (req, res) => {
+        const id = getAccId(req);
+        if (!id) return res.status(400).json({ ok: false });
+        if (!checkAccountAccess(req, id)) return res.status(403).json({ ok: false, error: '无权访问此账号' });
+        try {
+            const data = await provider.shareCharity(id);
+            res.json({ ok: true, data });
+        } catch (e) { res.json({ ok: false, error: e.message }); }
+    });
+
+    // API: 立即执行公益小红花每日自动化
+    app.post('/api/charity/run-now', async (req, res) => {
+        const id = getAccId(req);
+        if (!id) return res.status(400).json({ ok: false });
+        if (!checkAccountAccess(req, id)) return res.status(403).json({ ok: false, error: '无权访问此账号' });
+        try {
+            const data = await provider.runCharityTasksNow(id);
+            res.json({ ok: true, data });
+        } catch (e) { res.json({ ok: false, error: e.message }); }
+    });
+
     app.get('/api/illustrated', async (req, res) => {
         const id = getAccId(req);
         if (!id) return res.status(400).json({ ok: false });
@@ -1902,8 +1958,8 @@ app.use('/api', (req, res, next) => {
     // 保存系统配置
     app.post('/api/admin/system-config', authRequired, adminRequired, (req, res) => {
         try {
-            const { serverUrl, clientVersion, platform, os, activityHeFeng, activityQingNiang, activityQianXing, activityYuLuoChengShi } = req.body || {};
-            const newConfig = { serverUrl, clientVersion, platform, os, activityHeFeng, activityQingNiang, activityQianXing, activityYuLuoChengShi };
+            const { serverUrl, clientVersion, platform, os, activityHeFeng, activityQingNiang, activityQianXing, activityYuLuoChengShi, activityGongYiXiaoHongHua } = req.body || {};
+            const newConfig = { serverUrl, clientVersion, platform, os, activityHeFeng, activityQingNiang, activityQianXing, activityYuLuoChengShi, activityGongYiXiaoHongHua };
             const saved = store.setSystemConfig(newConfig);
             updateRuntimeConfig(saved);
             const current = getRuntimeConfig();

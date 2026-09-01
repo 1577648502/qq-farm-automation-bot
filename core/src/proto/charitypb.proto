@@ -1,0 +1,90 @@
+syntax = "proto3";
+
+package gamepb.charitypb;
+
+// ============ 公益小红花 (group_id=2026090901, head.type=19) ============
+// 抓包(2026-09-01)确认协议:
+//   活动名 "公益小红花", uid="CharityRedFlower", 2026/9/1 ~ 2026/9/9
+//   Operate cmd=38 (payload 空串, 字段137): 领取每日公益礼包 (化肥 80001 x2, 每日限领1次)
+//   Operate cmd=36 (payload 空串, 字段135): 送出爱心/公益金 (活动结束后结算发放)
+//   分享: gamepb.sharepb.ShareService.ReportShare
+// body 在 ActivityData 的 field 116, 用独立 GroupReply 复解 GetGroupReply, 避开字段冲突。
+
+message CharityGroupReply {
+    CharityGroup group = 1;
+}
+
+message CharityGroup {
+    CharityHead head = 1;
+    repeated CharityActivityData children = 2;
+}
+
+message CharityHead {
+    int64 id = 1;
+    int64 group_id = 2;
+    int64 type = 3;
+    string name = 4;
+    string desc = 5;
+    int64 start_time = 6;
+    int64 end_time = 7;
+    int64 client_id = 8;
+    int32 status = 20;
+}
+
+message CharityActivityData {
+    CharityHead head = 1;
+    CharityBody charity = 116;   // 公益小红花核心 body
+}
+
+// ---- 核心 body (抓包 field116) ----
+message CharityBody {
+    int64 love_item_id = 1;         // 爱心值物品id (实测=1040)
+    bool gift_claimed = 2;          // 今日是否已领公益礼包 (cmd=38 后置 true)
+    bool love_sent = 3;             // 是否已送出爱心/公益金 (cmd=36 后置 true)
+    int64 server_love_total = 4;    // 全服累计爱心值
+    int64 server_target = 5;        // 全服目标 (实测=1000000000)
+    int64 field6 = 6;
+    CharityItem seed_reward = 7;    // 每日种子奖励 (实测 {20883, 6})
+    repeated CharityTier tiers = 9; // 个人爱心值档位奖励 (30/60/90/120/150)
+    CharityTier server_reward = 10; // 全服结算档 ({1000000000, {101604,1}})
+    int64 field11 = 11;
+    CharityItem settle_pack = 12;   // 全服结算礼包 (实测 {101604,1})
+    int64 end_time = 13;
+    int64 red_dot = 16;             // 可领取红点标志
+    int64 state = 17;
+    int64 field19 = 19;
+    CharityItem daily_gift = 21;    // 每日公益礼包内容 (实测 {80001,2} 化肥1h)
+}
+
+message CharityTier {
+    int64 threshold = 1;    // 爱心值档位阈值
+    CharityItem reward = 2; // 达标奖励
+}
+
+message CharityItem {
+    int64 id = 1;
+    int64 count = 2;
+}
+
+// ---- Operate 响应 (手动构造请求, 响应用此宽松解析) ----
+message CharityOperateReply {
+    int64 id = 1;
+    int64 cmd = 2;
+    CharityActivityData activity = 3;   // 操作后最新活动状态
+    CharitySendResult send_love = 136;  // cmd=36 送爱心结果
+    CharityClaimResult claim_gift = 138; // cmd=38 领礼包结果
+}
+
+message CharitySendResult {
+    int64 field1 = 1;
+    int64 field2 = 2;
+    int64 field3 = 3;
+    int64 love_total = 4;   // 送出后全服/个人爱心值
+}
+
+message CharityClaimResult {
+    int64 field1 = 1;
+    bytes friend = 2;       // 好友信息(结构未定, 保留原始字节)
+    CharityItem award = 3;  // 领到的礼包物品 (化肥 80001)
+    bytes field4 = 4;
+}

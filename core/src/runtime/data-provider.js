@@ -208,6 +208,11 @@ function createDataProvider(options) {
         useWeatherThunderBottle: (accountRef) => callWorkerApi(resolveAccountRefId(accountRef), 'useWeatherThunderBottle'),
         upgradeWeatherResearch: (accountRef, tierId) => callWorkerApi(resolveAccountRefId(accountRef), 'upgradeWeatherResearch', [tierId]),
         runWeatherResearchNow: (accountRef) => callWorkerApi(resolveAccountRefId(accountRef), 'runWeatherResearchNow'),
+        getCharityOverview: (accountRef) => callWorkerApi(resolveAccountRefId(accountRef), 'getCharityOverview'),
+        claimCharityGift: (accountRef) => callWorkerApi(resolveAccountRefId(accountRef), 'claimCharityGift'),
+        sendCharityLove: (accountRef) => callWorkerApi(resolveAccountRefId(accountRef), 'sendCharityLove'),
+        shareCharity: (accountRef) => callWorkerApi(resolveAccountRefId(accountRef), 'shareCharity'),
+        runCharityTasksNow: (accountRef) => callWorkerApi(resolveAccountRefId(accountRef), 'runCharityTasksNow'),
 
         getBagSeeds: (accountRef) => callWorkerApi(resolveAccountRefId(accountRef), 'getBagSeeds'),
 

@@ -113,6 +113,15 @@ export const menuRoutes: MenuItem[] = [
   },
 
   {
+    path: 'charity-activity',
+    name: 'charity-activity',
+    label: '公益小红花',
+    icon: 'i-carbon-favorite',
+    activityKey: 'gongYiXiaoHongHuaEnabled',
+    component: () => import('@/views/CharityActivity.vue'),
+  },
+
+  {
     path: 'pet',
     name: 'pet',
     label: '\u5ba0\u7269',

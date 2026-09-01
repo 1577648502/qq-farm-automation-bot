@@ -151,6 +151,7 @@ const DEFAULT_ACCOUNT_CONFIG = {
         solar_terms: false,   // 节令小礼自动领取
         weather_task: false,     // 雨落成诗: 每日自动买瓶+对好友使用采集瓶
         weather_research: false, // 雨落成诗: 气象研究自动检查(升级协议待补)
+        charity_task: false,     // 公益小红花: 每日领礼包+送爱心+分享
         sell: false,
         fertilizer: 'smart',
         fertilizer_multi_season: true,
@@ -609,6 +610,7 @@ function loadGlobalConfig() {
                     activityQingNiang: data.systemConfig.activityQingNiang !== false,
                     activityQianXing: data.systemConfig.activityQianXing !== false,
                     activityYuLuoChengShi: data.systemConfig.activityYuLuoChengShi !== false,
+                    activityGongYiXiaoHongHua: data.systemConfig.activityGongYiXiaoHongHua !== false,
                 };
             }
 
@@ -1311,6 +1313,7 @@ function setSystemConfig(config) {
         activityQingNiang: config.activityQingNiang !== false,
         activityQianXing: config.activityQianXing !== false,
         activityYuLuoChengShi: config.activityYuLuoChengShi !== false,
+        activityGongYiXiaoHongHua: config.activityGongYiXiaoHongHua !== false,
     };
     saveGlobalConfig();
     return { ...globalConfig.systemConfig };
@@ -1323,6 +1326,7 @@ function getActivityStatus() {
         qingNiangEnabled: cfg.activityQingNiang !== false,
         qianXingEnabled: cfg.activityQianXing !== false,
         yuLuoChengShiEnabled: cfg.activityYuLuoChengShi !== false,
+        gongYiXiaoHongHuaEnabled: cfg.activityGongYiXiaoHongHua !== false,
     };
 }
 

@@ -37,6 +37,7 @@ async function loadProto() {
         getResourcePath('proto', 'mysteryshoppb.proto'),
         getResourcePath('proto', 'solartermspb.proto'),
         getResourcePath('proto', 'weatherpb.proto'),
+        getResourcePath('proto', 'charitypb.proto'),
     ], { keepCase: true });
 
     // 网关
@@ -237,6 +238,18 @@ async function loadProto() {
     types.WeatherUseBottleOnFriendReq = root.lookupType('gamepb.weatherpb.WeatherUseBottleOnFriendReq');
     types.WeatherUpgradeResearchReq = root.lookupType('gamepb.weatherpb.WeatherUpgradeResearchReq');
     types.WeatherUseItemOnSelfRequest = root.lookupType('gamepb.weatherpb.UseItemOnSelfRequest');
+
+    // 公益小红花
+    types.CharityGroupReply = root.lookupType('gamepb.charitypb.CharityGroupReply');
+    types.CharityOperateReply = root.lookupType('gamepb.charitypb.CharityOperateReply');
+    types.CharityActivityData = root.lookupType('gamepb.charitypb.CharityActivityData');
+    types.CharityBody = root.lookupType('gamepb.charitypb.CharityBody');
+
+    // 分享
+    types.CheckCanShareRequest = root.lookupType('gamepb.sharepb.CheckCanShareRequest');
+    types.CheckCanShareReply = root.lookupType('gamepb.sharepb.CheckCanShareReply');
+    types.ReportShareRequest = root.lookupType('gamepb.sharepb.ReportShareRequest');
+    types.ReportShareReply = root.lookupType('gamepb.sharepb.ReportShareReply');
 
         // Proto 加载完成
     log('系统', 'Protobuf 定义加载完成');

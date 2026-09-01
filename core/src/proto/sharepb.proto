@@ -14,12 +14,24 @@ message CheckCanShareReply {
 }
 
 // --- 报告分享 ---
+// 抓包(2026-09-01): 请求 { #1=15, #4=1506 }, 分享场景码固定
 message ReportShareRequest {
-    bool shared = 1;  // 是否已分享
+    int64 share_type = 1;   // 分享场景类型 (实测=15)
+    int64 scene = 4;        // 子场景/目标 (实测=1506)
 }
 
 message ReportShareReply {
-    bool success = 1;  // 是否成功
+    ReportShareResult result = 1;
+}
+
+message ReportShareResult {
+    int64 code = 1;                 // 实测=1 (成功)
+    ReportShareReward reward = 2;
+}
+
+message ReportShareReward {
+    int64 field1 = 1;
+    int64 field2 = 2;
 }
 
 // --- 领取分享奖励 ---

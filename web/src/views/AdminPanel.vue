@@ -680,6 +680,7 @@ const localSystemConfig = ref({
   activityQingNiang: true,
   activityQianXing: true,
   activityYuLuoChengShi: true,
+  activityGongYiXiaoHongHua: true,
 })
 
 const defaultSystemConfig = ref({
@@ -691,6 +692,7 @@ const defaultSystemConfig = ref({
   activityQingNiang: true,
   activityQianXing: true,
   activityYuLuoChengShi: true,
+  activityGongYiXiaoHongHua: true,
 })
 
 const wxConfigSaving = ref(false)
@@ -704,6 +706,7 @@ async function handleSaveActivityConfig() {
       activityQingNiang: localSystemConfig.value.activityQingNiang,
       activityQianXing: localSystemConfig.value.activityQianXing,
       activityYuLuoChengShi: localSystemConfig.value.activityYuLuoChengShi,
+      activityGongYiXiaoHongHua: localSystemConfig.value.activityGongYiXiaoHongHua,
     })
     if (data?.ok) {
       showAlert('活动配置已保存，前端菜单已同步更新', 'primary')
@@ -722,6 +725,7 @@ async function handleResetActivityConfig() {
   localSystemConfig.value.activityQingNiang = true
   localSystemConfig.value.activityQianXing = true
   localSystemConfig.value.activityYuLuoChengShi = true
+  localSystemConfig.value.activityGongYiXiaoHongHua = true
   await handleSaveActivityConfig()
 }
 
@@ -1783,6 +1787,17 @@ onMounted(() => {
                     </p>
                   </div>
                   <BaseSwitch v-model="localSystemConfig.activityYuLuoChengShi" />
+                </div>
+                <div class="flex items-center justify-between rounded-lg border border-gray-200 bg-white p-4 dark:border-gray-700 dark:bg-gray-800">
+                  <div>
+                    <h4 class="text-sm text-gray-900 font-medium dark:text-white">
+                      公益小红花
+                    </h4>
+                    <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                      关闭后前端菜单隐藏「公益小红花」入口
+                    </p>
+                  </div>
+                  <BaseSwitch v-model="localSystemConfig.activityGongYiXiaoHongHua" />
                 </div>
               </div>
 

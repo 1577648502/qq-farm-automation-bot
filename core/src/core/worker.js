@@ -164,6 +164,7 @@ async function runDailyRoutines(force = false) {
         await checkAndClaimSolarTerms();
         await require('../services/weather').checkAndRunWeatherTasks();
         await require('../services/weather').checkAndRunWeatherResearch();
+        await require('../services/charity').checkAndRunCharityTasks();
     } catch (e) {
         log('系统', `每日任务调度失败: ${e.message}`, { module: 'system', event: '每日任务', result: 'error' });
     }
@@ -473,6 +474,14 @@ function applyRuntimeConfig(snapshot, syncNow = false) {
                 workerScheduler.setTimeoutTask('weather_research_immediate', 500, () => {
                     if (!loginReady) return;
                     require('../services/weather').checkAndRunWeatherResearch().catch(() => null);
+                });
+            }
+
+            // 公益小红花每日任务 关->开 时立即执行一次
+            if (!(prevAuto && prevAuto.charity_task) && (nextAuto && nextAuto.charity_task)) {
+                workerScheduler.setTimeoutTask('charity_task_immediate', 500, () => {
+                    if (!loginReady) return;
+                    require('../services/charity').checkAndRunCharityTasks().catch(() => null);
                 });
             }
 
@@ -812,6 +821,21 @@ async function handleApiCall(msg) {
                 break;
             case 'runWeatherResearchNow':
                 result = await require('../services/weather').checkAndRunWeatherResearch();
+                break;
+            case 'getCharityOverview':
+                result = await require('../services/charity').getCharityOverview();
+                break;
+            case 'claimCharityGift':
+                result = await require('../services/charity').claimCharityGift();
+                break;
+            case 'sendCharityLove':
+                result = await require('../services/charity').sendCharityLove();
+                break;
+            case 'shareCharity':
+                result = await require('../services/charity').shareCharity();
+                break;
+            case 'runCharityTasksNow':
+                result = await require('../services/charity').autoRunCharityTasks();
                 break;
             case 'getIllustrated': {
                 const { getIllustratedOverview } = require('../services/illustrated');

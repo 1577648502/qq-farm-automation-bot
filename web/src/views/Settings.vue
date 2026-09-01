@@ -590,6 +590,7 @@ const localAutomationSettings = ref({
     solar_terms: false,
     weather_task: false,
     weather_research: false,
+    charity_task: false,
     fertilizer: 'normal',
     skip_own_weed_bug: false,
     fertilizer_multi_season: false,
@@ -633,6 +634,7 @@ function syncLocalAutomationSettings() {
         solar_terms: false,
         weather_task: false,
         weather_research: false,
+        charity_task: false,
         fertilizer: 'none',
         skip_own_weed_bug: false,
         fertilizer_multi_season: false,
@@ -660,6 +662,7 @@ function syncLocalAutomationSettings() {
         solar_terms: false,
         weather_task: false,
         weather_research: false,
+        charity_task: false,
         fertilizer: 'none',
         skip_own_weed_bug: false,
         fertilizer_multi_season: false,
@@ -1415,6 +1418,7 @@ async function handleTestOffline() {
             <BaseSwitch v-model="localAutomationSettings.automation.solar_terms" label="节令小礼自动领取" />
             <BaseSwitch v-model="localAutomationSettings.automation.weather_task" label="雨落成诗：每日买采集瓶+对好友使用+雷雨瓶自用" />
             <BaseSwitch v-model="localAutomationSettings.automation.weather_research" label="雨落成诗：气象研究自动升级（消耗雷电徽章）" />
+            <BaseSwitch v-model="localAutomationSettings.automation.charity_task" label="公益小红花：每日领公益礼包+送爱心+分享" />
             <BaseSwitch v-model="localAutomationSettings.automation.skip_own_weed_bug" label="不除自己草虫" />
           </div>
 
