@@ -35,9 +35,9 @@ const FIELD_CLAIM_TIER = 136;
 const CMD_CLAIM_GIFT = 38;     // 领取每日公益礼包
 const FIELD_CLAIM_GIFT = 137;
 
-// 分享场景码 (抓包固定值)
-const SHARE_TYPE = 15;
-const SHARE_SCENE = 1506;
+// 分享场景码 (2026-09-09 抓包更新: 旧 15/1506 已失效, 服务端报 1000020 参数错误)
+const SHARE_TYPE = 1;
+const SHARE_SCENE = 42;
 
 // 相关物品 ID
 const ITEM_ID_LOVE = 1040;      // 爱心值
@@ -225,7 +225,9 @@ async function claimCharityTier(threshold) {
 }
 
 /**
- * 每日分享: 先 CheckCanShare, 可分享时再 ReportShare 上报领种子
+ * 每日分享 (2026-09-09 抓包更新):
+ *   CheckCanShare → 可分享时 ReportShare{share_type=1, scene=42} → 成功后 ClaimShareReward{share_type=1} 领奖
+ *   旧流程 (15/1506, 不领奖) 已失效: 服务端报 1000020 请求参数错误
  */
 async function shareCharity() {
     const canBody = types.CheckCanShareRequest.encode(types.CheckCanShareRequest.create({})).finish();
@@ -244,7 +246,30 @@ async function shareCharity() {
         const rep = types.ReportShareReply.decode(repReplyBody);
         code = toNum(rep && rep.result && rep.result.code);
     } catch (_) { /* 忽略 */ }
-    return { shared: true, code };
+    if (code !== 1) {
+        return { shared: false, reason: `ReportShare 未成功 (code=${code})` };
+    }
+    // 领取分享奖励 (上报成功后客户端会立刻调用)
+    let reward = null;
+    try {
+        const claimBody = types.ClaimShareRewardRequest.encode(
+            types.ClaimShareRewardRequest.create({ share_type: toLong(SHARE_TYPE) }),
+        ).finish();
+        const { body: claimReplyBody } = await sendMsgAsync(SHARE_SERVICE, 'ClaimShareReward', claimBody);
+        const claimRep = types.ClaimShareRewardReply.decode(claimReplyBody);
+        const info = claimRep && claimRep.reward;
+        if (info) {
+            reward = {
+                field1: toNum(info.field1),
+                field6: toNum(info.field6),
+                field7: toNum(info.field7),
+            };
+        }
+    } catch (e) {
+        // 领奖失败不视为分享失败 (可能已领过)
+        logWarn('活动', `公益小红花: ClaimShareReward 失败(可能已领): ${e.message}`);
+    }
+    return { shared: true, code, reward };
 }
 
 // ============ 自动化 ============

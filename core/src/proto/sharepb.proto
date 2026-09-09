@@ -14,10 +14,11 @@ message CheckCanShareReply {
 }
 
 // --- 报告分享 ---
-// 抓包(2026-09-01): 请求 { #1=15, #4=1506 }, 分享场景码固定
+// 抓包(2026-09-01): 请求 { #1=15, #4=1506 } (旧活动期)
+// 抓包(2026-09-09): 请求 { #1=1, #4=42 }, 旧参数已失效(服务端报 1000020 请求参数错误)
 message ReportShareRequest {
-    int64 share_type = 1;   // 分享场景类型 (实测=15)
-    int64 scene = 4;        // 子场景/目标 (实测=1506)
+    int64 share_type = 1;   // 分享场景类型 (2026-09-09 实测=1)
+    int64 scene = 4;        // 子场景/目标 (2026-09-09 实测=42)
 }
 
 message ReportShareReply {
@@ -35,12 +36,31 @@ message ReportShareReward {
 }
 
 // --- 领取分享奖励 ---
+// 抓包(2026-09-09): ReportShare 成功后客户端随即调用
+//   请求 { #1=1 }(share_type); 响应 field1=奖励信息, field2=状态
 message ClaimShareRewardRequest {
-    bool claimed = 1;  // 请求领取
+    int64 share_type = 1;   // 实测=1
 }
 
 message ClaimShareRewardReply {
-    bool success = 1;           // 是否成功
-    bool has_reward = 2;        // 是否有奖励
-    repeated corepb.Item items = 3;  // 奖励物品列表
+    ClaimShareRewardInfo reward = 1;   // 奖励信息
+    ClaimShareRewardStatus status = 2; // 状态
+}
+
+message ClaimShareRewardInfo {
+    int64 field1 = 1;   // 实测=100003 (疑似奖励/任务id)
+    int64 field2 = 2;   // 实测=5
+    int64 field3 = 3;   // 实测=负数 int64
+    int64 field6 = 6;   // 实测=11362 (疑似物品id)
+    int64 field7 = 7;   // 实测=1 (疑似数量)
+}
+
+message ClaimShareRewardStatus {
+    int64 field1 = 1;
+    ClaimShareRewardStatusInner field2 = 2;
+}
+
+message ClaimShareRewardStatusInner {
+    int64 field1 = 1;
+    int64 field2 = 2;
 }
