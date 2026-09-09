@@ -7,6 +7,9 @@ package gamepb.charitypb;
 //   活动名 "公益小红花", uid="CharityRedFlower", 2026/9/1 ~ 2026/9/9
 //   Operate cmd=38 (payload 空串, 字段137): 领取每日公益礼包 (化肥 80001 x2, 每日限领1次)
 //   Operate cmd=36 (payload 空串, 字段135): 送出爱心/公益金 (活动结束后结算发放)
+//   Operate cmd=37 (payload message{threshold}, 字段136): 领取个人爱心档位奖励
+//       (2026-09-08 抓包: 领 150 档 -> payload #1=150, 响应无独立结果字段, 只回最新 activity)
+//       payload 字段号规律 = cmd + 99 (36->135, 37->136, 38->137)
 //   分享: gamepb.sharepb.ShareService.ReportShare
 // body 在 ActivityData 的 field 116, 用独立 GroupReply 复解 GetGroupReply, 避开字段冲突。
 
@@ -39,8 +42,8 @@ message CharityActivityData {
 // ---- 核心 body (抓包 field116) ----
 message CharityBody {
     int64 love_item_id = 1;         // 爱心值物品id (实测=1040)
-    bool gift_claimed = 2;          // 今日是否已领公益礼包 (cmd=38 后置 true)
-    bool love_sent = 3;             // 是否已送出爱心/公益金 (cmd=36 后置 true)
+    int64 love_can_send = 2;        // 今日可送爱心数 (2026-09-08 实测: 送前=23, 送后缺省=0; 不是 bool!)
+    int64 personal_love_total = 3;  // 个人累计爱心值 (2026-09-08 实测: 145 -> 送23后=168; 不是 bool!)
     int64 server_love_total = 4;    // 全服累计爱心值
     int64 server_target = 5;        // 全服目标 (实测=1000000000)
     int64 field6 = 6;
@@ -50,7 +53,7 @@ message CharityBody {
     int64 field11 = 11;
     CharityItem settle_pack = 12;   // 全服结算礼包 (实测 {101604,1})
     int64 end_time = 13;
-    int64 red_dot = 16;             // 可领取红点标志
+    int64 red_dot = 16;             // 可领取红点标志 (2026-09-08 实测: 送爱心后 1->0)
     int64 state = 17;
     int64 field19 = 19;
     CharityItem daily_gift = 21;    // 每日公益礼包内容 (实测 {80001,2} 化肥1h)

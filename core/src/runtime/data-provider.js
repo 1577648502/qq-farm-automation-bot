@@ -211,6 +211,7 @@ function createDataProvider(options) {
         getCharityOverview: (accountRef) => callWorkerApi(resolveAccountRefId(accountRef), 'getCharityOverview'),
         claimCharityGift: (accountRef) => callWorkerApi(resolveAccountRefId(accountRef), 'claimCharityGift'),
         sendCharityLove: (accountRef) => callWorkerApi(resolveAccountRefId(accountRef), 'sendCharityLove'),
+        claimCharityTier: (accountRef, threshold) => callWorkerApi(resolveAccountRefId(accountRef), 'claimCharityTier', [threshold]),
         shareCharity: (accountRef) => callWorkerApi(resolveAccountRefId(accountRef), 'shareCharity'),
         runCharityTasksNow: (accountRef) => callWorkerApi(resolveAccountRefId(accountRef), 'runCharityTasksNow'),
 

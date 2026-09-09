@@ -1,11 +1,13 @@
 /**
  * 公益小红花 (group_id=2026090901, head.type=19)
  *
- * 抓包(2026-09-01)确认协议:
+ * 抓包(2026-09-01 / 2026-09-08)确认协议:
  *   活动名 "公益小红花", uid="CharityRedFlower", 2026/9/1 ~ 2026/9/9
  *   概览:   ActivityService.GetGroup(2026090901) → CharityGroupReply, body 在 ActivityData.field116
+ *           (2026-09-08 实测客户端改走 Operate 响应内嵌 activity, GetGroup 仍有效)
  *   领礼包: Operate(2026090901, cmd=38, field137="")  每日公益礼包(化肥 80001×2)
  *   送爱心: Operate(2026090901, cmd=36, field135="")  送出爱心/公益金(活动结束后结算)
+ *   领档位: Operate(2026090901, cmd=37, field136=message{threshold})  个人爱心档位奖励(30/60/90/120/150)
  *   分享:   ShareService.CheckCanShare → ShareService.ReportShare{share_type=15, scene=1506}
  *
  * 备注: 本活动为腾讯公益真实项目, 涉及真实善款, 操作均按活动内既定按钮语义发起,
@@ -25,11 +27,13 @@ const SHARE_SERVICE = 'gamepb.sharepb.ShareService';
 
 const CHARITY_GROUP_ID = 2026090901;
 
-// Operate 命令与其 payload 字段号 (payload 均为空串)
-const CMD_CLAIM_GIFT = 38;     // 领取每日公益礼包
-const FIELD_CLAIM_GIFT = 137;
+// Operate 命令与其 payload 字段号 (规律: 字段号 = cmd + 99)
 const CMD_SEND_LOVE = 36;      // 送出爱心/公益金
 const FIELD_SEND_LOVE = 135;
+const CMD_CLAIM_TIER = 37;     // 领取个人爱心档位奖励 (payload=message{threshold})
+const FIELD_CLAIM_TIER = 136;
+const CMD_CLAIM_GIFT = 38;     // 领取每日公益礼包
+const FIELD_CLAIM_GIFT = 137;
 
 // 分享场景码 (抓包固定值)
 const SHARE_TYPE = 15;
@@ -71,17 +75,17 @@ async function getCharityGroupRaw() {
     return types.CharityGroupReply.decode(replyBody);
 }
 
-// 手动构造 Operate 请求 (payload 为空串, 字段号随 cmd 不同)
-function encodeCharityOperateRaw(cmd, payloadFieldNumber) {
+// 手动构造 Operate 请求 (payload 缺省为空串; cmd=37 传 message{threshold})
+function encodeCharityOperateRaw(cmd, payloadFieldNumber, payloadBytes) {
     const w = new protobuf.Writer();
     w.uint32((1 << 3) | 0).int64(toLong(CHARITY_GROUP_ID));
     w.uint32((2 << 3) | 0).int64(toLong(cmd));
-    w.uint32((payloadFieldNumber << 3) | 2).bytes(Buffer.alloc(0)); // 空串 payload
+    w.uint32((payloadFieldNumber << 3) | 2).bytes(payloadBytes || Buffer.alloc(0));
     return w.finish();
 }
 
-async function operateCharityRaw(cmd, payloadFieldNumber) {
-    const body = encodeCharityOperateRaw(cmd, payloadFieldNumber);
+async function operateCharityRaw(cmd, payloadFieldNumber, payloadBytes) {
+    const body = encodeCharityOperateRaw(cmd, payloadFieldNumber, payloadBytes);
     const { body: replyBody } = await sendMsgAsync(ACTIVITY_SERVICE, 'Operate', body);
     return replyBody;
 }
@@ -125,8 +129,10 @@ function normalizeCharity(groupReply) {
         ...base,
         hasBody: true,
         loveItemId: toNum(body.love_item_id) || ITEM_ID_LOVE,
-        giftClaimed: !!body.gift_claimed,
-        loveSent: !!body.love_sent,
+        // 2026-09-08 抓包修正: field2=今日可送爱心数(0=已送), field3=个人累计爱心值
+        loveCanSend: toNum(body.love_can_send),
+        loveSent: toNum(body.love_can_send) <= 0,
+        personalLoveTotal: toNum(body.personal_love_total),
         serverLoveTotal: toNum(body.server_love_total),
         serverTarget: toNum(body.server_target),
         seedReward: normalizeItem(body.seed_reward),
@@ -198,6 +204,27 @@ async function sendCharityLove() {
 }
 
 /**
+ * 领取个人爱心档位奖励 (cmd=37, 2026-09-08 抓包确认)
+ * payload = message{ #1: threshold } (字段136), 响应无独立结果字段, 只回最新 activity
+ * @param {number} threshold 档位阈值 (30/60/90/120/150)
+ */
+async function claimCharityTier(threshold) {
+    const w = new protobuf.Writer();
+    w.uint32((1 << 3) | 0).int64(toLong(threshold));
+    const replyBody = await operateCharityRaw(CMD_CLAIM_TIER, FIELD_CLAIM_TIER, w.finish());
+    let personalLoveTotal = 0;
+    try {
+        const rep = types.CharityOperateReply.decode(replyBody);
+        const children = (rep && rep.activity && rep.activity.children) || [];
+        const charity = children.find((c) => c && c.charity);
+        if (charity && charity.charity) {
+            personalLoveTotal = toNum(charity.charity.personal_love_total);
+        }
+    } catch (_) { /* 忽略解析失败 */ }
+    return { threshold, personalLoveTotal, replyLen: replyBody.length };
+}
+
+/**
  * 每日分享: 先 CheckCanShare, 可分享时再 ReportShare 上报领种子
  */
 async function shareCharity() {
@@ -223,10 +250,10 @@ async function shareCharity() {
 // ============ 自动化 ============
 
 /**
- * 每日公益任务: 领公益礼包 + 送爱心 + 分享 (各自仅在未完成时触发一次)
+ * 每日公益任务: 领公益礼包 + 送爱心 + 领档位奖励 + 分享 (各自仅在未完成时触发一次)
  */
 async function autoRunCharityTasks() {
-    const summary = { claimed: false, loved: false, shared: false, skipped: [], errors: [] };
+    const summary = { claimed: false, loved: false, tierClaims: 0, shared: false, skipped: [], errors: [] };
     let overview;
     try {
         overview = await getCharityOverview();
@@ -237,22 +264,17 @@ async function autoRunCharityTasks() {
         return { skipped: true, reason: 'activity_not_active' };
     }
 
-    // 1) 领取公益礼包 (今日未领时)
-    if (!overview.activity.giftClaimed) {
-        try {
-            await claimCharityGift();
-            summary.claimed = true;
-            log('活动', '公益小红花: 领取公益礼包成功', { module: 'activity', event: '公益小红花', result: 'claim_ok' });
-            await randomDelay(800, 1500);
-        } catch (e) {
-            summary.errors.push(`领取公益礼包失败: ${e.message}`);
-            logWarn('活动', `公益小红花领礼包失败: ${e.message}`, { module: 'activity', event: '公益小红花', result: 'claim_error' });
-        }
-    } else {
-        summary.skipped.push('公益礼包已领取');
+    // 1) 领取公益礼包 (body 里无可靠"已领"标志, 直接尝试, 已领时服务端报错按跳过处理)
+    try {
+        await claimCharityGift();
+        summary.claimed = true;
+        log('活动', '公益小红花: 领取公益礼包成功', { module: 'activity', event: '公益小红花', result: 'claim_ok' });
+        await randomDelay(800, 1500);
+    } catch (e) {
+        summary.skipped.push('公益礼包(已领或不可领)');
     }
 
-    // 2) 送出爱心 (未送时)
+    // 2) 送出爱心 (今日可送数为 0/缺省 时视为已送)
     if (!overview.activity.loveSent) {
         try {
             await sendCharityLove();
@@ -267,7 +289,23 @@ async function autoRunCharityTasks() {
         summary.skipped.push('今日已送出爱心');
     }
 
-    // 3) 每日分享
+    // 3) 领取个人爱心档位奖励 (cmd=37): 档位阈值 <= 个人累计爱心 的逐一尝试, 已领过的由服务端报错跳过
+    const act = overview.activity;
+    if (Array.isArray(act.tiers) && act.tiers.length) {
+        for (const tier of act.tiers) {
+            if (!tier || !tier.threshold || tier.threshold > act.personalLoveTotal) continue;
+            try {
+                await claimCharityTier(tier.threshold);
+                summary.tierClaims += 1;
+                log('活动', `公益小红花: 领取 ${tier.threshold} 爱心档位奖励成功`, { module: 'activity', event: '公益小红花', result: 'tier_ok' });
+                await randomDelay(800, 1500);
+            } catch (e) {
+                summary.skipped.push(`${tier.threshold} 档(已领或未达标)`);
+            }
+        }
+    }
+
+    // 4) 每日分享
     try {
         const r = await shareCharity();
         summary.shared = r.shared;
@@ -309,6 +347,7 @@ module.exports = {
     // 写操作
     claimCharityGift,
     sendCharityLove,
+    claimCharityTier,
     shareCharity,
     // 自动化
     autoRunCharityTasks,

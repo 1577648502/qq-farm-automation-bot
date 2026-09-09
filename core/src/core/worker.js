@@ -831,6 +831,9 @@ async function handleApiCall(msg) {
             case 'sendCharityLove':
                 result = await require('../services/charity').sendCharityLove();
                 break;
+            case 'claimCharityTier':
+                result = await require('../services/charity').claimCharityTier(args[0]);
+                break;
             case 'shareCharity':
                 result = await require('../services/charity').shareCharity();
                 break;

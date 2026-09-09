@@ -23,8 +23,9 @@ interface CharityActivity {
   endTime: number
   hasBody: boolean
   loveItemId?: number
-  giftClaimed?: boolean
+  loveCanSend?: number
   loveSent?: boolean
+  personalLoveTotal?: number
   serverLoveTotal?: number
   serverTarget?: number
   seedReward?: RewardItem
@@ -126,6 +127,23 @@ async function handleSendLove() {
   }
 }
 
+async function handleClaimTier(threshold: number) {
+  busy.value = true
+  try {
+    const { data } = await api.post('/api/charity/claim-tier', { threshold })
+    if (data?.ok) {
+      toast.success(`已领取 ${threshold} 爱心档位奖励`)
+      await loadOverview()
+    } else {
+      toast.error(data?.error || '领取失败(可能已领取或未达标)')
+    }
+  } catch (e: any) {
+    toast.error(extractError(e) || '领取失败')
+  } finally {
+    busy.value = false
+  }
+}
+
 async function handleShare() {
   busy.value = true
   try {
@@ -153,7 +171,7 @@ async function handleRunNow() {
     const { data } = await api.post('/api/charity/run-now')
     if (data?.ok) {
       const r = data.data || {}
-      toast.success(`已执行: 领礼包 ${r.claimed ? '是' : '否'}, 送爱心 ${r.loved ? '是' : '否'}, 分享 ${r.shared ? '是' : '否'}`)
+      toast.success(`已执行: 领礼包 ${r.claimed ? '是' : '否'}, 送爱心 ${r.loved ? '是' : '否'}, 领档位 ${r.tierClaims || 0} 个, 分享 ${r.shared ? '是' : '否'}`)
       await loadOverview()
     } else {
       toast.error(data?.error || '执行失败')
@@ -226,18 +244,22 @@ onMounted(async () => {
       </div>
 
       <!-- 背包摘要 -->
-      <div class="grid grid-cols-3 gap-3">
+      <div class="grid grid-cols-2 gap-3 md:grid-cols-4">
         <div class="rounded-lg border border-gray-200 bg-white p-3 dark:border-gray-700 dark:bg-gray-800">
-          <div class="text-xs text-gray-500 dark:text-gray-400">爱心值</div>
-          <div class="mt-1 text-xl font-bold">{{ overview.bag.love }}</div>
+          <div class="text-xs text-gray-500 dark:text-gray-400">累计爱心值(档位)</div>
+          <div class="mt-1 text-xl font-bold">{{ fmtNum(overview.activity.personalLoveTotal || 0) }}</div>
+        </div>
+        <div class="rounded-lg border border-gray-200 bg-white p-3 dark:border-gray-700 dark:bg-gray-800">
+          <div class="text-xs text-gray-500 dark:text-gray-400">背包爱心道具</div>
+          <div class="mt-1 text-xl font-bold">{{ fmtNum(overview.bag.love || 0) }}</div>
         </div>
         <div class="rounded-lg border border-gray-200 bg-white p-3 dark:border-gray-700 dark:bg-gray-800">
           <div class="text-xs text-gray-500 dark:text-gray-400">小红花种子</div>
-          <div class="mt-1 text-xl font-bold">{{ overview.bag.seed }}</div>
+          <div class="mt-1 text-xl font-bold">{{ fmtNum(overview.bag.seed || 0) }}</div>
         </div>
         <div class="rounded-lg border border-gray-200 bg-white p-3 dark:border-gray-700 dark:bg-gray-800">
           <div class="text-xs text-gray-500 dark:text-gray-400">小红花(果实)</div>
-          <div class="mt-1 text-xl font-bold">{{ overview.bag.fruit }}</div>
+          <div class="mt-1 text-xl font-bold">{{ fmtNum(overview.bag.fruit || 0) }}</div>
         </div>
       </div>
 
@@ -256,11 +278,11 @@ onMounted(async () => {
             class="mt-3"
             variant="primary"
             size="sm"
-            :disabled="busy || overview.activity.giftClaimed"
+            :disabled="busy"
             :loading="busy"
             @click="handleClaimGift"
           >
-            {{ overview.activity.giftClaimed ? '今日已领取' : '领取礼包' }}
+            领取礼包
           </BaseButton>
         </div>
 
@@ -314,14 +336,25 @@ onMounted(async () => {
             v-for="t in overview.activity.tiers"
             :key="t.threshold"
             class="flex flex-col rounded border border-gray-200 p-3 text-sm dark:border-gray-700"
-            :class="(overview.bag.love || 0) >= t.threshold
+            :class="(overview.activity.personalLoveTotal || 0) >= t.threshold
               ? 'bg-rose-50 dark:bg-rose-900/20'
               : 'bg-gray-50 dark:bg-gray-900/40'"
           >
             <span class="font-medium">达 {{ t.threshold }} 爱心值</span>
-            <span class="mt-1 text-xs text-gray-600 dark:text-gray-400">
+            <span class="mt-1 flex-1 text-xs text-gray-600 dark:text-gray-400">
               {{ t.reward.name }} × {{ t.reward.count }}
             </span>
+            <BaseButton
+              v-if="(overview.activity.personalLoveTotal || 0) >= t.threshold"
+              class="mt-2"
+              variant="primary"
+              size="sm"
+              :disabled="busy"
+              :loading="busy"
+              @click="handleClaimTier(t.threshold)"
+            >
+              领取
+            </BaseButton>
           </div>
         </div>
       </div>

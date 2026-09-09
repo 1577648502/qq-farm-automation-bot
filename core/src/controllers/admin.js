@@ -1477,6 +1477,19 @@ app.use('/api', (req, res, next) => {
         } catch (e) { res.json({ ok: false, error: e.message }); }
     });
 
+    // API: 领取个人爱心档位奖励 (cmd=37)
+    app.post('/api/charity/claim-tier', async (req, res) => {
+        const id = getAccId(req);
+        if (!id) return res.status(400).json({ ok: false });
+        if (!checkAccountAccess(req, id)) return res.status(403).json({ ok: false, error: '无权访问此账号' });
+        const threshold = Number(req.body && req.body.threshold);
+        if (!threshold || threshold <= 0) return res.status(400).json({ ok: false, error: '缺少 threshold' });
+        try {
+            const data = await provider.claimCharityTier(id, threshold);
+            res.json({ ok: true, data });
+        } catch (e) { res.json({ ok: false, error: e.message }); }
+    });
+
     // API: 分享
     app.post('/api/charity/share', async (req, res) => {
         const id = getAccId(req);
