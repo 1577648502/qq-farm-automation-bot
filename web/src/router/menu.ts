@@ -122,6 +122,15 @@ export const menuRoutes: MenuItem[] = [
   },
 
   {
+    path: 'mengchong-activity',
+    name: 'mengchong-activity',
+    label: '萌宠游记',
+    icon: 'i-carbon-paw-print',
+    activityKey: 'mengChongEnabled',
+    component: () => import('@/views/MengchongActivity.vue'),
+  },
+
+  {
     path: 'pet',
     name: 'pet',
     label: '\u5ba0\u7269',

@@ -214,6 +214,10 @@ function createDataProvider(options) {
         claimCharityTier: (accountRef, threshold) => callWorkerApi(resolveAccountRefId(accountRef), 'claimCharityTier', [threshold]),
         shareCharity: (accountRef) => callWorkerApi(resolveAccountRefId(accountRef), 'shareCharity'),
         runCharityTasksNow: (accountRef) => callWorkerApi(resolveAccountRefId(accountRef), 'runCharityTasksNow'),
+        getMengchongOverview: (accountRef) => callWorkerApi(resolveAccountRefId(accountRef), 'getMengchongOverview'),
+        claimMengchongFreeGift: (accountRef) => callWorkerApi(resolveAccountRefId(accountRef), 'claimMengchongFreeGift'),
+        mengchongOperate: (accountRef, opts) => callWorkerApi(resolveAccountRefId(accountRef), 'mengchongOperate', [opts || {}]),
+        runMengchongTasksNow: (accountRef) => callWorkerApi(resolveAccountRefId(accountRef), 'runMengchongTasksNow'),
 
         getBagSeeds: (accountRef) => callWorkerApi(resolveAccountRefId(accountRef), 'getBagSeeds'),
 

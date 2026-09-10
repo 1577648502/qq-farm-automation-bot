@@ -6,7 +6,23 @@
 const { sendMsgAsync, getUserState } = require('../utils/network');
 const { types } = require('../utils/proto');
 const { toNum, log, sleep } = require('../utils/utils');
-const { getItemById, getItemByName, getItemImageById } = require('../config/gameConfig');
+const { getItemById, getAllItems, getItemImageById } = require('../config/gameConfig');
+
+// 名称 -> 物品 索引 (懒加载; gameConfig 未导出 getItemByName, 这里自建, 同时避免未收录物品抛错)
+let itemNameIndex = null;
+function getItemByNameLocal(name) {
+    const key = String(name || '').trim();
+    if (!key) return null;
+    if (!itemNameIndex) {
+        itemNameIndex = new Map();
+        try {
+            for (const item of (getAllItems() || [])) {
+                if (item && item.name) itemNameIndex.set(String(item.name), item);
+            }
+        } catch { /* 配置未加载时忽略 */ }
+    }
+    return itemNameIndex.get(key) || null;
+}
 
 const ORGANIC_FERTILIZER_MALL_GOODS_ID = 1002;
 const INORGANIC_FERTILIZER_MALL_GOODS_ID = 1003;
@@ -63,11 +79,65 @@ async function getMallGoodsList(slotType = 1) {
     for (const b of raw) {
         try {
             goods.push(types.MallGoods.decode(b));
-        } catch {
-            // ignore
+        } catch (e) {
+            // 不再静默丢弃: 用通用 wire 解析兜底, 保证新商品(proto 未覆盖字段)也能展示
+            const fallback = decodeMallGoodsFallback(b);
+            if (fallback) {
+                goods.push(fallback);
+                log('商城', `商品字段超出 proto 定义, 已用通用解析兜底: id=${fallback.goods_id} name=${fallback.name}`, {
+                    module: 'mall', event: '兜底解析', goodsId: fallback.goods_id,
+                });
+            } else {
+                log('商城', `商城商品解析失败已跳过: ${e.message}`, { module: 'mall', event: '解析失败', result: 'error' });
+            }
         }
     }
     return goods;
+}
+
+/** 通用 wire 兜底: 解析 MallGoods 的可读字段 (id/name/type/is_free/discount/image/items/price) */
+function decodeMallGoodsFallback(input) {
+    let fields = [];
+    try {
+        fields = decodeWireFields(input);
+    } catch {
+        return null;
+    }
+    const pick = (f, wire) => fields.find(x => x.field === f && (wire == null || x.wire === wire)) || null;
+    const goodsId = toNum(pick(1, 0) && pick(1, 0).value);
+    if (goodsId <= 0) return null;
+    const nameField = pick(2, 2);
+    const typeField = pick(3, 0);
+    const itemFields = fields.filter(x => x.field === 4 && x.wire === 2);
+    const priceField = pick(5, 2);
+    const freeField = pick(6, 0);
+    const limitField = pick(7, 2);
+    const limitedField = pick(8, 0);
+    const discountField = pick(9, 2);
+    const imageField = pick(13, 2);
+    // 物品条目 {id=1, count=2}
+    const items = [];
+    for (const entry of itemFields) {
+        let sub = [];
+        try { sub = decodeWireFields(entry.value); } catch { continue; }
+        const id = toNum((sub.find(x => x.field === 1 && x.wire === 0) || {}).value);
+        const count = toNum((sub.find(x => x.field === 2 && x.wire === 0) || {}).value) || 1;
+        if (id > 0) items.push({ id, count });
+    }
+    return {
+        goods_id: goodsId,
+        name: nameField ? Buffer.from(nameField.value).toString('utf8') : '',
+        type: typeField ? toNum(typeField.value) : 0,
+        item_ids: Buffer.alloc(0),
+        price: priceField ? Buffer.from(priceField.value) : Buffer.alloc(0),
+        is_free: freeField ? toNum(freeField.value) > 0 : false,
+        limit: limitField ? Buffer.from(limitField.value) : Buffer.alloc(0),
+        is_limited: limitedField ? toNum(limitedField.value) > 0 : false,
+        discount: discountField ? Buffer.from(discountField.value).toString('utf8') : '',
+        __items: items,
+        __image: imageField ? Buffer.from(imageField.value).toString('utf8') : '',
+        __fallback: true,
+    };
 }
 
 async function getShopGoodsList(shopId) {
@@ -222,6 +292,7 @@ function normalizeMallItem(item) {
     return {
         id,
         count: Math.max(1, Number(item && item.count) || 1),
+        // 本地配置未收录的新物品不再丢弃, 用 物品#id 兜底展示
         name: info.name ? String(info.name) : `物品#${id}`,
         description: String(info.desc || info.effectDesc || ''),
         image: getItemImageById(id),
@@ -330,12 +401,35 @@ function inferGoodsItem(goods) {
     ]);
     const knownItemId = knownGoodsItems.get(goodsId);
     if (knownItemId) return { id: knownItemId, count: 1 };
-    const info = getItemByName(goods && goods.name);
+    const info = getItemByNameLocal(goods && goods.name);
     return info && Number(info.id) > 0 ? { id: Number(info.id), count: 1 } : null;
 }
 
+/** 解析商品物品条目: item_ids 为一条或多条 {id=1, count=2} 子消息 */
+function decodeGoodsItems(itemIds) {
+    if (!itemIds) return [];
+    const arr = Array.isArray(itemIds) ? itemIds : [itemIds];
+    const out = [];
+    for (const buf of arr) {
+        const bytes = Buffer.isBuffer(buf) ? buf : Buffer.from(buf || []);
+        if (!bytes.length) continue;
+        let fields = [];
+        try { fields = decodeWireFields(bytes); } catch { continue; }
+        const id = toNum((fields.find(x => x.field === 1 && x.wire === 0) || {}).value);
+        const count = toNum((fields.find(x => x.field === 2 && x.wire === 0) || {}).value) || 1;
+        if (id > 0) out.push({ id, count });
+    }
+    return out;
+}
+
 function normalizeMallGoods(goods, slotType) {
-    const decodedItems = decodeItemCandidates(goods && goods.item_ids);
+    // 物品内容: 优先结构化条目(item_ids 多条), 兜底再用通用字节解析
+    let decodedItems = (Array.isArray(goods && goods.__items) && goods.__items.length)
+        ? goods.__items.slice()
+        : decodeGoodsItems(goods && goods.item_ids);
+    if (!decodedItems.length) {
+        decodedItems = decodeItemCandidates(goods && goods.item_ids);
+    }
     if (!decodedItems.length) {
         const inferred = inferGoodsItem(goods);
         if (inferred) decodedItems.push(inferred);
@@ -359,7 +453,9 @@ function normalizeMallGoods(goods, slotType) {
         discount: String(goods && goods.discount || ''),
         price: parseMallPrice(goods && goods.price, isFree),
         items,
-        image: primary && primary.image || '',
+        // 页面用本地物品图(可直接被浏览器加载); 服务端图路径单独保留备用
+        image: (primary && primary.image) || '',
+        iconPath: (goods && goods.__image) || '',
         description: primary && primary.description || '',
         unlocked: true,
         boughtNum,

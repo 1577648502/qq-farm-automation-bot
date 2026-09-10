@@ -165,6 +165,7 @@ async function runDailyRoutines(force = false) {
         await require('../services/weather').checkAndRunWeatherTasks();
         await require('../services/weather').checkAndRunWeatherResearch();
         await require('../services/charity').checkAndRunCharityTasks();
+        await require('../services/mengchong').checkAndRunMengchongTasks();
     } catch (e) {
         log('系统', `每日任务调度失败: ${e.message}`, { module: 'system', event: '每日任务', result: 'error' });
     }
@@ -482,6 +483,14 @@ function applyRuntimeConfig(snapshot, syncNow = false) {
                 workerScheduler.setTimeoutTask('charity_task_immediate', 500, () => {
                     if (!loginReady) return;
                     require('../services/charity').checkAndRunCharityTasks().catch(() => null);
+                });
+            }
+
+            // 萌宠游记每日任务 关->开 时立即执行一次
+            if (!(prevAuto && prevAuto.mengchong_task) && (nextAuto && nextAuto.mengchong_task)) {
+                workerScheduler.setTimeoutTask('mengchong_task_immediate', 500, () => {
+                    if (!loginReady) return;
+                    require('../services/mengchong').checkAndRunMengchongTasks().catch(() => null);
                 });
             }
 
@@ -840,6 +849,18 @@ async function handleApiCall(msg) {
             case 'runCharityTasksNow':
                 result = await require('../services/charity').autoRunCharityTasks();
                 break;
+            case 'getMengchongOverview':
+                result = await require('../services/mengchong').getMengchongOverview();
+                break;
+            case 'claimMengchongFreeGift':
+                result = await require('../services/mengchong').claimFreeSeedGift();
+                break;
+            case 'mengchongOperate':
+                result = await require('../services/mengchong').petOperate(args[0] || {});
+                break;
+            case 'runMengchongTasksNow':
+                result = await require('../services/mengchong').autoRunMengchongTasks();
+                break;
             case 'getIllustrated': {
                 const { getIllustratedOverview } = require('../services/illustrated');
                 const { getPlantNameBySeedId, getSeedImageBySeedId, getPlantBySeedId, getPlantByFruitId } = require('../config/gameConfig');
@@ -914,9 +935,13 @@ async function handleApiCall(msg) {
                 result = { ok: true };
                 break;
 
-            case 'getMallCatalog':
-                result = await getMallCatalog(args[0] || {});
+            case 'getMallCatalog': {
+                // provider 传的是 { slotType }; 之前直接把对象当 slotType 用导致永远按 1 查
+                const options = args[0] || {};
+                const slot = Number(options && typeof options === 'object' ? options.slotType : options);
+                result = await getMallCatalog(Number.isFinite(slot) && slot > 0 ? slot : 1);
                 break;
+            }
             case 'purchaseMallGoods': {
                 const [goodsId, count, slotType, source, shopId] = args;
                 result = await purchaseCatalogGoods(goodsId, count, slotType, source, shopId);

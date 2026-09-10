@@ -70,6 +70,7 @@ async function getActivityStatus() {
         qianXingEnabled: res.data.qianXingEnabled !== false,
         yuLuoChengShiEnabled: res.data.yuLuoChengShiEnabled !== false,
         gongYiXiaoHongHuaEnabled: res.data.gongYiXiaoHongHuaEnabled !== false,
+        mengChongEnabled: res.data.mengChongEnabled !== false,
       }
       return cachedActivityStatus
     }
@@ -114,6 +115,7 @@ router.beforeEach(async (to, _from) => {
     'star-activity': 'qianXingEnabled',
     'weather-activity': 'yuLuoChengShiEnabled',
     'charity-activity': 'gongYiXiaoHongHuaEnabled',
+    'mengchong-activity': 'mengChongEnabled',
   }
   const activityKey = to.name ? activityRouteMap[String(to.name)] : undefined
   if (activityKey) {

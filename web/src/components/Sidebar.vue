@@ -251,6 +251,7 @@ const activityStatus = ref({
   qianXingEnabled: true,
   yuLuoChengShiEnabled: true,
   gongYiXiaoHongHuaEnabled: true,
+  mengChongEnabled: true,
 })
 
 async function loadActivityStatus() {
@@ -263,6 +264,7 @@ async function loadActivityStatus() {
         qianXingEnabled: res.data.qianXingEnabled !== false,
         yuLuoChengShiEnabled: res.data.yuLuoChengShiEnabled !== false,
         gongYiXiaoHongHuaEnabled: res.data.gongYiXiaoHongHuaEnabled !== false,
+        mengChongEnabled: res.data.mengChongEnabled !== false,
       }
     }
   } catch {

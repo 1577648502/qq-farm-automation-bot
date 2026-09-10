@@ -1512,6 +1512,51 @@ app.use('/api', (req, res, next) => {
         } catch (e) { res.json({ ok: false, error: e.message }); }
     });
 
+    // ===== 萌宠游记 =====
+    // API: 概览
+    app.get('/api/mengchong/overview', async (req, res) => {
+        const id = getAccId(req);
+        if (!id) return res.status(400).json({ ok: false });
+        if (!checkAccountAccess(req, id)) return res.status(403).json({ ok: false, error: '无权访问此账号' });
+        try {
+            const data = await provider.getMengchongOverview(id);
+            res.json({ ok: true, data });
+        } catch (e) { res.json({ ok: false, error: e.message }); }
+    });
+
+    // API: 领取每日免费稀有种子礼包
+    app.post('/api/mengchong/claim-free-gift', async (req, res) => {
+        const id = getAccId(req);
+        if (!id) return res.status(400).json({ ok: false });
+        if (!checkAccountAccess(req, id)) return res.status(403).json({ ok: false, error: '无权访问此账号' });
+        try {
+            const data = await provider.claimMengchongFreeGift(id);
+            res.json({ ok: true, data });
+        } catch (e) { res.json({ ok: false, error: e.message }); }
+    });
+
+    // API: 萌宠主活动操作 (cmd 27/31/47, 语义部分待抓包确认)
+    app.post('/api/mengchong/operate', async (req, res) => {
+        const id = getAccId(req);
+        if (!id) return res.status(400).json({ ok: false });
+        if (!checkAccountAccess(req, id)) return res.status(403).json({ ok: false, error: '无权访问此账号' });
+        try {
+            const data = await provider.mengchongOperate(id, req.body || {});
+            res.json({ ok: true, data });
+        } catch (e) { res.json({ ok: false, error: e.message }); }
+    });
+
+    // API: 立即执行萌宠游记每日自动化
+    app.post('/api/mengchong/run-now', async (req, res) => {
+        const id = getAccId(req);
+        if (!id) return res.status(400).json({ ok: false });
+        if (!checkAccountAccess(req, id)) return res.status(403).json({ ok: false, error: '无权访问此账号' });
+        try {
+            const data = await provider.runMengchongTasksNow(id);
+            res.json({ ok: true, data });
+        } catch (e) { res.json({ ok: false, error: e.message }); }
+    });
+
     app.get('/api/illustrated', async (req, res) => {
         const id = getAccId(req);
         if (!id) return res.status(400).json({ ok: false });
