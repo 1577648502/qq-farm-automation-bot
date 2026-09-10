@@ -13,7 +13,21 @@
       "updatedAt": 1787730208889,
       "nick": "润出去",
       "loginType": "manual"
+    },
+    {
+      "id": "2",
+      "name": "账号2",
+      "code": "0d3oBd100zQB5X16lf100EqwqV1oBd1i",
+      "platform": "wx",
+      "uin": "",
+      "qq": "",
+      "avatar": "",
+      "username": "admin",
+      "createdAt": 1789012499623,
+      "updatedAt": 1789020585296,
+      "nick": "哈哈",
+      "loginType": "manual"
     }
   ],
-  "nextId": 2
+  "nextId": 3
 }

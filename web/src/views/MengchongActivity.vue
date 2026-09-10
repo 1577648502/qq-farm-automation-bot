@@ -2,7 +2,6 @@
 import { computed, onMounted, ref } from 'vue'
 import api from '@/api'
 import BaseButton from '@/components/ui/BaseButton.vue'
-import BaseInput from '@/components/ui/BaseInput.vue'
 import { useToastStore } from '@/stores/toast'
 
 interface SigninItem {
@@ -50,6 +49,7 @@ interface MengchongOverview {
   seedGift: GroupInfo | null
   pet: PetState | null
   yuanqigao: number
+  luckyStar: number
 }
 
 const toast = useToastStore()
@@ -57,14 +57,13 @@ const loading = ref(false)
 const busy = ref(false)
 const overview = ref<MengchongOverview | null>(null)
 
-// 高级操作
-const opCmd = ref<number>(27)
-const opGid = ref<string>('')
-const opHex = ref<string>('')
-const opResult = ref<string>('')
-const opBusy = ref(false)
-
 const active = computed(() => !!overview.value?.active)
+
+// 状态里除元气糕/幸运星之外的额外道具 (避免与背包卡片重复)
+const DUP_ITEM_IDS = [1028, 1029]
+const otherPetItems = computed(() =>
+  (overview.value?.pet?.items || []).filter((it: any) => !DUP_ITEM_IDS.includes(Number(it.id))),
+)
 
 function fmtTime(sec: number) {
   if (!sec) return '-'
@@ -160,10 +159,12 @@ async function handleRunNow() {
     const { data } = await api.post('/api/mengchong/run-now')
     if (data?.ok) {
       const r = data.data || {}
-      if (r.skipped) {
+      if (r.skipped === true) {
         toast.info('自动化开关未开启, 请先到设置中开启"萌宠游记每日任务"')
       } else {
-        toast.success(`已执行: 免费礼包 ${r.giftClaimed ? '是' : '否'}, 手记奖励 ${r.handnoteClaims || 0} 个`)
+        const parts = [`免费礼包 ${r.giftClaimed ? '已领' : '未领'}`, `手记奖励 ${r.handnoteClaims || 0} 个`]
+        const skipList = Array.isArray(r.skipped) ? r.skipped : []
+        toast.success(`已执行: ${parts.join(', ')}${skipList.length ? ` (跳过: ${skipList.join('、')})` : ''}`)
       }
       await loadOverview()
     } else {
@@ -176,30 +177,21 @@ async function handleRunNow() {
   }
 }
 
-async function handleOperate() {
-  opBusy.value = true
-  opResult.value = ''
+async function handleTreasure() {
+  busy.value = true
   try {
-    const payload: any = { cmd: opCmd.value }
-    if (opHex.value.trim()) {
-      payload.payloadHex = opHex.value.trim()
-    } else if ((opCmd.value === 47 || opCmd.value === 32) && opGid.value) {
-      payload.payloadVarints = [Number(opGid.value)]
-    }
-    const { data } = await api.post('/api/mengchong/operate', payload)
+    const { data } = await api.post('/api/mengchong/operate', { cmd: 31 })
     if (data?.ok) {
-      opResult.value = JSON.stringify(data.data?.result || {}, null, 1)
-      toast.success('操作已发送 (err=0)')
+      const awards = (data.data?.result?.awards || []).map((i: any) => `${i.name}×${i.count}`).join('、')
+      toast.success(`寻宝完成${awards ? ` → ${awards}` : ''}`)
       await loadOverview()
     } else {
-      opResult.value = data?.error || '操作失败'
-      toast.error(opResult.value)
+      toast.error(data?.error || '寻宝失败(可能元气糕不足或次数已满)')
     }
   } catch (e: any) {
-    opResult.value = extractError(e) || '操作失败'
-    toast.error(opResult.value)
+    toast.error(extractError(e) || '寻宝失败')
   } finally {
-    opBusy.value = false
+    busy.value = false
   }
 }
 
@@ -291,8 +283,12 @@ onMounted(async () => {
             <div class="text-xs text-gray-500 dark:text-gray-400">元气糕(背包)</div>
             <div class="mt-1 text-xl font-bold">{{ fmtNum(overview.yuanqigao) }}</div>
           </div>
+          <div class="rounded border border-gray-200 p-3 dark:border-gray-700">
+            <div class="text-xs text-gray-500 dark:text-gray-400">幸运星(背包)</div>
+            <div class="mt-1 text-xl font-bold">{{ fmtNum(overview.luckyStar) }}</div>
+          </div>
           <div
-            v-for="it in overview.pet.items"
+            v-for="it in otherPetItems"
             :key="it.id"
             class="rounded border border-gray-200 p-3 dark:border-gray-700"
           >
@@ -393,55 +389,24 @@ onMounted(async () => {
         </div>
       </div>
 
-      <!-- 萌宠操作 (待确认语义) -->
+      <!-- 寻宝 -->
       <div class="rounded-lg border border-gray-200 bg-white p-4 shadow-sm dark:border-gray-700 dark:bg-gray-800">
         <h3 class="text-sm text-gray-900 font-medium dark:text-white">
-          萌宠操作
+          比熊寻宝
         </h3>
         <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
-          投喂/领取手记已有专用按钮; 这里保留原始命令入口(按抓包推断): 27 打开/刷新, 31 寻宝, 47 好友操作(填 gid), 49 翻看手记。
+          比熊成年后可寻宝: 消耗萌宠元气糕, 必定获得幸运星、待护送宝藏与挑战书。每日次数有限。
         </p>
-        <div class="mt-3 flex flex-wrap items-end gap-3">
-          <div>
-            <label class="mb-1 block text-xs text-gray-500">命令</label>
-            <select v-model.number="opCmd" class="rounded border border-gray-300 bg-white px-2 py-1.5 text-sm dark:border-gray-600 dark:bg-gray-900">
-              <option :value="27">
-                27 · 打开/刷新
-              </option>
-              <option :value="29">
-                29 · 投喂
-              </option>
-              <option :value="31">
-                31 · 寻宝(推测)
-              </option>
-              <option :value="32">
-                32 · 领手记奖励
-              </option>
-              <option :value="47">
-                47 · 好友操作(推测)
-              </option>
-              <option :value="49">
-                49 · 翻看手记
-              </option>
-            </select>
-          </div>
-          <div v-if="opCmd === 47">
-            <label class="mb-1 block text-xs text-gray-500">好友 gid</label>
-            <BaseInput v-model="opGid" placeholder="好友 gid" class="w-48" />
-          </div>
-          <div v-if="opCmd === 32">
-            <label class="mb-1 block text-xs text-gray-500">手记 id</label>
-            <BaseInput v-model="opGid" placeholder="手记 id" class="w-32" />
-          </div>
-          <div>
-            <label class="mb-1 block text-xs text-gray-500">payload(hex, 可选)</label>
-            <BaseInput v-model="opHex" placeholder="如 0a0101" class="w-40" />
-          </div>
-          <BaseButton variant="primary" size="sm" :loading="opBusy" @click="handleOperate">
-            发送
-          </BaseButton>
-        </div>
-        <pre v-if="opResult" class="mt-3 max-h-48 overflow-auto rounded bg-gray-100 p-2 text-xs dark:bg-gray-900">{{ opResult }}</pre>
+        <BaseButton
+          class="mt-3"
+          variant="primary"
+          size="sm"
+          :disabled="busy || !overview.yuanqigao"
+          :loading="busy"
+          @click="handleTreasure"
+        >
+          {{ overview.yuanqigao ? '寻宝一次' : '元气糕不足' }}
+        </BaseButton>
       </div>
     </template>
   </div>

@@ -324,6 +324,36 @@ function loadConfigs() {
         console.warn('[配置] 加载 ItemInfo.json 失败:', e.message);
     }
 
+    // 物品名覆盖表 (ItemInfo.json 未收录的新物品, 避免界面显示"物品#id")
+    // 支持两处: 内置 gameConfig/ItemNameOverrides.json (随版本维护) + data/gameConfig/ItemNameOverrides.json (用户自补)
+    try {
+        const overridePaths = [
+            path.join(configDir, 'ItemNameOverrides.json'),
+            path.join(getDataDir(), 'gameConfig', 'ItemNameOverrides.json'),
+        ];
+        let overridden = 0;
+        for (const p of overridePaths) {
+            if (!fs.existsSync(p)) continue;
+            let data;
+            try { data = JSON.parse(fs.readFileSync(p, 'utf8')); } catch { continue; }
+            for (const [k, name] of Object.entries(data || {})) {
+                const id = Number(k);
+                if (!(id > 0) || typeof name !== 'string' || !name) continue;
+                const existing = itemInfoMap.get(id);
+                if (existing) {
+                    if (!existing.name) { existing.name = name; overridden += 1; }
+                } else {
+                    const item = { id, name, type: 0, price: 0, level: 0, asset_name: '', __override: true };
+                    itemInfoMap.set(id, item);
+                    overridden += 1;
+                }
+            }
+        }
+        if (overridden > 0) console.warn(`[配置] 已应用物品名覆盖 ${overridden} 项`);
+    } catch (e) {
+        console.warn('[配置] 加载物品名覆盖表失败:', e.message);
+    }
+
     // 合并同步目录(data/gameConfig)里新增的植物：内置 Plant.json 的等级数据经过人工校正，
     // 因此只追加内置缺少的新植物，不覆盖已有条目；
     // 同步源的 land_level_need 不准，新植物用 ItemInfo 种子物品的 level 校正

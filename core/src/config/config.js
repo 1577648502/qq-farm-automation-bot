@@ -5,9 +5,16 @@ const process = require('node:process');
 
 const DEFAULT_SYSTEM_CONFIG = {
     serverUrl: 'wss://gate-obt.nqf.qq.com/prod/ws',
-    clientVersion: '1.12.3.20_20260630',
+    clientVersion: '1.14.0.1_20260909',
     platform: 'qq',
     os: 'iOS',
+    // 活动入口默认开关 (前端菜单显隐)
+    activityHeFeng: true,
+    activityQingNiang: true,
+    activityQianXing: true,
+    activityYuLuoChengShi: true,
+    activityGongYiXiaoHongHua: true,
+    activityMengChong: true,
 };
 
 const CONFIG = {

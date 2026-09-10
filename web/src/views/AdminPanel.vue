@@ -681,6 +681,7 @@ const localSystemConfig = ref({
   activityQianXing: true,
   activityYuLuoChengShi: true,
   activityGongYiXiaoHongHua: true,
+  activityMengChong: true,
 })
 
 const defaultSystemConfig = ref({
@@ -693,6 +694,7 @@ const defaultSystemConfig = ref({
   activityQianXing: true,
   activityYuLuoChengShi: true,
   activityGongYiXiaoHongHua: true,
+  activityMengChong: true,
 })
 
 const wxConfigSaving = ref(false)
@@ -707,6 +709,7 @@ async function handleSaveActivityConfig() {
       activityQianXing: localSystemConfig.value.activityQianXing,
       activityYuLuoChengShi: localSystemConfig.value.activityYuLuoChengShi,
       activityGongYiXiaoHongHua: localSystemConfig.value.activityGongYiXiaoHongHua,
+      activityMengChong: localSystemConfig.value.activityMengChong,
     })
     if (data?.ok) {
       showAlert('活动配置已保存，前端菜单已同步更新', 'primary')
@@ -726,6 +729,7 @@ async function handleResetActivityConfig() {
   localSystemConfig.value.activityQianXing = true
   localSystemConfig.value.activityYuLuoChengShi = true
   localSystemConfig.value.activityGongYiXiaoHongHua = true
+  localSystemConfig.value.activityMengChong = true
   await handleSaveActivityConfig()
 }
 
@@ -799,10 +803,10 @@ async function loadSystemConfig() {
     const { data } = await api.get('/api/admin/system-config')
     if (data?.ok) {
       if (data.data.saved) {
-        localSystemConfig.value = { ...data.data.saved }
+        localSystemConfig.value = { ...defaultSystemConfig.value, ...data.data.saved }
       }
       if (data.data.default) {
-        defaultSystemConfig.value = { ...data.data.default }
+        defaultSystemConfig.value = { ...defaultSystemConfig.value, ...data.data.default }
       }
     }
   }
@@ -1798,6 +1802,17 @@ onMounted(() => {
                     </p>
                   </div>
                   <BaseSwitch v-model="localSystemConfig.activityGongYiXiaoHongHua" />
+                </div>
+                <div class="flex items-center justify-between rounded-lg border border-gray-200 bg-white p-4 dark:border-gray-700 dark:bg-gray-800">
+                  <div>
+                    <h4 class="text-sm text-gray-900 font-medium dark:text-white">
+                      萌宠游记
+                    </h4>
+                    <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                      关闭后前端菜单隐藏「萌宠游记」入口
+                    </p>
+                  </div>
+                  <BaseSwitch v-model="localSystemConfig.activityMengChong" />
                 </div>
               </div>
 

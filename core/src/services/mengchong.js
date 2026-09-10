@@ -44,7 +44,10 @@ const MAIN_CMD_PAYLOAD_FIELD = {
     49: 149,   // 解锁/翻看爪印手记
 };
 
-const ITEM_ID_YUANQIGAO = 29004;  // 萌宠元气糕
+// 萌宠元气糕 = 物品 1028 (投喂/寻宝消耗品); 幸运星 = 1029 (游记代币)
+// 注意: 29004 是"泡泡棉花糖种子"(新农作物种子), 不是元气糕 — 名称以 QQ 缓存同步的 ItemInfo 为准
+const ITEM_ID_YUANQIGAO = 1028;
+const ITEM_ID_LUCKYSTAR = 1029;
 
 // ============ 底层工具 ============
 
@@ -86,7 +89,9 @@ function itemName(id) {
     const nid = toNum(id);
     if (!nid) return '';
     const cfg = getItemById(nid);
-    return cfg && cfg.name ? String(cfg.name) : `物品#${nid}`;
+    if (cfg && cfg.name) return String(cfg.name);
+    // ItemInfo 未收录的新道具: 不显示生硬的"物品#id"
+    return `游记道具#${nid}`;
 }
 
 function parseItems(buf) {
@@ -231,23 +236,26 @@ function parsePetState(stateBuf) {
             if (v > 0) pet.baseValue = v;
         }
     }
-    // #4 repeated 爪印手记
+    // #4 是容器消息: 内部 repeated #1 才是手记条目 (实测 2026-09-10)
     for (const x of f) {
         if (x.f !== 4 || x.w !== 2) continue;
-        const d = parseTop(x.v);
-        const id = toNum((findField(d, 1) || {}).v);
-        if (!id) continue;
-        const photoBuf = findField(d, 4);
-        let photo = null;
-        if (photoBuf && photoBuf.w === 2) {
-            try { photo = JSON.parse(photoBuf.v.toString('utf8')); } catch { photo = null; }
+        for (const entry of parseTop(x.v)) {
+            if (entry.f !== 1 || entry.w !== 2) continue;
+            const d = parseTop(entry.v);
+            const id = toNum((findField(d, 1) || {}).v);
+            if (!id) continue;
+            const photoBuf = findField(d, 4);
+            let photo = null;
+            if (photoBuf && photoBuf.w === 2) {
+                try { photo = JSON.parse(photoBuf.v.toString('utf8')); } catch { photo = null; }
+            }
+            pet.handnotes.push({
+                id,
+                unlocked: toNum((findField(d, 3) || {}).v) > 0,
+                claimed: toNum((findField(d, 5) || {}).v) > 0,
+                photo,
+            });
         }
-        pet.handnotes.push({
-            id,
-            unlocked: toNum((findField(d, 3) || {}).v) > 0,
-            claimed: toNum((findField(d, 5) || {}).v) > 0,
-            photo,
-        });
     }
     pet.handnotes.sort((a, b) => a.id - b.id);
     return pet;
@@ -258,7 +266,7 @@ function parsePetState(stateBuf) {
  * 宠物状态优先取 GetGroup 的 children(#115); 取不到时用 cmd=27(打开活动页) 兜底拉取
  */
 async function getMengchongOverview() {
-    const result = { updatedAt: Date.now(), active: false, main: null, signin: null, seedGift: null, pet: null, yuanqigao: 0 };
+    const result = { updatedAt: Date.now(), active: false, main: null, signin: null, seedGift: null, pet: null, yuanqigao: 0, luckyStar: 0 };
     try {
         const reply = await getGroupRaw(GROUP_MAIN);
         const parsed = parseGroupReply(reply);
@@ -320,15 +328,14 @@ async function getMengchongOverview() {
             result.active = true;
         }
     } catch (e) { /* 忽略 */ }
-    // 背包里的萌宠元气糕数量 (投喂消耗品)
+    // 背包里的游记道具数量 (1028 萌宠元气糕 = 投喂/寻宝消耗; 1029 幸运星 = 游记代币)
     try {
         const { getBag, getBagItems } = require('./warehouse');
         const bag = await getBag();
         for (const it of getBagItems(bag)) {
-            if (toNum(it && it.id) === ITEM_ID_YUANQIGAO) {
-                result.yuanqigao = toNum(it.count);
-                break;
-            }
+            const id = toNum(it && it.id);
+            if (id === ITEM_ID_YUANQIGAO) result.yuanqigao = toNum(it.count);
+            else if (id === ITEM_ID_LUCKYSTAR) result.luckyStar = toNum(it.count);
         }
     } catch (e) { /* 背包读取失败不阻断 */ }
     return result;
@@ -486,7 +493,7 @@ async function autoClaimPetHandnotes() {
  */
 async function autoRunMengchongTasks() {
     const summary = { giftClaimed: false, handnoteClaims: 0, skipped: [], errors: [] };
-    if (!isAutomationOn('mengchong_task')) return { skipped: true };
+    // 手动"执行每日任务"直接跑; 每日定时入口在外层 checkAndRunMengchongTasks 里判开关
 
     try {
         await claimFreeSeedGift();

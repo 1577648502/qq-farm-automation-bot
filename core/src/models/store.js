@@ -612,6 +612,7 @@ function loadGlobalConfig() {
                     activityQianXing: data.systemConfig.activityQianXing !== false,
                     activityYuLuoChengShi: data.systemConfig.activityYuLuoChengShi !== false,
                     activityGongYiXiaoHongHua: data.systemConfig.activityGongYiXiaoHongHua !== false,
+                    activityMengChong: data.systemConfig.activityMengChong !== false,
                 };
             }
 
