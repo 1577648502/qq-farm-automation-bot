@@ -27,12 +27,29 @@ interface GroupInfo {
   ruleTitle?: string
 }
 
+interface Handnote {
+  id: number
+  unlocked: boolean
+  claimed: boolean
+  photo: { photo?: string, say?: string } | null
+}
+
+interface PetState {
+  growth: number
+  petType: number
+  baseValue?: number
+  items: { id: number, count: number, name: string }[]
+  handnotes: Handnote[]
+}
+
 interface MengchongOverview {
   updatedAt: number
   active: boolean
   main: GroupInfo | null
   signin: (GroupInfo & { currentDay?: number; totalDays?: number; days?: SigninDay[] }) | null
   seedGift: GroupInfo | null
+  pet: PetState | null
+  yuanqigao: number
 }
 
 const toast = useToastStore()
@@ -43,6 +60,7 @@ const overview = ref<MengchongOverview | null>(null)
 // 高级操作
 const opCmd = ref<number>(27)
 const opGid = ref<string>('')
+const opHex = ref<string>('')
 const opResult = ref<string>('')
 const opBusy = ref(false)
 
@@ -56,6 +74,10 @@ function fmtTime(sec: number) {
 
 function fmtRange(begin: number, end: number) {
   return `${fmtTime(begin)} ~ ${fmtTime(end)}`
+}
+
+function fmtNum(n: number) {
+  return (Number(n) || 0).toLocaleString('zh-CN')
 }
 
 function extractError(e: any): string {
@@ -95,6 +117,43 @@ async function handleClaimGift() {
   }
 }
 
+async function handleFeed() {
+  busy.value = true
+  try {
+    const { data } = await api.post('/api/mengchong/feed')
+    if (data?.ok) {
+      const r = data.data || {}
+      const gains = (r.items || []).map((i: any) => `${i.name}×${i.count}`).join('、')
+      toast.success(`投喂成功${gains ? ` → ${gains}` : ''}`)
+      await loadOverview()
+    } else {
+      toast.error(data?.error || '投喂失败(可能元气糕不足)')
+    }
+  } catch (e: any) {
+    toast.error(extractError(e) || '投喂失败')
+  } finally {
+    busy.value = false
+  }
+}
+
+async function handleClaimHandnote(h: Handnote) {
+  busy.value = true
+  try {
+    const { data } = await api.post('/api/mengchong/claim-handnote', { handnoteId: h.id })
+    if (data?.ok) {
+      const awards = (data.data?.awards || []).map((i: any) => `${i.name}×${i.count}`).join('、')
+      toast.success(`已领取手记 ${h.id} 奖励${awards ? ` → ${awards}` : ''}`)
+      await loadOverview()
+    } else {
+      toast.error(data?.error || '领取失败(可能已领取)')
+    }
+  } catch (e: any) {
+    toast.error(extractError(e) || '领取失败')
+  } finally {
+    busy.value = false
+  }
+}
+
 async function handleRunNow() {
   busy.value = true
   try {
@@ -104,7 +163,7 @@ async function handleRunNow() {
       if (r.skipped) {
         toast.info('自动化开关未开启, 请先到设置中开启"萌宠游记每日任务"')
       } else {
-        toast.success(`已执行: 免费礼包 ${r.giftClaimed ? '是' : '否'}`)
+        toast.success(`已执行: 免费礼包 ${r.giftClaimed ? '是' : '否'}, 手记奖励 ${r.handnoteClaims || 0} 个`)
       }
       await loadOverview()
     } else {
@@ -122,7 +181,9 @@ async function handleOperate() {
   opResult.value = ''
   try {
     const payload: any = { cmd: opCmd.value }
-    if (opCmd.value === 47 && opGid.value) {
+    if (opHex.value.trim()) {
+      payload.payloadHex = opHex.value.trim()
+    } else if ((opCmd.value === 47 || opCmd.value === 32) && opGid.value) {
       payload.payloadVarints = [Number(opGid.value)]
     }
     const { data } = await api.post('/api/mengchong/operate', payload)
@@ -216,6 +277,87 @@ onMounted(async () => {
         </BaseButton>
       </div>
 
+      <!-- 比熊宠物 + 投喂 -->
+      <div v-if="overview.pet" class="rounded-lg border border-gray-200 bg-white p-4 shadow-sm dark:border-gray-700 dark:bg-gray-800">
+        <h3 class="mb-2 text-sm text-gray-900 font-medium dark:text-white">
+          比熊萌宠
+        </h3>
+        <div class="grid grid-cols-2 gap-3 md:grid-cols-4">
+          <div class="rounded border border-gray-200 p-3 dark:border-gray-700">
+            <div class="text-xs text-gray-500 dark:text-gray-400">成长值</div>
+            <div class="mt-1 text-xl font-bold">{{ fmtNum(overview.pet.growth) }}</div>
+          </div>
+          <div class="rounded border border-gray-200 p-3 dark:border-gray-700">
+            <div class="text-xs text-gray-500 dark:text-gray-400">元气糕(背包)</div>
+            <div class="mt-1 text-xl font-bold">{{ fmtNum(overview.yuanqigao) }}</div>
+          </div>
+          <div
+            v-for="it in overview.pet.items"
+            :key="it.id"
+            class="rounded border border-gray-200 p-3 dark:border-gray-700"
+          >
+            <div class="text-xs text-gray-500 dark:text-gray-400">{{ it.name }}</div>
+            <div class="mt-1 text-xl font-bold">{{ fmtNum(it.count) }}</div>
+          </div>
+        </div>
+        <p class="mt-2 text-xs text-gray-500 dark:text-gray-400">
+          投喂消耗背包中的萌宠元气糕, 比熊成长至成年后解锁寻宝/夺宝。
+        </p>
+        <BaseButton
+          class="mt-3"
+          variant="primary"
+          size="sm"
+          :disabled="busy || !overview.yuanqigao"
+          :loading="busy"
+          @click="handleFeed"
+        >
+          {{ overview.yuanqigao ? '投喂比熊' : '元气糕不足' }}
+        </BaseButton>
+      </div>
+
+      <!-- 爪印手记 -->
+      <div v-if="overview.pet && overview.pet.handnotes && overview.pet.handnotes.length" class="rounded-lg border border-gray-200 bg-white p-4 shadow-sm dark:border-gray-700 dark:bg-gray-800">
+        <h3 class="mb-3 text-sm text-gray-900 font-medium dark:text-white">
+          爪印手记
+        </h3>
+        <div class="grid grid-cols-2 gap-3 md:grid-cols-3 lg:grid-cols-5">
+          <div
+            v-for="h in overview.pet.handnotes"
+            :key="h.id"
+            class="flex flex-col rounded border p-3 text-sm dark:border-gray-700"
+            :class="h.claimed
+              ? 'border-green-300 bg-green-50 dark:border-green-700 dark:bg-green-900/20'
+              : h.unlocked
+                ? 'border-rose-300 bg-rose-50 dark:border-rose-700 dark:bg-rose-900/20'
+                : 'border-gray-200 bg-gray-50 dark:border-gray-700 dark:bg-gray-900/40'"
+          >
+            <span class="font-medium">手记 {{ h.id }}</span>
+            <span class="mt-1 flex-1 text-xs text-gray-500 dark:text-gray-400">
+              <template v-if="h.claimed">
+                已领取
+              </template>
+              <template v-else-if="h.unlocked">
+                可领取
+              </template>
+              <template v-else>
+                未解锁
+              </template>
+            </span>
+            <BaseButton
+              v-if="h.unlocked && !h.claimed"
+              class="mt-2"
+              variant="primary"
+              size="sm"
+              :disabled="busy"
+              :loading="busy"
+              @click="handleClaimHandnote(h)"
+            >
+              领取
+            </BaseButton>
+          </div>
+        </div>
+      </div>
+
       <!-- 比熊赠礼 -->
       <div v-if="overview.signin && overview.signin.days && overview.signin.days.length" class="rounded-lg border border-gray-200 bg-white p-4 shadow-sm dark:border-gray-700 dark:bg-gray-800">
         <h3 class="mb-3 text-sm text-gray-900 font-medium dark:text-white">
@@ -257,7 +399,7 @@ onMounted(async () => {
           萌宠操作
         </h3>
         <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
-          按抓包时序推断, 语义未完全确认: cmd=27 打开/刷新活动页, cmd=31 疑似寻宝/喂食相关, cmd=47 疑似对好友操作(填好友 gid)。
+          投喂/领取手记已有专用按钮; 这里保留原始命令入口(按抓包推断): 27 打开/刷新, 31 寻宝, 47 好友操作(填 gid), 49 翻看手记。
         </p>
         <div class="mt-3 flex flex-wrap items-end gap-3">
           <div>
@@ -266,17 +408,34 @@ onMounted(async () => {
               <option :value="27">
                 27 · 打开/刷新
               </option>
+              <option :value="29">
+                29 · 投喂
+              </option>
               <option :value="31">
                 31 · 寻宝(推测)
               </option>
+              <option :value="32">
+                32 · 领手记奖励
+              </option>
               <option :value="47">
                 47 · 好友操作(推测)
+              </option>
+              <option :value="49">
+                49 · 翻看手记
               </option>
             </select>
           </div>
           <div v-if="opCmd === 47">
             <label class="mb-1 block text-xs text-gray-500">好友 gid</label>
             <BaseInput v-model="opGid" placeholder="好友 gid" class="w-48" />
+          </div>
+          <div v-if="opCmd === 32">
+            <label class="mb-1 block text-xs text-gray-500">手记 id</label>
+            <BaseInput v-model="opGid" placeholder="手记 id" class="w-32" />
+          </div>
+          <div>
+            <label class="mb-1 block text-xs text-gray-500">payload(hex, 可选)</label>
+            <BaseInput v-model="opHex" placeholder="如 0a0101" class="w-40" />
           </div>
           <BaseButton variant="primary" size="sm" :loading="opBusy" @click="handleOperate">
             发送

@@ -216,6 +216,8 @@ function createDataProvider(options) {
         runCharityTasksNow: (accountRef) => callWorkerApi(resolveAccountRefId(accountRef), 'runCharityTasksNow'),
         getMengchongOverview: (accountRef) => callWorkerApi(resolveAccountRefId(accountRef), 'getMengchongOverview'),
         claimMengchongFreeGift: (accountRef) => callWorkerApi(resolveAccountRefId(accountRef), 'claimMengchongFreeGift'),
+        feedMengchongPet: (accountRef) => callWorkerApi(resolveAccountRefId(accountRef), 'feedMengchongPet'),
+        claimMengchongHandnote: (accountRef, handnoteId) => callWorkerApi(resolveAccountRefId(accountRef), 'claimMengchongHandnote', handnoteId),
         mengchongOperate: (accountRef, opts) => callWorkerApi(resolveAccountRefId(accountRef), 'mengchongOperate', [opts || {}]),
         runMengchongTasksNow: (accountRef) => callWorkerApi(resolveAccountRefId(accountRef), 'runMengchongTasksNow'),
 

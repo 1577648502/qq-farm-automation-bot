@@ -855,6 +855,12 @@ async function handleApiCall(msg) {
             case 'claimMengchongFreeGift':
                 result = await require('../services/mengchong').claimFreeSeedGift();
                 break;
+            case 'feedMengchongPet':
+                result = await require('../services/mengchong').feedPet();
+                break;
+            case 'claimMengchongHandnote':
+                result = await require('../services/mengchong').claimPetHandnote(args[0]);
+                break;
             case 'mengchongOperate':
                 result = await require('../services/mengchong').petOperate(args[0] || {});
                 break;

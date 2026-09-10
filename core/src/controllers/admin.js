@@ -1535,13 +1535,37 @@ app.use('/api', (req, res, next) => {
         } catch (e) { res.json({ ok: false, error: e.message }); }
     });
 
-    // API: 萌宠主活动操作 (cmd 27/31/47, 语义部分待抓包确认)
+    // API: 萌宠主活动操作 (cmd 27/29/31/32/47/49)
     app.post('/api/mengchong/operate', async (req, res) => {
         const id = getAccId(req);
         if (!id) return res.status(400).json({ ok: false });
         if (!checkAccountAccess(req, id)) return res.status(403).json({ ok: false, error: '无权访问此账号' });
         try {
             const data = await provider.mengchongOperate(id, req.body || {});
+            res.json({ ok: true, data });
+        } catch (e) { res.json({ ok: false, error: e.message }); }
+    });
+
+    // API: 投喂比熊 (cmd=29)
+    app.post('/api/mengchong/feed', async (req, res) => {
+        const id = getAccId(req);
+        if (!id) return res.status(400).json({ ok: false });
+        if (!checkAccountAccess(req, id)) return res.status(403).json({ ok: false, error: '无权访问此账号' });
+        try {
+            const data = await provider.feedMengchongPet(id);
+            res.json({ ok: true, data });
+        } catch (e) { res.json({ ok: false, error: e.message }); }
+    });
+
+    // API: 领取爪印手记奖励 (cmd=32)
+    app.post('/api/mengchong/claim-handnote', async (req, res) => {
+        const id = getAccId(req);
+        if (!id) return res.status(400).json({ ok: false });
+        if (!checkAccountAccess(req, id)) return res.status(403).json({ ok: false, error: '无权访问此账号' });
+        const handnoteId = Number(req.body && req.body.handnoteId);
+        if (!handnoteId) return res.status(400).json({ ok: false, error: '缺少 handnoteId' });
+        try {
+            const data = await provider.claimMengchongHandnote(id, handnoteId);
             res.json({ ok: true, data });
         } catch (e) { res.json({ ok: false, error: e.message }); }
     });
