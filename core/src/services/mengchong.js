@@ -1,25 +1,26 @@
 /**
- * 萌宠赛季游记 (S3 比熊, uid=SEASON_BEAR_CAMPAIGN)
+ * 萌宠赛季游记 (S3 萌宠, uid=SEASON_BEAR_CAMPAIGN)
  *
- * 抓包(2026-09-10 两轮)确认协议 (均走 ActivityService.Operate, group=2026090101 主活动):
- *   cmd=27 (payload field126, 空): 打开/刷新活动 (响应 activity 带 head.desc 规则 JSON + field115 宠物状态)
- *   cmd=29 (payload field128, 空): 投喂比熊 (消耗元气糕, 响应结果字段129 带成长值/幸运星变化)
- *   cmd=31 (payload field130, 空): 寻宝 (响应结果字段131 带奖励, 待进一步确认)
- *   cmd=32 (payload field131 = message{#1: 手记id}): 领取爪印手记奖励 (响应结果132 带奖励物品+手记JSON)
- *   cmd=47 (payload field147 = message{#1: 好友gid}): 好友操作(夺宝, 待确认)
- *   cmd=49 (payload field149 = bytes 0x01): 解锁/翻看爪印手记 (响应无结果字段, 状态里手记 entry 增加 #5=1)
- *   比熊赠礼 group=2026090102 (type=13, star_register@110, 31 天): cmd=21 走 star_light_up, 由千星游记覆盖
- *   免费礼包 group=2026090103: cmd=7 (无 payload) 领取每日免费稀有种子礼包
+ * 三个请求 group 都属于同一个活动 "S3 萌宠", 对应三个子模块 (2026-09-11 抓包确认):
+ *   group=2026090101 → body #115 = 宠物状态 (投喂/寻宝/手记)
+ *     cmd=27 (payload field126, 空): 打开/刷新活动
+ *     cmd=29 (payload field128, 空): 投喂比熊 (消耗萌宠元气糕 1028)
+ *     cmd=31 (payload field130, 空): 寻宝 (消耗元气糕, 得幸运星 1029/宝藏/挑战书)
+ *     cmd=32 (payload field131 = {#1: 手记id}): 领取爪印手记奖励
+ *     cmd=47 (payload field147 = {#1: 好友gid}): 好友夺宝 (语义待确认)
+ *     cmd=49 (payload field149 = bytes 0a0101): 解锁/翻看手记
+ *   group=2026090102 → body #110 = 【每日免费稀有种子礼包】31 天列表
+ *     cmd=21 (payload field119, 空): 领取当日种子礼包, 响应结果 #120 = {#1: 第几天, #2...: 种子}
+ *     ⚠ 与"千星游记自动点亮领取"(star_register 通道) 是同一接口, 重复调用服务端报已领
+ *   group=2026090103 → body #102 = 带价格的条目列表(13 项, 语义未确认, 疑兑换/商店)
+ *     cmd=7 无结果字段, 不产生任何效果 → 已停止调用 (曾是"报成功但没领到"的原因)
  *   游记商城: MallService.Purchase (goodsId 1041~1051)
  *
- * field115 宠物状态结构 (实测):
- *   #1 { #1: 宠物类型, #3: 成长值(实测700), #4: 数量 }
- *   #2 { #1: 1 }
- *   #3 { #3: 数值, #4: {#1: 货币物品id(1028), #2: 数量} }
- *   #4 repeated 爪印手记 { #1: id(1~9), #2, #3: 1=已解锁, #4: 照片JSON, #5: 1=已领取 }
- *   #6 其他与手记进度相关
+ * field115 宠物状态结构:
+ *   #1 { 宠物类型, 成长值, 数量 }, #3 { 数值, {元气糕id, 数量} },
+ *   #4 容器 { 内部 repeated #1 = 手记条目 { id, 已解锁=#3, 照片JSON=#4, 已领取=#5 } }
  *
- * 备注: 宠物成长/寻宝的完整数值语义仍部分推断, 页面操作入口保留, 继续按抓包迭代。
+ * 物品 id: 1028=萌宠元气糕, 1029=幸运星, 29004=泡泡棉花糖种子, 20516=狗尾草种子 (以配置同步为准)
  */
 
 const protobuf = require('protobufjs');
@@ -30,9 +31,9 @@ const { getItemById } = require('../config/gameConfig');
 
 const ACTIVITY_SERVICE = 'gamepb.activitypb.ActivityService';
 
-const GROUP_MAIN = 2026090101;  // S3 萌宠 主活动
-const GROUP_GIFT = 2026090102;  // 比熊赠礼 (31 天, star_register)
-const GROUP_SEED = 2026090103;  // 每日免费稀有种子礼包
+const GROUP_MAIN = 2026090101;  // S3 萌宠: 宠物状态 (body #115)
+const GROUP_GIFT = 2026090102;  // 每日免费稀有种子礼包 31 天列表 (body #110), 领取 = cmd21 走 star_light_up 通道
+const GROUP_EXTRA = 2026090103; // 另一模块(body #102: 带价格的条目列表, 语义未确认, 暂不调用)
 
 // 主活动各 cmd 对应的 OperateRequest payload 字段号
 const MAIN_CMD_PAYLOAD_FIELD = {
@@ -48,6 +49,9 @@ const MAIN_CMD_PAYLOAD_FIELD = {
 // 注意: 29004 是"泡泡棉花糖种子"(新农作物种子), 不是元气糕 — 名称以 QQ 缓存同步的 ItemInfo 为准
 const ITEM_ID_YUANQIGAO = 1028;
 const ITEM_ID_LUCKYSTAR = 1029;
+
+// 免费种子礼包领取用的 payload 字段号 (cmd=21 → field 119)
+const CMD_GIFT_CLAIM_FIELD = 119;
 
 // ============ 底层工具 ============
 
@@ -92,20 +96,6 @@ function itemName(id) {
     if (cfg && cfg.name) return String(cfg.name);
     // ItemInfo 未收录的新道具: 不显示生硬的"物品#id"
     return `游记道具#${nid}`;
-}
-
-function parseItems(buf) {
-    // corepb.Item { id=1, count=2 }
-    return parseTop(buf)
-        .filter((x) => x.w === 2)
-        .map((x) => {
-            const f = parseTop(x.v);
-            return {
-                id: toNum((findField(f, 1) || {}).v),
-                count: toNum((findField(f, 2) || {}).v),
-                name: itemName((findField(f, 1) || {}).v),
-            };
-        });
 }
 
 /** 发送 Operate 并返回 { err, errorCode, resultField, resultHex, activity } */
@@ -187,7 +177,13 @@ function parseSigninDays(activityDataBuf) {
                 const d = parseTop(entry.v);
                 const items = [];
                 for (const r of d) {
-                    if (r.f === 5 && r.w === 2) items.push(...parseItems(r.v));
+                    // 奖励条目直接就是 {id=1, count=2} 的物品消息
+                    if (r.f === 5 && r.w === 2) {
+                        const it = parseTop(r.v);
+                        const id = toNum((findField(it, 1) || {}).v);
+                        const count = toNum((findField(it, 2) || {}).v);
+                        if (id > 0) items.push({ id, count: count || 1, name: itemName(id) });
+                    }
                 }
                 days.push({
                     day: toNum((findField(d, 1) || {}).v),
@@ -198,9 +194,11 @@ function parseSigninDays(activityDataBuf) {
             }
         }
         days.sort((a, b) => a.day - b.day);
+        const curEntry = body.find((x) => x.f === 1 && x.w === 0);
+        const totalEntry = body.find((x) => x.f === 2 && x.w === 0);
         return {
-            currentDay: toNum((findField(body.find((x) => x.f === 1) || {}).v) || 0) || 0,
-            totalDays: toNum((findField(body.find((x) => x.f === 2) || {}).v) || 0) || days.length,
+            currentDay: toNum(curEntry && curEntry.v) || 0,
+            totalDays: toNum(totalEntry && totalEntry.v) || days.length,
             days,
         };
     }
@@ -266,7 +264,7 @@ function parsePetState(stateBuf) {
  * 宠物状态优先取 GetGroup 的 children(#115); 取不到时用 cmd=27(打开活动页) 兜底拉取
  */
 async function getMengchongOverview() {
-    const result = { updatedAt: Date.now(), active: false, main: null, signin: null, seedGift: null, pet: null, yuanqigao: 0, luckyStar: 0 };
+    const result = { updatedAt: Date.now(), active: false, main: null, seedGift: null, pet: null, yuanqigao: 0, luckyStar: 0 };
     try {
         const reply = await getGroupRaw(GROUP_MAIN);
         const parsed = parseGroupReply(reply);
@@ -306,24 +304,13 @@ async function getMengchongOverview() {
                 const parsedDays = parseSigninDays(childBuf);
                 if (parsedDays) { days.push(parsedDays); break; }
             }
-            result.signin = {
-                name: parsed.head.nameText,
+            result.seedGift = {
+                id: parsed.head.id,
+                name: parsed.head.nameText || '每日免费稀有种子礼包',
+                type: parsed.head.type,
                 startTime: parsed.head.startTime,
                 endTime: parsed.head.endTime,
                 ...(days[0] || { currentDay: 0, totalDays: 0, days: [] }),
-            };
-            result.active = true;
-        }
-    } catch (e) { /* 忽略 */ }
-    try {
-        const reply = await getGroupRaw(GROUP_SEED);
-        const { head } = parseGroupReply(reply);
-        if (head) {
-            result.seedGift = {
-                id: head.id,
-                name: head.nameText,
-                startTime: head.startTime,
-                endTime: head.endTime,
             };
             result.active = true;
         }
@@ -344,15 +331,31 @@ async function getMengchongOverview() {
 // ============ 操作 ============
 
 /**
- * 领取每日免费稀有种子礼包 (group 2026090103, cmd=7, 无 payload)
- * 已领过时服务端报错, 调用方需捕获
+ * 领取每日免费稀有种子礼包
+ * 正确通道 (2026-09-11 抓包确认): Operate(group=2026090102, cmd=21, payload field119 空)
+ *   → 响应结果字段 #120 = { #1: 第几天, #2...: {种子物品id, 数量} }
+ *   注意: 与"千星游记自动点亮领取"是同一接口(star_register 通道), 重复调用服务端会报已领, 按跳过处理
  */
 async function claimFreeSeedGift() {
-    const res = await operateRaw(GROUP_SEED, 7, 0, null);
+    const res = await operateRaw(GROUP_GIFT, 21, CMD_GIFT_CLAIM_FIELD, null);
     if (res.errorCode !== 0) {
         throw new Error(`领取免费种子礼包失败: code=${res.errorCode}`);
     }
-    return { ok: true, activity: !!res.activity };
+    const awards = [];
+    let day = 0;
+    if (res.resultHex) {
+        for (const x of parseTop(Buffer.from(res.resultHex, 'hex'))) {
+            if (x.f === 1) {
+                day = x.w === 0 ? toNum(x.v) : (x.v.length === 1 ? x.v[0] : toNum(x.v));
+            } else if (x.w === 2 && x.v.length <= 16) {
+                const inner = parseTop(x.v);
+                const id = toNum((findField(inner, 1) || {}).v);
+                const count = toNum((findField(inner, 2) || {}).v);
+                if (id > 0 && count > 0) awards.push({ id, count, name: itemName(id) });
+            }
+        }
+    }
+    return { ok: true, day, awards };
 }
 
 /**
@@ -496,9 +499,11 @@ async function autoRunMengchongTasks() {
     // 手动"执行每日任务"直接跑; 每日定时入口在外层 checkAndRunMengchongTasks 里判开关
 
     try {
-        await claimFreeSeedGift();
+        const g = await claimFreeSeedGift();
         summary.giftClaimed = true;
-        log('活动', '萌宠游记: 领取每日免费稀有种子礼包成功', { module: 'activity', event: '萌宠游记', result: 'gift_ok' });
+        summary.giftDay = g.day;
+        summary.giftAwards = (g.awards || []).map(a => `${a.name}×${a.count}`).join('、');
+        log('活动', `萌宠游记: 领取每日免费稀有种子礼包成功${summary.giftAwards ? ` (第${g.day}天 → ${summary.giftAwards})` : ''}`, { module: 'activity', event: '萌宠游记', result: 'gift_ok' });
     } catch (e) {
         // 已领过/活动未开启按跳过处理
         summary.skipped.push(`免费种子礼包(${e.message.includes('code=') ? '今日已领或不可领' : e.message})`);
@@ -536,9 +541,10 @@ async function checkAndRunMengchongTasks() {
 }
 
 module.exports = {
+    __testing: { parseTop, parseGroupReply, parseSigninDays, parsePetState, itemName },
     GROUP_MAIN,
     GROUP_GIFT,
-    GROUP_SEED,
+    GROUP_GIFT,
     getMengchongOverview,
     claimFreeSeedGift,
     feedPet,

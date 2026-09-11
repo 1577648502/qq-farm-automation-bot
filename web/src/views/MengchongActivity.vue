@@ -45,8 +45,7 @@ interface MengchongOverview {
   updatedAt: number
   active: boolean
   main: GroupInfo | null
-  signin: (GroupInfo & { currentDay?: number; totalDays?: number; days?: SigninDay[] }) | null
-  seedGift: GroupInfo | null
+  seedGift: (GroupInfo & { currentDay?: number, totalDays?: number, days?: SigninDay[] }) | null
   pet: PetState | null
   yuanqigao: number
   luckyStar: number
@@ -239,12 +238,8 @@ onMounted(async () => {
             <span class="ml-2 text-gray-500">{{ fmtRange(overview.main.startTime, overview.main.endTime) }}</span>
           </div>
           <div v-if="overview.seedGift">
-            免费种子礼包: <span class="font-medium">{{ overview.seedGift.name }}</span>
+            每日免费稀有种子礼包:
             <span class="ml-2 text-gray-500">{{ fmtRange(overview.seedGift.startTime, overview.seedGift.endTime) }}</span>
-          </div>
-          <div v-if="overview.signin">
-            比熊赠礼: <span class="font-medium">{{ overview.signin.name }}</span>
-            <span class="ml-2 text-gray-500">{{ fmtRange(overview.signin.startTime, overview.signin.endTime) }}</span>
           </div>
         </div>
       </div>
@@ -253,9 +248,11 @@ onMounted(async () => {
       <div class="rounded-lg border border-gray-200 bg-white p-4 shadow-sm dark:border-gray-700 dark:bg-gray-800">
         <h3 class="text-sm text-gray-900 font-medium dark:text-white">
           每日免费稀有种子礼包
+          <span v-if="overview.seedGift?.currentDay" class="ml-2 text-xs text-gray-500">当前第 {{ overview.seedGift.currentDay }} 天</span>
         </h3>
         <p class="mt-1 flex-1 text-xs text-gray-500 dark:text-gray-400">
-          每日 0 点刷新一份免费稀有种子礼包, 未领取可累计保留。开启"萌宠游记每日任务"后自动领取。
+          每日 0 点刷新一份免费稀有种子礼包(泡泡棉花糖种子/狗尾草种子等), 未领取可累计。开启"萌宠游记每日任务"后自动领取;
+          与设置里的"千星游记自动点亮领取"是同一接口。
         </p>
         <BaseButton
           class="mt-3"
@@ -354,18 +351,18 @@ onMounted(async () => {
         </div>
       </div>
 
-      <!-- 比熊赠礼 -->
-      <div v-if="overview.signin && overview.signin.days && overview.signin.days.length" class="rounded-lg border border-gray-200 bg-white p-4 shadow-sm dark:border-gray-700 dark:bg-gray-800">
+      <!-- 31 天种子礼包 -->
+      <div v-if="overview.seedGift && overview.seedGift.days && overview.seedGift.days.length" class="rounded-lg border border-gray-200 bg-white p-4 shadow-sm dark:border-gray-700 dark:bg-gray-800">
         <h3 class="mb-3 text-sm text-gray-900 font-medium dark:text-white">
-          比熊赠礼 (31 天累计奖励)
-          <span v-if="overview.signin.currentDay" class="ml-2 text-xs text-gray-500">当前第 {{ overview.signin.currentDay }} 天</span>
+          种子礼包 31 天进度
+          <span v-if="overview.seedGift.currentDay" class="ml-2 text-xs text-gray-500">当前第 {{ overview.seedGift.currentDay }} 天</span>
         </h3>
         <p class="mb-3 text-xs text-gray-500 dark:text-gray-400">
-          领取走"千星游记"通用通道, 可在设置中开启"千星游记自动点亮领取"自动领取。
+          每日领取一份稀有种子, 未领取可累计保留。
         </p>
         <div class="grid grid-cols-4 gap-2 md:grid-cols-8 lg:grid-cols-10">
           <div
-            v-for="d in overview.signin.days"
+            v-for="d in overview.seedGift.days"
             :key="d.day"
             class="rounded border p-2 text-center text-xs dark:border-gray-700"
             :class="d.claimed
