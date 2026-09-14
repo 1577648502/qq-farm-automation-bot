@@ -1,19 +1,24 @@
 /**
  * 萌宠赛季游记 (S3 萌宠, uid=SEASON_BEAR_CAMPAIGN)
  *
- * 三个请求 group 都属于同一个活动 "S3 萌宠", 对应三个子模块 (2026-09-11 抓包确认):
+ * 三个请求 group 都属于同一个活动 "S3 萌宠", 对应三个子模块 (2026-09-11/09-14 抓包确认):
  *   group=2026090101 → body #115 = 宠物状态 (投喂/寻宝/手记)
  *     cmd=27 (payload field126, 空): 打开/刷新活动
- *     cmd=29 (payload field128, 空): 投喂比熊 (消耗萌宠元气糕 1028)
- *     cmd=31 (payload field130, 空): 寻宝 (消耗元气糕, 得幸运星 1029/宝藏/挑战书)
+ *     cmd=29 (payload field128, 空): 投喂比熊 — 每次消耗 700 萌宠元气糕 → 成长值+700、幸运星+100
+ *                                    元气糕不足报 1000019; 阶段(#1.#4)=2 即成年
+ *     cmd=41 (payload field141, 空): 寻宝 — 结果 #141 = {宝藏id, 开始时间, 标记}, 状态 #6 记录宝藏/护送
+ *     cmd=42 (payload field142 = 锦囊id 字符串): 选择锦囊 (状态 #6.#1/#2 为当日两个锦囊)
+ *     cmd=47 (payload field147 = {#1: 好友gid}): 好友夺宝
+ *     cmd=48 (无 payload 字段): 领取比熊犬 (成年后解锁宠物), 结果 #148 = {#1: 90031}
+ *     cmd=49 (payload field149 = {#1: 手记id 裸varint字节}): 点亮/翻看爪印手记
  *     cmd=32 (payload field131 = {#1: 手记id}): 领取爪印手记奖励
- *     cmd=47 (payload field147 = {#1: 好友gid}): 好友夺宝 (语义待确认)
- *     cmd=49 (payload field149 = bytes 0a0101): 解锁/翻看手记
+ *     cmd=31 (payload field130, 空): 语义未确认 (旧抓包出现过一次), 暂不使用
  *   group=2026090102 → body #110 = 【每日免费稀有种子礼包】31 天列表
  *     cmd=21 (payload field119, 空): 领取当日种子礼包, 响应结果 #120 = {#1: 第几天, #2...: 种子}
  *     ⚠ 与"千星游记自动点亮领取"(star_register 通道) 是同一接口, 重复调用服务端报已领
- *   group=2026090103 → body #102 = 带价格的条目列表(13 项, 语义未确认, 疑兑换/商店)
- *     cmd=7 无结果字段, 不产生任何效果 → 已停止调用 (曾是"报成功但没领到"的原因)
+ *   group=2026090103 → body #102 = 【拾物小铺】(ActivityBodyShop, type=3), 13 件商品, 消耗幸运星兑换
+ *     cmd=7 (无 payload): 拉取小铺列表 (响应 body #102)
+ *     cmd=1 + shop_buy{#1: 商品id, #2: 数量} (field 101): 兑换 (协议同其他活动商城, 待实测确认)
  *   游记商城: MallService.Purchase (goodsId 1041~1051)
  *
  * field115 宠物状态结构:
@@ -33,22 +38,43 @@ const ACTIVITY_SERVICE = 'gamepb.activitypb.ActivityService';
 
 const GROUP_MAIN = 2026090101;  // S3 萌宠: 宠物状态 (body #115)
 const GROUP_GIFT = 2026090102;  // 每日免费稀有种子礼包 31 天列表 (body #110), 领取 = cmd21 走 star_light_up 通道
-const GROUP_EXTRA = 2026090103; // 另一模块(body #102: 带价格的条目列表, 语义未确认, 暂不调用)
+const GROUP_SHOP = 2026090103;  // 拾物小铺 (type=3, body #102 = ActivityBodyShop, 消耗幸运星兑换)
+const CMD_SHOP_LIST = 7;        // 拉取小铺列表 (实测: 空 payload, 响应 body #102)
+const CMD_SHOP_BUY = 1;         // 兑换 (协议同其他活动: cmd=1 + shop_buy{goods_id,count})
+const SHOP_BUY_PAYLOAD_FIELD = 101;
+
+// 寻宝: 命令未抓到实测(官方说明: 成年后解锁, 消耗元气糕, 必得幸运星+待护送宝藏+挑战书, 自动开启4小时护送)
+// 候选命令按可能性排序, 用"背包到账校验"判断是否真的生效 (不会误报成功)
+const CMD_TREASURE_HUNT_CANDIDATES = [44, 41, 31];
+const CMD_PAYLOAD_FIELD_BY_CMD = { 31: 130, 41: 141, 44: 144 };
+// 锦囊: 每日0点刷新2个选1个; cmd=41 刷新(结果返回锦囊id), cmd=42 选择(payload=锦囊id字符串)
+const CMD_WISH_BAG_REFRESH = 41;
+const CMD_WISH_BAG_SELECT = 42;
 
 // 主活动各 cmd 对应的 OperateRequest payload 字段号
 const MAIN_CMD_PAYLOAD_FIELD = {
     27: 126,
     29: 128,   // 投喂
-    31: 130,   // 寻宝
+    31: 130,   // (旧) 语义未确认
     32: 131,   // 领取爪印手记奖励
-    47: 147,   // 好友操作(夺宝)
-    49: 149,   // 解锁/翻看爪印手记
+    41: 141,   // 寻宝 (推断: 结果带宝藏id+开始时间, 状态 #6 记录)
+    42: 142,   // 选择锦囊 (payload = 锦囊id 字符串)
+    47: 147,   // 好友夺宝
+    48: 0,     // 领取比熊犬 (实测请求不带 payload 字段)
+    49: 149,   // 点亮/翻看爪印手记 (payload = {#1: 手记id 裸 varint 字节})
 };
 
-// 萌宠元气糕 = 物品 1028 (投喂/寻宝消耗品); 幸运星 = 1029 (游记代币)
-// 注意: 29004 是"泡泡棉花糖种子"(新农作物种子), 不是元气糕 — 名称以 QQ 缓存同步的 ItemInfo 为准
-const ITEM_ID_YUANQIGAO = 1028;
-const ITEM_ID_LUCKYSTAR = 1029;
+// toNum 对字符串会原样返回(parseTop 的 varint 都是字符串), 比较/计算前统一走 toInt
+function toInt(value) {
+    const n = Number(toNum(value));
+    return Number.isFinite(n) ? n : 0;
+}
+
+const ITEM_ID_YUANQIGAO = 1028;   // 萌宠元气糕 (投喂/寻宝消耗, 每次投喂 700)
+const ITEM_ID_LUCKYSTAR = 1029;   // 幸运星
+const ITEM_ID_BEAR = 90031;       // 比熊犬 (成年后领取)
+const FEED_COST = 700;            // 单次投喂消耗的元气糕
+const STAGE_ADULT = 2;            // 成长阶段: 2 = 成年 (可领比熊犬/寻宝)
 
 // 免费种子礼包领取用的 payload 字段号 (cmd=21 → field 119)
 const CMD_GIFT_CLAIM_FIELD = 119;
@@ -180,15 +206,15 @@ function parseSigninDays(activityDataBuf) {
                     // 奖励条目直接就是 {id=1, count=2} 的物品消息
                     if (r.f === 5 && r.w === 2) {
                         const it = parseTop(r.v);
-                        const id = toNum((findField(it, 1) || {}).v);
-                        const count = toNum((findField(it, 2) || {}).v);
+                        const id = toInt((findField(it, 1) || {}).v);
+                        const count = toInt((findField(it, 2) || {}).v);
                         if (id > 0) items.push({ id, count: count || 1, name: itemName(id) });
                     }
                 }
                 days.push({
-                    day: toNum((findField(d, 1) || {}).v),
-                    unlocked: toNum((findField(d, 2) || {}).v) > 0,
-                    claimed: toNum((findField(d, 3) || {}).v) > 0,
+                    day: toInt((findField(d, 1) || {}).v),
+                    unlocked: toInt((findField(d, 2) || {}).v) > 0,
+                    claimed: toInt((findField(d, 3) || {}).v) > 0,
                     items,
                 });
             }
@@ -197,60 +223,94 @@ function parseSigninDays(activityDataBuf) {
         const curEntry = body.find((x) => x.f === 1 && x.w === 0);
         const totalEntry = body.find((x) => x.f === 2 && x.w === 0);
         return {
-            currentDay: toNum(curEntry && curEntry.v) || 0,
-            totalDays: toNum(totalEntry && totalEntry.v) || days.length,
+            currentDay: toInt(curEntry && curEntry.v),
+            totalDays: toInt(totalEntry && totalEntry.v) || days.length,
             days,
         };
     }
     return null;
 }
 
-/** 解析 #115 宠物状态: 成长值 / 货币 / 爪印手记列表 */
+/** 解析 #115 宠物状态: 成长值 / 阶段 / 投喂次数 / 幸运星 / 爪印手记列表 */
 function parsePetState(stateBuf) {
     const f = parseTop(stateBuf);
-    const pet = { growth: 0, petType: 0, items: [], handnotes: [] };
+    const pet = { growth: 0, petType: 0, stage: 0, feedCount: 0, lastFeedAt: 0, items: [], handnotes: [] };
     const f1 = findField(f, 1);
     if (f1 && f1.w === 2) {
         const inner = parseTop(f1.v);
-        pet.petType = toNum((findField(inner, 1) || {}).v);
-        pet.growth = toNum((findField(inner, 3) || {}).v);
+        pet.petType = toInt((findField(inner, 1) || {}).v);
+        pet.growth = toInt((findField(inner, 3) || {}).v);
+        pet.stage = toInt((findField(inner, 4) || {}).v);
+        pet.lastFeedAt = toInt((findField(inner, 5) || {}).v);
+        pet.adult = pet.stage >= STAGE_ADULT;
     }
-    // #3 { #3: 数值, #4: {#1: 货币id, #2: 数量} } + #2 单值
+    // #2 { #1: 投喂次数 }
+    const f2 = findField(f, 2);
+    if (f2 && f2.w === 2) {
+        pet.feedCount = toInt((findField(parseTop(f2.v), 1) || {}).v);
+    }
+    // #3 { #3: 数值(幸运星), #4: {#1: 物品id, #2: 数量} }
     const f3 = findField(f, 3);
     if (f3 && f3.w === 2) {
         for (const x of parseTop(f3.v)) {
+            if (x.w === 0 && x.f === 3) pet.luckyStar = toInt(x.v);
             if (x.w === 2) {
                 const inner = parseTop(x.v);
-                const id = toNum((findField(inner, 1) || {}).v);
-                const count = toNum((findField(inner, 2) || {}).v);
+                const id = toInt((findField(inner, 1) || {}).v);
+                const count = toInt((findField(inner, 2) || {}).v);
                 if (id > 0) pet.items.push({ id, count, name: itemName(id) });
+            }
+        }
+    }
+    // #6 { #1/#2: 锦囊id, #4: 护送/宝藏信息, #6/#7: 标记 }
+    const f6 = findField(f, 6);
+    if (f6 && f6.w === 2) {
+        pet.extra = {};
+        for (const x of parseTop(f6.v)) {
+            if (x.w === 2 && x.f <= 2) {
+                const s = x.v.toString('utf8');
+                if (/^[\x20-\x7e]+$/.test(s)) pet.extra['slot' + x.f] = s;
+            } else if (x.w === 2 && x.f === 4) {
+                const inner = parseTop(x.v);
+                pet.extra.treasure = {
+                    id: toInt((findField(inner, 1) || {}).v),
+                    field2: toInt((findField(inner, 2) || {}).v),
+                    field3: toInt((findField(inner, 3) || {}).v),
+                };
+            } else if (x.w === 0) {
+                pet.extra['f' + x.f] = toInt(x.v);
             }
         }
     }
     for (const x of f) {
         if (x.f === 2 && x.w === 2) {
             const inner = parseTop(x.v);
-            const v = toNum((findField(inner, 1) || {}).v);
+            const v = toInt((findField(inner, 1) || {}).v);
             if (v > 0) pet.baseValue = v;
         }
     }
-    // #4 是容器消息: 内部 repeated #1 才是手记条目 (实测 2026-09-10)
+    // #4 是容器消息: 内部 repeated #1 才是手记条目 (实测 2026-09-14 修正标志位)
+    // 条目字段: #1=id, #2=1, #3=1 表示【已领取奖励】, #4=照片JSON, #5=1 表示【已点亮/翻开】
     for (const x of f) {
         if (x.f !== 4 || x.w !== 2) continue;
         for (const entry of parseTop(x.v)) {
             if (entry.f !== 1 || entry.w !== 2) continue;
             const d = parseTop(entry.v);
-            const id = toNum((findField(d, 1) || {}).v);
+            const id = toInt((findField(d, 1) || {}).v);
             if (!id) continue;
             const photoBuf = findField(d, 4);
             let photo = null;
             if (photoBuf && photoBuf.w === 2) {
                 try { photo = JSON.parse(photoBuf.v.toString('utf8')); } catch { photo = null; }
             }
+            const opened = toInt((findField(d, 5) || {}).v) > 0;
+            const claimed = toInt((findField(d, 3) || {}).v) > 0;
             pet.handnotes.push({
                 id,
-                unlocked: toNum((findField(d, 3) || {}).v) > 0,
-                claimed: toNum((findField(d, 5) || {}).v) > 0,
+                opened,                                  // 已点亮(可领取)
+                claimed,                                 // 已领取
+                unlocked: opened,                        // 兼容旧字段名
+                claimable: opened && !claimed,
                 photo,
             });
         }
@@ -320,12 +380,125 @@ async function getMengchongOverview() {
         const { getBag, getBagItems } = require('./warehouse');
         const bag = await getBag();
         for (const it of getBagItems(bag)) {
-            const id = toNum(it && it.id);
-            if (id === ITEM_ID_YUANQIGAO) result.yuanqigao = toNum(it.count);
-            else if (id === ITEM_ID_LUCKYSTAR) result.luckyStar = toNum(it.count);
+            const id = toInt(it && it.id);
+            if (id === ITEM_ID_YUANQIGAO) result.yuanqigao = toInt(it.count);
+            else if (id === ITEM_ID_LUCKYSTAR) result.luckyStar = toInt(it.count);
         }
     } catch (e) { /* 背包读取失败不阻断 */ }
     return result;
+}
+
+// ============ 拾物小铺 ============
+
+/** 解析 body #102 (ActivityBodyShop) 的商品列表 */
+function parseShopBody(activityBuf) {
+    if (!activityBuf) return [];
+    const shopField = parseTop(activityBuf).find(x => x.f === 102 && x.w === 2);
+    if (!shopField) return [];
+    const items = [];
+    for (const g of parseTop(shopField.v)) {
+        if (g.f !== 1 || g.w !== 2) continue;
+        const d = parseTop(g.v);
+        const id = toInt((findField(d, 1) || {}).v);
+        if (!id) continue;
+        const itemField = findField(d, 2);
+        const costField = findField(d, 3);
+        const nameBuf = findField(d, 7);
+        let item = null;
+        if (itemField && itemField.w === 2) {
+            const it = parseTop(itemField.v);
+            item = { id: toInt((findField(it, 1) || {}).v), count: toInt((findField(it, 2) || {}).v) || 1 };
+            item.name = itemName(item.id);
+        }
+        let cost = null;
+        if (costField && costField.w === 2) {
+            const ct = parseTop(costField.v);
+            const cid = toInt((findField(ct, 1) || {}).v);
+            cost = { id: cid, amount: toInt((findField(ct, 2) || {}).v), name: itemName(cid) };
+        }
+        const descBuf = findField(d, 8);
+        let icon = '';
+        if (descBuf && descBuf.w === 2) {
+            try { icon = (JSON.parse(descBuf.v.toString('utf8')) || {}).res || ''; } catch { icon = ''; }
+        }
+        const limit = toInt((findField(d, 4) || {}).v);
+        const bought = toInt((findField(d, 5) || {}).v);
+        items.push({
+            id,
+            name: nameBuf && nameBuf.w === 2 ? nameBuf.v.toString('utf8') : (item ? item.name : `商品#${id}`),
+            item,
+            cost,
+            limit,                                   // 限购数量
+            bought,                                  // 已兑换数量
+            remaining: limit > 0 ? Math.max(0, limit - bought) : null,
+            order: toInt((findField(d, 6) || {}).v),
+            quality: toInt((findField(d, 10) || {}).v),
+            restrictionType: toInt((findField(d, 11) || {}).v),
+            icon,
+        });
+    }
+    items.sort((a, b) => a.order - b.order);
+    return items;
+}
+
+/**
+ * 拾物小铺列表 (cmd=7, 空 payload) — 消耗幸运星兑换
+ */
+async function getMengchongShop() {
+    const res = await operateRaw(GROUP_SHOP, CMD_SHOP_LIST, 0, null);
+    if (res.errorCode !== 0) throw new Error(`获取拾物小铺失败: code=${res.errorCode}`);
+    const items = parseShopBody(res.activity);
+    // 幸运星余额
+    let luckyStar = 0;
+    try {
+        const { getBag, getBagItems } = require('./warehouse');
+        const bag = await getBag();
+        for (const it of getBagItems(bag)) {
+            if (toInt(it && it.id) === ITEM_ID_LUCKYSTAR) { luckyStar = toInt(it.count); break; }
+        }
+    } catch (e) { /* 背包失败不阻断 */ }
+    return { updatedAt: Date.now(), luckyStar, items };
+}
+
+/**
+ * 拾物小铺兑换 (cmd=1 + shop_buy, 协议同其他活动商城)
+ * 校验: 重新拉取小铺对比 purchased_count 是否增加 (协议差异时不会误报成功)
+ */
+async function exchangeMengchongShopGoods(goodsId, count = 1) {
+    const id = Math.floor(Number(goodsId) || 0);
+    const num = Math.max(1, Math.min(99, Math.floor(Number(count) || 1)));
+    if (!id) throw new Error('缺少商品 ID');
+
+    const before = await getMengchongShop();
+    const target = (before.items || []).find(it => it.id === id);
+    if (!target) throw new Error('该商品不在拾物小铺中');
+    if (target.remaining !== null && num > target.remaining) throw new Error(`该商品最多还可兑换 ${target.remaining} 个`);
+    if (target.cost && before.luckyStar > 0 && before.luckyStar < target.cost.amount * num) {
+        throw new Error(`幸运星不足 (需要 ${target.cost.amount * num}, 现有 ${before.luckyStar})`);
+    }
+
+    // ShopBuyReq { goods_id=1, count=2 }
+    const inner = new protobuf.Writer();
+    inner.uint32((1 << 3) | 0).int64(toLong(id));
+    inner.uint32((2 << 3) | 0).int64(toLong(num));
+    const res = await operateRaw(GROUP_SHOP, CMD_SHOP_BUY, SHOP_BUY_PAYLOAD_FIELD, Buffer.from(inner.finish()));
+    if (res.errorCode !== 0) throw new Error(`兑换失败: code=${res.errorCode}`);
+
+    // 校验: 重新拉列表看已兑换数量是否变化
+    let after = null;
+    try { after = await getMengchongShop(); } catch (e) { after = null; }
+    const afterTarget = after ? (after.items || []).find(it => it.id === id) : null;
+    const verified = !!(afterTarget && afterTarget.bought > (target.bought || 0));
+    return {
+        goodsId: id,
+        count: num,
+        name: target.name,
+        ok: verified,
+        verified,
+        reason: verified ? '' : '兑换未生效(商城协议可能与预期不同, 请抓包确认)',
+        luckyStar: after ? after.luckyStar : null,
+        shopItem: afterTarget || null,
+    };
 }
 
 // ============ 操作 ============
@@ -386,7 +559,7 @@ async function petOperate(opts = {}) {
         const f = parseTop(Buffer.from(res.resultHex, 'hex'));
         result = { raw: res.resultHex };
         for (const x of f) {
-            if (x.w === 0) result['f' + x.f] = x.v;
+            if (x.w === 0) result['f' + x.f] = toInt(x.v);
             else if (x.w === 2 && x.v.length <= 64) result['f' + x.f] = x.v.toString('hex');
         }
         // 尝试提取奖励 items (字段 2/3 里的 {id,count})
@@ -397,8 +570,8 @@ async function petOperate(opts = {}) {
                 for (const y of inner) {
                     if (y.w === 2 && y.v.length <= 16) {
                         const it = parseTop(y.v);
-                        const id = toNum((findField(it, 1) || {}).v);
-                        const count = toNum((findField(it, 2) || {}).v);
+                        const id = toInt((findField(it, 1) || {}).v);
+                        const count = toInt((findField(it, 2) || {}).v);
                         if (id > 0 && count > 0) awards.push({ id, count, name: itemName(id) });
                     }
                 }
@@ -419,19 +592,56 @@ async function feedPet() {
     const r = parseTop(Buffer.from(res.resultHex || '', 'hex'));
     const out = { ok: true, raw: res.resultHex };
     for (const x of r) {
-        if (x.w === 0) out['f' + x.f] = toNum(x.v);
+        if (x.w === 0) out['f' + x.f] = toInt(x.v);
         else if (x.w === 2 && x.v.length <= 16) {
             const inner = parseTop(x.v);
-            const id = toNum((findField(inner, 1) || {}).v);
-            const count = toNum((findField(inner, 2) || {}).v);
+            const id = toInt((findField(inner, 1) || {}).v);
+            const count = toInt((findField(inner, 2) || {}).v);
             if (id > 0 && count > 0) out.items = [...(out.items || []), { id, count, name: itemName(id) }];
         }
     }
     return out;
 }
 
+/** 从 Operate 响应的 activity 里取出某条手记的最新状态 (用于校验操作是否真的生效) */
+function findHandnoteInActivity(activityBuf, handnoteId) {
+    if (!activityBuf) return null;
+    const stateField = parseTop(activityBuf).find(x => x.f === 115 && x.w === 2);
+    if (!stateField) return null;
+    const pet = parsePetState(stateField.v);
+    // 注意: parseTop 里 varint 存的是字符串, toNum 对字符串原样返回 → 必须用 toInt 转数字比较
+    return pet.handnotes.find(h => toInt(h.id) === toInt(handnoteId)) || null;
+}
+
+/**
+ * 点亮/翻开爪印手记 (cmd=49, payload field149 = {#1: 手记id 裸varint字节})
+ * 抓包实测: 手记 2 → payload 0a0102，点亮后状态里该条目 #5 = 1
+ * 注意: 对未开放的手记, 服务端可能返回 err=0 但状态不变 → 必须校验状态, 否则会误报成功
+ */
+async function unlockPetHandnote(handnoteId) {
+    const id = Math.floor(Number(handnoteId) || 0);
+    if (!id) throw new Error('缺少手记 id');
+    // 手记 id 是裸 varint 字节 (实测 id=2 → 0a0102)
+    const inner = new protobuf.Writer();
+    inner.uint64(toLong(id));
+    const w = new protobuf.Writer();
+    w.uint32((1 << 3) | 2).bytes(inner.finish());
+    const res = await operateRaw(GROUP_MAIN, 49, MAIN_CMD_PAYLOAD_FIELD[49], w.finish());
+    if (res.errorCode !== 0) throw new Error(`点亮手记失败: code=${res.errorCode}`);
+    const after = findHandnoteInActivity(res.activity, id);
+    // 无法从响应校验时, 一律按"未生效"处理 (避免误报成功)
+    if (!after) {
+        return { handnoteId: id, ok: false, reason: '无法校验结果(响应未带状态)' };
+    }
+    if (!after.opened) {
+        return { handnoteId: id, ok: false, reason: '该手记尚不可点亮', handnote: after };
+    }
+    return { handnoteId: id, ok: true, verified: true, handnote: after };
+}
+
 /**
  * 领取爪印手记奖励 (cmd=32, payload field131 = {#1: 手记id})
+ * 校验: 领取成功后状态里该条目 #3 = 1
  */
 async function claimPetHandnote(handnoteId) {
     const id = Math.floor(Number(handnoteId) || 0);
@@ -445,18 +655,182 @@ async function claimPetHandnote(handnoteId) {
     for (const x of r) {
         if (x.w !== 2 || x.v.length > 16) continue;
         const inner = parseTop(x.v);
-        const itemId = toNum((findField(inner, 1) || {}).v);
-        const count = toNum((findField(inner, 2) || {}).v);
+        const itemId = toInt((findField(inner, 1) || {}).v);
+        const count = toInt((findField(inner, 2) || {}).v);
         if (itemId > 0 && count > 0) awards.push({ id: itemId, count, name: itemName(itemId) });
     }
-    return { handnoteId: id, awards };
+    const after = findHandnoteInActivity(res.activity, id);
+    if (!after) {
+        const hasAwards = awards.length > 0;
+        return { handnoteId: id, awards, ok: hasAwards, reason: hasAwards ? '' : '无法校验结果(响应未带状态)' };
+    }
+    if (!after.claimed) {
+        return { handnoteId: id, awards, ok: false, reason: '未领取成功', handnote: after };
+    }
+    return { handnoteId: id, awards, ok: true, verified: true, handnote: after };
+}
+
+/**
+ * 领取比熊犬 (cmd=48, payload field148 空) — 比熊成年后解锁宠物, 结果 #148 = {#1: 90031 比熊犬}
+ */
+async function claimBearPet() {
+    const res = await operateRaw(GROUP_MAIN, 48, MAIN_CMD_PAYLOAD_FIELD[48], null);
+    if (res.errorCode !== 0) throw new Error(`领取比熊犬失败: code=${res.errorCode}`);
+    const f = parseTop(Buffer.from(res.resultHex || '', 'hex'));
+    const itemId = toInt((findField(f, 1) || {}).v);
+    return { ok: true, itemId, name: itemId ? itemName(itemId) : '' };
+}
+
+/**
+ * 寻宝 (cmd=41, payload field141 空, 抓包推断)
+ * 结果 #141 = { #1: 宝藏id(字符串), #2: 开始时间, #4/#5: 标记 }; 状态 #6 记录宝藏与护送信息
+ */
+async function bagCountOf(itemId) {
+    try {
+        const { getBag, getBagItems } = require('./warehouse');
+        const bag = await getBag();
+        for (const it of getBagItems(bag)) {
+            if (toInt(it && it.id) === itemId) return toInt(it.count);
+        }
+    } catch (e) { /* 忽略 */ }
+    return 0;
+}
+
+/**
+ * 寻宝 (官方说明: 比熊成年后解锁, 消耗萌宠元气糕, 必定获得幸运星/待护送宝藏/挑战书, 获得宝藏后自动开启 4 小时护送)
+ * ⚠ 命令未抓到实测: 按候选顺序尝试, 每次都用【背包元气糕减少 / 幸运星增加】校验是否真的生效,
+ *    全部候选都未生效时返回 ok:false (绝不误报成功)
+ */
+async function treasureHunt() {
+    const beforeYuanqigao = await bagCountOf(ITEM_ID_YUANQIGAO);
+    const beforeLucky = await bagCountOf(ITEM_ID_LUCKYSTAR);
+    const tried = [];
+    for (const cmd of CMD_TREASURE_HUNT_CANDIDATES) {
+        const field = CMD_PAYLOAD_FIELD_BY_CMD[cmd] || 0;
+        let res;
+        try {
+            res = await operateRaw(GROUP_MAIN, cmd, field, null);
+        } catch (e) {
+            tried.push(`cmd${cmd}:${e.message}`);
+            continue;
+        }
+        if (res.errorCode !== 0) {
+            if (String(res.errorCode) === '1000019') throw new Error('萌宠元气糕不足');
+            tried.push(`cmd${cmd}:code=${res.errorCode}`);
+            continue;
+        }
+        const spentYuanqigao = beforeYuanqigao - await bagCountOf(ITEM_ID_YUANQIGAO);
+        const gainedLuckyStar = (await bagCountOf(ITEM_ID_LUCKYSTAR)) - beforeLucky;
+        const verified = spentYuanqigao > 0 || gainedLuckyStar > 0;
+        let treasure = null;
+        if (res.activity) {
+            const st = parseTop(res.activity).find(x => x.f === 115 && x.w === 2);
+            if (st) treasure = parsePetState(st.v).extra || null;
+        }
+        if (verified) {
+            log('活动', `萌宠游记: 寻宝成功 (cmd=${cmd}, 消耗元气糕 ${spentYuanqigao}, 幸运星 +${gainedLuckyStar})`, {
+                module: 'activity', event: '萌宠游记', result: 'hunt_ok',
+            });
+            return { ok: true, verified: true, cmd, spentYuanqigao, gainedLuckyStar, treasure, tried };
+        }
+        tried.push(`cmd${cmd}:未生效`);
+    }
+    return {
+        ok: false,
+        verified: false,
+        reason: '寻宝未生效(命令尚未确认, 请在游戏内点一次寻宝并抓包)',
+        treasure: null,
+        tried,
+    };
+}
+
+/**
+ * 刷新锦囊 (cmd=41, 空 payload) — 官方说明: 每日 0 点刷新 2 个锦囊, 每日 1 次免费刷新
+ * 结果 #141 = { #1: 锦囊id, #2: 刷新时间, #4/#5: 标志 }; 状态 #115.#6.#1/#2 = 当日两个锦囊 id
+ */
+async function refreshWishBags() {
+    const res = await operateRaw(GROUP_MAIN, CMD_WISH_BAG_REFRESH, MAIN_CMD_PAYLOAD_FIELD[41], null);
+    if (res.errorCode !== 0) throw new Error(`刷新锦囊失败: code=${res.errorCode}`);
+    const f = parseTop(Buffer.from(res.resultHex || '', 'hex'));
+    const idBuf = findField(f, 1);
+    return {
+        ok: true,
+        wishBagId: idBuf && idBuf.w === 2 ? idBuf.v.toString('utf8') : '',
+        refreshedAt: toInt((findField(f, 2) || {}).v),
+    };
+}
+
+/** 选择锦囊 (cmd=42, payload = 锦囊id 字符串) */
+async function selectWishBag(wishBagId) {
+    const id = String(wishBagId || '').trim();
+    if (!id) throw new Error('缺少锦囊 id');
+    const w = new protobuf.Writer();
+    w.uint32((1 << 3) | 2).bytes(Buffer.from(id, 'utf8'));
+    const res = await operateRaw(GROUP_MAIN, CMD_WISH_BAG_SELECT, MAIN_CMD_PAYLOAD_FIELD[42], w.finish());
+    if (res.errorCode !== 0) throw new Error(`选择锦囊失败: code=${res.errorCode}`);
+    return { ok: true, wishBagId: id };
+}
+
+/** 活动玩法说明 (活动 head.desc 的 JSON: tips / tips1 / tips2) */
+async function getMengchongRules() {
+    const reply = await getGroupRaw(GROUP_MAIN);
+    const { head } = parseGroupReply(reply);
+    const json = head && head.descJson;
+    const out = { uid: json && json.uid ? json.uid : '', sections: [] };
+    if (!json) return out;
+    const clean = (s) => String(s).replace(/<br\s*\/?>/gi, '\n').replace(/<\/?b>/gi, '').replace(/&nbsp;/g, ' ').trim();
+    for (const key of ['tips', 'tips1', 'tips2', 'tips3']) {
+        const t = json[key];
+        if (!t || !Array.isArray(t.txt)) continue;
+        out.sections.push({
+            key,
+            title: t.title || '',
+            lines: t.txt.filter(x => typeof x === 'string').map(clean).filter(Boolean),
+        });
+    }
+    return out;
+}
+
+/**
+ * 自动投喂: 每次消耗 700 萌宠元气糕 → 成长值 +700, 幸运星 +100 (抓包实测)
+ * 元气糕不足时服务端报 1000019, 直接结束; 成年后自动领取比熊犬
+ */
+async function autoFeedPet(opts = {}) {
+    const maxFeeds = Math.max(1, Math.min(200, Math.floor(Number(opts.maxFeeds) || 100)));
+    const summary = { feeds: 0, growth: 0, luckyStar: 0, petUnlocked: false, stopped: '' };
+    for (let i = 0; i < maxFeeds; i++) {
+        let r;
+        try {
+            r = await feedPet();
+        } catch (e) {
+            summary.stopped = e.message.includes('1000019') ? '元气糕不足' : e.message;
+            break;
+        }
+        summary.feeds += 1;
+        if (r.f1) summary.growth = toInt(r.f1);
+        const lucky = (r.items || []).find(it => toInt(it.id) === ITEM_ID_LUCKYSTAR);
+        if (lucky) summary.luckyStar = toInt(lucky.count);
+        summary.stage = toInt(r.f4) || summary.stage || 0;
+        await randomDelay(400, 900);
+    }
+    // 成年后领取比熊犬
+    if (summary.stage >= STAGE_ADULT && !opts.skipPetClaim) {
+        try {
+            const p = await claimBearPet();
+            summary.petUnlocked = true;
+            summary.petName = p.name;
+        } catch (e) {
+            summary.stopped = summary.stopped || `领取比熊犬失败: ${e.message}`;
+        }
+    }
+    return summary;
 }
 
 /**
  * 每天自动领取已解锁但未领取的爪印手记奖励
  */
 async function autoClaimPetHandnotes() {
-    const summary = { claimed: 0, handnotes: [], skipped: [] };
+    const summary = { claimed: 0, unlocked: 0, handnotes: [], skipped: [] };
     let pet = null;
     try {
         const res = await operateRaw(GROUP_MAIN, 27, MAIN_CMD_PAYLOAD_FIELD[27], null);
@@ -470,10 +844,40 @@ async function autoClaimPetHandnotes() {
         summary.skipped.push('暂无可领取手记');
         return summary;
     }
+    // 1) 先点亮未点亮的手记 (cmd=49) — 按顺序尝试, 遇到"未生效"即停止
+    //    (手记按进度依次开放: 前面的未开放时, 后面的必然未开放, 避免无意义请求)
+    let stopped = false;
     for (const h of pet.handnotes) {
-        if (!h.unlocked || h.claimed) continue;
+        if (h.opened) continue;
+        if (stopped) { summary.skipped.push(`手记${h.id}(前序未开放)`); continue; }
+        try {
+            const r = await unlockPetHandnote(h.id);
+            // 校验: 响应里该手记 #5 必须变为 1, 否则视为未生效(避免误报成功)
+            if (r.ok && r.verified !== false) {
+                summary.unlocked += 1;
+                h.opened = true;
+                log('活动', `萌宠游记: 点亮爪印手记 ${h.id}`, { module: 'activity', event: '萌宠游记', result: 'handnote_unlock' });
+            } else {
+                stopped = true;
+                summary.skipped.push(`手记${h.id}(${r.reason || '未生效'})`);
+            }
+            await randomDelay(600, 1200);
+        } catch (e) {
+            stopped = true;
+            summary.skipped.push(`手记${h.id}点亮(${e.message.includes('code=') ? '条件未满足' : e.message})`);
+        }
+    }
+    // 2) 领取已点亮未领取的奖励 (cmd=32)
+    for (const h of pet.handnotes) {
+        if (!h.opened || h.claimed) continue;
         try {
             const r = await claimPetHandnote(h.id);
+            // 校验: 响应里该手记 #3 应变为 1; 拿不到状态时以"是否返回奖励"为准
+            const ok = r.ok && (r.verified !== false || (r.awards || []).length > 0);
+            if (!ok) {
+                summary.skipped.push(`手记${h.id}(${r.reason || '未生效'})`);
+                continue;
+            }
             summary.claimed += 1;
             summary.handnotes.push(h.id);
             const awardText = (r.awards || []).map(a => `${a.name}×${a.count}`).join('、');
@@ -495,7 +899,7 @@ async function autoClaimPetHandnotes() {
  * (比熊赠礼由千星游记 star_light_up 覆盖; 投喂消耗元气糕, 保持手动)
  */
 async function autoRunMengchongTasks() {
-    const summary = { giftClaimed: false, handnoteClaims: 0, skipped: [], errors: [] };
+    const summary = { giftClaimed: false, handnoteClaims: 0, handnoteUnlocks: 0, feeds: 0, petUnlocked: false, skipped: [], errors: [] };
     // 手动"执行每日任务"直接跑; 每日定时入口在外层 checkAndRunMengchongTasks 里判开关
 
     try {
@@ -515,9 +919,25 @@ async function autoRunMengchongTasks() {
     try {
         const r = await autoClaimPetHandnotes();
         summary.handnoteClaims = r.claimed;
+        summary.handnoteUnlocks = r.unlocked || 0;
         summary.skipped.push(...(r.skipped || []));
     } catch (e) {
         summary.errors.push(`手记奖励领取失败: ${e.message}`);
+    }
+
+    // 自动投喂: 消耗元气糕喂比熊, 成年后自动领取比熊犬
+    try {
+        const f = await autoFeedPet();
+        summary.feeds = f.feeds;
+        summary.petUnlocked = !!f.petUnlocked;
+        if (f.feeds > 0) {
+            log('活动', `萌宠游记: 自动投喂 ${f.feeds} 次 (成长值 ${f.growth}, 幸运星 ${f.luckyStar}${f.petUnlocked ? `, 已解锁${f.petName || '比熊犬'}` : ''})`, {
+                module: 'activity', event: '萌宠游记', result: 'feed_ok',
+            });
+        }
+        if (f.stopped && !/元气糕不足/.test(f.stopped)) summary.skipped.push(`投喂(${f.stopped})`);
+    } catch (e) {
+        summary.errors.push(`自动投喂失败: ${e.message}`);
     }
 
     return summary;
@@ -541,14 +961,23 @@ async function checkAndRunMengchongTasks() {
 }
 
 module.exports = {
-    __testing: { parseTop, parseGroupReply, parseSigninDays, parsePetState, itemName },
+    __testing: { parseTop, parseGroupReply, parseSigninDays, parsePetState, parseShopBody, itemName },
     GROUP_MAIN,
     GROUP_GIFT,
-    GROUP_GIFT,
     getMengchongOverview,
+    getMengchongShop,
+    exchangeMengchongShopGoods,
     claimFreeSeedGift,
     feedPet,
+    autoFeedPet,
+    claimBearPet,
+    treasureHunt,
+    refreshWishBags,
+    selectWishBag,
+    getMengchongRules,
+    unlockPetHandnote,
     claimPetHandnote,
+    autoClaimPetHandnotes,
     petOperate,
     autoRunMengchongTasks,
     checkAndRunMengchongTasks,

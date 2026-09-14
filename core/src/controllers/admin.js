@@ -1557,6 +1557,88 @@ app.use('/api', (req, res, next) => {
         } catch (e) { res.json({ ok: false, error: e.message }); }
     });
 
+    // API: 萌宠游记玩法说明 (活动 desc)
+    app.get('/api/mengchong/rules', async (req, res) => {
+        const id = getAccId(req);
+        if (!id) return res.status(400).json({ ok: false });
+        if (!checkAccountAccess(req, id)) return res.status(403).json({ ok: false, error: '无权访问此账号' });
+        try {
+            const data = await provider.getMengchongRules(id);
+            res.json({ ok: true, data });
+        } catch (e) { res.json({ ok: false, error: e.message }); }
+    });
+
+    // API: 拾物小铺列表
+    app.get('/api/mengchong/shop', async (req, res) => {
+        const id = getAccId(req);
+        if (!id) return res.status(400).json({ ok: false });
+        if (!checkAccountAccess(req, id)) return res.status(403).json({ ok: false, error: '无权访问此账号' });
+        try {
+            const data = await provider.getMengchongShop(id);
+            res.json({ ok: true, data });
+        } catch (e) { res.json({ ok: false, error: e.message }); }
+    });
+
+    // API: 拾物小铺兑换 (消耗幸运星)
+    app.post('/api/mengchong/shop-exchange', async (req, res) => {
+        const id = getAccId(req);
+        if (!id) return res.status(400).json({ ok: false });
+        if (!checkAccountAccess(req, id)) return res.status(403).json({ ok: false, error: '无权访问此账号' });
+        const goodsId = Number(req.body && req.body.goodsId);
+        const count = Math.max(1, Math.min(99, Number(req.body && req.body.count) || 1));
+        if (!goodsId) return res.status(400).json({ ok: false, error: '缺少 goodsId' });
+        try {
+            const data = await provider.exchangeMengchongShopGoods(id, goodsId, count);
+            res.json({ ok: true, data });
+        } catch (e) { res.json({ ok: false, error: e.message }); }
+    });
+
+    // API: 自动投喂 (循环投喂直到元气糕不足)
+    app.post('/api/mengchong/auto-feed', async (req, res) => {
+        const id = getAccId(req);
+        if (!id) return res.status(400).json({ ok: false });
+        if (!checkAccountAccess(req, id)) return res.status(403).json({ ok: false, error: '无权访问此账号' });
+        try {
+            const data = await provider.autoFeedMengchongPet(id, req.body || {});
+            res.json({ ok: true, data });
+        } catch (e) { res.json({ ok: false, error: e.message }); }
+    });
+
+    // API: 领取比熊犬 (成年后解锁宠物)
+    app.post('/api/mengchong/claim-pet', async (req, res) => {
+        const id = getAccId(req);
+        if (!id) return res.status(400).json({ ok: false });
+        if (!checkAccountAccess(req, id)) return res.status(403).json({ ok: false, error: '无权访问此账号' });
+        try {
+            const data = await provider.claimMengchongBearPet(id);
+            res.json({ ok: true, data });
+        } catch (e) { res.json({ ok: false, error: e.message }); }
+    });
+
+    // API: 寻宝
+    app.post('/api/mengchong/treasure-hunt', async (req, res) => {
+        const id = getAccId(req);
+        if (!id) return res.status(400).json({ ok: false });
+        if (!checkAccountAccess(req, id)) return res.status(403).json({ ok: false, error: '无权访问此账号' });
+        try {
+            const data = await provider.mengchongTreasureHunt(id);
+            res.json({ ok: true, data });
+        } catch (e) { res.json({ ok: false, error: e.message }); }
+    });
+
+    // API: 点亮爪印手记 (cmd=49)
+    app.post('/api/mengchong/unlock-handnote', async (req, res) => {
+        const id = getAccId(req);
+        if (!id) return res.status(400).json({ ok: false });
+        if (!checkAccountAccess(req, id)) return res.status(403).json({ ok: false, error: '无权访问此账号' });
+        const handnoteId = Number(req.body && req.body.handnoteId);
+        if (!handnoteId) return res.status(400).json({ ok: false, error: '缺少 handnoteId' });
+        try {
+            const data = await provider.unlockMengchongHandnote(id, handnoteId);
+            res.json({ ok: true, data });
+        } catch (e) { res.json({ ok: false, error: e.message }); }
+    });
+
     // API: 领取爪印手记奖励 (cmd=32)
     app.post('/api/mengchong/claim-handnote', async (req, res) => {
         const id = getAccId(req);
