@@ -99,6 +99,8 @@ onMounted(async () => {
   if (!currentAccountId.value && accounts.value.length > 0 && accounts.value[0]) {
     accountStore.selectAccount(String(accounts.value[0].id))
   }
+  // 先取活动开关状态, 再同步本地设置(否则后台已关闭的活动开关无法被自动关掉)
+  await fetchActivityStatus()
   if (currentAccountId.value) {
     await settingStore.fetchSettings(currentAccountId.value)
     syncLocalStrategySettings()
@@ -592,6 +594,7 @@ const localAutomationSettings = ref({
     weather_research: false,
     charity_task: false,
     mengchong_task: false,
+    mengchong_hunt: false,
     fertilizer: 'normal',
     skip_own_weed_bug: false,
     fertilizer_multi_season: false,
@@ -612,6 +615,52 @@ const fertilizerOptions = [
   { label: '仅有机化肥', value: 'organic' },
   { label: '不施肥', value: 'none' },
 ]
+
+// 活动菜单在后台被关闭时, 对应自动化开关必须一并关闭
+const activityStatus = ref<Record<string, boolean>>({})
+const ACTIVITY_GATED_AUTOMATION: Record<string, string> = {
+  star_light_up: 'qianXingEnabled',
+  weather_task: 'yuLuoChengShiEnabled',
+  weather_research: 'yuLuoChengShiEnabled',
+  charity_task: 'gongYiXiaoHongHuaEnabled',
+  mengchong_task: 'mengChongEnabled',
+  mengchong_hunt: 'mengChongEnabled',
+}
+
+function isAutomationGated(key: string): boolean {
+  const flagKey = ACTIVITY_GATED_AUTOMATION[key]
+  return !!flagKey && activityStatus.value[flagKey] === false
+}
+
+function autoLabel(key: string, base: string): string {
+  return isAutomationGated(key) ? `${base}（活动已在后台关闭）` : base
+}
+
+/** 把被后台关闭的活动的自动化开关强制置为 false */
+function applyActivityGate() {
+  const auto = localAutomationSettings.value.automation as any
+  if (!auto) return
+  for (const key of Object.keys(ACTIVITY_GATED_AUTOMATION)) {
+    if (isAutomationGated(key)) auto[key] = false
+  }
+}
+
+async function fetchActivityStatus() {
+  try {
+    const res = await api.get('/api/activities/status')
+    if (res.data) {
+      activityStatus.value = {
+        heFengEnabled: res.data.heFengEnabled !== false,
+        qingNiangEnabled: res.data.qingNiangEnabled !== false,
+        qianXingEnabled: res.data.qianXingEnabled !== false,
+        yuLuoChengShiEnabled: res.data.yuLuoChengShiEnabled !== false,
+        gongYiXiaoHongHuaEnabled: res.data.gongYiXiaoHongHuaEnabled !== false,
+        mengChongEnabled: res.data.mengChongEnabled !== false,
+      }
+      applyActivityGate()
+    }
+  } catch (e) { /* 状态取不到时不拦截 */ }
+}
 
 function syncLocalAutomationSettings() {
   if (settings.value) {
@@ -637,6 +686,7 @@ function syncLocalAutomationSettings() {
         weather_research: false,
         charity_task: false,
         mengchong_task: false,
+    mengchong_hunt: false,
         fertilizer: 'none',
         skip_own_weed_bug: false,
         fertilizer_multi_season: false,
@@ -666,6 +716,7 @@ function syncLocalAutomationSettings() {
         weather_research: false,
         charity_task: false,
         mengchong_task: false,
+    mengchong_hunt: false,
         fertilizer: 'none',
         skip_own_weed_bug: false,
         fertilizer_multi_season: false,
@@ -686,6 +737,7 @@ function syncLocalAutomationSettings() {
     localAutomationSettings.value.fertilizerBuyNormalCount = settings.value.fertilizerBuyNormalCount ?? 10
     localAutomationSettings.value.fertilizerBuyNormalThresholdHours = settings.value.fertilizerBuyNormalThresholdHours ?? 10
     localAutomationSettings.value.fertilizerBuyCheckIntervalMinutes = settings.value.fertilizerBuyCheckIntervalMinutes ?? 30
+    applyActivityGate()
   }
 }
 
@@ -694,6 +746,8 @@ async function saveAutomationSettings() {
     return
   automationSaving.value = true
   try {
+    // 后台已关闭的活动, 其自动化开关一并置 false 后再保存
+    applyActivityGate()
     const fullSettings = {
       ...settings.value,
       automation: localAutomationSettings.value.automation,
@@ -1417,12 +1471,13 @@ async function handleTestOffline() {
             <BaseSwitch v-model="localAutomationSettings.automation.fertilizer_buy_organic" label="自动购买有机化肥" />
             <BaseSwitch v-model="localAutomationSettings.automation.fertilizer_buy_normal" label="自动购买无机化肥" />
             <BaseSwitch v-model="localAutomationSettings.automation.mystery_shop" label="自动购买神秘商店" />
-            <BaseSwitch v-model="localAutomationSettings.automation.star_light_up" label="千星游记自动点亮领取" />
+            <BaseSwitch v-model="localAutomationSettings.automation.star_light_up" :label="autoLabel('star_light_up', '千星游记自动点亮领取')" :disabled="isAutomationGated('star_light_up')" />
             <BaseSwitch v-model="localAutomationSettings.automation.solar_terms" label="节令小礼自动领取" />
-            <BaseSwitch v-model="localAutomationSettings.automation.weather_task" label="雨落成诗：每日买采集瓶+对好友使用+雷雨瓶自用" />
-            <BaseSwitch v-model="localAutomationSettings.automation.weather_research" label="雨落成诗：气象研究自动升级（消耗雷电徽章）" />
-            <BaseSwitch v-model="localAutomationSettings.automation.charity_task" label="公益小红花：每日领公益礼包+送爱心+分享" />
-            <BaseSwitch v-model="localAutomationSettings.automation.mengchong_task" label="萌宠游记：每日领免费稀有种子礼包" />
+            <BaseSwitch v-model="localAutomationSettings.automation.weather_task" :label="autoLabel('weather_task', '雨落成诗：每日买采集瓶+对好友使用+雷雨瓶自用')" :disabled="isAutomationGated('weather_task')" />
+            <BaseSwitch v-model="localAutomationSettings.automation.weather_research" :label="autoLabel('weather_research', '雨落成诗：气象研究自动升级（消耗雷电徽章）')" :disabled="isAutomationGated('weather_research')" />
+            <BaseSwitch v-model="localAutomationSettings.automation.charity_task" :label="autoLabel('charity_task', '公益小红花：每日领公益礼包+送爱心+分享')" :disabled="isAutomationGated('charity_task')" />
+            <BaseSwitch v-model="localAutomationSettings.automation.mengchong_task" :label="autoLabel('mengchong_task', '萌宠游记：每日任务(种子礼包/手记/自动投喂)')" :disabled="isAutomationGated('mengchong_task')" />
+            <BaseSwitch v-model="localAutomationSettings.automation.mengchong_hunt" :label="autoLabel('mengchong_hunt', '萌宠游记：自动寻宝(消耗元气糕700/次，已有护送时跳过)')" :disabled="isAutomationGated('mengchong_hunt')" />
             <BaseSwitch v-model="localAutomationSettings.automation.skip_own_weed_bug" label="不除自己草虫" />
           </div>
 

@@ -6,7 +6,8 @@
  *     cmd=27 (payload field126, 空): 打开/刷新活动
  *     cmd=29 (payload field128, 空): 投喂比熊 — 每次消耗 700 萌宠元气糕 → 成长值+700、幸运星+100
  *                                    元气糕不足报 1000019; 阶段(#1.#4)=2 即成年
- *     cmd=41 (payload field141, 空): 寻宝 — 结果 #141 = {宝藏id, 开始时间, 标记}, 状态 #6 记录宝藏/护送
+ *     cmd=30 (payload field129, 空): 寻宝 — 消耗元气糕700 → 待护送宝藏+初级挑战书+幸运星50, 自动开启4小时护送
+ *                                    响应结果 #130 = {#2: 消耗, #5...: 获得}; 护送状态在 #115.#7
  *     cmd=42 (payload field142 = 锦囊id 字符串): 选择锦囊 (状态 #6.#1/#2 为当日两个锦囊)
  *     cmd=47 (payload field147 = {#1: 好友gid}): 好友夺宝
  *     cmd=48 (无 payload 字段): 领取比熊犬 (成年后解锁宠物), 结果 #148 = {#1: 90031}
@@ -31,7 +32,7 @@
 const protobuf = require('protobufjs');
 const { sendMsgAsync } = require('../utils/network');
 const { toLong, toNum, log, logWarn, randomDelay } = require('../utils/utils');
-const { isAutomationOn } = require('../models/store');
+const { isAutomationOn, getActivityStatus } = require('../models/store');
 const { getItemById } = require('../config/gameConfig');
 
 const ACTIVITY_SERVICE = 'gamepb.activitypb.ActivityService';
@@ -43,10 +44,11 @@ const CMD_SHOP_LIST = 7;        // 拉取小铺列表 (实测: 空 payload, 响�
 const CMD_SHOP_BUY = 1;         // 兑换 (协议同其他活动: cmd=1 + shop_buy{goods_id,count})
 const SHOP_BUY_PAYLOAD_FIELD = 101;
 
-// 寻宝: 命令未抓到实测(官方说明: 成年后解锁, 消耗元气糕, 必得幸运星+待护送宝藏+挑战书, 自动开启4小时护送)
-// 候选命令按可能性排序, 用"背包到账校验"判断是否真的生效 (不会误报成功)
-const CMD_TREASURE_HUNT_CANDIDATES = [44, 41, 31];
-const CMD_PAYLOAD_FIELD_BY_CMD = { 31: 130, 41: 141, 44: 144 };
+// 寻宝 (2026-09-14 抓包实测): cmd=30, payload field129 空
+// 消耗 萌宠元气糕×700 → 必得 待护送宝藏×1 + 初级挑战书×1 + 幸运星×50, 并自动开启 4 小时护送
+const CMD_TREASURE_HUNT = 30;
+const HUNT_PAYLOAD_FIELD = 129;
+const HUNT_COST_YUANQIGAO = 700;
 // 锦囊: 每日0点刷新2个选1个; cmd=41 刷新(结果返回锦囊id), cmd=42 选择(payload=锦囊id字符串)
 const CMD_WISH_BAG_REFRESH = 41;
 const CMD_WISH_BAG_SELECT = 42;
@@ -262,31 +264,73 @@ function parsePetState(stateBuf) {
             }
         }
     }
-    // #6 { #1/#2: 锦囊id, #4: 护送/宝藏信息, #6/#7: 标记 }
+    // #6 = 锦囊状态 { #1: 刷新出的备选key, #2: 当前生效key, #4: 附加数值, #6: 已选标记, #7: 已刷新标记 }
     const f6 = findField(f, 6);
     if (f6 && f6.w === 2) {
-        pet.extra = {};
-        for (const x of parseTop(f6.v)) {
-            if (x.w === 2 && x.f <= 2) {
-                const s = x.v.toString('utf8');
-                if (/^[\x20-\x7e]+$/.test(s)) pet.extra['slot' + x.f] = s;
-            } else if (x.w === 2 && x.f === 4) {
-                const inner = parseTop(x.v);
-                pet.extra.treasure = {
-                    id: toInt((findField(inner, 1) || {}).v),
-                    field2: toInt((findField(inner, 2) || {}).v),
-                    field3: toInt((findField(inner, 3) || {}).v),
-                };
-            } else if (x.w === 0) {
-                pet.extra['f' + x.f] = toInt(x.v);
+        const t = parseTop(f6.v);
+        const keys = [];
+        const readKey = (field) => {
+            const e = findField(t, field);
+            if (e && e.w === 2) {
+                const str = e.v.toString('utf8');
+                if (/^[\x20-\x7e]{1,8}$/.test(str)) return str;
             }
+            return '';
+        };
+        const k1 = readKey(1);
+        const k2 = readKey(2);
+        if (k2) keys.push(k2);
+        if (k1 && k1 !== k2) keys.push(k1);
+        pet.wishBags = {
+            keys,                                              // 今日两个锦囊 key
+            selectedKey: k2,                                   // 当前生效(#2)
+            refreshedKey: k1,                                  // 刷新出的备选(#1)
+            hasSelection: toInt((findField(t, 6) || {}).v) > 0,
+            refreshed: toInt((findField(t, 7) || {}).v) > 0,
+            extraCounter: toInt((findField(t, 8) || {}).v),   // 含义未确认(实测出现 3), 仅保留备查
+        };
+        const f4 = findField(t, 4);
+        if (f4 && f4.w === 2) {
+            const inner = parseTop(f4.v);
+            pet.wishBags.extra = {
+                a: toInt((findField(inner, 1) || {}).v),
+                b: toInt((findField(inner, 2) || {}).v),
+                c: toInt((findField(inner, 3) || {}).v),
+            };
         }
+        // 兼容旧字段
+        pet.extra = { ...(pet.extra || {}), ...pet.wishBags };
     }
     for (const x of f) {
         if (x.f === 2 && x.w === 2) {
             const inner = parseTop(x.v);
             const v = toInt((findField(inner, 1) || {}).v);
             if (v > 0) pet.baseValue = v;
+        }
+    }
+    // #7 = 护送/宝藏状态 { #1: { #1: 宝藏ID, #2: 货币id, #3: 价值, #4: 开始时间, #6: 结束时间,
+    //                          #8: 博弈资金, #9: 保底, #10: 上限, #14: 夺宝次数上限 } }
+    const f7 = findField(f, 7);
+    if (f7 && f7.w === 2) {
+        const wrap = parseTop(f7.v).find(x => x.f === 1 && x.w === 2);
+        if (wrap) {
+            const t = parseTop(wrap.v);
+            const idBuf = findField(t, 1);
+            const now = Math.floor(Date.now() / 1000);
+            const endTime = toInt((findField(t, 6) || {}).v);
+            pet.escort = {
+                treasureId: idBuf && idBuf.w === 2 ? idBuf.v.toString('utf8') : '',
+                currencyId: toInt((findField(t, 2) || {}).v),
+                value: toInt((findField(t, 3) || {}).v),
+                startTime: toInt((findField(t, 4) || {}).v),
+                endTime,
+                betFunds: toInt((findField(t, 8) || {}).v),
+                floor: toInt((findField(t, 9) || {}).v),
+                cap: toInt((findField(t, 10) || {}).v),
+                maxRobCount: toInt((findField(t, 14) || {}).v),
+                remainingSec: endTime > now ? endTime - now : 0,
+                active: endTime > now,
+            };
         }
     }
     // #4 是容器消息: 内部 repeated #1 才是手记条目 (实测 2026-09-14 修正标志位)
@@ -697,51 +741,39 @@ async function bagCountOf(itemId) {
 }
 
 /**
- * 寻宝 (官方说明: 比熊成年后解锁, 消耗萌宠元气糕, 必定获得幸运星/待护送宝藏/挑战书, 获得宝藏后自动开启 4 小时护送)
- * ⚠ 命令未抓到实测: 按候选顺序尝试, 每次都用【背包元气糕减少 / 幸运星增加】校验是否真的生效,
- *    全部候选都未生效时返回 ok:false (绝不误报成功)
+ * 寻宝 (cmd=30, payload field129 空) — 比熊成年后解锁
+ * 实测: 消耗萌宠元气糕×700 → 待护送宝藏×1 + 初级挑战书×1 + 幸运星×50, 并自动开启 4 小时护送
+ * 响应结果 #130 = { #2: 消耗{id,count}, #5...: 获得{id,count} }
  */
 async function treasureHunt() {
-    const beforeYuanqigao = await bagCountOf(ITEM_ID_YUANQIGAO);
-    const beforeLucky = await bagCountOf(ITEM_ID_LUCKYSTAR);
-    const tried = [];
-    for (const cmd of CMD_TREASURE_HUNT_CANDIDATES) {
-        const field = CMD_PAYLOAD_FIELD_BY_CMD[cmd] || 0;
-        let res;
-        try {
-            res = await operateRaw(GROUP_MAIN, cmd, field, null);
-        } catch (e) {
-            tried.push(`cmd${cmd}:${e.message}`);
-            continue;
-        }
-        if (res.errorCode !== 0) {
-            if (String(res.errorCode) === '1000019') throw new Error('萌宠元气糕不足');
-            tried.push(`cmd${cmd}:code=${res.errorCode}`);
-            continue;
-        }
-        const spentYuanqigao = beforeYuanqigao - await bagCountOf(ITEM_ID_YUANQIGAO);
-        const gainedLuckyStar = (await bagCountOf(ITEM_ID_LUCKYSTAR)) - beforeLucky;
-        const verified = spentYuanqigao > 0 || gainedLuckyStar > 0;
-        let treasure = null;
-        if (res.activity) {
-            const st = parseTop(res.activity).find(x => x.f === 115 && x.w === 2);
-            if (st) treasure = parsePetState(st.v).extra || null;
-        }
-        if (verified) {
-            log('活动', `萌宠游记: 寻宝成功 (cmd=${cmd}, 消耗元气糕 ${spentYuanqigao}, 幸运星 +${gainedLuckyStar})`, {
-                module: 'activity', event: '萌宠游记', result: 'hunt_ok',
-            });
-            return { ok: true, verified: true, cmd, spentYuanqigao, gainedLuckyStar, treasure, tried };
-        }
-        tried.push(`cmd${cmd}:未生效`);
+    const res = await operateRaw(GROUP_MAIN, CMD_TREASURE_HUNT, HUNT_PAYLOAD_FIELD, null);
+    if (res.errorCode !== 0) {
+        if (String(res.errorCode) === '1000019') throw new Error('萌宠元气糕不足(需要 700)');
+        throw new Error(`寻宝失败: code=${res.errorCode}`);
     }
-    return {
-        ok: false,
-        verified: false,
-        reason: '寻宝未生效(命令尚未确认, 请在游戏内点一次寻宝并抓包)',
-        treasure: null,
-        tried,
-    };
+    const f = parseTop(Buffer.from(res.resultHex || '', 'hex'));
+    let cost = null;
+    const gains = [];
+    for (const x of f) {
+        if (x.w !== 2 || x.v.length > 16) continue;
+        const inner = parseTop(x.v);
+        const id = toInt((findField(inner, 1) || {}).v);
+        const count = toInt((findField(inner, 2) || {}).v);
+        if (!id) continue;
+        const entry = { id, count, name: itemName(id) };
+        if (x.f === 2) cost = entry; else gains.push(entry);
+    }
+    // 护送状态 (#115.#7)
+    let escort = null;
+    if (res.activity) {
+        const st = parseTop(res.activity).find(x => x.f === 115 && x.w === 2);
+        if (st) escort = parsePetState(st.v).escort || null;
+    }
+    const gainText = gains.map(g => `${g.name}×${g.count}`).join('、');
+    log('活动', `萌宠游记: 寻宝成功 消耗${cost ? `${cost.name}×${cost.count}` : '元气糕×700'} → ${gainText}${escort ? ` (护送至 ${new Date(escort.endTime * 1000).toLocaleTimeString('zh-CN', { hour12: false })})` : ''}`, {
+        module: 'activity', event: '萌宠游记', result: 'hunt_ok',
+    });
+    return { ok: true, verified: gains.length > 0, cost, gains, escort };
 }
 
 /**
@@ -753,22 +785,47 @@ async function refreshWishBags() {
     if (res.errorCode !== 0) throw new Error(`刷新锦囊失败: code=${res.errorCode}`);
     const f = parseTop(Buffer.from(res.resultHex || '', 'hex'));
     const idBuf = findField(f, 1);
+    const key = idBuf && idBuf.w === 2 ? idBuf.v.toString('utf8') : '';
+    // 校验: 响应状态里的备选锦囊要有变化(或已刷新标记)
+    const after = readWishBagsFromActivity(res.activity);
+    const verified = !!(after && (after.refreshedKey === key || after.refreshed));
     return {
-        ok: true,
-        wishBagId: idBuf && idBuf.w === 2 ? idBuf.v.toString('utf8') : '',
+        ok: verified,
+        verified,
+        reason: verified ? '' : '刷新未生效(可能今日免费刷新已用完)',
+        wishBagKey: key,
         refreshedAt: toInt((findField(f, 2) || {}).v),
+        wishBags: after,
     };
 }
 
-/** 选择锦囊 (cmd=42, payload = 锦囊id 字符串) */
-async function selectWishBag(wishBagId) {
-    const id = String(wishBagId || '').trim();
-    if (!id) throw new Error('缺少锦囊 id');
+/** 选择锦囊 (cmd=42, payload field142 = 锦囊key 字符串) */
+async function selectWishBag(wishBagKey) {
+    const key = String(wishBagKey || '').trim();
+    if (!key) throw new Error('缺少锦囊 key');
     const w = new protobuf.Writer();
-    w.uint32((1 << 3) | 2).bytes(Buffer.from(id, 'utf8'));
+    w.uint32((1 << 3) | 2).bytes(Buffer.from(key, 'utf8'));
     const res = await operateRaw(GROUP_MAIN, CMD_WISH_BAG_SELECT, MAIN_CMD_PAYLOAD_FIELD[42], w.finish());
     if (res.errorCode !== 0) throw new Error(`选择锦囊失败: code=${res.errorCode}`);
-    return { ok: true, wishBagId: id };
+    // 校验: 响应状态里 #2(当前生效) 应等于所选 key
+    const after = readWishBagsFromActivity(res.activity);
+    const verified = !!(after && after.selectedKey === key);
+    return {
+        ok: verified,
+        verified,
+        reason: verified ? '' : '选择未生效(该锦囊可能不可选)',
+        wishBagKey: key,
+        wishBags: after,
+    };
+}
+
+/** 从 Operate 响应的 activity 里读锦囊状态 */
+function readWishBagsFromActivity(activityBuf) {
+    if (!activityBuf) return null;
+    const st = parseTop(activityBuf).find(x => x.f === 115 && x.w === 2);
+    if (!st) return null;
+    const pet = parsePetState(st.v);
+    return pet.wishBags || null;
 }
 
 /** 活动玩法说明 (活动 head.desc 的 JSON: tips / tips1 / tips2) */
@@ -797,8 +854,19 @@ async function getMengchongRules() {
  */
 async function autoFeedPet(opts = {}) {
     const maxFeeds = Math.max(1, Math.min(200, Math.floor(Number(opts.maxFeeds) || 100)));
+    // reserve: 给自动寻宝预留的元气糕数量(避免投喂把元气糕吃光导致寻宝没得用)
+    const reserve = Math.max(0, Math.floor(Number(opts.reserve) || 0));
     const summary = { feeds: 0, growth: 0, luckyStar: 0, petUnlocked: false, stopped: '' };
+    let remaining = await bagCountOf(ITEM_ID_YUANQIGAO);
+    if (remaining < FEED_COST + reserve) {
+        summary.stopped = `元气糕不足(需 ${FEED_COST + reserve}, 现有 ${remaining})`;
+        return summary;
+    }
     for (let i = 0; i < maxFeeds; i++) {
+        if (remaining < FEED_COST + reserve) {
+            summary.stopped = reserve > 0 ? `已为寻宝预留 ${reserve} 元气糕` : '元气糕不足';
+            break;
+        }
         let r;
         try {
             r = await feedPet();
@@ -806,6 +874,7 @@ async function autoFeedPet(opts = {}) {
             summary.stopped = e.message.includes('1000019') ? '元气糕不足' : e.message;
             break;
         }
+        remaining = Math.max(0, remaining - FEED_COST);
         summary.feeds += 1;
         if (r.f1) summary.growth = toInt(r.f1);
         const lucky = (r.items || []).find(it => toInt(it.id) === ITEM_ID_LUCKYSTAR);
@@ -821,6 +890,48 @@ async function autoFeedPet(opts = {}) {
             summary.petName = p.name;
         } catch (e) {
             summary.stopped = summary.stopped || `领取比熊犬失败: ${e.message}`;
+        }
+    }
+    return summary;
+}
+
+/**
+ * 自动寻宝: 比熊成年 + 无护送中的宝藏 + 元气糕充足 时执行
+ * 单次消耗元气糕 700, 必得 待护送宝藏 + 初级挑战书 + 幸运星50, 并自动开启 4 小时护送
+ * 默认每轮只寻宝 1 次(每日次数有限, 避免一次烧光元气糕)
+ */
+async function autoTreasureHunt(opts = {}) {
+    const maxHunts = Math.max(1, Math.min(5, Math.floor(Number(opts.maxHunts) || 1)));
+    const summary = { hunts: 0, gains: [], escort: null, stopped: '' };
+    // 先读状态: 需要成年 + 当前没有护送中的宝藏(一次只能护送一个)
+    let pet = null;
+    try {
+        const res = await operateRaw(GROUP_MAIN, 27, MAIN_CMD_PAYLOAD_FIELD[27], null);
+        const st = res.activity ? parseTop(res.activity).find(x => x.f === 115 && x.w === 2) : null;
+        if (st) pet = parsePetState(st.v);
+    } catch (e) {
+        summary.stopped = `读取宠物状态失败: ${e.message}`;
+        return summary;
+    }
+    if (!pet) { summary.stopped = '未取到宠物状态'; return summary; }
+    if (!pet.adult) { summary.stopped = '比熊未成年'; return summary; }
+    if (pet.escort && pet.escort.active) { summary.stopped = '已有护送中的宝藏'; return summary; }
+
+    if (await bagCountOf(ITEM_ID_YUANQIGAO) < HUNT_COST_YUANQIGAO) {
+        summary.stopped = `元气糕不足(需 ${HUNT_COST_YUANQIGAO})`;
+        return summary;
+    }
+    for (let i = 0; i < maxHunts; i++) {
+        if (await bagCountOf(ITEM_ID_YUANQIGAO) < HUNT_COST_YUANQIGAO) { summary.stopped = '元气糕不足'; break; }
+        try {
+            const r = await treasureHunt();
+            summary.hunts += 1;
+            summary.gains = r.gains || [];
+            summary.escort = r.escort || null;
+            await randomDelay(1000, 1800);
+        } catch (e) {
+            summary.stopped = e.message;
+            break;
         }
     }
     return summary;
@@ -899,7 +1010,7 @@ async function autoClaimPetHandnotes() {
  * (比熊赠礼由千星游记 star_light_up 覆盖; 投喂消耗元气糕, 保持手动)
  */
 async function autoRunMengchongTasks() {
-    const summary = { giftClaimed: false, handnoteClaims: 0, handnoteUnlocks: 0, feeds: 0, petUnlocked: false, skipped: [], errors: [] };
+    const summary = { giftClaimed: false, handnoteClaims: 0, handnoteUnlocks: 0, feeds: 0, hunts: 0, petUnlocked: false, skipped: [], errors: [] };
     // 手动"执行每日任务"直接跑; 每日定时入口在外层 checkAndRunMengchongTasks 里判开关
 
     try {
@@ -926,8 +1037,10 @@ async function autoRunMengchongTasks() {
     }
 
     // 自动投喂: 消耗元气糕喂比熊, 成年后自动领取比熊犬
+    // 若开启了自动寻宝, 则预留一份寻宝消耗(700), 避免投喂把元气糕吃光
+    const huntOn = isAutomationOn('mengchong_hunt') && getActivityStatus().mengChongEnabled !== false;
     try {
-        const f = await autoFeedPet();
+        const f = await autoFeedPet({ reserve: huntOn ? HUNT_COST_YUANQIGAO : 0 });
         summary.feeds = f.feeds;
         summary.petUnlocked = !!f.petUnlocked;
         if (f.feeds > 0) {
@@ -940,6 +1053,24 @@ async function autoRunMengchongTasks() {
         summary.errors.push(`自动投喂失败: ${e.message}`);
     }
 
+    // 自动寻宝 (独立开关 mengchong_hunt)
+    if (huntOn) {
+        try {
+            const h = await autoTreasureHunt();
+            summary.hunts = h.hunts;
+            if (h.hunts > 0) {
+                const gainText = (h.gains || []).map(g => `${g.name}×${g.count}`).join('、');
+                log('活动', `萌宠游记: 自动寻宝 ${h.hunts} 次 → ${gainText}${h.escort ? ` (护送至 ${new Date(h.escort.endTime * 1000).toLocaleTimeString('zh-CN', { hour12: false })})` : ''}`, {
+                    module: 'activity', event: '萌宠游记', result: 'hunt_auto_ok',
+                });
+            } else if (h.stopped) {
+                summary.skipped.push(`寻宝(${h.stopped})`);
+            }
+        } catch (e) {
+            summary.errors.push(`自动寻宝失败: ${e.message}`);
+        }
+    }
+
     return summary;
 }
 
@@ -947,6 +1078,8 @@ async function autoRunMengchongTasks() {
  * 顶层自动化入口 (受 mengchong_task 开关控制)
  */
 async function checkAndRunMengchongTasks() {
+    // 后台关闭了「萌宠游记」菜单 → 自动化一并停止
+    if (getActivityStatus().mengChongEnabled === false) return { skipped: true, reason: '活动已在后台关闭' };
     if (!isAutomationOn('mengchong_task')) return { skipped: true };
     try {
         const result = await autoRunMengchongTasks();
@@ -970,6 +1103,7 @@ module.exports = {
     claimFreeSeedGift,
     feedPet,
     autoFeedPet,
+    autoTreasureHunt,
     claimBearPet,
     treasureHunt,
     refreshWishBags,

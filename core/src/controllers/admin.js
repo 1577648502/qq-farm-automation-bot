@@ -1557,6 +1557,30 @@ app.use('/api', (req, res, next) => {
         } catch (e) { res.json({ ok: false, error: e.message }); }
     });
 
+    // API: 刷新锦囊 (每日 1 次免费)
+    app.post('/api/mengchong/wish-bag/refresh', async (req, res) => {
+        const id = getAccId(req);
+        if (!id) return res.status(400).json({ ok: false });
+        if (!checkAccountAccess(req, id)) return res.status(403).json({ ok: false, error: '无权访问此账号' });
+        try {
+            const data = await provider.refreshMengchongWishBags(id);
+            res.json({ ok: true, data });
+        } catch (e) { res.json({ ok: false, error: e.message }); }
+    });
+
+    // API: 选择锦囊
+    app.post('/api/mengchong/wish-bag/select', async (req, res) => {
+        const id = getAccId(req);
+        if (!id) return res.status(400).json({ ok: false });
+        if (!checkAccountAccess(req, id)) return res.status(403).json({ ok: false, error: '无权访问此账号' });
+        const key = String((req.body && req.body.key) || '').trim();
+        if (!key) return res.status(400).json({ ok: false, error: '缺少锦囊 key' });
+        try {
+            const data = await provider.selectMengchongWishBag(id, key);
+            res.json({ ok: true, data });
+        } catch (e) { res.json({ ok: false, error: e.message }); }
+    });
+
     // API: 萌宠游记玩法说明 (活动 desc)
     app.get('/api/mengchong/rules', async (req, res) => {
         const id = getAccId(req);

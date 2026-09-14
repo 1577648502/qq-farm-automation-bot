@@ -152,7 +152,8 @@ const DEFAULT_ACCOUNT_CONFIG = {
         weather_task: false,     // 雨落成诗: 每日自动买瓶+对好友使用采集瓶
         weather_research: false, // 雨落成诗: 气象研究自动检查(升级协议待补)
         charity_task: false,     // 公益小红花: 每日领礼包+送爱心+分享
-        mengchong_task: false,   // 萌宠游记: 每日免费稀有种子礼包
+        mengchong_task: false,   // 萌宠游记: 每日任务(免费种子礼包 + 手记点亮/领取 + 自动投喂)
+        mengchong_hunt: false,   // 萌宠游记: 自动寻宝(消耗元气糕 700/次)
         sell: false,
         fertilizer: 'smart',
         fertilizer_multi_season: true,

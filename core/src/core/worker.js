@@ -870,6 +870,12 @@ async function handleApiCall(msg) {
             case 'claimMengchongBearPet':
                 result = await require('../services/mengchong').claimBearPet();
                 break;
+            case 'refreshMengchongWishBags':
+                result = await require('../services/mengchong').refreshWishBags();
+                break;
+            case 'selectMengchongWishBag':
+                result = await require('../services/mengchong').selectWishBag(args[0]);
+                break;
             case 'getMengchongRules':
                 result = await require('../services/mengchong').getMengchongRules();
                 break;

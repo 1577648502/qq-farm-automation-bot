@@ -44,6 +44,26 @@ interface PetState {
   baseValue?: number
   items: { id: number, count: number, name: string }[]
   handnotes: Handnote[]
+  wishBags?: {
+    keys: string[]
+    selectedKey: string
+    refreshedKey: string
+    hasSelection: boolean
+    refreshed: boolean
+  } | null
+  escort?: {
+    treasureId: string
+    currencyId: number
+    value: number
+    startTime: number
+    endTime: number
+    betFunds: number
+    floor: number
+    cap: number
+    maxRobCount: number
+    remainingSec: number
+    active: boolean
+  } | null
 }
 
 interface MengchongOverview {
@@ -102,6 +122,18 @@ function fmtTime(sec: number) {
 
 function fmtRange(begin: number, end: number) {
   return `${fmtTime(begin)} ~ ${fmtTime(end)}`
+}
+
+function fmtRemain(sec: number) {
+  const s = Math.max(0, Math.floor(Number(sec) || 0))
+  const h = Math.floor(s / 3600)
+  const m = Math.floor((s % 3600) / 60)
+  return h > 0 ? `${h} 小时 ${m} 分` : `${m} 分`
+}
+
+function fmtTimeShort(ts: number) {
+  if (!ts) return '-'
+  return new Date(ts * 1000).toLocaleString('zh-CN', { hour12: false, month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })
 }
 
 function fmtNum(n: number) {
@@ -254,7 +286,7 @@ async function handleRunNow() {
       if (r.skipped === true) {
         toast.info('自动化开关未开启, 请先到设置中开启"萌宠游记每日任务"')
       } else {
-        const parts = [`免费礼包 ${r.giftClaimed ? '已领' : '未领'}`, `手记奖励 ${r.handnoteClaims || 0} 个`]
+        const parts = [`免费礼包 ${r.giftClaimed ? '已领' : '未领'}`, `手记奖励 ${r.handnoteClaims || 0} 个`, `自动投喂 ${r.feeds || 0} 次`, `寻宝 ${r.hunts || 0} 次`]
         const skipList = Array.isArray(r.skipped) ? r.skipped : []
         toast.success(`已执行: ${parts.join(', ')}${skipList.length ? ` (跳过: ${skipList.join('、')})` : ''}`)
       }
@@ -326,17 +358,55 @@ async function handleExchange(g: ShopItem) {
   }
 }
 
+async function handleRefreshWishBags() {
+  busy.value = true
+  try {
+    const { data } = await api.post('/api/mengchong/wish-bag/refresh')
+    const r = data?.data || {}
+    const fresh = await loadOverview()
+    const wb = fresh?.pet?.wishBags
+    if (data?.ok && (r.verified !== false) && wb && (wb.refreshedKey === r.wishBagKey || wb.refreshed)) {
+      toast.success(`锦囊已刷新${wb.refreshedKey ? ` → ${wb.refreshedKey}` : ''}`)
+    } else {
+      toast.warning(r.reason || data?.error || '刷新未生效(今日免费刷新可能已用完)')
+    }
+  } catch (e: any) {
+    toast.error(extractError(e) || '刷新锦囊失败')
+  } finally {
+    busy.value = false
+  }
+}
+
+async function handleSelectWishBag(key: string) {
+  busy.value = true
+  try {
+    const { data } = await api.post('/api/mengchong/wish-bag/select', { key })
+    const fresh = await loadOverview()
+    const wb = fresh?.pet?.wishBags
+    if (data?.ok && data.data?.verified !== false && wb && wb.selectedKey === key) {
+      toast.success(`已选择锦囊 ${key}`)
+    } else {
+      toast.warning(data?.data?.reason || data?.error || '选择未生效')
+    }
+  } catch (e: any) {
+    toast.error(extractError(e) || '选择锦囊失败')
+  } finally {
+    busy.value = false
+  }
+}
+
 async function handleTreasure() {
   busy.value = true
   try {
     const { data } = await api.post('/api/mengchong/treasure-hunt')
     const r = data?.data || {}
-    if (data?.ok && r.verified !== false && r.ok !== false) {
-      toast.success(`寻宝成功: 消耗元气糕 ${r.spentYuanqigao || 0}, 幸运星 +${r.gainedLuckyStar || 0} (已自动开始护送)`)
+    if (data?.ok && r.ok !== false) {
+      const gains = (r.gains || []).map((g: any) => `${g.name}×${g.count}`).join('、')
+      toast.success(`寻宝成功: 消耗${r.cost ? `${r.cost.name}×${r.cost.count}` : '元气糕×700'}${gains ? ` → ${gains}` : ''} (已自动开始护送)`)
       await loadOverview()
       await fetchShop()
     } else {
-      toast.warning(r.reason || data?.error || '寻宝未生效(命令待抓包确认)')
+      toast.warning(r.reason || data?.error || '寻宝失败')
     }
   } catch (e: any) {
     toast.error(extractError(e) || '寻宝失败')
@@ -631,21 +701,101 @@ onMounted(async () => {
           比熊寻宝
         </h3>
         <div class="mt-2 space-y-1 text-xs text-gray-500 dark:text-gray-400">
-          <div>· 前置条件: 比熊<b>成年</b>, 每次消耗萌宠元气糕 (每日寻宝次数有限)</div>
-          <div>· 必定获得: 幸运星 + 待护送宝藏 + 挑战书</div>
-          <div>· 获得宝藏后<b>自动开启护送</b> (无需手动激活), 单次护送 4 小时</div>
-          <div>· 宝藏初始价值 350 幸运星 = 50 保底(不可掠夺) + 300 博弈资金; 博弈资金达 500 触发爆仓满载结算</div>
+          <div>· 前置条件: 比熊<b>成年</b>; 每次消耗 <b>萌宠元气糕 ×700</b> (每日寻宝次数有限)</div>
+          <div>· 必定获得: 待护送宝藏 ×1 + 初级挑战书 ×1 + 幸运星 ×50 (实测)</div>
+          <div>· 获得宝藏后<b>自动开启护送</b>, 单次护送 4 小时; 宝藏可被好友夺宝 (最多 3 次)</div>
+          <div>· 自动寻宝: 在「设置 → 自动化」开启"萌宠游记：自动寻宝"(已有护送中的宝藏时会自动跳过)</div>
         </div>
         <BaseButton
           class="mt-3"
           variant="primary"
           size="sm"
-          :disabled="busy || !overview.yuanqigao || !(overview.pet && overview.pet.adult)"
+          :disabled="busy || overview.yuanqigao < 700 || !(overview.pet && overview.pet.adult)"
           :loading="busy"
           @click="handleTreasure"
         >
-          {{ !(overview.pet && overview.pet.adult) ? '比熊未成年' : (overview.yuanqigao ? '寻宝一次' : '元气糕不足') }}
+          {{ !(overview.pet && overview.pet.adult) ? '比熊未成年' : (overview.yuanqigao >= 700 ? '寻宝一次 (消耗元气糕 700)' : `元气糕不足 (需 700, 现有 ${overview.yuanqigao})`) }}
         </BaseButton>
+      </div>
+
+      <!-- 护送状态 (来自 #115.#7) -->
+      <div v-if="overview.pet && overview.pet.escort && overview.pet.escort.treasureId" class="rounded-lg border border-rose-200 bg-rose-50 p-4 shadow-sm dark:border-rose-900/50 dark:bg-rose-900/20">
+        <h3 class="mb-2 flex flex-wrap items-center gap-2 text-sm text-gray-900 font-medium dark:text-white">
+          宝藏护送中
+          <span class="rounded px-1.5 py-0.5 text-xs" :class="overview.pet.escort.active ? 'bg-rose-100 text-rose-600 dark:bg-rose-900/40 dark:text-rose-300' : 'bg-gray-100 text-gray-500 dark:bg-gray-700 dark:text-gray-300'">
+            {{ overview.pet.escort.active ? '护送中' : '已结束' }}
+          </span>
+        </h3>
+        <div class="grid grid-cols-2 gap-3 md:grid-cols-4">
+          <div class="rounded border border-rose-200 bg-white p-3 dark:border-rose-900/40 dark:bg-gray-800">
+            <div class="text-xs text-gray-500 dark:text-gray-400">剩余时间</div>
+            <div class="mt-1 text-lg font-bold">{{ fmtRemain(overview.pet.escort.remainingSec) }}</div>
+          </div>
+          <div class="rounded border border-rose-200 bg-white p-3 dark:border-rose-900/40 dark:bg-gray-800">
+            <div class="text-xs text-gray-500 dark:text-gray-400">宝藏价值</div>
+            <div class="mt-1 text-lg font-bold">{{ fmtNum(overview.pet.escort.value) }}</div>
+          </div>
+          <div class="rounded border border-rose-200 bg-white p-3 dark:border-rose-900/40 dark:bg-gray-800">
+            <div class="text-xs text-gray-500 dark:text-gray-400">博弈资金</div>
+            <div class="mt-1 text-lg font-bold">{{ fmtNum(overview.pet.escort.betFunds) }}</div>
+          </div>
+          <div class="rounded border border-rose-200 bg-white p-3 dark:border-rose-900/40 dark:bg-gray-800">
+            <div class="text-xs text-gray-500 dark:text-gray-400">保底 / 上限</div>
+            <div class="mt-1 text-lg font-bold">{{ fmtNum(overview.pet.escort.floor) }} / {{ fmtNum(overview.pet.escort.cap) }}</div>
+          </div>
+        </div>
+        <p class="mt-2 text-xs text-gray-500 dark:text-gray-400">
+          结束时间 {{ fmtTimeShort(overview.pet.escort.endTime) }}; 被夺宝满 {{ overview.pet.escort.maxRobCount }} 次 / 博弈资金低于保底 / 到点 都会立即结算。
+        </p>
+      </div>
+
+      <!-- 锦囊 -->
+      <div v-if="overview.pet && overview.pet.wishBags && overview.pet.wishBags.keys && overview.pet.wishBags.keys.length" class="rounded-lg border border-gray-200 bg-white p-4 shadow-sm dark:border-gray-700 dark:bg-gray-800">
+        <div class="mb-2 flex flex-wrap items-center justify-between gap-2">
+          <h3 class="text-sm text-gray-900 font-medium dark:text-white">
+            锦囊
+            <span class="ml-2 text-xs text-gray-500">每日 0 点刷新 2 个, 选 1 个生效; 1 次免费刷新, 付费刷新每日最多 3 次</span>
+          </h3>
+          <BaseButton
+            variant="secondary"
+            size="sm"
+            :disabled="busy"
+            :loading="busy"
+            @click="handleRefreshWishBags"
+          >
+            刷新锦囊
+          </BaseButton>
+        </div>
+        <div class="grid grid-cols-2 gap-3 md:grid-cols-4">
+          <div
+            v-for="k in overview.pet.wishBags.keys"
+            :key="k"
+            class="flex flex-col rounded border p-3 text-sm"
+            :class="k === overview.pet.wishBags.selectedKey
+              ? 'border-rose-300 bg-rose-50 dark:border-rose-700 dark:bg-rose-900/20'
+              : 'border-gray-200 dark:border-gray-700'"
+          >
+            <span class="font-medium">锦囊 {{ k }}</span>
+            <span class="mt-1 flex-1 text-xs text-gray-500 dark:text-gray-400">
+              {{ k === overview.pet.wishBags.selectedKey ? '生效中' : '备选' }}
+            </span>
+            <BaseButton
+              v-if="k !== overview.pet.wishBags.selectedKey"
+              class="mt-2"
+              variant="primary"
+              size="sm"
+              :disabled="busy"
+              :loading="busy"
+              @click="handleSelectWishBag(k)"
+            >
+              选择
+            </BaseButton>
+          </div>
+        </div>
+        <p class="mt-2 text-xs text-gray-500 dark:text-gray-400">
+          锦囊分寻宝/宝藏/防守/进攻/整蛊五类, 可提升胜率或改变收益。
+          协议只下发锦囊 key, 具体名称与效果请在游戏内查看。今日{{ overview.pet.wishBags.refreshed ? '已' : '未' }}使用免费刷新。
+        </p>
       </div>
 
       <!-- 夺宝参考 (来自活动说明) -->

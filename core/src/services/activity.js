@@ -205,7 +205,7 @@ const {
 const { sendMsgAsync } = require('../utils/network');
 const { types } = require('../utils/proto');
 const { toLong, toNum, log, logWarn } = require('../utils/utils');
-const { isAutomationOn } = require('../models/store');
+const { isAutomationOn, getActivityStatus } = require('../models/store');
 const path = require('node:path');
 const fs = require('node:fs');
 
@@ -1252,6 +1252,8 @@ async function lightUpStarRegister(options = {}) {
 
 // 千星游记自动点亮领取(开关关闭时直接返回); 活动不存在时静默跳过
 async function checkAndLightUpStar() {
+    // 后台关闭了「千星游记」菜单 → 自动化一并停止
+    if (getActivityStatus().qianXingEnabled === false) return { skipped: true, reason: '活动已在后台关闭' };
     if (!isAutomationOn('star_light_up')) return { skipped: true };
     try {
         const listReply = await getActivityList();

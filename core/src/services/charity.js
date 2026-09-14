@@ -18,7 +18,7 @@ const protobuf = require('protobufjs');
 const { sendMsgAsync } = require('../utils/network');
 const { types } = require('../utils/proto');
 const { toLong, toNum, log, logWarn, randomDelay } = require('../utils/utils');
-const { isAutomationOn } = require('../models/store');
+const { isAutomationOn, getActivityStatus } = require('../models/store');
 const { getBag, getBagItems } = require('./warehouse');
 const { getItemImageById, getItemById } = require('../config/gameConfig');
 
@@ -350,6 +350,8 @@ async function autoRunCharityTasks() {
  * 顶层自动化入口 (受 charity_task 开关控制)
  */
 async function checkAndRunCharityTasks() {
+    // 后台关闭了「公益小红花」菜单 → 自动化一并停止
+    if (getActivityStatus().gongYiXiaoHongHuaEnabled === false) return { skipped: true, reason: '活动已在后台关闭' };
     if (!isAutomationOn('charity_task')) return { skipped: true };
     try {
         const result = await autoRunCharityTasks();

@@ -20,7 +20,7 @@ const protobuf = require('protobufjs');
 const { sendMsgAsync, getUserState } = require('../utils/network');
 const { types } = require('../utils/proto');
 const { toLong, toNum, log, logWarn, randomDelay } = require('../utils/utils');
-const { isAutomationOn } = require('../models/store');
+const { isAutomationOn, getActivityStatus } = require('../models/store');
 const { getBag, getBagItems } = require('./warehouse');
 const { getFriendsList } = require('./friend');
 const { getItemImageById, getItemById } = require('../config/gameConfig');
@@ -448,6 +448,8 @@ async function autoRunDailyWeatherTasks() {
  * 顶层自动化入口 (受 weather_task 开关控制)
  */
 async function checkAndRunWeatherTasks() {
+    // 后台关闭了「雨落成诗」菜单 → 自动化一并停止
+    if (getActivityStatus().yuLuoChengShiEnabled === false) return { skipped: true, reason: '活动已在后台关闭' };
     if (!isAutomationOn('weather_task')) return { skipped: true };
     try {
         const result = await autoRunDailyWeatherTasks();
