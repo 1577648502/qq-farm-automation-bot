@@ -4,7 +4,7 @@
   "scripts": {
     "dev:core": "pnpm -C core dev",
     "dev:web": "pnpm -C web dev",
-    "dev": "pnpm build:web && pnpm dev:core",
+    "dev": "node scripts/ensure-web-build.mjs && pnpm dev:core",
     "lint": "pnpm lint:core && pnpm lint:web",
     "lint:core": "pnpm -C core lint",
     "sync:game-config": "pnpm -C core sync:game-config",
@@ -15,7 +15,11 @@
     "package:linux": "pnpm build:web && pnpm -C core build:linux",
     "package:mac": "pnpm build:web && pnpm -C core build:mac",
     "package:release": "pnpm build:web && pnpm -C core build:release",
-    "install:all": "pnpm install -r"
+    "install:all": "pnpm install -r",
+    "serve": "pnpm -C core start",
+    "dev:force-build": "FORCE_BUILD_WEB=1 node scripts/ensure-web-build.mjs && pnpm dev:core",
+    "build:web:fast": "pnpm -C web build:fast",
+    "build:analyze": "pnpm -C web build:analyze"
   },
   "dependencies": {
     "frida": "^17.15.3",

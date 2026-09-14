@@ -4,6 +4,9 @@ WORKDIR /app
 
 RUN corepack enable
 
+# 构建阶段限制 Node 堆, 避免小内存机器在 tsc/vite 阶段被拖到假死(超出会明确报错而不是整机卡住)
+ENV NODE_OPTIONS=--max-old-space-size=1536
+
 COPY pnpm-workspace.yaml pnpm-lock.yaml package.json ./
 COPY core/package.json ./core/
 COPY web/package.json ./web/
@@ -14,7 +17,8 @@ RUN pnpm install --frozen-lockfile
 COPY core ./core
 COPY web ./web
 
-RUN pnpm build:web
+# 快速构建: 跳过 vue-tsc 类型检查(省约 500MB 内存), 构建产物随镜像固化
+RUN pnpm build:web:fast
 
 # ==========================================
 FROM node:20-alpine AS prod-deps
