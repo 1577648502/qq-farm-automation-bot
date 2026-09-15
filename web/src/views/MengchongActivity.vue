@@ -1,5 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
+import { useRouteRefresh } from '@/composables/useRouteRefresh'
+
 import api from '@/api'
 import BaseButton from '@/components/ui/BaseButton.vue'
 import { useToastStore } from '@/stores/toast'
@@ -434,11 +436,9 @@ async function handleTreasure() {
   }
 }
 
-onMounted(async () => {
-  await loadOverview()
-  await fetchShop()
-  await fetchRules()
-})
+useRouteRefresh('/mengchong-activity', refreshAll)
+// 玩法说明挂载时拉一次即可(内容基本不变)
+onMounted(fetchRules)
 </script>
 
 <template>

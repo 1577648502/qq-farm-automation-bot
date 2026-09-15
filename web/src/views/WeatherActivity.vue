@@ -1,5 +1,7 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, ref } from 'vue'
+import { useRouteRefresh } from '@/composables/useRouteRefresh'
+
 import api from '@/api'
 import BaseButton from '@/components/ui/BaseButton.vue'
 import { useToastStore } from '@/stores/toast'
@@ -238,7 +240,7 @@ async function handleRunResearchNow() {
   }
 }
 
-onMounted(async () => {
+useRouteRefresh('/weather-activity', async () => {
   await loadOverview()
   await loadFriends()
 })

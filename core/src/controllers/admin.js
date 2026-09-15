@@ -161,6 +161,14 @@ function startAdminServer(dataProvider) {
         next();
     });
 
+    // 接口响应禁止浏览器缓存: 否则切换菜单/多次请求同一接口时可能拿到缓存的旧数据(表现为"页面不刷新")
+    app.use('/api', (req, res, next) => {
+        res.set('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+        res.set('Pragma', 'no-cache');
+        res.set('Expires', '0');
+        next();
+    });
+
     const webDist = path.join(__dirname, '../../../web/dist');
     if (fs.existsSync(webDist)) {
         app.use(express.static(webDist));

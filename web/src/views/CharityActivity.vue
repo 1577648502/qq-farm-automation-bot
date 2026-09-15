@@ -1,5 +1,7 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, ref } from 'vue'
+import { useRouteRefresh } from '@/composables/useRouteRefresh'
+
 import api from '@/api'
 import BaseButton from '@/components/ui/BaseButton.vue'
 import { useToastStore } from '@/stores/toast'
@@ -183,9 +185,7 @@ async function handleRunNow() {
   }
 }
 
-onMounted(async () => {
-  await loadOverview()
-})
+useRouteRefresh('/charity-activity', loadOverview)
 </script>
 
 <template>

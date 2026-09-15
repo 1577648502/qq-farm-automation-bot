@@ -1,6 +1,7 @@
 ﻿<script setup lang="ts">
 import { storeToRefs } from 'pinia'
-import { computed, onMounted, ref, triggerRef, watch } from 'vue'
+import { computed, ref, triggerRef, watch } from 'vue'
+import { useRouteRefresh } from '@/composables/useRouteRefresh'
 import api from '@/api'
 import BaseButton from '@/components/ui/BaseButton.vue'
 import { useAccountStore } from '@/stores/account'
@@ -308,7 +309,7 @@ async function shareSellBrew() {
 
 watch([currentAccountId, () => currentAccount.value?.running], fetchOverview)
 
-onMounted(async () => {
+useRouteRefresh('/qingniang', async () => {
   if (!accountStore.accounts.length)
     await accountStore.fetchAccounts()
   await fetchOverview()
