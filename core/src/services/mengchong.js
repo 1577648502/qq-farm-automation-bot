@@ -29,11 +29,14 @@
  * 物品 id: 1028=萌宠元气糕, 1029=幸运星, 29004=泡泡棉花糖种子, 20516=狗尾草种子 (以配置同步为准)
  */
 
+const fs = require('node:fs');
+const path = require('node:path');
 const protobuf = require('protobufjs');
 const { sendMsgAsync } = require('../utils/network');
 const { toLong, toNum, log, logWarn, randomDelay } = require('../utils/utils');
 const { isAutomationOn, getActivityStatus } = require('../models/store');
 const { getItemById } = require('../config/gameConfig');
+const { getDataDir, getResourcePath } = require('../config/runtime-paths');
 
 const ACTIVITY_SERVICE = 'gamepb.activitypb.ActivityService';
 
@@ -75,7 +78,13 @@ function toInt(value) {
 const ITEM_ID_YUANQIGAO = 1028;   // 萌宠元气糕 (投喂/寻宝消耗, 每次投喂 700)
 const ITEM_ID_LUCKYSTAR = 1029;   // 幸运星
 const ITEM_ID_BEAR = 90031;       // 比熊犬 (成年后领取)
-const FEED_COST = 700;            // 单次投喂消耗的元气糕
+const FEED_COST = 700;            // 单次投喂消耗的元气糕 (配置 feed_items 1028:700)
+// 以下来自游戏配置表 config/ActivityPetTreasureHuntBase / ActivityPetTreasureHuntFight
+const ADULT_GROWTH = 7000;        // 成年阈值
+const DAILY_FEED_LIMIT = 16;      // 每日投喂上限
+const DAILY_HUNT_LIMIT = 10;      // 每日寻宝上限
+const DAILY_BATTLE_LIMIT = 20;    // 每日夺宝上限
+const TREASURE_FLOOR = 50;        // 宝藏保底资金
 const STAGE_ADULT = 2;            // 成长阶段: 2 = 成年 (可领比熊犬/寻宝)
 
 // 免费种子礼包领取用的 payload 字段号 (cmd=21 → field 119)
@@ -281,23 +290,40 @@ function parsePetState(stateBuf) {
         const k2 = readKey(2);
         if (k2) keys.push(k2);
         if (k1 && k1 !== k2) keys.push(k1);
+        // ⚠ 字段含义未完全确认(见下), 只做展示, 不对"哪个生效"下结论:
+        //   #1/#2: 两个短字符串 key(实测 "f"/"he"/"hg"), 具体是"两个候选"还是"生效+候选"未确认
+        //   #6: 实测 投放期#6=1 → 刷新后消失 → 选择后回到 1 (推测与"本次是否已选择/免费刷新"有关)
+        //   #7: 刷新后出现(=1)
+        //   #8: 实测出现 3, 与说明"付费刷新每日最多 3 次"吻合, 推测为付费刷新剩余
         pet.wishBags = {
-            keys,                                              // 今日两个锦囊 key
-            selectedKey: k2,                                   // 当前生效(#2)
-            refreshedKey: k1,                                  // 刷新出的备选(#1)
-            hasSelection: toInt((findField(t, 6) || {}).v) > 0,
+            keys,                                              // 状态里的两个 key(顺序: #2 在前)
+            keyFirst: k2,                                      // #2
+            keySecond: k1,                                     // #1
+            flag6: toInt((findField(t, 6) || {}).v),
             refreshed: toInt((findField(t, 7) || {}).v) > 0,
-            extraCounter: toInt((findField(t, 8) || {}).v),   // 含义未确认(实测出现 3), 仅保留备查
+            paidRefreshLeft: toInt((findField(t, 8) || {}).v), // 推测: 付费刷新剩余(3)
         };
+        // #4 = 生效锦囊: #1 = charm_id, #2 = 已使用次数, #3 = 使用上限 (实测 105/1/2, 与配置里
+        //       移花接木 use_limit=2 完全吻合)
         const f4 = findField(t, 4);
         if (f4 && f4.w === 2) {
             const inner = parseTop(f4.v);
-            pet.wishBags.extra = {
-                a: toInt((findField(inner, 1) || {}).v),
-                b: toInt((findField(inner, 2) || {}).v),
-                c: toInt((findField(inner, 3) || {}).v),
-            };
+            const charmId = toInt((findField(inner, 1) || {}).v);
+            pet.wishBags.activeCharmId = charmId;
+            pet.wishBags.activeCharm = charmId ? charmInfo(charmId) : null;
+            pet.wishBags.charmUsed = toInt((findField(inner, 2) || {}).v);
+            pet.wishBags.charmLimit = toInt((findField(inner, 3) || {}).v);
         }
+        // 候选锦囊: #1/#2 的字符串是 charm_id 的字符编码(ASCII), 例 "f"=102 奖池上限, "he"=104+101
+        const candidates = [];
+        for (const key of [k2, k1]) {
+            for (const id of decodeCharmKeyToIds(key)) {
+                if (candidates.some(c => c.id === id)) continue;
+                candidates.push({ id, key, ...(charmInfo(id) || {}) });
+            }
+        }
+        pet.wishBags.candidates = candidates;
+        pet.wishBags.charmPool = Object.values(loadCharmTable()).sort((a2, b2) => (a2.id || 0) - (b2.id || 0));
         // 兼容旧字段
         pet.extra = { ...(pet.extra || {}), ...pet.wishBags };
     }
@@ -308,30 +334,48 @@ function parsePetState(stateBuf) {
             if (v > 0) pet.baseValue = v;
         }
     }
-    // #7 = 护送/宝藏状态 { #1: { #1: 宝藏ID, #2: 货币id, #3: 价值, #4: 开始时间, #6: 结束时间,
-    //                          #8: 博弈资金, #9: 保底, #10: 上限, #14: 夺宝次数上限 } }
-    const f7 = findField(f, 7);
-    if (f7 && f7.w === 2) {
-        const wrap = parseTop(f7.v).find(x => x.f === 1 && x.w === 2);
-        if (wrap) {
-            const t = parseTop(wrap.v);
+    // #7(以及可能的 #8/#9) = 护送/宝藏状态, 内部可能存**多条**记录(历史 + 当前):
+    //   #x { #1: { #1: 宝藏ID字符串, #2: 货币id, #3: 价值, #4: 开始时间, #5: 标记,
+    //              #6: 结束时间, #7: 开始时间, #8: 博弈资金, #9: 保底, #10: 上限,
+    //              #11: 标记, #14: 夺宝次数上限 } }
+    // 取法: 优先"结束时间还没到"的那条(当前护送); 都已结束则取开始时间最新的那条
+    const escorts = [];
+    for (const fieldNo of [7, 8, 9]) {
+        const wrapField = findField(f, fieldNo);
+        if (!wrapField || wrapField.w !== 2) continue;
+        for (const w of parseTop(wrapField.v)) {
+            if (w.f !== 1 || w.w !== 2) continue;
+            const t = parseTop(w.v);
             const idBuf = findField(t, 1);
-            const now = Math.floor(Date.now() / 1000);
+            const treasureId = idBuf && idBuf.w === 2 ? idBuf.v.toString('utf8') : '';
+            if (!treasureId) continue;
+            const startTime = toInt((findField(t, 4) || {}).v) || toInt((findField(t, 7) || {}).v);
             const endTime = toInt((findField(t, 6) || {}).v);
-            pet.escort = {
-                treasureId: idBuf && idBuf.w === 2 ? idBuf.v.toString('utf8') : '',
+            if (!startTime && !endTime) continue;   // 不像护送记录
+            escorts.push({
+                treasureId,
                 currencyId: toInt((findField(t, 2) || {}).v),
                 value: toInt((findField(t, 3) || {}).v),
-                startTime: toInt((findField(t, 4) || {}).v),
+                startTime,
                 endTime,
+                field5: toInt((findField(t, 5) || {}).v),
                 betFunds: toInt((findField(t, 8) || {}).v),
-                floor: toInt((findField(t, 9) || {}).v),
-                cap: toInt((findField(t, 10) || {}).v),
+                field9: toInt((findField(t, 9) || {}).v),
+                field10: toInt((findField(t, 10) || {}).v),
                 maxRobCount: toInt((findField(t, 14) || {}).v),
-                remainingSec: endTime > now ? endTime - now : 0,
-                active: endTime > now,
-            };
+                fromField: fieldNo,
+            });
         }
+    }
+    if (escorts.length) {
+        const now = Math.floor(Date.now() / 1000);
+        for (const e of escorts) {
+            e.remainingSec = e.endTime > now ? e.endTime - now : 0;
+            e.active = e.endTime > now;
+        }
+        escorts.sort((a, b) => (b.startTime || 0) - (a.startTime || 0));
+        pet.escorts = escorts;
+        pet.escort = escorts.find(e => e.active) || escorts[0];
     }
     // #4 是容器消息: 内部 repeated #1 才是手记条目 (实测 2026-09-14 修正标志位)
     // 条目字段: #1=id, #2=1, #3=1 表示【已领取奖励】, #4=照片JSON, #5=1 表示【已点亮/翻开】
@@ -368,7 +412,19 @@ function parsePetState(stateBuf) {
  * 宠物状态优先取 GetGroup 的 children(#115); 取不到时用 cmd=27(打开活动页) 兜底拉取
  */
 async function getMengchongOverview() {
-    const result = { updatedAt: Date.now(), active: false, main: null, seedGift: null, pet: null, yuanqigao: 0, luckyStar: 0 };
+    const result = {
+        updatedAt: Date.now(), active: false, main: null, seedGift: null, pet: null, yuanqigao: 0, luckyStar: 0,
+        // 来自游戏配置表的固定规则
+        limits: {
+            feedCost: FEED_COST,
+            huntCost: HUNT_COST_YUANQIGAO,
+            adultGrowth: ADULT_GROWTH,
+            dailyFeedLimit: DAILY_FEED_LIMIT,
+            dailyHuntLimit: DAILY_HUNT_LIMIT,
+            dailyBattleLimit: DAILY_BATTLE_LIMIT,
+            treasureFloor: TREASURE_FLOOR,
+        },
+    };
     try {
         const reply = await getGroupRaw(GROUP_MAIN);
         const parsed = parseGroupReply(reply);
@@ -430,6 +486,69 @@ async function getMengchongOverview() {
         }
     } catch (e) { /* 背包读取失败不阻断 */ }
     return result;
+}
+
+// ============ 锦囊(Charm)配置 ============
+// 游戏配置表 config/ActivityPetTreasureHuntCharm (CDN delayRes bundle), 由 sync-game-config 同步;
+// 内置副本在 src/gameConfig/ActivityPetTreasureHuntCharm.json, 运行时优先读 data/gameConfig 下的新版本
+const CHARM_TABLE_FALLBACK = {
+    101: { name: '惜糕探宝', short: '元气糕消耗-10%', group: 1 },
+    102: { name: '奖池上限', short: '宝藏价值+50幸运星', group: 2 },
+    103: { name: '复仇机制', short: '遭夺后8小时内复仇', group: 3 },
+    104: { name: '胜利加成', short: '掠夺胜+10%，败则-30%', group: 4 },
+    105: { name: '移花接木', short: '遭夺50%放假宝阻抢夺，限2次', group: 5 },
+};
+let charmTable = null;
+
+function loadCharmTable() {
+    if (charmTable) return charmTable;
+    const table = {};
+    const candidates = [
+        path.join(getDataDir(), 'gameConfig', 'ActivityPetTreasureHuntCharm.json'),
+        getResourcePath('gameConfig', 'ActivityPetTreasureHuntCharm.json'),
+    ];
+    for (const p of candidates) {
+        try {
+            if (!fs.existsSync(p)) continue;
+            const j = JSON.parse(fs.readFileSync(p, 'utf8'));
+            const rows = Array.isArray(j) ? j : (j.charms || []);
+            for (const r of rows) {
+                const id = toInt(r && r.charm_id);
+                if (!id) continue;
+                table[id] = {
+                    id,
+                    name: String(r.name || ''),
+                    desc: String(r.desc || ''),
+                    short: String(r.short_desc || ''),
+                    group: toInt(r.group_type_id),
+                    useLimit: toInt(r.use_limit),
+                };
+            }
+            if (Object.keys(table).length) break;
+        } catch (e) { /* 换下一个来源 */ }
+    }
+    charmTable = Object.keys(table).length
+        ? table
+        : Object.fromEntries(Object.entries(CHARM_TABLE_FALLBACK).map(([k, v]) => [Number(k), { id: Number(k), name: v.name, short: v.short, desc: v.short, group: v.group }]));
+    return charmTable;
+}
+
+/** 候选锦囊 key → charm_id 数组 (实测字符 ASCII 即 charm_id: e=101 f=102 g=103 h=104 i=105) */
+function decodeCharmKeyToIds(key) {
+    const table = loadCharmTable();
+    const ids = [];
+    for (const ch of String(key || '')) {
+        const code = ch.charCodeAt(0);
+        if (table[code] && !ids.includes(code)) ids.push(code);
+    }
+    return ids;
+}
+
+/** charm_id → { id, name, short, desc } */
+function charmInfo(charmId) {
+    const id = toInt(charmId);
+    if (!id) return null;
+    return loadCharmTable()[id] || { id, name: `锦囊#${id}`, short: '', desc: '' };
 }
 
 // ============ 拾物小铺 ============
@@ -786,9 +905,9 @@ async function refreshWishBags() {
     const f = parseTop(Buffer.from(res.resultHex || '', 'hex'));
     const idBuf = findField(f, 1);
     const key = idBuf && idBuf.w === 2 ? idBuf.v.toString('utf8') : '';
-    // 校验: 响应状态里的备选锦囊要有变化(或已刷新标记)
+    // 校验: 响应状态里出现了新 key 或已刷新标记
     const after = readWishBagsFromActivity(res.activity);
-    const verified = !!(after && (after.refreshedKey === key || after.refreshed));
+    const verified = !!(after && ((after.keys || []).includes(key) || after.refreshed));
     return {
         ok: verified,
         verified,
@@ -799,7 +918,17 @@ async function refreshWishBags() {
     };
 }
 
-/** 选择锦囊 (cmd=42, payload field142 = 锦囊key 字符串) */
+/**
+ * 按锦囊 id 选择 (推荐): payload = charm_id 对应的单字符 (实测 id=102 → "f")
+ */
+async function selectCharmById(charmId) {
+    const id = toInt(charmId);
+    if (!id) throw new Error('缺少锦囊 id');
+    const info = charmInfo(id);
+    return { ...(await selectWishBag(String.fromCharCode(id))), charmId: id, charm: info };
+}
+
+/** 选择锦囊 (cmd=42, payload field142 = 锦囊 key 字符串) */
 async function selectWishBag(wishBagKey) {
     const key = String(wishBagKey || '').trim();
     if (!key) throw new Error('缺少锦囊 key');
@@ -807,13 +936,13 @@ async function selectWishBag(wishBagKey) {
     w.uint32((1 << 3) | 2).bytes(Buffer.from(key, 'utf8'));
     const res = await operateRaw(GROUP_MAIN, CMD_WISH_BAG_SELECT, MAIN_CMD_PAYLOAD_FIELD[42], w.finish());
     if (res.errorCode !== 0) throw new Error(`选择锦囊失败: code=${res.errorCode}`);
-    // 校验: 响应状态里 #2(当前生效) 应等于所选 key
+    // 校验: 服务端接受了该 key(err=0) 且响应状态里确实带这个 key
     const after = readWishBagsFromActivity(res.activity);
-    const verified = !!(after && after.selectedKey === key);
+    const accepted = !!(after && after.keys && after.keys.includes(key));
     return {
-        ok: verified,
-        verified,
-        reason: verified ? '' : '选择未生效(该锦囊可能不可选)',
+        ok: accepted,
+        verified: accepted,
+        reason: accepted ? '' : '选择未生效(响应状态里没有该锦囊 key)',
         wishBagKey: key,
         wishBags: after,
     };
@@ -1108,6 +1237,7 @@ module.exports = {
     treasureHunt,
     refreshWishBags,
     selectWishBag,
+    selectCharmById,
     getMengchongRules,
     unlockPetHandnote,
     claimPetHandnote,

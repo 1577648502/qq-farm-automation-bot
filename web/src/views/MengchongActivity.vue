@@ -46,10 +46,17 @@ interface PetState {
   handnotes: Handnote[]
   wishBags?: {
     keys: string[]
-    selectedKey: string
-    refreshedKey: string
-    hasSelection: boolean
+    keyFirst: string
+    keySecond: string
+    flag6: number
     refreshed: boolean
+    paidRefreshLeft: number
+    activeCharmId: number
+    activeCharm: { id: number, name: string, short: string, desc: string } | null
+    charmUsed: number
+    charmLimit: number
+    candidates: { id: number, key: string, name: string, short: string, desc?: string }[]
+    charmPool: { id: number, name: string, short: string, desc?: string, group?: number, useLimit?: number }[]
   } | null
   escort?: {
     treasureId: string
@@ -58,12 +65,14 @@ interface PetState {
     startTime: number
     endTime: number
     betFunds: number
-    floor: number
-    cap: number
+    field9: number
+    field10: number
     maxRobCount: number
     remainingSec: number
     active: boolean
+    fromField?: number
   } | null
+  escorts?: any[]
 }
 
 interface MengchongOverview {
@@ -72,6 +81,15 @@ interface MengchongOverview {
   main: GroupInfo | null
   seedGift: (GroupInfo & { currentDay?: number, totalDays?: number, days?: SigninDay[] }) | null
   pet: PetState | null
+  limits?: {
+    feedCost: number
+    huntCost: number
+    adultGrowth: number
+    dailyFeedLimit: number
+    dailyHuntLimit: number
+    dailyBattleLimit: number
+    treasureFloor: number
+  }
   yuanqigao: number
   luckyStar: number
 }
@@ -98,6 +116,7 @@ const shopLuckyStar = ref(0)
 const shopLoading = ref(false)
 const rules = ref<{ uid: string, sections: { key: string, title: string, lines: string[] }[] } | null>(null)
 const rulesOpen = ref(false)
+const charmCodexOpen = ref(false)
 const rulesLoading = ref(false)
 // 说明里的关键数值 (摘自活动说明) — 便于对照操作
 const CHALLENGE_TIERS = [
@@ -365,8 +384,8 @@ async function handleRefreshWishBags() {
     const r = data?.data || {}
     const fresh = await loadOverview()
     const wb = fresh?.pet?.wishBags
-    if (data?.ok && (r.verified !== false) && wb && (wb.refreshedKey === r.wishBagKey || wb.refreshed)) {
-      toast.success(`锦囊已刷新${wb.refreshedKey ? ` → ${wb.refreshedKey}` : ''}`)
+    if (data?.ok && (r.verified !== false) && wb && ((wb.keys || []).includes(r.wishBagKey) || wb.refreshed)) {
+      toast.success(`锦囊已刷新${r.wishBagKey ? ` → ${r.wishBagKey}` : ''}`)
     } else {
       toast.warning(r.reason || data?.error || '刷新未生效(今日免费刷新可能已用完)')
     }
@@ -377,16 +396,16 @@ async function handleRefreshWishBags() {
   }
 }
 
-async function handleSelectWishBag(key: string) {
+async function handleSelectCharm(c: { id: number, name: string }) {
   busy.value = true
   try {
-    const { data } = await api.post('/api/mengchong/wish-bag/select', { key })
+    const { data } = await api.post('/api/mengchong/wish-bag/select', { charmId: c.id })
     const fresh = await loadOverview()
     const wb = fresh?.pet?.wishBags
-    if (data?.ok && data.data?.verified !== false && wb && wb.selectedKey === key) {
-      toast.success(`已选择锦囊 ${key}`)
+    if (data?.ok && data.data?.verified !== false) {
+      toast.success(`已选择锦囊「${c.name}」${wb?.activeCharmId === c.id ? ' (已生效)' : ''}`)
     } else {
-      toast.warning(data?.data?.reason || data?.error || '选择未生效')
+      toast.warning(data?.data?.reason || data?.error || '选择未生效(可能不在今日候选中)')
     }
   } catch (e: any) {
     toast.error(extractError(e) || '选择锦囊失败')
@@ -701,7 +720,11 @@ onMounted(async () => {
           比熊寻宝
         </h3>
         <div class="mt-2 space-y-1 text-xs text-gray-500 dark:text-gray-400">
-          <div>· 前置条件: 比熊<b>成年</b>; 每次消耗 <b>萌宠元气糕 ×700</b> (每日寻宝次数有限)</div>
+          <div>
+            · 前置条件: 比熊<b>成年</b>(成长值 {{ overview.limits?.adultGrowth || 7000 }});
+            每次消耗 <b>萌宠元气糕 ×{{ overview.limits?.huntCost || 700 }}</b>;
+            每日最多 {{ overview.limits?.dailyHuntLimit || 10 }} 次 (已含投喂上限 {{ overview.limits?.dailyFeedLimit || 16 }} 次)
+          </div>
           <div>· 必定获得: 待护送宝藏 ×1 + 初级挑战书 ×1 + 幸运星 ×50 (实测)</div>
           <div>· 获得宝藏后<b>自动开启护送</b>, 单次护送 4 小时; 宝藏可被好友夺宝 (最多 3 次)</div>
           <div>· 自动寻宝: 在「设置 → 自动化」开启"萌宠游记：自动寻宝"(已有护送中的宝藏时会自动跳过)</div>
@@ -718,12 +741,21 @@ onMounted(async () => {
         </BaseButton>
       </div>
 
-      <!-- 护送状态 (来自 #115.#7) -->
-      <div v-if="overview.pet && overview.pet.escort && overview.pet.escort.treasureId" class="rounded-lg border border-rose-200 bg-rose-50 p-4 shadow-sm dark:border-rose-900/50 dark:bg-rose-900/20">
+      <!-- 护送状态 (来自 #115.#7, 可能含多条记录, 这里显示当前/最近一条) -->
+      <div
+        v-if="overview.pet && overview.pet.escort && overview.pet.escort.treasureId"
+        class="rounded-lg border p-4 shadow-sm"
+        :class="overview.pet.escort.active
+          ? 'border-rose-200 bg-rose-50 dark:border-rose-900/50 dark:bg-rose-900/20'
+          : 'border-gray-200 bg-gray-50 dark:border-gray-700 dark:bg-gray-900/40'"
+      >
         <h3 class="mb-2 flex flex-wrap items-center gap-2 text-sm text-gray-900 font-medium dark:text-white">
-          宝藏护送中
+          {{ overview.pet.escort.active ? '宝藏护送中' : '最近一次护送 (已结束)' }}
           <span class="rounded px-1.5 py-0.5 text-xs" :class="overview.pet.escort.active ? 'bg-rose-100 text-rose-600 dark:bg-rose-900/40 dark:text-rose-300' : 'bg-gray-100 text-gray-500 dark:bg-gray-700 dark:text-gray-300'">
             {{ overview.pet.escort.active ? '护送中' : '已结束' }}
+          </span>
+          <span v-if="overview.pet.escorts && overview.pet.escorts.length > 1" class="text-xs text-gray-500 font-normal">
+            共 {{ overview.pet.escorts.length }} 条记录
           </span>
         </h3>
         <div class="grid grid-cols-2 gap-3 md:grid-cols-4">
@@ -740,21 +772,27 @@ onMounted(async () => {
             <div class="mt-1 text-lg font-bold">{{ fmtNum(overview.pet.escort.betFunds) }}</div>
           </div>
           <div class="rounded border border-rose-200 bg-white p-3 dark:border-rose-900/40 dark:bg-gray-800">
-            <div class="text-xs text-gray-500 dark:text-gray-400">保底 / 上限</div>
-            <div class="mt-1 text-lg font-bold">{{ fmtNum(overview.pet.escort.floor) }} / {{ fmtNum(overview.pet.escort.cap) }}</div>
+            <div class="text-xs text-gray-500 dark:text-gray-400">时间</div>
+            <div class="mt-1 text-xs leading-5">
+              {{ fmtTimeShort(overview.pet.escort.startTime) }}
+              <br>→ {{ fmtTimeShort(overview.pet.escort.endTime) }}
+            </div>
           </div>
         </div>
         <p class="mt-2 text-xs text-gray-500 dark:text-gray-400">
-          结束时间 {{ fmtTimeShort(overview.pet.escort.endTime) }}; 被夺宝满 {{ overview.pet.escort.maxRobCount }} 次 / 博弈资金低于保底 / 到点 都会立即结算。
+          结束条件: 到点 / 被夺宝满 {{ overview.pet.escort.maxRobCount }} 次 / 博弈资金低于保底 {{ overview.limits?.treasureFloor || 50 }}, 满足任一立即结算。
+        </p>
+        <p class="mt-1 text-xs text-gray-400 dark:text-gray-500">
+          状态明细: 宝藏 {{ overview.pet.escort.treasureId.slice(-8) }} · 价值 {{ overview.pet.escort.value }} · 资金 {{ overview.pet.escort.betFunds }} · #9={{ overview.pet.escort.field9 }} · #10={{ overview.pet.escort.field10 }} · 来源字段 #{{ overview.pet.escort.fromField ?? 7 }}
         </p>
       </div>
 
-      <!-- 锦囊 -->
-      <div v-if="overview.pet && overview.pet.wishBags && overview.pet.wishBags.keys && overview.pet.wishBags.keys.length" class="rounded-lg border border-gray-200 bg-white p-4 shadow-sm dark:border-gray-700 dark:bg-gray-800">
+      <!-- 锦囊 (charm) -->
+      <div v-if="overview.pet && overview.pet.wishBags" class="rounded-lg border border-gray-200 bg-white p-4 shadow-sm dark:border-gray-700 dark:bg-gray-800">
         <div class="mb-2 flex flex-wrap items-center justify-between gap-2">
           <h3 class="text-sm text-gray-900 font-medium dark:text-white">
             锦囊
-            <span class="ml-2 text-xs text-gray-500">每日 0 点刷新 2 个, 选 1 个生效; 1 次免费刷新, 付费刷新每日最多 3 次</span>
+            <span class="ml-2 text-xs text-gray-500">每日刷新 2 个, 选 1 个生效; 1 次免费刷新, 付费刷新每日最多 3 次</span>
           </h3>
           <BaseButton
             variant="secondary"
@@ -766,36 +804,106 @@ onMounted(async () => {
             刷新锦囊
           </BaseButton>
         </div>
-        <div class="grid grid-cols-2 gap-3 md:grid-cols-4">
-          <div
-            v-for="k in overview.pet.wishBags.keys"
-            :key="k"
-            class="flex flex-col rounded border p-3 text-sm"
-            :class="k === overview.pet.wishBags.selectedKey
-              ? 'border-rose-300 bg-rose-50 dark:border-rose-700 dark:bg-rose-900/20'
-              : 'border-gray-200 dark:border-gray-700'"
-          >
-            <span class="font-medium">锦囊 {{ k }}</span>
-            <span class="mt-1 flex-1 text-xs text-gray-500 dark:text-gray-400">
-              {{ k === overview.pet.wishBags.selectedKey ? '生效中' : '备选' }}
+
+        <!-- 生效锦囊 -->
+        <div class="rounded border border-rose-200 bg-rose-50 p-3 dark:border-rose-900/50 dark:bg-rose-900/20">
+          <div class="flex flex-wrap items-center gap-2">
+            <span class="text-xs text-gray-500 dark:text-gray-400">生效锦囊</span>
+            <span class="text-sm font-bold text-rose-600 dark:text-rose-300">
+              {{ overview.pet.wishBags.activeCharm ? overview.pet.wishBags.activeCharm.name : '未选择' }}
             </span>
-            <BaseButton
-              v-if="k !== overview.pet.wishBags.selectedKey"
-              class="mt-2"
-              variant="primary"
-              size="sm"
-              :disabled="busy"
-              :loading="busy"
-              @click="handleSelectWishBag(k)"
+            <span v-if="overview.pet.wishBags.activeCharm" class="text-xs text-gray-600 dark:text-gray-300">
+              {{ overview.pet.wishBags.activeCharm.short }}
+            </span>
+            <span
+              v-if="overview.pet.wishBags.charmLimit > 0"
+              class="rounded px-1.5 py-0.5 text-xs"
+              :class="overview.pet.wishBags.charmUsed >= overview.pet.wishBags.charmLimit
+                ? 'bg-gray-200 text-gray-500 dark:bg-gray-700 dark:text-gray-300'
+                : 'bg-rose-100 text-rose-600 dark:bg-rose-900/40 dark:text-rose-300'"
             >
-              选择
-            </BaseButton>
+              已用 {{ overview.pet.wishBags.charmUsed }}/{{ overview.pet.wishBags.charmLimit }}
+            </span>
+          </div>
+          <div v-if="overview.pet.wishBags.activeCharm && overview.pet.wishBags.activeCharm.desc" class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+            {{ overview.pet.wishBags.activeCharm.desc }}
           </div>
         </div>
-        <p class="mt-2 text-xs text-gray-500 dark:text-gray-400">
-          锦囊分寻宝/宝藏/防守/进攻/整蛊五类, 可提升胜率或改变收益。
-          协议只下发锦囊 key, 具体名称与效果请在游戏内查看。今日{{ overview.pet.wishBags.refreshed ? '已' : '未' }}使用免费刷新。
+
+        <!-- 今日候选 -->
+        <div class="mt-3">
+          <div class="mb-1 text-xs text-gray-500 dark:text-gray-400">
+            今日候选 (点「选用」使其生效)
+          </div>
+          <div v-if="!overview.pet.wishBags.candidates || !overview.pet.wishBags.candidates.length" class="text-xs text-gray-400">
+            暂未取到候选锦囊
+          </div>
+          <div class="grid grid-cols-1 gap-2 md:grid-cols-3">
+            <div
+              v-for="c in overview.pet.wishBags.candidates"
+              :key="c.id"
+              class="flex flex-col rounded border p-3 text-sm"
+              :class="c.id === overview.pet.wishBags.activeCharmId
+                ? 'border-rose-300 bg-rose-50 dark:border-rose-700 dark:bg-rose-900/20'
+                : 'border-gray-200 dark:border-gray-700'"
+            >
+              <span class="font-medium">{{ c.name }}</span>
+              <span class="mt-1 flex-1 text-xs leading-5 text-gray-600 dark:text-gray-300">
+                {{ c.desc || c.short }}
+              </span>
+              <BaseButton
+                class="mt-2"
+                :variant="c.id === overview.pet.wishBags.activeCharmId ? 'secondary' : 'primary'"
+                size="sm"
+                :disabled="busy || c.id === overview.pet.wishBags.activeCharmId"
+                :loading="busy"
+                @click="handleSelectCharm(c)"
+              >
+                {{ c.id === overview.pet.wishBags.activeCharmId ? '生效中' : '选用' }}
+              </BaseButton>
+            </div>
+          </div>
+        </div>
+
+        <p class="mt-3 text-xs text-gray-500 dark:text-gray-400">
+          · 今日{{ overview.pet.wishBags.refreshed ? '已' : '未' }}刷新; 付费刷新剩余 {{ overview.pet.wishBags.paidRefreshLeft }} 次;
+          选好锦囊后再点「寻宝一次」, 该锦囊即对本次寻得的宝藏生效。
         </p>
+
+        <!-- 锦囊图鉴: 全部锦囊的完整说明 -->
+        <div class="mt-3 rounded border border-gray-200 dark:border-gray-700">
+          <button
+            class="flex w-full items-center justify-between px-3 py-2 text-left"
+            @click="charmCodexOpen = !charmCodexOpen"
+          >
+            <span class="text-xs text-gray-900 font-medium dark:text-white">
+              锦囊图鉴 ({{ (overview.pet.wishBags.charmPool || []).length }} 个)
+            </span>
+            <span class="text-xs text-gray-500">{{ charmCodexOpen ? '收起' : '展开' }}</span>
+          </button>
+          <div v-if="charmCodexOpen" class="space-y-2 border-t border-gray-100 px-3 pb-3 pt-2 dark:border-gray-700">
+            <div
+              v-for="c in overview.pet.wishBags.charmPool"
+              :key="c.id"
+              class="rounded bg-gray-50 p-2 text-xs dark:bg-gray-900/40"
+            >
+              <div class="flex flex-wrap items-center gap-2">
+                <span class="font-bold">{{ c.name }}</span>
+                <span class="text-gray-500">类型{{ c.group }}</span>
+                <span v-if="c.useLimit && c.useLimit > 0" class="rounded bg-amber-100 px-1.5 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300">
+                  限 {{ c.useLimit }} 次
+                </span>
+              </div>
+              <div class="mt-1 leading-5 text-gray-600 dark:text-gray-300">
+                {{ c.desc || c.short }}
+              </div>
+            </div>
+            <p class="text-xs text-gray-400 dark:text-gray-500">
+              建议: 护宝藏家选「奖池上限」(宝藏价值+50, 增值不可被掠夺) 或「移花接木」(50% 放假宝, 限2次);
+              主动夺宝选「胜利加成」(胜率收益+10%) 或「复仇机制」(被抢后 8 小时内复仇成功率+25%)。
+            </p>
+          </div>
+        </div>
       </div>
 
       <!-- 夺宝参考 (来自活动说明) -->

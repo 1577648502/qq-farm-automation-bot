@@ -225,6 +225,7 @@ function createDataProvider(options) {
         getMengchongRules: (accountRef) => callWorkerApi(resolveAccountRefId(accountRef), 'getMengchongRules'),
         refreshMengchongWishBags: (accountRef) => callWorkerApi(resolveAccountRefId(accountRef), 'refreshMengchongWishBags'),
         selectMengchongWishBag: (accountRef, key) => callWorkerApi(resolveAccountRefId(accountRef), 'selectMengchongWishBag', key),
+        selectMengchongCharm: (accountRef, charmId) => callWorkerApi(resolveAccountRefId(accountRef), 'selectMengchongCharm', charmId),
         unlockMengchongHandnote: (accountRef, handnoteId) => callWorkerApi(resolveAccountRefId(accountRef), 'unlockMengchongHandnote', handnoteId),
         claimMengchongHandnote: (accountRef, handnoteId) => callWorkerApi(resolveAccountRefId(accountRef), 'claimMengchongHandnote', handnoteId),
         mengchongOperate: (accountRef, opts) => callWorkerApi(resolveAccountRefId(accountRef), 'mengchongOperate', [opts || {}]),

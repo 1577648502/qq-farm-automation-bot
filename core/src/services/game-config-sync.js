@@ -618,6 +618,32 @@ async function syncOtherItemImages(cache, cacheList, bundles, items, outputDir) 
     return { syncedCount, cachedCount, bundledCount, missing, errors };
 }
 
+/**
+ * 同步萌宠游记「锦囊」配置表 (config/ActivityPetTreasureHuntCharm)
+ * 属于同一个 delayRes bundle, 用于把 charm_id 映射成名称/效果
+ */
+async function syncPetCharmConfig(url, cache, outputDir) {
+    const raw = await readCachedOrRemote(cache, { files: {} }, url);
+    const rows = decodeCocosJsonAsset(JSON.parse(raw.toString('utf8')), 'ActivityPetTreasureHuntCharm');
+    if (!Array.isArray(rows) || !rows.length) throw new Error('锦囊配置为空');
+    const charms = rows.map(c => ({
+        charm_id: Number(c.charm_id),
+        name: String(c.name || ''),
+        short_desc: String(c.short_desc || ''),
+        desc: String(c.desc || ''),
+        group_type_id: Number(c.group_type_id || 0),
+        use_limit: Number(c.use_limit ?? -1),
+        order: Number(c.order || 0),
+    }));
+    const payload = `${JSON.stringify({ _source: '游戏配置表 config/ActivityPetTreasureHuntCharm (delayRes bundle)', charms }, null, 4)}\n`;
+    // 同时写入 数据目录 与 内置目录(源码目录), 运行时优先取数据目录
+    writeAtomic(path.join(outputDir, 'ActivityPetTreasureHuntCharm.json'), payload);
+    try {
+        writeAtomic(getResourcePath('gameConfig', 'ActivityPetTreasureHuntCharm.json'), payload);
+    } catch (e) { /* 内置目录只读时忽略 */ }
+    return charms.length;
+}
+
 async function syncGameConfigFromQQCache(options = {}) {
     const cache = findLatestQQFarmCache();
     if (!cache) return { skipped: true, reason: '未找到 QQ 农场前台缓存' };
@@ -630,11 +656,26 @@ async function syncGameConfigFromQQCache(options = {}) {
     const plantUrl = resolveJsonAsset(delayBundle.config, delayBundle.sourceUrl, 'config/Plant');
 
     const outputDir = path.join(getDataDir(), 'gameConfig');
+
     const itemOutputPath = path.join(outputDir, 'ItemInfo.json');
     const plantOutputPath = path.join(outputDir, 'Plant.json');
     const imageOutputDir = path.join(outputDir, 'seed_images_named');
     const statePath = path.join(outputDir, 'sync-state.json');
     const previousState = fs.existsSync(statePath) ? readJson(statePath) : {};
+    // 锦囊配置(萌宠游记): 独立判断是否需要同步(表缺失 / bundle 资源变化 / force), 失败不影响其它同步
+    let charmCount = 0;
+    let charmUrl = '';
+    try {
+        charmUrl = resolveJsonAsset(delayBundle.config, delayBundle.sourceUrl, 'config/ActivityPetTreasureHuntCharm');
+        const charmOutPath = path.join(outputDir, 'ActivityPetTreasureHuntCharm.json');
+        const charmNeedSync = !!options.force
+            || !fs.existsSync(charmOutPath)
+            || (previousState && previousState.charmUrl !== charmUrl);
+        if (charmNeedSync) charmCount = await syncPetCharmConfig(charmUrl, cache, outputDir);
+    } catch (e) {
+        console.warn('[配置] 同步锦囊配置失败:', e.message);
+        charmUrl = '';
+    }
     const canSkip = !options.force
         && Number(previousState.imageSchemaVersion) === 3
         && previousState.itemInfoUrl === itemInfoUrl
@@ -699,6 +740,8 @@ async function syncGameConfigFromQQCache(options = {}) {
     writeJsonAtomic(statePath, {
         imageSchemaVersion: 3,
         itemInfoUrl,
+        charmUrl: charmUrl || previousState.charmUrl || '',
+        charmCount,
         plantUrl,
         plantBundleUrl: plantBundle.sourceUrl,
         extraResBundleUrl: extraResBundle.sourceUrl,
@@ -746,4 +789,5 @@ module.exports = {
     resolveJsonAsset,
     syncGameConfigFromQQCache,
     syncItemInfoFromQQCache: syncGameConfigFromQQCache,
+    syncPetCharmConfig,
 };

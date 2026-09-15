@@ -1573,10 +1573,13 @@ app.use('/api', (req, res, next) => {
         const id = getAccId(req);
         if (!id) return res.status(400).json({ ok: false });
         if (!checkAccountAccess(req, id)) return res.status(403).json({ ok: false, error: '无权访问此账号' });
+        const charmId = Number(req.body && req.body.charmId);
         const key = String((req.body && req.body.key) || '').trim();
-        if (!key) return res.status(400).json({ ok: false, error: '缺少锦囊 key' });
+        if (!charmId && !key) return res.status(400).json({ ok: false, error: '缺少 charmId 或 key' });
         try {
-            const data = await provider.selectMengchongWishBag(id, key);
+            const data = charmId
+                ? await provider.selectMengchongCharm(id, charmId)
+                : await provider.selectMengchongWishBag(id, key);
             res.json({ ok: true, data });
         } catch (e) { res.json({ ok: false, error: e.message }); }
     });

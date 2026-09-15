@@ -1,0 +1,50 @@
+{
+    "_source": "游戏配置表 config/ActivityPetTreasureHuntCharm (delayRes bundle)",
+    "charms": [
+        {
+            "charm_id": 101,
+            "name": "惜糕探宝",
+            "short_desc": "元气糕消耗-10%",
+            "desc": "寻宝时元气糕消耗 -10%。",
+            "group_type_id": 1,
+            "use_limit": -1,
+            "order": 1
+        },
+        {
+            "charm_id": 102,
+            "name": "奖池上限",
+            "short_desc": "宝藏价值+50幸运星",
+            "desc": "宝藏护送时宝藏价值 + 50，增值部分不可被掠夺。",
+            "group_type_id": 2,
+            "use_limit": -1,
+            "order": 2
+        },
+        {
+            "charm_id": 103,
+            "name": "复仇机制",
+            "short_desc": "遭夺后8小时内复仇，成功率+25%",
+            "desc": "宝藏被好友抢走，8 小时内前往他家夺宝，成功率 + 25%。",
+            "group_type_id": 3,
+            "use_limit": -1,
+            "order": 3
+        },
+        {
+            "charm_id": 104,
+            "name": "胜利加成",
+            "short_desc": "掠夺胜+10%，败则-30%",
+            "desc": "掠夺成功时收益 +10%，掠夺失败时收益 -30%。",
+            "group_type_id": 4,
+            "use_limit": -1,
+            "order": 4
+        },
+        {
+            "charm_id": 105,
+            "name": "移花接木",
+            "short_desc": "遭夺 50% 放假宝阻抢夺，限 2 次",
+            "desc": "宝藏遭抢夺时，50% 概率放出假宝藏，让对手扑空，最多生效 2 次。",
+            "group_type_id": 5,
+            "use_limit": 2,
+            "order": 5
+        }
+    ]
+}

@@ -873,6 +873,9 @@ async function handleApiCall(msg) {
             case 'refreshMengchongWishBags':
                 result = await require('../services/mengchong').refreshWishBags();
                 break;
+            case 'selectMengchongCharm':
+                result = await require('../services/mengchong').selectCharmById(args[0]);
+                break;
             case 'selectMengchongWishBag':
                 result = await require('../services/mengchong').selectWishBag(args[0]);
                 break;
