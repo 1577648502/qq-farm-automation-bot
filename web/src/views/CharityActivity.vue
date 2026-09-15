@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
-import { useRouteRefresh } from '@/composables/useRouteRefresh'
+import { usePageRefresh } from '@/composables/usePageRefresh'
 
 import api from '@/api'
 import BaseButton from '@/components/ui/BaseButton.vue'
@@ -185,7 +185,7 @@ async function handleRunNow() {
   }
 }
 
-useRouteRefresh('/charity-activity', loadOverview)
+usePageRefresh('/charity-activity', loadOverview)
 </script>
 
 <template>

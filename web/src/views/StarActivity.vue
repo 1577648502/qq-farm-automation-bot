@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { storeToRefs } from 'pinia'
 import { computed, ref, watch } from 'vue'
-import { useRouteRefresh } from '@/composables/useRouteRefresh'
+import { usePageRefresh } from '@/composables/usePageRefresh'
 
 import api from '@/api'
 import ConfirmModal from '@/components/ConfirmModal.vue'
@@ -336,7 +336,7 @@ function refreshAll() {
   fetchSolarTerms()
 }
 
-useRouteRefresh('/star-activity', refreshAll)
+usePageRefresh('/star-activity', refreshAll)
 watch(currentAccountId, refreshAll)
 </script>
 

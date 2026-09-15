@@ -94,6 +94,17 @@ const addAccountDisabledReason = computed(() => {
 const stoppedAccounts = computed(() => accounts.value.filter((acc: any) => !acc.running))
 const stoppedAccountsCount = computed(() => stoppedAccounts.value.length)
 
+/** 按当前账号加载所有设置(挂载时 + 切换账号时都会调用) */
+async function loadForCurrentAccount() {
+  if (!currentAccountId.value)
+    return
+  await settingStore.fetchSettings(currentAccountId.value)
+  syncLocalStrategySettings()
+  syncLocalAutomationSettings()
+  syncLocalOfflineSettings()
+  await farmStore.fetchSeeds(currentAccountId.value)
+}
+
 onMounted(async () => {
   await accountStore.fetchAccounts()
   if (!currentAccountId.value && accounts.value.length > 0 && accounts.value[0]) {
@@ -101,13 +112,13 @@ onMounted(async () => {
   }
   // 先取活动开关状态, 再同步本地设置(否则后台已关闭的活动开关无法被自动关掉)
   await fetchActivityStatus()
-  if (currentAccountId.value) {
-    await settingStore.fetchSettings(currentAccountId.value)
-    syncLocalStrategySettings()
-    syncLocalAutomationSettings()
-    syncLocalOfflineSettings()
-    await farmStore.fetchSeeds(currentAccountId.value)
-  }
+  await loadForCurrentAccount()
+})
+
+// 切换账号时重新加载该账号的设置(否则页面还显示上一个账号的配置)
+watch(currentAccountId, (now, prev) => {
+  if (String(now ?? '') !== String(prev ?? ''))
+    void loadForCurrentAccount()
 })
 
 useIntervalFn(() => {

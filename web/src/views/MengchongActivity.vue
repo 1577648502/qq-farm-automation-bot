@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
-import { useRouteRefresh } from '@/composables/useRouteRefresh'
+import { usePageRefresh } from '@/composables/usePageRefresh'
 
 import api from '@/api'
 import BaseButton from '@/components/ui/BaseButton.vue'
@@ -436,7 +436,7 @@ async function handleTreasure() {
   }
 }
 
-useRouteRefresh('/mengchong-activity', refreshAll)
+usePageRefresh('/mengchong-activity', refreshAll)
 // 玩法说明挂载时拉一次即可(内容基本不变)
 onMounted(fetchRules)
 </script>
