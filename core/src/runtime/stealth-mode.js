@@ -22,8 +22,33 @@ function createStealthMode(options = {}) {
         stopWorker,
         callWorkerApi,
         findAccountByAnyRef,
+        addAccountLog,
         log = (msg) => rawLog('防封号', msg, { module: 'system', event: '防封号' }),
     } = options;
+
+    function accountOf(accountId) {
+        try {
+            return (typeof findAccountByAnyRef === 'function' ? findAccountByAnyRef(accountId) : null) || {};
+        } catch (e) { return {}; }
+    }
+
+    /** 同时写全局日志流(带账号归属)与账号日志流 */
+    function notify(accountId, action, msg, meta = {}) {
+        const acc = accountOf(accountId);
+        try {
+            log(msg, { accountId: String(accountId), accountName: acc.name || '', module: 'system', event: '防封号', ...meta });
+        } catch (e) { /* 忽略 */ }
+        accountLog(accountId, action, msg, meta);
+    }
+
+    /** 账号维度日志(会显示在该账号的运行日志里) */
+    function accountLog(accountId, action, msg, meta = {}) {
+        if (typeof addAccountLog !== 'function') return;
+        try {
+            const acc = (typeof findAccountByAnyRef === 'function' ? findAccountByAnyRef(accountId) : null) || {};
+            addAccountLog(action, msg, String(accountId), acc.name || '', meta);
+        } catch (e) { /* 忽略 */ }
+    }
 
     const states = new Map(); // accountId -> state
     let running = false;
@@ -103,6 +128,7 @@ function createStealthMode(options = {}) {
         if (!scheduler || typeof scheduler.setTimeoutTask !== 'function') return;
         scheduler.setTimeoutTask(`stealth_off_${accountId}`, sec * 1000, () => { void goOffline(accountId); });
         log(`账号 ${accountId} 防封号: 将在 ${Math.round(sec / 60)} 分钟后下线`);
+        notify(accountId, 'stealth_plan', `防封号: 本次计划在线 ${Math.round(sec / 60)} 分钟, 之后自动下线`, { reason: 'plan', onlineSeconds: Math.round(sec) });
     }
 
     /** 下线: 先算成熟时间, 决定离线时长 */
@@ -143,6 +169,7 @@ function createStealthMode(options = {}) {
                 scheduler.setTimeoutTask(`stealth_off_${accountId}`, waitSec * 1000, () => { void goOffline(accountId); });
             }
             log(`账号 ${accountId} 防封号: 作物将在 ${Math.round(timeToRipeSec / 60)} 分钟后成熟, 本次不下线`);
+            notify(accountId, 'stealth_hold', `防封号: ${Math.max(1, Math.round(timeToRipeSec / 60))} 分钟后有作物成熟, 保持在线收取`, { reason: 'ripe_soon' });
             return;
         }
 
@@ -163,14 +190,19 @@ function createStealthMode(options = {}) {
                 scheduler.setTimeoutTask(`stealth_off_${accountId}`, 60 * 1000, () => { void goOffline(accountId); });
             }
             log(`账号 ${accountId} 防封号: 仍有 ${toNum(st.ripeness.ripeCount)} 块地已成熟, 暂不下线`);
+            notify(accountId, 'stealth_hold', `防封号: 仍有 ${toNum(st.ripeness.ripeCount)} 块地已成熟, 保持在线收取`, { reason: 'has_ripe' });
             return;
         }
 
-        // 执行下线
+        // 执行下线(带原因, 会写入该账号的运行日志)
+        const wakeAt = new Date(Date.now() + offlineSec * 1000);
+        const wakeText = `预计 ${wakeAt.toLocaleTimeString('zh-CN', { hour12: false })} 上线`;
+        const stopReason = `防封号模式: 主动下线 —— ${reason}，${wakeText}`;
         try {
-            if (typeof stopWorker === 'function') stopWorker(accountId);
+            if (typeof stopWorker === 'function') stopWorker(accountId, { reason: stopReason, byStealth: true });
         } catch (e) {
             log(`账号 ${accountId} 下线失败: ${e.message}`);
+            notify(accountId, 'stealth_error', `防封号: 下线失败 - ${e.message}`, { reason: 'stop_failed' });
         }
         st.phase = 'offline';
         st.offlineSince = Date.now();
@@ -206,6 +238,7 @@ function createStealthMode(options = {}) {
             st.onlineSince = Date.now();
             st.offlineSince = 0;
             log(`账号 ${accountId} 防封号: 已上线收取`);
+            notify(accountId, 'stealth_online', '防封号: 已到点上线, 开始收取作物', { reason: 'wake_up' });
         } catch (e) {
             log(`账号 ${accountId} 上线失败: ${e.message}`);
         }

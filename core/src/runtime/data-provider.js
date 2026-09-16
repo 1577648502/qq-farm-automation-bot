@@ -506,7 +506,7 @@ function createDataProvider(options) {
 
             if (!acc) return false;
 
-            if (accountId) stopWorker(accountId);
+            if (accountId) stopWorker(accountId, { reason: '手动停止' });
 
             return true;
 
@@ -619,7 +619,18 @@ function createDataProvider(options) {
 
             store.addOrUpdateAccount({ id: accountId, code: nextCode });
 
-            const directRestartReason = worker.wsError && worker.wsError.waitingCodeRefresh ? 'kickout_waiting_code_refresh' : 'code_refresh_restart';
+            // 防封号(低调)模式: 当前会话健康时, 取码只更新 code, 不重启 worker
+            // (否则每取一次码就重启一次, 会不断重置"在线计时", 导致永远走不到离线阶段)
+            const waitingForCode = !!(worker.wsError && worker.wsError.waitingCodeRefresh);
+            const stealthOn = (() => {
+                try { return !!store.getStealthConfig(accountId).enabled; } catch (e) { return false; }
+            })();
+            if (stealthOn && !waitingForCode) {
+                addAccountLog('code_keep', `防封号模式: 已更新 Code, 不打断当前在线会话(${nextCode.substring(0, 8)}...)`, accountId, acc.name, { reason: 'stealth_keep_running' });
+                return { ok: true, skipped: 'stealth_keep_running', reason: 'stealth_keep_running', accountId };
+            }
+
+            const directRestartReason = waitingForCode ? 'kickout_waiting_code_refresh' : 'code_refresh_restart';
 
             if (typeof restartWorker !== 'function') return { ok: false, reason: directRestartReason };
 

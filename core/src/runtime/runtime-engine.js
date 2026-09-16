@@ -112,7 +112,9 @@ function createRuntimeEngine(options = {}) {
         return accounts.find(a => String(a.id) === target || String(a.name) === target || String(a.uin) === target) || null
       } catch (e) { return null }
     },
-    log: (msg) => log('系统', msg, { module: 'system', event: '防封号' }),
+    addAccountLog,
+    // 透传 meta(含 accountId/accountName), 保证日志能归属到账号并出现在运行日志里
+    log: (msg, meta) => log('系统', msg, { module: 'system', event: '防封号', ...(meta || {}) }),
   })
   stealthMode.start()
   workerControls.startWorker = startWorker

@@ -1573,6 +1573,9 @@ async function handleTestOffline() {
                 <div class="mt-0.5 text-xs text-gray-600 dark:text-gray-400">
                   不长期在线：在线一小段时间 → 离线一大段时间循环；作物成熟时自动提前上线收取。
                 </div>
+                <div class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                  与「自动取码」配合：取码只更新 Code，不会打断正在进行的在线会话；离线期间也不会被取码自动拉起。
+                </div>
               </div>
               <BaseSwitch v-model="localAutomationSettings.stealthEnabled" label="启用" />
             </div>

@@ -131,6 +131,24 @@ function createWorkerManager(options) {
                 runtimeMode: useThreadRuntime ? 'thread' : 'fork',
             });
 
+            // 账号日志里补一条"为什么停止"(防封号/手动停止会带原因; 否则记录退出码)
+            if (typeof addAccountLog === 'function') {
+                try {
+                    const stoppedReason = (current && current.stopReason) || '';
+                    // stopWorker 已把带原因的日志写过了, 这里不重复
+                    if (stoppedReason) return;
+                    const text = (current && current.stopping)
+                        ? '账号已停止'
+                        : `账号进程退出 (code=${code}, signal=${signal || 'none'})`;
+                    addAccountLog('stopped', text, String(account.id), displayName, {
+                        reason: 'process_exit',
+                        code,
+                        signal: signal || '',
+                        byStealth: stoppedReason ? /防封号/.test(stoppedReason) : false,
+                    });
+                } catch (e) { /* 忽略 */ }
+            }
+
             managerScheduler.clear(`force_kill_${account.id}`);
             managerScheduler.clear(`restart_fallback_${account.id}`);
 
@@ -151,14 +169,34 @@ function createWorkerManager(options) {
         return true;
     }
 
-    function stopWorker(accountId) {
+    function stopWorker(accountId, options2 = {}) {
         const worker = workers[accountId];
         if (!worker) return;
 
         const proc = worker.process;
+        const reason = String((options2 && options2.reason) || '').trim();
+        const byStealth = !!(options2 && options2.byStealth);
         worker.stopping = true;
+        worker.stopReason = reason;
+        // 把"为什么停止"写进该账号的运行日志(同时进全局日志流与账号日志流)
+        if (reason) {
+            try {
+                log('系统', `账号 ${worker.name || accountId} 已停止: ${reason}`, {
+                    accountId: String(accountId),
+                    accountName: worker.name || '',
+                    module: 'system',
+                    event: '停止',
+                    reason: 'stopped',
+                });
+            } catch (e) { /* 忽略 */ }
+            if (typeof addAccountLog === 'function') {
+                try {
+                    addAccountLog('stopped', reason, String(accountId), worker.name || '', { reason, byStealth });
+                } catch (e) { /* 忽略 */ }
+            }
+        }
         if (typeof onWorkerStopped === 'function') {
-            try { onWorkerStopped(String(accountId)); } catch (e) { /* 忽略 */ }
+            try { onWorkerStopped(String(accountId), { reason, byStealth }); } catch (e) { /* 忽略 */ }
         }
         worker.process.send({ type: 'stop' });
         // process.kill will happen in 'exit' handler, or we can force it
