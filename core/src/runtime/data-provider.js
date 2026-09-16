@@ -483,7 +483,7 @@ function createDataProvider(options) {
                     const r = await stealthMode.goOffline(accountId, { force: true, manual: true });
                     return { ...(r || { ok: true }), accountId };
                 }
-                const r = stealthMode.goOnline(accountId, { force: true, manual: true });
+                const r = await stealthMode.goOnline(accountId, { force: true, manual: true });
                 return { ...(r || { ok: true }), accountId };
             } catch (e) {
                 return { ok: false, reason: 'exception', message: e.message, accountId };

@@ -122,6 +122,15 @@ function createRuntimeEngine(options = {}) {
         return Array.isArray(data) ? data : (data.accounts || [])
       } catch (e) { return [] }
     },
+    // 上线前按需取新 code(防"code已过期"); qcbyScheduler 在 start() 里才创建, 这里晚绑定
+    refreshCode: (accountId) => {
+      try {
+        if (qcbyScheduler && typeof qcbyScheduler.fetchCodeOnly === 'function') {
+          return qcbyScheduler.fetchCodeOnly(accountId)
+        }
+      } catch (e) { /* 忽略 */ }
+      return Promise.resolve({ ok: false, reason: 'qcby_unavailable' })
+    },
     addAccountLog,
     // 透传 meta(含 accountId/accountName), 保证日志能归属到账号并出现在运行日志里
     log: (msg, meta) => log('系统', msg, { module: 'system', event: '防封号', ...(meta || {}) }),
@@ -216,6 +225,7 @@ function createRuntimeEngine(options = {}) {
       qcbyScheduler = createQcbyCodeScheduler({
         config: qcbyConfig,
         refreshAccountCode: dataProvider.refreshAccountCode,
+        saveAccountCode: (accountId, code) => store.addOrUpdateAccount({ id: accountId, code }),
         log,
       })
       qcbyScheduler.start()
@@ -243,6 +253,7 @@ function createRuntimeEngine(options = {}) {
       qcbyScheduler = createQcbyCodeScheduler({
         config: qcbyConfig,
         refreshAccountCode: dataProvider.refreshAccountCode,
+        saveAccountCode: (accountId, code) => store.addOrUpdateAccount({ id: accountId, code }),
         log,
       })
       const started = qcbyScheduler.start()

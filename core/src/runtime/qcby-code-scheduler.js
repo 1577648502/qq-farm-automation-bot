@@ -10,11 +10,60 @@ const { fetchFarmCode } = require('../services/qcby-code');
 function createQcbyCodeScheduler(options = {}) {
     const config = options.config || {};
     const refreshAccountCode = typeof options.refreshAccountCode === 'function' ? options.refreshAccountCode : null;
+    const saveAccountCode = typeof options.saveAccountCode === 'function' ? options.saveAccountCode : null;
     const rawLog = typeof options.log === 'function' ? options.log : null;
     const logInfo = (msg) => (rawLog ? rawLog('qcby取码', msg) : console.log('[qcby取码]', msg));
 
     const timers = new Map();
     const running = new Set();
+    const inFlightFetch = new Map();   // accountId -> 进行中的按需取码 Promise(防并发重复请求)
+
+    /**
+     * 按需为指定账号取一次新 code(只获取并保存, 不启动/重启 worker)。
+     * 供「防封号上线前刷新 code」使用 —— code 会过期, 用旧的登录会报 "code已过期"。
+     * 注意: 只要账号映射存在即可调用, 不受 enabled(周期调度开关)限制。
+     * @returns {Promise<{ok:boolean, code?:string, reason?:string}>}
+     */
+    async function fetchCodeOnly(accountId) {
+        const id = String(accountId || '').trim();
+        if (!id) return { ok: false, reason: 'invalid_account' };
+        const mapping = (Array.isArray(config.accounts) ? config.accounts : [])
+            .find(m => String(m && m.accountId).trim() === id);
+        if (!mapping) return { ok: false, reason: 'no_mapping' };
+        if (!config.baseUrl) return { ok: false, reason: 'missing_base_url' };
+        const appid = mapping.appid || config.appid;
+        if (!appid) return { ok: false, reason: 'missing_appid' };
+
+        // 同一账号的在途请求直接复用, 避免并发重复打接口
+        if (inFlightFetch.has(id)) return inFlightFetch.get(id);
+        const task = (async () => {
+            try {
+                const result = await fetchFarmCode({
+                    baseUrl: config.baseUrl,
+                    protocol: mapping.protocol || config.protocol,
+                    wxid: mapping.wxid,
+                    ref: mapping.ref,
+                    appid,
+                    authHeader: config.authHeader,
+                    codePath: config.codePath,
+                });
+                if (!result.ok) return { ok: false, reason: result.reason };
+                // 存到 store(只存 code, 不动 worker) —— 上线时会用到最新 code
+                if (saveAccountCode) {
+                    try { saveAccountCode(id, result.code); } catch (e) { /* 忽略 */ }
+                }
+                return { ok: true, code: result.code };
+            } catch (err) {
+                return { ok: false, reason: 'exception:' + (err && err.message ? err.message : String(err)) };
+            }
+        })();
+        inFlightFetch.set(id, task);
+        try {
+            return await task;
+        } finally {
+            inFlightFetch.delete(id);
+        }
+    }
 
     async function fetchAndApply(mapping) {
         const accountId = mapping.accountId;
@@ -91,7 +140,7 @@ function createQcbyCodeScheduler(options = {}) {
         timers.clear();
     }
 
-    return { start, stop, fetchAndApply };
+    return { start, stop, fetchAndApply, fetchCodeOnly };
 }
 
 module.exports = { createQcbyCodeScheduler };

@@ -15,6 +15,20 @@
 const { getStealthConfig } = require('../models/store');
 const { log: rawLog, toNum } = require('../utils/utils');
 
+/** 给 Promise 套一个超时(到点返回 fallback, 不抛异常) */
+function withTimeout(promise, ms, fallback) {
+    return new Promise((resolve) => {
+        const timer = setTimeout(() => resolve(fallback), ms);
+        Promise.resolve(promise).then(
+            (v) => { clearTimeout(timer); resolve(v); },
+            (e) => {
+                clearTimeout(timer);
+                resolve({ ...(fallback || {}), reason: 'error:' + (e && e.message ? e.message : String(e)) });
+            },
+        );
+    });
+}
+
 function createStealthMode(options = {}) {
     const {
         scheduler,
@@ -24,6 +38,7 @@ function createStealthMode(options = {}) {
         findAccountByAnyRef,
         isWorkerRunning,
         listAccounts,
+        refreshCode,
         addAccountLog,
         log = (msg) => rawLog('防封号', msg, { module: 'system', event: '防封号' }),
     } = options;
@@ -229,8 +244,8 @@ function createStealthMode(options = {}) {
         return { ok: true, action: 'offline', accountId, stopped, wakeAt: st.nextSwitchAt, message: reason };
     }
 
-    /** 上线: 启动 worker(自动做收取/种植等), 并安排下一次下线(options.force/manual 用于手动立即上线) */
-    function goOnline(accountId, options2 = {}) {
+    /** 上线: 先通过 qcby 取新 code(防"code已过期"), 再启动 worker, 并安排下一次下线 */
+    async function goOnline(accountId, options2 = {}) {
         const force = !!(options2 && options2.force);
         const manual = !!(options2 && options2.manual);
         const cfg = getStealthConfig(accountId);
@@ -255,14 +270,34 @@ function createStealthMode(options = {}) {
             return { ok: false, reason: 'account_not_found', message: '未找到该账号' };
         }
 
-        let alreadyRunning = false;
+        let alreadyRunning = (typeof isWorkerRunning === 'function') && !!isWorkerRunning(accountId);
         let started = false;
+        let codeRefreshed = false;
+        let latestAccount = account;
+
+        // 上线前先取一次新 code —— code 会过期, 用旧 code 登录会报 "code已过期"
+        // (只在"未在运行"时取; 已在线的会话不打扰)
+        if (!alreadyRunning && typeof refreshCode === 'function') {
+            try {
+                const r = await withTimeout(refreshCode(accountId), 20000, { ok: false, reason: 'timeout' });
+                if (r && r.ok && r.code) {
+                    codeRefreshed = true;
+                    const fresh = findAccountByAnyRef(accountId);   // 重读账号(带新 code)
+                    if (fresh && fresh.code) latestAccount = fresh;
+                    notify(accountId, 'stealth_code', `防封号: 上线前已获取新 Code(${String(r.code).slice(0, 8)}...)`, { reason: 'code_refreshed' });
+                } else {
+                    notify(accountId, 'stealth_code', `防封号: 上线前取码失败(${(r && r.reason) || 'unknown'}), 用现有 Code 尝试上线`, { reason: 'code_fetch_failed' });
+                }
+            } catch (e) {
+                notify(accountId, 'stealth_code', `防封号: 上线前取码异常(${e.message}), 用现有 Code 尝试上线`, { reason: 'code_fetch_error' });
+            }
+        }
+
         try {
-            alreadyRunning = (typeof isWorkerRunning === 'function') ? !!isWorkerRunning(accountId) : false;
             if (alreadyRunning) {
                 started = true;                        // 已在运行, 无需重启
             } else if (typeof startWorker === 'function') {
-                started = startWorker(account) !== false;
+                started = startWorker(latestAccount) !== false;
             } else {
                 started = true;                        // 无启动接口(单测环境), 视为成功
             }
@@ -309,9 +344,10 @@ function createStealthMode(options = {}) {
             ok: true,
             action: 'online',
             accountId,
-            name: account.name,
+            name: latestAccount.name,
             alreadyRunning,
-            message: alreadyRunning ? '账号已在运行中' : '已启动账号',
+            codeRefreshed,
+            message: alreadyRunning ? '账号已在运行中' : (codeRefreshed ? '已获取新 Code 并启动账号' : '已启动账号'),
         };
     }
 
