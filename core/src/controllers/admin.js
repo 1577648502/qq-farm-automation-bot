@@ -2078,12 +2078,45 @@ app.use('/api', (req, res, next) => {
             const bagSeedPriority = id && (typeof store.getBagSeedPriority === 'function') ? store.getBagSeedPriority(id) : [];
             const bagSeedFallbackStrategy = id && (typeof store.getBagSeedFallbackStrategy === 'function') ? store.getBagSeedFallbackStrategy(id) : 'level';
             const plantSeedExclude = id && (typeof store.getPlantSeedExclude === 'function') ? store.getPlantSeedExclude(id) : [];
+            // 防封号(低调)模式(按账号)
+            const stealth = id && (typeof store.getStealthConfig === 'function')
+                ? store.getStealthConfig(id)
+                : { enabled: false, onlineMinMinutes: 3, onlineMaxMinutes: 8, offlineMinMinutes: 20, offlineMaxMinutes: 60, wakeForRipe: true };
             const ui = store.getUI();
             // 获取用户隔离的下线提醒配置
             const offlineReminder = store.getOfflineReminder && currentUser
                 ? store.getOfflineReminder(currentUser.username)
                 : { channel: 'webhook', reloginUrlMode: 'none', endpoint: '', token: '', title: '账号下线提醒', msg: '账号下线', offlineDeleteSec: 0 };
-            res.json({ ok: true, data: { intervals, strategy, preferredSeed, friendQuietHours, automation, stealDelaySeconds, plantOrderRandom, plantDelaySeconds, fertilizerBuyOrganicCount, fertilizerBuyOrganicThresholdHours, fertilizerBuyNormalCount, fertilizerBuyNormalThresholdHours, fertilizerBuyCheckIntervalMinutes, bagSeedPriority, bagSeedFallbackStrategy, plantSeedExclude, ui, offlineReminder } });
+            res.json({
+                ok: true,
+                data: {
+                    intervals,
+                    strategy,
+                    preferredSeed,
+                    friendQuietHours,
+                    automation,
+                    stealDelaySeconds,
+                    plantOrderRandom,
+                    plantDelaySeconds,
+                    fertilizerBuyOrganicCount,
+                    fertilizerBuyOrganicThresholdHours,
+                    fertilizerBuyNormalCount,
+                    fertilizerBuyNormalThresholdHours,
+                    fertilizerBuyCheckIntervalMinutes,
+                    bagSeedPriority,
+                    bagSeedFallbackStrategy,
+                    plantSeedExclude,
+                    // 防封号(低调)模式
+                    stealthEnabled: !!stealth.enabled,
+                    stealthOnlineMinMinutes: stealth.onlineMinMinutes,
+                    stealthOnlineMaxMinutes: stealth.onlineMaxMinutes,
+                    stealthOfflineMinMinutes: stealth.offlineMinMinutes,
+                    stealthOfflineMaxMinutes: stealth.offlineMaxMinutes,
+                    stealthWakeForRipe: !!stealth.wakeForRipe,
+                    ui,
+                    offlineReminder,
+                },
+            });
         } catch (e) {
             res.status(500).json({ ok: false, error: e.message });
         }

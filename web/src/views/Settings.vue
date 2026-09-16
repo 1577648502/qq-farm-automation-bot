@@ -896,13 +896,6 @@ const localOffline = ref({
   title: '',
   msg: '',
   offlineDeleteSec: 0,
-  // 防封号(低调)模式
-  stealthEnabled: false,
-  stealthOnlineMinMinutes: 3,
-  stealthOnlineMaxMinutes: 8,
-  stealthOfflineMinMinutes: 20,
-  stealthOfflineMaxMinutes: 60,
-  stealthWakeForRipe: true,
 })
 
 const channelOptions = [
