@@ -10,6 +10,7 @@ const { createDataProvider } = require('./data-provider')
 const { createReloginReminderService } = require('./relogin-reminder')
 const { createRuntimeState } = require('./runtime-state')
 const { createWorkerManager } = require('./worker-manager')
+const { createStealthMode } = require('./stealth-mode')
 const { loadQcbyCodeConfig } = require('../services/qcby-code-config')
 const { createQcbyCodeScheduler } = require('./qcby-code-scheduler')
 
@@ -61,7 +62,10 @@ function createRuntimeEngine(options = {}) {
     triggerOfflineReminder,
   } = reloginReminder
 
-  const { startWorker, stopWorker, restartWorker, callWorkerApi, refreshWorkerCode } = createWorkerManager({
+  // 防封号(低调)模式实例(在 worker-manager 之后初始化, 用 let 以支持回调里安全引用)
+  let stealthMode = null
+
+  const { startWorker, stopWorker, restartWorker, callWorkerApi, refreshWorkerCode, managerScheduler } = createWorkerManager({
     fork,
     WorkerThread: Worker,
     runtimeMode,
@@ -87,12 +91,36 @@ function createRuntimeEngine(options = {}) {
       runtimeEvents.emit('worker_log', { entry, accountId, accountName })
       if (onLog) onLog(entry, accountId, accountName)
     },
+    onWorkerStarted: (accountId) => {
+      if (stealthMode) stealthMode.onAccountStarted(accountId)
+    },
+    onWorkerStopped: (accountId) => {
+      if (stealthMode) stealthMode.onAccountStopped(accountId)
+    },
   })
+
+  // 防封号(低调)模式: 在线一段时间 → 离线一段时间, 并按作物成熟时间提前上线
+  stealthMode = createStealthMode({
+    scheduler: managerScheduler,
+    startWorker,
+    stopWorker,
+    callWorkerApi,
+    findAccountByAnyRef: (ref) => {
+      try {
+        const accounts = store.getAccounts() || []
+        const target = String(ref || '')
+        return accounts.find(a => String(a.id) === target || String(a.name) === target || String(a.uin) === target) || null
+      } catch (e) { return null }
+    },
+    log: (msg) => log('系统', msg, { module: 'system', event: '防封号' }),
+  })
+  stealthMode.start()
   workerControls.startWorker = startWorker
   workerControls.restartWorker = restartWorker
   workerControls.refreshWorkerCode = refreshWorkerCode
 
   const dataProvider = createDataProvider({
+    stealthMode,
     workers,
     globalLogs: GLOBAL_LOGS,
     accountLogs: ACCOUNT_LOGS,

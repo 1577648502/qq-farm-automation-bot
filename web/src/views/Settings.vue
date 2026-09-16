@@ -103,6 +103,7 @@ async function loadForCurrentAccount() {
   syncLocalAutomationSettings()
   syncLocalOfflineSettings()
   await farmStore.fetchSeeds(currentAccountId.value)
+  await fetchStealthStatus()
 }
 
 onMounted(async () => {
@@ -122,6 +123,7 @@ watch(currentAccountId, (now, prev) => {
 })
 
 useIntervalFn(() => {
+  fetchStealthStatus()
   accountStore.fetchAccounts()
 }, 3000)
 
@@ -612,6 +614,13 @@ const localAutomationSettings = ref({
     fertilizer_land_types: [...allFertilizerLandTypes],
     fertilizer_smart_seconds: 300,
   },
+  // 防封号(低调)模式
+  stealthEnabled: false,
+  stealthOnlineMinMinutes: 3,
+  stealthOnlineMaxMinutes: 8,
+  stealthOfflineMinMinutes: 20,
+  stealthOfflineMaxMinutes: 60,
+  stealthWakeForRipe: true,
   fertilizerBuyOrganicCount: 10,
   fertilizerBuyOrganicThresholdHours: 10,
   fertilizerBuyNormalCount: 10,
@@ -654,6 +663,56 @@ function applyActivityGate() {
   for (const key of Object.keys(ACTIVITY_GATED_AUTOMATION)) {
     if (isAutomationGated(key)) auto[key] = false
   }
+}
+
+// ===== 防封号(低调)模式: 状态与手动切换 =====
+const stealthStatus = ref<any>(null)
+const stealthLoading = ref(false)
+
+async function fetchStealthStatus() {
+  try {
+    const res = await api.get('/api/stealth/status')
+    if (res.data?.ok)
+      stealthStatus.value = res.data.data
+  } catch (e) { /* 忽略 */ }
+}
+
+async function handleForceStealth(action: 'online' | 'offline') {
+  if (!currentAccountId.value)
+    return
+  stealthLoading.value = true
+  try {
+    const res = await api.post('/api/stealth/force', { action }, { headers: { 'x-account-id': currentAccountId.value } })
+    if (res.data?.ok) {
+      showAlert(action === 'offline' ? '已手动下线' : '已手动上线', 'primary')
+      await fetchStealthStatus()
+    } else {
+      showAlert(res.data?.error || '操作失败', 'danger')
+    }
+  } catch (e: any) {
+    showAlert(e?.response?.data?.error || e?.message || '操作失败', 'danger')
+  } finally {
+    stealthLoading.value = false
+  }
+}
+
+/** 当前账号的防封号状态 */
+const myStealth = computed(() => {
+  const list = stealthStatus.value?.accounts || []
+  return list.find((x: any) => String(x.accountId) === String(currentAccountId.value || '')) || null
+})
+
+function fmtClock(ms: number) {
+  if (!ms)
+    return '-'
+  const d = new Date(ms)
+  return d.toLocaleTimeString('zh-CN', { hour12: false })
+}
+
+function fmtRemain(sec: number) {
+  const v = Math.max(0, Math.round(Number(sec) || 0))
+  const m = Math.floor(v / 60)
+  return m >= 60 ? `${Math.floor(m / 60)} 小时 ${m % 60} 分` : `${m} 分`
 }
 
 async function fetchActivityStatus() {
@@ -743,6 +802,12 @@ function syncLocalAutomationSettings() {
     if (localAutomationSettings.value.automation.fertilizer_smart_seconds === undefined) {
       localAutomationSettings.value.automation.fertilizer_smart_seconds = 300
     }
+    localAutomationSettings.value.stealthEnabled = !!settings.value.stealthEnabled
+    localAutomationSettings.value.stealthOnlineMinMinutes = settings.value.stealthOnlineMinMinutes ?? 3
+    localAutomationSettings.value.stealthOnlineMaxMinutes = settings.value.stealthOnlineMaxMinutes ?? 8
+    localAutomationSettings.value.stealthOfflineMinMinutes = settings.value.stealthOfflineMinMinutes ?? 20
+    localAutomationSettings.value.stealthOfflineMaxMinutes = settings.value.stealthOfflineMaxMinutes ?? 60
+    localAutomationSettings.value.stealthWakeForRipe = settings.value.stealthWakeForRipe !== false
     localAutomationSettings.value.fertilizerBuyOrganicCount = settings.value.fertilizerBuyOrganicCount ?? 10
     localAutomationSettings.value.fertilizerBuyOrganicThresholdHours = settings.value.fertilizerBuyOrganicThresholdHours ?? 10
     localAutomationSettings.value.fertilizerBuyNormalCount = settings.value.fertilizerBuyNormalCount ?? 10
@@ -762,6 +827,12 @@ async function saveAutomationSettings() {
     const fullSettings = {
       ...settings.value,
       automation: localAutomationSettings.value.automation,
+      stealthEnabled: localAutomationSettings.value.stealthEnabled,
+      stealthOnlineMinMinutes: localAutomationSettings.value.stealthOnlineMinMinutes,
+      stealthOnlineMaxMinutes: localAutomationSettings.value.stealthOnlineMaxMinutes,
+      stealthOfflineMinMinutes: localAutomationSettings.value.stealthOfflineMinMinutes,
+      stealthOfflineMaxMinutes: localAutomationSettings.value.stealthOfflineMaxMinutes,
+      stealthWakeForRipe: localAutomationSettings.value.stealthWakeForRipe,
       fertilizerBuyOrganicCount: localAutomationSettings.value.fertilizerBuyOrganicCount,
       fertilizerBuyOrganicThresholdHours: localAutomationSettings.value.fertilizerBuyOrganicThresholdHours,
       fertilizerBuyNormalCount: localAutomationSettings.value.fertilizerBuyNormalCount,
@@ -825,6 +896,13 @@ const localOffline = ref({
   title: '',
   msg: '',
   offlineDeleteSec: 0,
+  // 防封号(低调)模式
+  stealthEnabled: false,
+  stealthOnlineMinMinutes: 3,
+  stealthOnlineMaxMinutes: 8,
+  stealthOfflineMinMinutes: 20,
+  stealthOfflineMaxMinutes: 60,
+  stealthWakeForRipe: true,
 })
 
 const channelOptions = [
@@ -1490,6 +1568,101 @@ async function handleTestOffline() {
             <BaseSwitch v-model="localAutomationSettings.automation.mengchong_task" :label="autoLabel('mengchong_task', '萌宠游记：每日任务(种子礼包/手记/自动投喂)')" :disabled="isAutomationGated('mengchong_task')" />
             <BaseSwitch v-model="localAutomationSettings.automation.mengchong_hunt" :label="autoLabel('mengchong_hunt', '萌宠游记：自动寻宝(消耗元气糕700/次，已有护送时跳过)')" :disabled="isAutomationGated('mengchong_hunt')" />
             <BaseSwitch v-model="localAutomationSettings.automation.skip_own_weed_bug" label="不除自己草虫" />
+          </div>
+
+          <!-- 防封号(低调)模式 -->
+          <div class="space-y-3 rounded border border-amber-200 bg-amber-50 p-3 dark:border-amber-900/40 dark:bg-amber-900/10">
+            <div class="flex flex-wrap items-center justify-between gap-2">
+              <div>
+                <div class="text-sm text-amber-800 font-medium dark:text-amber-300">
+                  防封号（低调模式）
+                </div>
+                <div class="mt-0.5 text-xs text-gray-600 dark:text-gray-400">
+                  不长期在线：在线一小段时间 → 离线一大段时间循环；作物成熟时自动提前上线收取。
+                </div>
+              </div>
+              <BaseSwitch v-model="localAutomationSettings.stealthEnabled" label="启用" />
+            </div>
+
+            <div v-if="localAutomationSettings.stealthEnabled" class="space-y-2">
+              <div class="flex flex-wrap items-end gap-3">
+                <BaseInput
+                  v-model.number="localAutomationSettings.stealthOnlineMinMinutes"
+                  label="单次在线最短 (分钟)"
+                  type="number"
+                  min="1"
+                  max="180"
+                />
+                <BaseInput
+                  v-model.number="localAutomationSettings.stealthOnlineMaxMinutes"
+                  label="单次在线最长 (分钟)"
+                  type="number"
+                  min="1"
+                  max="180"
+                />
+              </div>
+              <div class="flex flex-wrap items-end gap-3">
+                <BaseInput
+                  v-model.number="localAutomationSettings.stealthOfflineMinMinutes"
+                  label="离线最短 (分钟)"
+                  type="number"
+                  min="1"
+                  max="1440"
+                />
+                <BaseInput
+                  v-model.number="localAutomationSettings.stealthOfflineMaxMinutes"
+                  label="离线最长 (分钟)"
+                  type="number"
+                  min="1"
+                  max="1440"
+                />
+              </div>
+              <BaseSwitch v-model="localAutomationSettings.stealthWakeForRipe" label="作物成熟时优先上线收取（推荐）" />
+
+              <!-- 实时状态 -->
+              <div class="rounded bg-white p-2 text-xs dark:bg-gray-800">
+                <div class="mb-1 text-gray-500 dark:text-gray-400">
+                  当前账号状态
+                </div>
+                <div v-if="myStealth" class="space-y-1">
+                  <div class="flex flex-wrap items-center gap-2">
+                    <span
+                      class="rounded px-1.5 py-0.5"
+                      :class="myStealth.phase === 'online'
+                        ? 'bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-300'
+                        : myStealth.phase === 'offline'
+                          ? 'bg-gray-200 text-gray-600 dark:bg-gray-700 dark:text-gray-300'
+                          : 'bg-gray-100 text-gray-500 dark:bg-gray-800 dark:text-gray-400'"
+                    >
+                      {{ myStealth.phase === 'online' ? '在线中' : myStealth.phase === 'offline' ? '离线中' : '未启用' }}
+                    </span>
+                    <span v-if="myStealth.nextSwitchAt" class="text-gray-600 dark:text-gray-300">
+                      {{ myStealth.phase === 'online' ? '预计' : '预计' }}
+                      {{ fmtClock(myStealth.nextSwitchAt) }} {{ myStealth.phase === 'online' ? '下线' : '上线' }}
+                      ({{ fmtRemain(myStealth.nextSwitchInSec) }}后)
+                    </span>
+                  </div>
+                  <div v-if="myStealth.lastReason" class="text-gray-500 dark:text-gray-400">
+                    {{ myStealth.lastReason }}
+                  </div>
+                  <div v-if="myStealth.ripeness && myStealth.ripeness.nextReadyAt" class="text-gray-400 dark:text-gray-500">
+                    下一批成熟: {{ fmtClock(myStealth.ripeness.nextReadyAt * 1000) }}
+                    <span v-if="myStealth.ripeness.ripeCount > 0">(当前有 {{ myStealth.ripeness.ripeCount }} 块地已成熟)</span>
+                  </div>
+                  <div class="pt-1 flex gap-2">
+                    <BaseButton variant="secondary" size="sm" :loading="stealthLoading" @click="handleForceStealth('offline')">
+                      立即下线
+                    </BaseButton>
+                    <BaseButton variant="secondary" size="sm" :loading="stealthLoading" @click="handleForceStealth('online')">
+                      立即上线
+                    </BaseButton>
+                  </div>
+                </div>
+                <div v-else class="text-gray-400 dark:text-gray-500">
+                  该账号暂无状态记录（保存设置后或账号启动后开始计时）
+                </div>
+              </div>
+            </div>
           </div>
 
           <div v-if="localAutomationSettings.automation.fertilizer_buy_organic || localAutomationSettings.automation.fertilizer_buy_normal" class="space-y-3 rounded bg-green-50 p-3 text-sm dark:bg-green-900/20">

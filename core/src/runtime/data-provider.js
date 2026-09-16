@@ -37,7 +37,7 @@ function createDataProvider(options) {
         stopWorker,
 
         restartWorker,
-
+        stealthMode,
     } = options;
 
 
@@ -325,11 +325,24 @@ function createDataProvider(options) {
 
                 bagSeedFallbackStrategy: body.bagSeedFallbackStrategy,
 
-                plantSeedExclude: body.plantSeedExclude
+                plantSeedExclude: body.plantSeedExclude,
+
+                // 防封号(低调)模式
+                stealthEnabled: body.stealthEnabled,
+                stealthOnlineMinMinutes: body.stealthOnlineMinMinutes,
+                stealthOnlineMaxMinutes: body.stealthOnlineMaxMinutes,
+                stealthOfflineMinMinutes: body.stealthOfflineMinMinutes,
+                stealthOfflineMaxMinutes: body.stealthOfflineMaxMinutes,
+                stealthWakeForRipe: body.stealthWakeForRipe
 
             };
 
             store.applyConfigSnapshot(snapshot, { accountId });
+
+            // 防封号参数变化后立即重排(开启→开始计时; 关闭→清理定时器)
+            if (stealthMode && typeof stealthMode.refreshAll === 'function') {
+                try { stealthMode.refreshAll(); } catch (e) { /* 忽略 */ }
+            }
 
             const rev = nextConfigRevision();
 
@@ -436,6 +449,38 @@ function createDataProvider(options) {
         },
 
 
+
+        // ===== 防封号(低调)模式 =====
+        getStealthStatus: () => {
+            if (!stealthMode) return { enabled: false, accounts: [] };
+            const cfg = (typeof store.getStealthConfig === 'function')
+                ? store.getStealthConfig()
+                : { enabled: false };
+            return {
+                enabled: !!cfg.enabled,
+                config: cfg,
+                accounts: typeof stealthMode.statusList === 'function' ? stealthMode.statusList() : [],
+            };
+        },
+
+        /** 手动上线/下线一次(action: 'online' | 'offline') */
+        forceStealth: (accountRef, action) => {
+            if (!stealthMode) return { ok: false, reason: 'stealth_unavailable' };
+            const accountId = resolveAccountRefId(accountRef);
+            if (!accountId) return { ok: false, reason: 'invalid_account' };
+            if (String(action) === 'offline') {
+                void stealthMode.goOffline(accountId);
+                return { ok: true, action: 'offline', accountId };
+            }
+            stealthMode.goOnline(accountId);
+            return { ok: true, action: 'online', accountId };
+        },
+
+        /** 配置变更后重排 */
+        refreshStealth: () => {
+            if (stealthMode && typeof stealthMode.refreshAll === 'function') stealthMode.refreshAll();
+            return { ok: true };
+        },
 
         startAccount: (accountRef) => {
 
@@ -546,6 +591,15 @@ function createDataProvider(options) {
             const worker = accountId ? workers[accountId] : null;
 
             if (!accountId) return { ok: false, reason: 'invalid_account' };
+
+            // 防封号(低调)模式离线期间: 只保存 code, 不自动启动(避免破坏"离线一段时间"的节奏)
+            if (stealthMode && typeof stealthMode.isOfflineByStealth === 'function' && stealthMode.isOfflineByStealth(accountId)) {
+                store.addOrUpdateAccount({ id: accountId, code: nextCode });
+                if (typeof addAccountLog === 'function') {
+                    addAccountLog('code_skip', `已获取到 Code，账号处于防封号离线中，暂不启动`, accountId, acc.name, { reason: 'stealth_offline' });
+                }
+                return { ok: true, skipped: 'stealth_offline', reason: 'stealth_offline', accountId };
+            }
 
             if (!worker) {
 

@@ -203,6 +203,51 @@ function getFastMatureLands(lands, thresholdSec = 300) {
     }
     return targets;
 }
+/**
+ * 计算"下一次作物成熟时间"与"当前已成熟地块数" —— 供防封号(低调)模式决定何时上线收取
+ * 返回: { nowSec, landCount, ripeCount, readyLandIds, nextReadyAt }
+ *   nextReadyAt: 最近一次成熟的时间戳(秒); 0 表示没有正在生长的作物
+ */
+async function getNextRipeness() {
+    const reply = await getAllLands();
+    const lands = Array.isArray(reply && reply.lands) ? reply.lands : [];
+    const landsMap = buildLandMap(lands);
+    const nowSec = getServerTimeSec();
+    let ripeCount = 0;
+    let nextReadyAt = 0;
+    const readyLandIds = [];
+
+    for (const land of lands) {
+        if (!land || !land.unlocked) continue;
+        const { sourceLand } = getDisplayLandContext(land, landsMap);
+        const plant = (sourceLand && sourceLand.plant) || land.plant;
+        if (!plant || !Array.isArray(plant.phases) || plant.phases.length === 0) continue;
+
+        const currentPhase = getCurrentPhase(plant.phases);
+        if (currentPhase && toNum(currentPhase.phase) === PlantPhase.DEAD) continue;
+
+        const landId = toNum(land.id);
+        const isMature = currentPhase && toNum(currentPhase.phase) === PlantPhase.MATURE;
+        if (isMature) {
+            ripeCount += 1;
+            if (landId) readyLandIds.push(landId);
+            continue;
+        }
+
+        const maturePhase = plant.phases.find(ph => toNum(ph.phase) === PlantPhase.MATURE);
+        const matureBeginTime = maturePhase ? toTimeSec(maturePhase.begin_time) : 0;
+        if (matureBeginTime <= 0) continue;
+        if (matureBeginTime <= nowSec) {
+            ripeCount += 1;
+            if (landId) readyLandIds.push(landId);
+            continue;
+        }
+        if (!nextReadyAt || matureBeginTime < nextReadyAt) nextReadyAt = matureBeginTime;
+    }
+
+    return { nowSec, landCount: lands.length, ripeCount, readyLandIds, nextReadyAt };
+}
+
 function getSlaveLandIds(land) {
     const ids = Array.isArray(land && land.slave_land_ids) ? land.slave_land_ids : [];
     return [...new Set(ids.map(id => toNum(id)).filter(Boolean))];
@@ -1989,6 +2034,7 @@ module.exports = {
     getCurrentPhase,
     setOperationLimitsCallback,
     getAllLands,
+    getNextRipeness,
     getLandsDetail,
     getAvailableSeeds,
     buySeed,

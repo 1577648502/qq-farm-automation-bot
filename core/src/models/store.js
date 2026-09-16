@@ -209,6 +209,13 @@ const DEFAULT_ACCOUNT_CONFIG = {
     fertilizerBuyNormalThresholdHours: 10,
     // 化肥自动购买检测间隔（分钟）
     fertilizerBuyCheckIntervalMinutes: 60,
+    // ===== 防封号(低调)模式: 不定时上线收取, 不长期在线 =====
+    stealthEnabled: false,            // 是否启用
+    stealthOnlineMinMinutes: 3,       // 单次在线时长下限(分钟)
+    stealthOnlineMaxMinutes: 8,       // 单次在线时长上限(分钟)
+    stealthOfflineMinMinutes: 20,     // 离线时长下限(分钟)
+    stealthOfflineMaxMinutes: 60,     // 离线时长上限(分钟)
+    stealthWakeForRipe: true,         // 作物成熟时优先上线收取
     // 背包种子优先顺序（seedId 数组）
     bagSeedPriority: [],
     // 背包种子用完后的回退策略
@@ -346,6 +353,12 @@ function cloneAccountConfig(base = DEFAULT_ACCOUNT_CONFIG) {
         preferredSeedId: Math.max(0, Number.parseInt(base.preferredSeedId, 10) || 0),
         plantBlacklist: rawPlantBlacklist.map(Number).filter(n => Number.isFinite(n) && n > 0),
         plantSeedExclude: rawPlantSeedExclude.map(Number).filter(n => Number.isFinite(n) && n > 0),
+        stealthEnabled: !!(base.stealthEnabled),
+        stealthOnlineMinMinutes: Math.max(1, Math.min(180, Number(base.stealthOnlineMinMinutes) || 3)),
+        stealthOnlineMaxMinutes: Math.max(1, Math.min(180, Number(base.stealthOnlineMaxMinutes) || 8)),
+        stealthOfflineMinMinutes: Math.max(1, Math.min(1440, Number(base.stealthOfflineMinMinutes) || 20)),
+        stealthOfflineMaxMinutes: Math.max(1, Math.min(1440, Number(base.stealthOfflineMaxMinutes) || 60)),
+        stealthWakeForRipe: base.stealthWakeForRipe === undefined ? true : !!(base.stealthWakeForRipe),
         stealDelaySeconds: Math.max(0, Math.min(300, Number(base.stealDelaySeconds) || 0)),
         plantOrderRandom: !!(base.plantOrderRandom),
         plantDelaySeconds: Math.max(0, Math.min(60, Number(base.plantDelaySeconds) || 0)),
@@ -458,6 +471,26 @@ function normalizeAccountConfig(input, fallback = accountFallbackConfig) {
     // 种植延迟
     if (src.plantDelaySeconds !== undefined && src.plantDelaySeconds !== null) {
         cfg.plantDelaySeconds = Math.max(0, Math.min(60, Number(src.plantDelaySeconds) || 0));
+    }
+
+    // 防封号(低调)模式
+    if (src.stealthEnabled !== undefined && src.stealthEnabled !== null) {
+        cfg.stealthEnabled = !!src.stealthEnabled;
+    }
+    if (src.stealthOnlineMinMinutes !== undefined && src.stealthOnlineMinMinutes !== null) {
+        cfg.stealthOnlineMinMinutes = Math.max(1, Math.min(180, Number(src.stealthOnlineMinMinutes) || 3));
+    }
+    if (src.stealthOnlineMaxMinutes !== undefined && src.stealthOnlineMaxMinutes !== null) {
+        cfg.stealthOnlineMaxMinutes = Math.max(1, Math.min(180, Number(src.stealthOnlineMaxMinutes) || 8));
+    }
+    if (src.stealthOfflineMinMinutes !== undefined && src.stealthOfflineMinMinutes !== null) {
+        cfg.stealthOfflineMinMinutes = Math.max(1, Math.min(1440, Number(src.stealthOfflineMinMinutes) || 20));
+    }
+    if (src.stealthOfflineMaxMinutes !== undefined && src.stealthOfflineMaxMinutes !== null) {
+        cfg.stealthOfflineMaxMinutes = Math.max(1, Math.min(1440, Number(src.stealthOfflineMaxMinutes) || 60));
+    }
+    if (src.stealthWakeForRipe !== undefined && src.stealthWakeForRipe !== null) {
+        cfg.stealthWakeForRipe = !!src.stealthWakeForRipe;
     }
 
     // 有机化肥购买数量
@@ -717,6 +750,12 @@ function getConfigSnapshot(accountId) {
         friendBlacklist: [...(cfg.friendBlacklist || [])],
         plantBlacklist: [...(cfg.plantBlacklist || [])],
         plantSeedExclude: [...(cfg.plantSeedExclude || [])],
+        stealthEnabled: !!cfg.stealthEnabled,
+        stealthOnlineMinMinutes: Math.max(1, Math.min(180, Number(cfg.stealthOnlineMinMinutes) || 3)),
+        stealthOnlineMaxMinutes: Math.max(1, Math.min(180, Number(cfg.stealthOnlineMaxMinutes) || 8)),
+        stealthOfflineMinMinutes: Math.max(1, Math.min(1440, Number(cfg.stealthOfflineMinMinutes) || 20)),
+        stealthOfflineMaxMinutes: Math.max(1, Math.min(1440, Number(cfg.stealthOfflineMaxMinutes) || 60)),
+        stealthWakeForRipe: cfg.stealthWakeForRipe === undefined ? true : !!cfg.stealthWakeForRipe,
         stealDelaySeconds: Math.max(0, Math.min(300, Number(cfg.stealDelaySeconds) || 0)),
         plantOrderRandom: !!cfg.plantOrderRandom,
         plantDelaySeconds: Math.max(0, Math.min(60, Number(cfg.plantDelaySeconds) || 0)),
@@ -822,6 +861,26 @@ function applyConfigSnapshot(snapshot, options = {}) {
     // 种植顺序随机
     if (cfg.plantOrderRandom !== undefined && cfg.plantOrderRandom !== null) {
         next.plantOrderRandom = !!cfg.plantOrderRandom;
+    }
+
+    // 防封号(低调)模式
+    if (cfg.stealthEnabled !== undefined && cfg.stealthEnabled !== null) {
+        next.stealthEnabled = !!cfg.stealthEnabled;
+    }
+    if (cfg.stealthOnlineMinMinutes !== undefined && cfg.stealthOnlineMinMinutes !== null) {
+        next.stealthOnlineMinMinutes = Math.max(1, Math.min(180, Number(cfg.stealthOnlineMinMinutes) || 3));
+    }
+    if (cfg.stealthOnlineMaxMinutes !== undefined && cfg.stealthOnlineMaxMinutes !== null) {
+        next.stealthOnlineMaxMinutes = Math.max(1, Math.min(180, Number(cfg.stealthOnlineMaxMinutes) || 8));
+    }
+    if (cfg.stealthOfflineMinMinutes !== undefined && cfg.stealthOfflineMinMinutes !== null) {
+        next.stealthOfflineMinMinutes = Math.max(1, Math.min(1440, Number(cfg.stealthOfflineMinMinutes) || 20));
+    }
+    if (cfg.stealthOfflineMaxMinutes !== undefined && cfg.stealthOfflineMaxMinutes !== null) {
+        next.stealthOfflineMaxMinutes = Math.max(1, Math.min(1440, Number(cfg.stealthOfflineMaxMinutes) || 60));
+    }
+    if (cfg.stealthWakeForRipe !== undefined && cfg.stealthWakeForRipe !== null) {
+        next.stealthWakeForRipe = !!cfg.stealthWakeForRipe;
     }
 
     // 种植延迟
@@ -1323,6 +1382,23 @@ function setSystemConfig(config) {
     return { ...globalConfig.systemConfig };
 }
 
+/** 防封号(低调)模式配置(按账号读取, 未传则读默认配置) */
+function getStealthConfig(accountId) {
+    const cfg = (typeof getConfigSnapshot === 'function' ? getConfigSnapshot(accountId) : (globalConfig.accountConfig || {})) || {};
+    const onlineMin = Math.max(1, Math.min(180, Number(cfg.stealthOnlineMinMinutes) || 3));
+    const onlineMax = Math.max(onlineMin, Math.min(180, Number(cfg.stealthOnlineMaxMinutes) || 8));
+    const offlineMin = Math.max(1, Math.min(1440, Number(cfg.stealthOfflineMinMinutes) || 20));
+    const offlineMax = Math.max(offlineMin, Math.min(1440, Number(cfg.stealthOfflineMaxMinutes) || 60));
+    return {
+        enabled: !!cfg.stealthEnabled,
+        onlineMinMinutes: onlineMin,
+        onlineMaxMinutes: onlineMax,
+        offlineMinMinutes: offlineMin,
+        offlineMaxMinutes: offlineMax,
+        wakeForRipe: cfg.stealthWakeForRipe === undefined ? true : !!cfg.stealthWakeForRipe,
+    };
+}
+
 function getActivityStatus() {
     const cfg = globalConfig.systemConfig || {};
     return {
@@ -1425,6 +1501,7 @@ module.exports = {
     getSystemConfig,
     setSystemConfig,
     getActivityStatus,
+    getStealthConfig,
     // 全局微信配置
     getGlobalWxConfig,
     setGlobalWxConfig,

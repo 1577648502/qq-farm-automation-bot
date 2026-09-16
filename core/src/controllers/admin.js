@@ -1592,6 +1592,26 @@ app.use('/api', (req, res, next) => {
         } catch (e) { res.json({ ok: false, error: e.message }); }
     });
 
+    // API: 防封号(低调)模式状态
+    app.get('/api/stealth/status', async (req, res) => {
+        try {
+            const data = provider.getStealthStatus();
+            res.json({ ok: true, data });
+        } catch (e) { res.json({ ok: false, error: e.message }); }
+    });
+
+    // API: 手动上线/下线一次 (action: online | offline)
+    app.post('/api/stealth/force', async (req, res) => {
+        const id = getAccId(req);
+        if (!id) return res.status(400).json({ ok: false, error: '缺少账号 ID' });
+        if (!checkAccountAccess(req, id)) return res.status(403).json({ ok: false, error: '无权访问此账号' });
+        const action = String((req.body && req.body.action) || 'online').toLowerCase();
+        try {
+            const data = provider.forceStealth(id, action === 'offline' ? 'offline' : 'online');
+            res.json({ ok: true, data });
+        } catch (e) { res.json({ ok: false, error: e.message }); }
+    });
+
     // API: 萌宠游记玩法说明 (活动 desc)
     app.get('/api/mengchong/rules', async (req, res) => {
         const id = getAccId(req);

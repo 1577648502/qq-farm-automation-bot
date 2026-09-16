@@ -70,6 +70,13 @@ export interface SettingsState {
   fertilizerBuyNormalCount: number
   fertilizerBuyNormalThresholdHours: number
   fertilizerBuyCheckIntervalMinutes: number
+  // 防封号(低调)模式
+  stealthEnabled: boolean
+  stealthOnlineMinMinutes: number
+  stealthOnlineMaxMinutes: number
+  stealthOfflineMinMinutes: number
+  stealthOfflineMaxMinutes: number
+  stealthWakeForRipe: boolean
 }
 
 export const useSettingStore = defineStore('setting', () => {
@@ -100,6 +107,12 @@ export const useSettingStore = defineStore('setting', () => {
     fertilizerBuyNormalCount: 10,
     fertilizerBuyNormalThresholdHours: 10,
     fertilizerBuyCheckIntervalMinutes: 30,
+    stealthEnabled: false,
+    stealthOnlineMinMinutes: 3,
+    stealthOnlineMaxMinutes: 8,
+    stealthOfflineMinMinutes: 20,
+    stealthOfflineMaxMinutes: 60,
+    stealthWakeForRipe: true,
   })
   const loading = ref(false)
 
@@ -136,6 +149,12 @@ export const useSettingStore = defineStore('setting', () => {
         settings.value.fertilizerBuyNormalCount = d.fertilizerBuyNormalCount ?? 10
         settings.value.fertilizerBuyNormalThresholdHours = d.fertilizerBuyNormalThresholdHours ?? 10
         settings.value.fertilizerBuyCheckIntervalMinutes = d.fertilizerBuyCheckIntervalMinutes ?? 30
+        settings.value.stealthEnabled = !!d.stealthEnabled
+        settings.value.stealthOnlineMinMinutes = d.stealthOnlineMinMinutes ?? 3
+        settings.value.stealthOnlineMaxMinutes = d.stealthOnlineMaxMinutes ?? 8
+        settings.value.stealthOfflineMinMinutes = d.stealthOfflineMinMinutes ?? 20
+        settings.value.stealthOfflineMaxMinutes = d.stealthOfflineMaxMinutes ?? 60
+        settings.value.stealthWakeForRipe = d.stealthWakeForRipe !== false
         settings.value.bagSeedPriority = d.bagSeedPriority ?? []
         settings.value.bagSeedFallbackStrategy = d.bagSeedFallbackStrategy ?? 'level'
         settings.value.plantSeedExclude = d.plantSeedExclude ?? []
@@ -167,6 +186,12 @@ export const useSettingStore = defineStore('setting', () => {
         fertilizerBuyNormalCount: newSettings.fertilizerBuyNormalCount ?? 10,
         fertilizerBuyNormalThresholdHours: newSettings.fertilizerBuyNormalThresholdHours ?? 10,
         fertilizerBuyCheckIntervalMinutes: newSettings.fertilizerBuyCheckIntervalMinutes ?? 30,
+        stealthEnabled: newSettings.stealthEnabled,
+        stealthOnlineMinMinutes: newSettings.stealthOnlineMinMinutes ?? 3,
+        stealthOnlineMaxMinutes: newSettings.stealthOnlineMaxMinutes ?? 8,
+        stealthOfflineMinMinutes: newSettings.stealthOfflineMinMinutes ?? 20,
+        stealthOfflineMaxMinutes: newSettings.stealthOfflineMaxMinutes ?? 60,
+        stealthWakeForRipe: newSettings.stealthWakeForRipe !== false,
       }
 
       await api.post('/api/settings/save', settingsPayload, {

@@ -21,6 +21,8 @@ function createWorkerManager(options) {
         getAccounts,
         onStatusSync,
         onWorkerLog,
+        onWorkerStarted,
+        onWorkerStopped,
     } = options;
     const managerScheduler = createScheduler('worker_manager');
     const useThreadRuntime = runtimeMode === 'thread' && !processRef.pkg && typeof WorkerThread === 'function';
@@ -54,6 +56,9 @@ function createWorkerManager(options) {
         });
     }
 
+    // 供外部(如防封号模式)复用的调度器
+    const managerSchedulerRef = managerScheduler;
+
     function createWorkerProcess(account, options) {
         if (useThreadRuntime) return createThreadWorker(account, options);
         return createForkWorker(account, options);
@@ -73,6 +78,10 @@ function createWorkerManager(options) {
             log('错误', `账号 ${account.name} 启动失败: ${reason}`, { accountId: String(account.id), accountName: account.name });
             addAccountLog('start_failed', `账号 ${account.name} 启动失败`, account.id, account.name, { reason });
             return false;
+        }
+
+        if (typeof onWorkerStarted === 'function') {
+            try { onWorkerStarted(String(account.id)); } catch (e) { /* 忽略 */ }
         }
 
         workers[account.id] = {
@@ -148,6 +157,9 @@ function createWorkerManager(options) {
 
         const proc = worker.process;
         worker.stopping = true;
+        if (typeof onWorkerStopped === 'function') {
+            try { onWorkerStopped(String(accountId)); } catch (e) { /* 忽略 */ }
+        }
         worker.process.send({ type: 'stop' });
         // process.kill will happen in 'exit' handler, or we can force it
         managerScheduler.setTimeoutTask(`force_kill_${accountId}`, 1000, () => {
@@ -406,6 +418,7 @@ function createWorkerManager(options) {
 
     return {
         startWorker,
+        managerScheduler: managerSchedulerRef,
         stopWorker,
         restartWorker,
         callWorkerApi,
