@@ -22,6 +22,8 @@ function createStealthMode(options = {}) {
         stopWorker,
         callWorkerApi,
         findAccountByAnyRef,
+        isWorkerRunning,
+        listAccounts,
         addAccountLog,
         log = (msg) => rawLog('防封号', msg, { module: 'system', event: '防封号' }),
     } = options;
@@ -131,11 +133,16 @@ function createStealthMode(options = {}) {
         notify(accountId, 'stealth_plan', `防封号: 本次计划在线 ${Math.round(sec / 60)} 分钟, 之后自动下线`, { reason: 'plan', onlineSeconds: Math.round(sec) });
     }
 
-    /** 下线: 先算成熟时间, 决定离线时长 */
-    async function goOffline(accountId) {
+    /** 下线: 先算成熟时间, 决定离线时长(options.force/manual 用于手动立即下线) */
+    async function goOffline(accountId, options2 = {}) {
+        const force = !!(options2 && options2.force);
+        const manual = !!(options2 && options2.manual);
         const cfg = getStealthConfig(accountId);
         const st = stateOf(accountId);
-        if (!cfg.enabled) { st.nextSwitchAt = 0; return; }
+        if (!cfg.enabled && !force) {
+            st.nextSwitchAt = 0;
+            return { ok: false, reason: 'stealth_disabled', message: '防封号模式未启用' };
+        }
 
         // 先问 worker 作物情况(此刻还在线)
         let ripe = null;
@@ -160,7 +167,8 @@ function createStealthMode(options = {}) {
         const timeToRipeSec = nextReadyAt > nowSec ? nextReadyAt - nowSec : 0;
 
         // 成熟就在眼前(不足一个最短离线窗口) → 不值得下线, 留在线上把这波收完再走
-        if (nextReadyAt > 0 && timeToRipeSec > 0 && timeToRipeSec < cfg.offlineMinMinutes * 60) {
+        // (手动点击"立即下线"时跳过该判断, 用户说了算)
+        if (!manual && nextReadyAt > 0 && timeToRipeSec > 0 && timeToRipeSec < cfg.offlineMinMinutes * 60) {
             const waitSec = timeToRipeSec + 30;   // 成熟后再多留 30 秒把活儿干完
             st.phase = 'online';
             st.nextSwitchAt = Date.now() + waitSec * 1000;
@@ -170,7 +178,7 @@ function createStealthMode(options = {}) {
             }
             log(`账号 ${accountId} 防封号: 作物将在 ${Math.round(timeToRipeSec / 60)} 分钟后成熟, 本次不下线`);
             notify(accountId, 'stealth_hold', `防封号: ${Math.max(1, Math.round(timeToRipeSec / 60))} 分钟后有作物成熟, 保持在线收取`, { reason: 'ripe_soon' });
-            return;
+            return { ok: false, reason: 'ripe_soon', message: '下批作物即将成熟, 已保持在线收取' };
         }
 
         // 计算离线时长: 随机窗口; 若成熟的更早, 则提前上线(留 10 秒缓冲)
@@ -182,7 +190,7 @@ function createStealthMode(options = {}) {
                 offlineSec = wakeSec;
                 reason = `${Math.round(timeToRipeSec / 60)} 分钟后作物成熟, 提前上线收取`;
             }
-        } else if (cfg.wakeForRipe && st.ripeness && toNum(st.ripeness.ripeCount) > 0) {
+        } else if (!manual && cfg.wakeForRipe && st.ripeness && toNum(st.ripeness.ripeCount) > 0) {
             // 还有熟着的作物没收完 → 不收完不下线
             st.lastReason = `仍有 ${toNum(st.ripeness.ripeCount)} 块地已成熟, 保持在线收取`;
             st.nextSwitchAt = Date.now() + 60 * 1000;
@@ -191,18 +199,22 @@ function createStealthMode(options = {}) {
             }
             log(`账号 ${accountId} 防封号: 仍有 ${toNum(st.ripeness.ripeCount)} 块地已成熟, 暂不下线`);
             notify(accountId, 'stealth_hold', `防封号: 仍有 ${toNum(st.ripeness.ripeCount)} 块地已成熟, 保持在线收取`, { reason: 'has_ripe' });
-            return;
+            return { ok: false, reason: 'has_ripe', message: '仍有已成熟作物, 已保持在线收取' };
         }
+
+        if (manual) reason = `离线中(手动下线)`;
 
         // 执行下线(带原因, 会写入该账号的运行日志)
         const wakeAt = new Date(Date.now() + offlineSec * 1000);
         const wakeText = `预计 ${wakeAt.toLocaleTimeString('zh-CN', { hour12: false })} 上线`;
         const stopReason = `防封号模式: 主动下线 —— ${reason}，${wakeText}`;
+        let stopped = false;
         try {
-            if (typeof stopWorker === 'function') stopWorker(accountId, { reason: stopReason, byStealth: true });
+            if (typeof stopWorker === 'function') { stopWorker(accountId, { reason: stopReason, byStealth: true }); stopped = true; }
         } catch (e) {
             log(`账号 ${accountId} 下线失败: ${e.message}`);
             notify(accountId, 'stealth_error', `防封号: 下线失败 - ${e.message}`, { reason: 'stop_failed' });
+            return { ok: false, reason: 'stop_failed', message: `下线失败: ${e.message}` };
         }
         st.phase = 'offline';
         st.offlineSince = Date.now();
@@ -211,38 +223,96 @@ function createStealthMode(options = {}) {
         st.cycles += 1;
         log(`账号 ${accountId} 防封号: 已下线, ${Math.round(offlineSec / 60)} 分钟后上线 (${reason})`);
 
-        if (scheduler && typeof scheduler.setTimeoutTask === 'function') {
+        if (cfg.enabled && scheduler && typeof scheduler.setTimeoutTask === 'function') {
             scheduler.setTimeoutTask(`stealth_on_${accountId}`, offlineSec * 1000, () => { void goOnline(accountId); });
         }
+        return { ok: true, action: 'offline', accountId, stopped, wakeAt: st.nextSwitchAt, message: reason };
     }
 
-    /** 上线: 启动 worker(自动做收取/种植等), 并安排下一次下线 */
-    function goOnline(accountId) {
+    /** 上线: 启动 worker(自动做收取/种植等), 并安排下一次下线(options.force/manual 用于手动立即上线) */
+    function goOnline(accountId, options2 = {}) {
+        const force = !!(options2 && options2.force);
+        const manual = !!(options2 && options2.manual);
         const cfg = getStealthConfig(accountId);
         const st = stateOf(accountId);
         clearTimers(accountId);
-        if (!cfg.enabled) { st.phase = 'unknown'; st.nextSwitchAt = 0; return; }
-        try {
-            const account = typeof findAccountByAnyRef === 'function' ? findAccountByAnyRef(accountId) : null;
-            if (!account) {
-                st.phase = 'offline';
-                st.lastReason = '账号不存在, 等待中';
-                st.nextSwitchAt = Date.now() + 5 * 60 * 1000;
-                if (scheduler && typeof scheduler.setTimeoutTask === 'function') {
-                    scheduler.setTimeoutTask(`stealth_on_${accountId}`, 5 * 60 * 1000, () => { void goOnline(accountId); });
-                }
-                return;
-            }
-            if (typeof startWorker === 'function') startWorker(account);
-            st.phase = 'online';
-            st.onlineSince = Date.now();
-            st.offlineSince = 0;
-            log(`账号 ${accountId} 防封号: 已上线收取`);
-            notify(accountId, 'stealth_online', '防封号: 已到点上线, 开始收取作物', { reason: 'wake_up' });
-        } catch (e) {
-            log(`账号 ${accountId} 上线失败: ${e.message}`);
+
+        if (!cfg.enabled && !force) {
+            st.phase = 'unknown';
+            st.nextSwitchAt = 0;
+            return { ok: false, reason: 'stealth_disabled', message: '防封号模式未启用' };
         }
-        scheduleOffline(accountId);
+
+        const account = typeof findAccountByAnyRef === 'function' ? findAccountByAnyRef(accountId) : null;
+        if (!account) {
+            st.phase = 'offline';
+            st.lastReason = '账号不存在, 等待中';
+            st.nextSwitchAt = Date.now() + 5 * 60 * 1000;
+            if (scheduler && typeof scheduler.setTimeoutTask === 'function') {
+                scheduler.setTimeoutTask(`stealth_on_${accountId}`, 5 * 60 * 1000, () => { void goOnline(accountId); });
+            }
+            notify(accountId, 'stealth_error', '防封号: 未找到该账号, 5 分钟后重试', { reason: 'account_missing' });
+            return { ok: false, reason: 'account_not_found', message: '未找到该账号' };
+        }
+
+        let alreadyRunning = false;
+        let started = false;
+        try {
+            alreadyRunning = (typeof isWorkerRunning === 'function') ? !!isWorkerRunning(accountId) : false;
+            if (alreadyRunning) {
+                started = true;                        // 已在运行, 无需重启
+            } else if (typeof startWorker === 'function') {
+                started = startWorker(account) !== false;
+            } else {
+                started = true;                        // 无启动接口(单测环境), 视为成功
+            }
+        } catch (e) {
+            notify(accountId, 'stealth_error', `防封号: 上线失败 - ${e.message}`, { reason: 'start_failed' });
+            return { ok: false, reason: 'start_failed', message: `启动失败: ${e.message}` };
+        }
+
+        if (!started) {
+            // 多半是上一个进程还没退干净(stopping), 稍后自动重试; 避免"立即下线后立刻立即上线"失败
+            const retry = toNum(options2.retry);
+            if (retry < 3 && scheduler && typeof scheduler.setTimeoutTask === 'function') {
+                const delayMs = 1200 + retry * 800;
+                scheduler.setTimeoutTask(`stealth_on_${accountId}`, delayMs, () => {
+                    void goOnline(accountId, { ...options2, retry: retry + 1 });
+                });
+                notify(accountId, 'stealth_hold', '防封号: 账号进程正在退出, 已安排稍后自动上线', { reason: 'start_retry', retry });
+                return { ok: true, pending: true, accountId, message: '账号正在停止, 已安排稍后自动上线' };
+            }
+            notify(accountId, 'stealth_error', '防封号: 账号未能启动(启动接口返回失败)', { reason: 'start_rejected' });
+            return { ok: false, reason: 'start_rejected', message: '账号未能启动, 请查看运行日志' };
+        }
+
+        st.phase = 'online';
+        st.onlineSince = Date.now();
+        st.offlineSince = 0;
+        log(`账号 ${accountId} 防封号: 已上线收取`);
+        notify(
+            accountId,
+            'stealth_online',
+            manual
+                ? (cfg.enabled ? '防封号: 手动上线, 开始收取作物' : '手动上线: 防封号未启用, 账号保持在线')
+                : '防封号: 已到点上线, 开始收取作物',
+            { reason: manual ? 'manual_online' : 'wake_up' },
+        );
+
+        if (cfg.enabled) {
+            scheduleOffline(accountId);
+        } else {
+            st.nextSwitchAt = 0;
+            st.lastReason = '防封号未启用, 保持在线';
+        }
+        return {
+            ok: true,
+            action: 'online',
+            accountId,
+            name: account.name,
+            alreadyRunning,
+            message: alreadyRunning ? '账号已在运行中' : '已启动账号',
+        };
     }
 
     /** worker 启动后调用, 重新开始计时(用户手动启动 / 取码启动 / 自我唤醒 都会走到) */
@@ -263,8 +333,27 @@ function createStealthMode(options = {}) {
         st.lastReason = '';
     }
 
+    /** 全部账号列表(可选注入, 用于补状态/启动恢复) */
+    function allAccounts() {
+        try {
+            const list = (typeof listAccounts === 'function') ? listAccounts() : null;
+            return Array.isArray(list) ? list : [];
+        } catch (e) { return []; }
+    }
+
     /** 开关或参数变化时, 对所有已运行账号重排 */
     function refreshAll() {
+        // 正在运行但还没有状态记录的账号(例如开启防封号时账号已经在跑), 直接进入计时
+        for (const acc of allAccounts()) {
+            if (!acc || acc.id === undefined || acc.id === null) continue;
+            const id = String(acc.id);
+            if (states.has(id)) continue;
+            if (!getStealthConfig(id).enabled) continue;
+            if (typeof isWorkerRunning === 'function' && isWorkerRunning(id)) {
+                stateOf(id);
+                scheduleOffline(id);
+            }
+        }
         for (const st of states.values()) {
             const cfg = getStealthConfig(st.accountId);
             if (!cfg.enabled) {
@@ -276,6 +365,40 @@ function createStealthMode(options = {}) {
             }
             if (st.phase === 'online') scheduleOffline(st.accountId);
         }
+    }
+
+    /**
+     * 进程重启后的自恢复: 防封号的循环状态在内存里, 重启即丢。
+     * 对已开启防封号的账号 —— 在跑的进入计时, 没跑的安排自动上线, 循环不会因重启而中断。
+     */
+    function bootstrap() {
+        let scheduled = 0;
+        let index = 0;
+        for (const acc of allAccounts()) {
+            if (!acc || acc.id === undefined || acc.id === null) continue;
+            const id = String(acc.id);
+            if (!getStealthConfig(id).enabled) continue;
+            const running = (typeof isWorkerRunning === 'function') && isWorkerRunning(id);
+            if (running) {
+                stateOf(id);
+                scheduleOffline(id);
+                scheduled += 1;
+                continue;
+            }
+            const delayMs = 20000 + index * 8000;   // 错开启动, 避免同时上线
+            const st = stateOf(id);
+            st.phase = 'offline';
+            st.offlineSince = Date.now();
+            st.lastReason = '后台重启, 恢复防封号循环';
+            st.nextSwitchAt = Date.now() + delayMs;
+            if (scheduler && typeof scheduler.setTimeoutTask === 'function') {
+                scheduler.setTimeoutTask(`stealth_on_${id}`, delayMs, () => { void goOnline(id); });
+            }
+            log(`账号 ${id} 防封号: 后台重启, 将在 ${Math.round(delayMs / 1000)} 秒后自动上线`);
+            index += 1;
+            scheduled += 1;
+        }
+        return scheduled;
     }
 
     function start() {
@@ -293,6 +416,7 @@ function createStealthMode(options = {}) {
         goOnline,
         goOffline,
         refreshAll,
+        bootstrap,
     };
 }
 

@@ -65,7 +65,7 @@ function createRuntimeEngine(options = {}) {
   // 防封号(低调)模式实例(在 worker-manager 之后初始化, 用 let 以支持回调里安全引用)
   let stealthMode = null
 
-  const { startWorker, stopWorker, restartWorker, callWorkerApi, refreshWorkerCode, managerScheduler } = createWorkerManager({
+  const { startWorker, stopWorker, restartWorker, callWorkerApi, refreshWorkerCode, managerScheduler, isWorkerRunning } = createWorkerManager({
     fork,
     WorkerThread: Worker,
     runtimeMode,
@@ -94,8 +94,8 @@ function createRuntimeEngine(options = {}) {
     onWorkerStarted: (accountId) => {
       if (stealthMode) stealthMode.onAccountStarted(accountId)
     },
-    onWorkerStopped: (accountId) => {
-      if (stealthMode) stealthMode.onAccountStopped(accountId)
+    onWorkerStopped: (accountId, options) => {
+      if (stealthMode) stealthMode.onAccountStopped(accountId, options || {})
     },
   })
 
@@ -105,18 +105,33 @@ function createRuntimeEngine(options = {}) {
     startWorker,
     stopWorker,
     callWorkerApi,
+    // 注意: store.getAccounts() 返回的是 { accounts: [...], nextId } 而不是数组
     findAccountByAnyRef: (ref) => {
       try {
-        const accounts = store.getAccounts() || []
+        const data = store.getAccounts() || {}
+        const list = Array.isArray(data) ? data : (data.accounts || [])
         const target = String(ref || '')
-        return accounts.find(a => String(a.id) === target || String(a.name) === target || String(a.uin) === target) || null
+        if (!target) return null
+        return list.find(a => String(a.id) === target || String(a.name) === target || String(a.uin) === target) || null
       } catch (e) { return null }
+    },
+    isWorkerRunning,
+    listAccounts: () => {
+      try {
+        const data = store.getAccounts() || {}
+        return Array.isArray(data) ? data : (data.accounts || [])
+      } catch (e) { return [] }
     },
     addAccountLog,
     // 透传 meta(含 accountId/accountName), 保证日志能归属到账号并出现在运行日志里
     log: (msg, meta) => log('系统', msg, { module: 'system', event: '防封号', ...(meta || {}) }),
   })
   stealthMode.start()
+  // 重启自恢复: 已开启防封号的账号自动回到上下线循环(在跑的进入计时, 没跑的错峰自动上线)
+  try {
+    const recovered = stealthMode.bootstrap()
+    if (recovered > 0) log('系统', `防封号: 后台启动, 已恢复 ${recovered} 个账号的上下线循环`, { module: 'system', event: '防封号' })
+  } catch (e) { /* 忽略 */ }
   workerControls.startWorker = startWorker
   workerControls.restartWorker = restartWorker
   workerControls.refreshWorkerCode = refreshWorkerCode

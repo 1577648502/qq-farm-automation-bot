@@ -1607,7 +1607,10 @@ app.use('/api', (req, res, next) => {
         if (!checkAccountAccess(req, id)) return res.status(403).json({ ok: false, error: '无权访问此账号' });
         const action = String((req.body && req.body.action) || 'online').toLowerCase();
         try {
-            const data = provider.forceStealth(id, action === 'offline' ? 'offline' : 'online');
+            const data = await provider.forceStealth(id, action === 'offline' ? 'offline' : 'online');
+            if (data && data.ok === false) {
+                return res.json({ ok: false, error: data.message || data.reason || '操作未生效', data });
+            }
             res.json({ ok: true, data });
         } catch (e) { res.json({ ok: false, error: e.message }); }
     });

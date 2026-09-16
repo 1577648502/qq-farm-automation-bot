@@ -454,6 +454,12 @@ function createWorkerManager(options) {
         return { ok: true };
     }
 
+    /** 该账号的 worker 进程当前是否在运行 */
+    function isWorkerRunning(accountId) {
+        const worker = workers[accountId];
+        return !!(worker && worker.process && !worker.stopping);
+    }
+
     return {
         startWorker,
         managerScheduler: managerSchedulerRef,
@@ -461,6 +467,7 @@ function createWorkerManager(options) {
         restartWorker,
         callWorkerApi,
         refreshWorkerCode,
+        isWorkerRunning,
     };
 }
 

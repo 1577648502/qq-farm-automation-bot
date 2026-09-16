@@ -668,14 +668,98 @@ function applyActivityGate() {
 // ===== 防封号(低调)模式: 状态与手动切换 =====
 const stealthStatus = ref<any>(null)
 const stealthLoading = ref(false)
+const stealthStatusError = ref('')
+const stealthSaveState = ref<'idle' | 'saving' | 'saved' | 'error'>('idle')
+const stealthSavedAt = ref('')
+const stealthSaveError = ref('')
+let stealthSaveTimer: any = null
 
 async function fetchStealthStatus() {
   try {
     const res = await api.get('/api/stealth/status')
-    if (res.data?.ok)
+    if (res.data?.ok) {
       stealthStatus.value = res.data.data
-  } catch (e) { /* 忽略 */ }
+      stealthStatusError.value = ''
+    } else {
+      stealthStatusError.value = `后台未返回防封号状态：${res.data?.error || '未知原因'}`
+    }
+  } catch (e: any) {
+    const code = e?.response?.status
+    stealthStatusError.value = code === 404
+      ? '后台没有 /api/stealth 接口 —— 说明后台进程还是旧版本，请重启后台（core）后再试'
+      : `无法读取防封号状态：${e?.response?.data?.error || e?.message || '请求失败'}`
+  }
 }
+
+/** 当前防封号表单值(用于自动保存) */
+function stealthPayload() {
+  return {
+    stealthEnabled: !!localAutomationSettings.value.stealthEnabled,
+    stealthOnlineMinMinutes: Number(localAutomationSettings.value.stealthOnlineMinMinutes) || 3,
+    stealthOnlineMaxMinutes: Number(localAutomationSettings.value.stealthOnlineMaxMinutes) || 8,
+    stealthOfflineMinMinutes: Number(localAutomationSettings.value.stealthOfflineMinMinutes) || 20,
+    stealthOfflineMaxMinutes: Number(localAutomationSettings.value.stealthOfflineMaxMinutes) || 60,
+    stealthWakeForRipe: localAutomationSettings.value.stealthWakeForRipe !== false,
+  }
+}
+/** 后台已保存的防封号值 */
+function stealthSavedPayload() {
+  const s: any = settings.value || {}
+  return {
+    stealthEnabled: !!s.stealthEnabled,
+    stealthOnlineMinMinutes: s.stealthOnlineMinMinutes ?? 3,
+    stealthOnlineMaxMinutes: s.stealthOnlineMaxMinutes ?? 8,
+    stealthOfflineMinMinutes: s.stealthOfflineMinMinutes ?? 20,
+    stealthOfflineMaxMinutes: s.stealthOfflineMaxMinutes ?? 60,
+    stealthWakeForRipe: s.stealthWakeForRipe !== false,
+  }
+}
+function stealthSame(a: any, b: any) {
+  return a.stealthEnabled === b.stealthEnabled
+    && a.stealthOnlineMinMinutes === b.stealthOnlineMinMinutes
+    && a.stealthOnlineMaxMinutes === b.stealthOnlineMaxMinutes
+    && a.stealthOfflineMinMinutes === b.stealthOfflineMinMinutes
+    && a.stealthOfflineMaxMinutes === b.stealthOfflineMaxMinutes
+    && a.stealthWakeForRipe === b.stealthWakeForRipe
+}
+
+/** 有未保存的改动 */
+const stealthDirty = computed(() => !stealthSame(stealthPayload(), stealthSavedPayload()))
+
+/** 只保存防封号相关设置(自动保存用, 不影响其它未保存的编辑) */
+async function saveStealthSettings() {
+  if (!currentAccountId.value)
+    return
+  stealthSaveState.value = 'saving'
+  stealthSaveError.value = ''
+  try {
+    const res = await settingStore.saveSettings(currentAccountId.value, stealthPayload())
+    if (res?.ok) {
+      // 同步到本地 settings, 让"未保存"提示消失
+      Object.assign(settings.value as any, stealthPayload())
+      stealthSaveState.value = 'saved'
+      stealthSavedAt.value = new Date().toLocaleTimeString('zh-CN', { hour12: false })
+      await fetchStealthStatus()
+    } else {
+      stealthSaveState.value = 'error'
+      stealthSaveError.value = res?.error || '保存失败'
+    }
+  } catch (e: any) {
+    stealthSaveState.value = 'error'
+    stealthSaveError.value = e?.response?.data?.error || e?.message || '保存失败'
+  }
+}
+
+// 防封号设置改动后自动保存(免去"改了但忘记点保存")
+watch(
+  () => { const p = stealthPayload(); return JSON.stringify(p) },
+  () => {
+    if (!currentAccountId.value || !stealthDirty.value)
+      return
+    if (stealthSaveTimer) clearTimeout(stealthSaveTimer)
+    stealthSaveTimer = setTimeout(() => { void saveStealthSettings() }, 700)
+  },
+)
 
 async function handleForceStealth(action: 'online' | 'offline') {
   if (!currentAccountId.value)
@@ -684,7 +768,8 @@ async function handleForceStealth(action: 'online' | 'offline') {
   try {
     const res = await api.post('/api/stealth/force', { action }, { headers: { 'x-account-id': currentAccountId.value } })
     if (res.data?.ok) {
-      showAlert(action === 'offline' ? '已手动下线' : '已手动上线', 'primary')
+      const detail = res.data?.data?.message
+      showAlert(detail || (action === 'offline' ? '已手动下线' : '已手动上线'), 'primary')
       await fetchStealthStatus()
     } else {
       showAlert(res.data?.error || '操作失败', 'danger')
@@ -1617,8 +1702,16 @@ async function handleTestOffline() {
 
               <!-- 实时状态 -->
               <div class="rounded bg-white p-2 text-xs dark:bg-gray-800">
-                <div class="mb-1 text-gray-500 dark:text-gray-400">
-                  当前账号状态
+                <div class="mb-1 flex items-center justify-between">
+                  <span class="text-gray-500 dark:text-gray-400">当前账号状态</span>
+                  <span v-if="stealthSaveState === 'saving'" class="text-blue-500">正在保存…</span>
+                  <span v-else-if="stealthSaveState === 'error'" class="text-red-500">保存失败：{{ stealthSaveError }}</span>
+                  <span v-else-if="stealthDirty" class="text-amber-600 dark:text-amber-400">有未保存的修改…</span>
+                  <span v-else-if="stealthSaveState === 'saved'" class="text-gray-400">已自动保存 {{ stealthSavedAt }}</span>
+                  <span v-else class="text-gray-400">修改后自动保存</span>
+                </div>
+                <div v-if="stealthStatusError" class="mb-2 rounded bg-red-50 px-2 py-1 text-red-600 dark:bg-red-900/30 dark:text-red-300">
+                  {{ stealthStatusError }}
                 </div>
                 <div v-if="myStealth" class="space-y-1">
                   <div class="flex flex-wrap items-center gap-2">
@@ -1630,7 +1723,13 @@ async function handleTestOffline() {
                           ? 'bg-gray-200 text-gray-600 dark:bg-gray-700 dark:text-gray-300'
                           : 'bg-gray-100 text-gray-500 dark:bg-gray-800 dark:text-gray-400'"
                     >
-                      {{ myStealth.phase === 'online' ? '在线中' : myStealth.phase === 'offline' ? '离线中' : '未启用' }}
+                      {{ !myStealth.enabled
+                        ? '未启用'
+                        : myStealth.phase === 'online'
+                          ? '在线中'
+                          : myStealth.phase === 'offline'
+                            ? '离线中'
+                            : '待调度' }}
                     </span>
                     <span v-if="myStealth.nextSwitchAt" class="text-gray-600 dark:text-gray-300">
                       {{ myStealth.phase === 'online' ? '预计' : '预计' }}
@@ -1645,17 +1744,17 @@ async function handleTestOffline() {
                     下一批成熟: {{ fmtClock(myStealth.ripeness.nextReadyAt * 1000) }}
                     <span v-if="myStealth.ripeness.ripeCount > 0">(当前有 {{ myStealth.ripeness.ripeCount }} 块地已成熟)</span>
                   </div>
-                  <div class="pt-1 flex gap-2">
-                    <BaseButton variant="secondary" size="sm" :loading="stealthLoading" @click="handleForceStealth('offline')">
-                      立即下线
-                    </BaseButton>
-                    <BaseButton variant="secondary" size="sm" :loading="stealthLoading" @click="handleForceStealth('online')">
-                      立即上线
-                    </BaseButton>
-                  </div>
                 </div>
                 <div v-else class="text-gray-400 dark:text-gray-500">
-                  该账号暂无状态记录（保存设置后或账号启动后开始计时）
+                  暂无状态记录（开启防封号后自动开始计时）
+                </div>
+                <div class="mt-2 flex gap-2 border-t border-gray-100 pt-2 dark:border-gray-700">
+                  <BaseButton variant="secondary" size="sm" :loading="stealthLoading" @click="handleForceStealth('offline')">
+                    立即下线
+                  </BaseButton>
+                  <BaseButton variant="secondary" size="sm" :loading="stealthLoading" @click="handleForceStealth('online')">
+                    立即上线
+                  </BaseButton>
                 </div>
               </div>
             </div>

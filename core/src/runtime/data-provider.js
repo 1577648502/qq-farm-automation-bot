@@ -456,6 +456,16 @@ function createDataProvider(options) {
             const cfg = (typeof store.getStealthConfig === 'function')
                 ? store.getStealthConfig()
                 : { enabled: false };
+            // 为每个账号补一条状态记录(哪怕还没启动过), 前端才能显示该账号的开关与按钮
+            try {
+                const raw = store.getAccounts ? store.getAccounts() : null;
+                const list = Array.isArray(raw) ? raw : ((raw && raw.accounts) || []);
+                if (typeof stealthMode.stateOf === 'function') {
+                    for (const acc of list) {
+                        if (acc && acc.id !== undefined && acc.id !== null) stealthMode.stateOf(String(acc.id));
+                    }
+                }
+            } catch (e) { /* 忽略 */ }
             return {
                 enabled: !!cfg.enabled,
                 config: cfg,
@@ -463,17 +473,21 @@ function createDataProvider(options) {
             };
         },
 
-        /** 手动上线/下线一次(action: 'online' | 'offline') */
-        forceStealth: (accountRef, action) => {
-            if (!stealthMode) return { ok: false, reason: 'stealth_unavailable' };
+        /** 手动上线/下线一次(action: 'online' | 'offline'), 返回真实执行结果 */
+        forceStealth: async (accountRef, action) => {
+            if (!stealthMode) return { ok: false, reason: 'stealth_unavailable', message: '防封号模块未就绪' };
             const accountId = resolveAccountRefId(accountRef);
-            if (!accountId) return { ok: false, reason: 'invalid_account' };
-            if (String(action) === 'offline') {
-                void stealthMode.goOffline(accountId);
-                return { ok: true, action: 'offline', accountId };
+            if (!accountId) return { ok: false, reason: 'invalid_account', message: '账号无效' };
+            try {
+                if (String(action) === 'offline') {
+                    const r = await stealthMode.goOffline(accountId, { force: true, manual: true });
+                    return { ...(r || { ok: true }), accountId };
+                }
+                const r = stealthMode.goOnline(accountId, { force: true, manual: true });
+                return { ...(r || { ok: true }), accountId };
+            } catch (e) {
+                return { ok: false, reason: 'exception', message: e.message, accountId };
             }
-            stealthMode.goOnline(accountId);
-            return { ok: true, action: 'online', accountId };
         },
 
         /** 配置变更后重排 */
