@@ -51,18 +51,23 @@ interface PetState {
   items: { id: number, count: number, name: string }[]
   handnotes: Handnote[]
   wishBags?: {
-    keys: string[]
-    keyFirst: string
-    keySecond: string
-    flag6: number
+    /** 当前生效锦囊(#6.#2) */
+    activeCharmId: number
+    activeKey: string
+    activeCharm: { id: number, name: string, short: string, desc: string } | null
+    /** 今日候选(#6.#1, 刷新出来的 2 个; 未刷新时兜底为生效锦囊) */
+    candidates: { id: number, key: string, name: string, short: string, desc?: string, active?: boolean }[]
+    candidateIds: number[]
+    poolKey: string
+    poolRefreshed: boolean
+    /** #6>0 = 今日已选择, #7>0 = 今日已刷新, #8 = 付费刷新剩余 */
+    selected: boolean
     refreshed: boolean
     paidRefreshLeft: number
-    activeCharmId: number
-    activeCharm: { id: number, name: string, short: string, desc: string } | null
-    charmUsed: number
-    charmLimit: number
-    candidates: { id: number, key: string, name: string, short: string, desc?: string }[]
+    /** 限次锦囊计数(#6.#4, 与每日选择无关, 恒为 105 移花接木) */
+    limitedCharm: { id: number, name: string, short: string, used: number, limit: number } | null
     charmPool: { id: number, name: string, short: string, desc?: string, group?: number, useLimit?: number }[]
+    keys: string[]
   } | null
   escort?: {
     treasureId: string
@@ -390,8 +395,10 @@ async function handleRefreshWishBags() {
     const r = data?.data || {}
     const fresh = await loadOverview()
     const wb = fresh?.pet?.wishBags
-    if (data?.ok && (r.verified !== false) && wb && ((wb.keys || []).includes(r.wishBagKey) || wb.refreshed)) {
-      toast.success(`锦囊已刷新${r.wishBagKey ? ` → ${r.wishBagKey}` : ''}`)
+    if (data?.ok && r.verified !== false) {
+      // 刷新出的是"新候选", 用锦囊名展示, 别再打单字节 key
+      const names = (r.candidates || wb?.candidates || []).map((c: any) => c.name).filter(Boolean)
+      toast.success(names.length ? `锦囊已刷新 → ${names.join('、')}` : '锦囊已刷新')
     } else {
       toast.warning(r.reason || data?.error || '刷新未生效(今日免费刷新可能已用完)')
     }
@@ -406,12 +413,19 @@ async function handleSelectCharm(c: { id: number, name: string }) {
   busy.value = true
   try {
     const { data } = await api.post('/api/mengchong/wish-bag/select', { charmId: c.id })
+    const r = data?.data || {}
     const fresh = await loadOverview()
     const wb = fresh?.pet?.wishBags
-    if (data?.ok && data.data?.verified !== false) {
-      toast.success(`已选择锦囊「${c.name}」${wb?.activeCharmId === c.id ? ' (已生效)' : ''}`)
+    if (data?.ok && r.verified !== false) {
+      // 以"刷新后的生效锦囊"为准(服务端可能不接受不在候选里的锦囊)
+      const activeId = wb?.activeCharmId || r.activeCharmId
+      if (activeId === c.id) {
+        toast.success(`已选择锦囊「${wb?.activeCharm?.name || c.name}」，当前生效`)
+      } else {
+        toast.warning(`服务端当前生效的仍是「${wb?.activeCharm?.name || '未知'}」，本次选择未改变生效锦囊`)
+      }
     } else {
-      toast.warning(data?.data?.reason || data?.error || '选择未生效(可能不在今日候选中)')
+      toast.warning(r.reason || data?.error || '选择未生效(只能选今日候选里的锦囊)')
     }
   } catch (e: any) {
     toast.error(extractError(e) || '选择锦囊失败')
@@ -847,13 +861,10 @@ onMounted(fetchRules)
               {{ overview.pet.wishBags.activeCharm.short }}
             </span>
             <span
-              v-if="overview.pet.wishBags.charmLimit > 0"
-              class="rounded px-1.5 py-0.5 text-xs"
-              :class="overview.pet.wishBags.charmUsed >= overview.pet.wishBags.charmLimit
-                ? 'bg-gray-200 text-gray-500 dark:bg-gray-700 dark:text-gray-300'
-                : 'bg-rose-100 text-rose-600 dark:bg-rose-900/40 dark:text-rose-300'"
+              v-if="overview.pet.wishBags.selected"
+              class="rounded bg-rose-100 px-1.5 py-0.5 text-xs text-rose-600 dark:bg-rose-900/40 dark:text-rose-300"
             >
-              已用 {{ overview.pet.wishBags.charmUsed }}/{{ overview.pet.wishBags.charmLimit }}
+              今日已选择
             </span>
           </div>
           <div v-if="overview.pet.wishBags.activeCharm && overview.pet.wishBags.activeCharm.desc" class="mt-1 text-xs text-gray-500 dark:text-gray-400">
@@ -864,10 +875,13 @@ onMounted(fetchRules)
         <!-- 今日候选 -->
         <div class="mt-3">
           <div class="mb-1 text-xs text-gray-500 dark:text-gray-400">
-            今日候选 (点「选用」使其生效)
+            今日候选（{{ (overview.pet.wishBags.candidates || []).length }} 个，点「选用」使其生效）
+            <span v-if="!overview.pet.wishBags.poolRefreshed" class="text-gray-400">
+              · 今日还没刷新过，点「刷新锦囊」可换出 2 个新候选
+            </span>
           </div>
           <div v-if="!overview.pet.wishBags.candidates || !overview.pet.wishBags.candidates.length" class="text-xs text-gray-400">
-            暂未取到候选锦囊
+            暂未取到候选锦囊（点「刷新锦囊」获取今日候选）
           </div>
           <div class="grid grid-cols-1 gap-2 md:grid-cols-3">
             <div
@@ -878,7 +892,15 @@ onMounted(fetchRules)
                 ? 'border-rose-300 bg-rose-50 dark:border-rose-700 dark:bg-rose-900/20'
                 : 'border-gray-200 dark:border-gray-700'"
             >
-              <span class="font-medium">{{ c.name }}</span>
+              <span class="font-medium">
+                {{ c.name }}
+                <span
+                  v-if="c.id === overview.pet.wishBags.activeCharmId"
+                  class="ml-1 rounded bg-rose-100 px-1.5 py-0.5 text-xs font-normal text-rose-600 dark:bg-rose-900/40 dark:text-rose-300"
+                >
+                  生效中
+                </span>
+              </span>
               <span class="mt-1 flex-1 text-xs leading-5 text-gray-600 dark:text-gray-300">
                 {{ c.desc || c.short }}
               </span>
@@ -897,8 +919,16 @@ onMounted(fetchRules)
         </div>
 
         <p class="mt-3 text-xs text-gray-500 dark:text-gray-400">
-          · 今日{{ overview.pet.wishBags.refreshed ? '已' : '未' }}刷新; 付费刷新剩余 {{ overview.pet.wishBags.paidRefreshLeft }} 次;
+          · 今日{{ overview.pet.wishBags.refreshed ? '已' : '未' }}刷新、
+          {{ overview.pet.wishBags.selected ? '已选择' : '尚未选择' }};
+          付费刷新剩余 {{ overview.pet.wishBags.paidRefreshLeft }} 次;
           选好锦囊后再点「寻宝一次」, 该锦囊即对本次寻得的宝藏生效。
+        </p>
+        <p v-if="overview.pet.wishBags.limitedCharm" class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+          · 限次锦囊「{{ overview.pet.wishBags.limitedCharm.name }}」
+          {{ overview.pet.wishBags.limitedCharm.used }}/{{ overview.pet.wishBags.limitedCharm.limit }}
+          {{ overview.pet.wishBags.limitedCharm.short ? `（${overview.pet.wishBags.limitedCharm.short}）` : '' }}
+          <span class="text-gray-400">— 与每日选择无关, 单独计数</span>
         </p>
 
         <!-- 锦囊图鉴: 全部锦囊的完整说明 -->

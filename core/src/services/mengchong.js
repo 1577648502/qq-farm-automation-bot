@@ -8,7 +8,7 @@
  *                                    元气糕不足报 1000019; 阶段(#1.#4)=2 即成年
  *     cmd=30 (payload field129, 空): 寻宝 — 消耗元气糕700 → 待护送宝藏+初级挑战书+幸运星50, 自动开启4小时护送
  *                                    响应结果 #130 = {#2: 消耗, #5...: 获得}; 护送状态在 #115.#7
- *     cmd=42 (payload field142 = 锦囊id 字符串): 选择锦囊 (状态 #6.#1/#2 为当日两个锦囊)
+ *     cmd=42 (payload field142 = 锦囊id 单字节): 选择锦囊 (生效锦囊 = 状态 #6.#2, 候选 = #6.#1)
  *     cmd=47 (payload field147 = {#1: 好友gid}): 好友夺宝
  *     cmd=48 (无 payload 字段): 领取比熊犬 (成年后解锁宠物), 结果 #148 = {#1: 90031}
  *     cmd=49 (payload field149 = {#1: 手记id 裸varint字节}): 点亮/翻看爪印手记
@@ -62,7 +62,7 @@ const MAIN_CMD_PAYLOAD_FIELD = {
     29: 128,   // 投喂
     31: 130,   // (旧) 语义未确认
     32: 131,   // 领取爪印手记奖励
-    41: 141,   // 寻宝 (推断: 结果带宝藏id+开始时间, 状态 #6 记录)
+    41: 141,   // 刷新锦囊 (结果 #141 = {#1: 新候选 id 串, #2: 刷新时间})
     42: 142,   // 选择锦囊 (payload = 锦囊id 字符串)
     47: 147,   // 好友夺宝
     48: 0,     // 领取比熊犬 (实测请求不带 payload 字段)
@@ -273,58 +273,73 @@ function parsePetState(stateBuf) {
             }
         }
     }
-    // #6 = 锦囊状态 { #1: 刷新出的备选key, #2: 当前生效key, #4: 附加数值, #6: 已选标记, #7: 已刷新标记 }
+    // #6 = 锦囊状态 (2026-09-10 / 09-14 / 09-17 抓包实测, 并用"夺宝战斗详情"交叉验证):
+    //   #1 = 刷新出来的候选锦囊 id 串 (免费/付费刷新后才有; 实测 "he"=104+101, "hg"=104+103, "ih"=105+104, 均 2 个)
+    //   #2 = **当前生效的锦囊** id (单字节; 实测 09-10/09-14 = "f"=102 奖池上限, 09-17 = "e"=101 惜糕探宝;
+    //        与夺宝战斗详情 结果#143.#9.#1(我方锦囊) 完全一致 → 可信)
+    //   #4 = { #1: 限次锦囊 id, #2: 已用, #3: 上限 } —— **与"每日选择"无关!**
+    //        实测 7 天恒为 105 移花接木 1/2; ⚠ 旧实现把它当成"当前生效锦囊", 于是不管选哪个都显示"移花接木"
+    //   #6 > 0 = 今日已选择(刷新后清零, 需要重新选), #7 > 0 = 今日已刷新, #8 = 付费刷新剩余
+    //   #3 / #9 语义未确认 → 不展示
     const f6 = findField(f, 6);
     if (f6 && f6.w === 2) {
         const t = parseTop(f6.v);
-        const keys = [];
-        const readKey = (field) => {
-            const e = findField(t, field);
-            if (e && e.w === 2) {
-                const str = e.v.toString('utf8');
-                if (/^[\x20-\x7e]{1,8}$/.test(str)) return str;
-            }
-            return '';
+        const keyBuf = (no) => {
+            const e = findField(t, no);
+            return e && e.w === 2 ? e.v : null;
         };
-        const k1 = readKey(1);
-        const k2 = readKey(2);
-        if (k2) keys.push(k2);
-        if (k1 && k1 !== k2) keys.push(k1);
-        // ⚠ 字段含义未完全确认(见下), 只做展示, 不对"哪个生效"下结论:
-        //   #1/#2: 两个短字符串 key(实测 "f"/"he"/"hg"), 具体是"两个候选"还是"生效+候选"未确认
-        //   #6: 实测 投放期#6=1 → 刷新后消失 → 选择后回到 1 (推测与"本次是否已选择/免费刷新"有关)
-        //   #7: 刷新后出现(=1)
-        //   #8: 实测出现 3, 与说明"付费刷新每日最多 3 次"吻合, 推测为付费刷新剩余
-        pet.wishBags = {
-            keys,                                              // 状态里的两个 key(顺序: #2 在前)
-            keyFirst: k2,                                      // #2
-            keySecond: k1,                                     // #1
-            flag6: toInt((findField(t, 6) || {}).v),
-            refreshed: toInt((findField(t, 7) || {}).v) > 0,
-            paidRefreshLeft: toInt((findField(t, 8) || {}).v), // 推测: 付费刷新剩余(3)
-        };
-        // #4 = 生效锦囊: #1 = charm_id, #2 = 已使用次数, #3 = 使用上限 (实测 105/1/2, 与配置里
-        //       移花接木 use_limit=2 完全吻合)
+        // 当前生效锦囊: #2
+        const activeIds = decodeCharmKeyToIds(keyBuf(2));
+        const activeCharmId = activeIds[0] || 0;
+        // 今日候选: #1(刷新出的 2 个); 尚未刷新过 #1 为空, 用"当前生效的那个"兜底, 免得候选区空着
+        const poolBuf = keyBuf(1);
+        const poolIds = decodeCharmKeyToIds(poolBuf);
+        const candidates = [];
+        for (const id of (poolIds.length ? poolIds : activeIds)) {
+            if (candidates.some(c => c.id === id)) continue;
+            const info = charmInfo(id) || {};
+            candidates.push({
+                id,
+                key: String.fromCharCode(id),
+                name: info.name || `锦囊#${id}`,
+                short: info.short || '',
+                desc: info.desc || '',
+                active: id === activeCharmId,
+            });
+        }
+        // 限次锦囊(#4): 与每日选择无关, 单独展示
+        let limitedCharm = null;
         const f4 = findField(t, 4);
         if (f4 && f4.w === 2) {
             const inner = parseTop(f4.v);
-            const charmId = toInt((findField(inner, 1) || {}).v);
-            pet.wishBags.activeCharmId = charmId;
-            pet.wishBags.activeCharm = charmId ? charmInfo(charmId) : null;
-            pet.wishBags.charmUsed = toInt((findField(inner, 2) || {}).v);
-            pet.wishBags.charmLimit = toInt((findField(inner, 3) || {}).v);
-        }
-        // 候选锦囊: #1/#2 的字符串是 charm_id 的字符编码(ASCII), 例 "f"=102 奖池上限, "he"=104+101
-        const candidates = [];
-        for (const key of [k2, k1]) {
-            for (const id of decodeCharmKeyToIds(key)) {
-                if (candidates.some(c => c.id === id)) continue;
-                candidates.push({ id, key, ...(charmInfo(id) || {}) });
+            const cid = toInt((findField(inner, 1) || {}).v);
+            if (cid) {
+                const info = charmInfo(cid) || {};
+                limitedCharm = {
+                    id: cid,
+                    name: info.name || `锦囊#${cid}`,
+                    short: info.short || '',
+                    used: toInt((findField(inner, 2) || {}).v),
+                    limit: toInt((findField(inner, 3) || {}).v),
+                };
             }
         }
-        pet.wishBags.candidates = candidates;
-        pet.wishBags.charmPool = Object.values(loadCharmTable()).sort((a2, b2) => (a2.id || 0) - (b2.id || 0));
-        // 兼容旧字段
+        pet.wishBags = {
+            activeCharmId,
+            activeCharm: activeCharmId ? charmInfo(activeCharmId) : null,
+            activeKey: activeCharmId ? String.fromCharCode(activeCharmId) : '',
+            candidates,
+            candidateIds: candidates.map(c => c.id),
+            poolKey: poolBuf ? poolBuf.toString('latin1') : '',   // #1 原文(校验刷新结果用)
+            poolRefreshed: poolIds.length > 0,                     // 是否已刷新出候选
+            selected: toInt((findField(t, 6) || {}).v) > 0,
+            refreshed: toInt((findField(t, 7) || {}).v) > 0,
+            paidRefreshLeft: toInt((findField(t, 8) || {}).v),
+            limitedCharm,
+            charmPool: Object.values(loadCharmTable()).sort((a2, b2) => (a2.id || 0) - (b2.id || 0)),
+        };
+        // 兼容旧字段(仅保留键位, 语义已废弃)
+        pet.wishBags.keys = candidates.map(c => c.key);
         pet.extra = { ...(pet.extra || {}), ...pet.wishBags };
     }
     for (const x of f) {
@@ -533,14 +548,25 @@ function loadCharmTable() {
     return charmTable;
 }
 
-/** 候选锦囊 key → charm_id 数组 (实测字符 ASCII 即 charm_id: e=101 f=102 g=103 h=104 i=105) */
+/**
+ * 锦囊 key → charm_id 数组
+ * 服务端把 charm_id 直接按字节存放(不是文本): 0x65=101 惜糕探宝 … 0x69=105 移花接木
+ *   实测: "f"=102 奖池上限, "he"={104 胜利加成, 101 惜糕探宝}, "ih"={105 移花接木, 104}
+ * 兼容: 若将来 charm_id > 255(多字节), 按 varint 序列再解一次
+ */
 function decodeCharmKeyToIds(key) {
     const table = loadCharmTable();
+    const buf = Buffer.isBuffer(key) ? key : Buffer.from(String(key || ''), 'latin1');
     const ids = [];
-    for (const ch of String(key || '')) {
-        const code = ch.charCodeAt(0);
-        if (table[code] && !ids.includes(code)) ids.push(code);
-    }
+    const push = (id) => { if (id && table[id] && !ids.includes(id)) ids.push(id); };
+    // 方式1: 一个字节就是一个 charm_id
+    for (const b of buf) push(b);
+    if (ids.length) return ids;
+    // 方式2: varint 序列
+    try {
+        const r = protobuf.Reader.create(buf);
+        while (r.pos < r.len) { const v = Number(r.uint64()); if (!table[v]) break; push(v); }
+    } catch { /* 两种都不像就算了 */ }
     return ids;
 }
 
@@ -897,29 +923,33 @@ async function treasureHunt() {
 
 /**
  * 刷新锦囊 (cmd=41, 空 payload) — 官方说明: 每日 0 点刷新 2 个锦囊, 每日 1 次免费刷新
- * 结果 #141 = { #1: 锦囊id, #2: 刷新时间, #4/#5: 标志 }; 状态 #115.#6.#1/#2 = 当日两个锦囊 id
+ * 结果 #141 = { #1: 刷新出的候选锦囊 id 串, #2: 刷新时间, #4/#5: 标志 }
+ *   抓包实测: #141 = 0a02686510e89a9dd50620012801 → #1="he"=104+101, #2=时间戳, #4=1, #5=1
  */
 async function refreshWishBags() {
     const res = await operateRaw(GROUP_MAIN, CMD_WISH_BAG_REFRESH, MAIN_CMD_PAYLOAD_FIELD[41], null);
     if (res.errorCode !== 0) throw new Error(`刷新锦囊失败: code=${res.errorCode}`);
     const f = parseTop(Buffer.from(res.resultHex || '', 'hex'));
     const idBuf = findField(f, 1);
-    const key = idBuf && idBuf.w === 2 ? idBuf.v.toString('utf8') : '';
-    // 校验: 响应状态里出现了新 key 或已刷新标记
+    const keyBuf = idBuf && idBuf.w === 2 ? idBuf.v : null;
+    const key = keyBuf ? keyBuf.toString('latin1') : '';
     const after = readWishBagsFromActivity(res.activity);
-    const verified = !!(after && ((after.keys || []).includes(key) || after.refreshed));
+    // 校验: 状态里出现新候选(与 #141 一致) 或 已刷新标记
+    const verified = !!(after && (after.refreshed || (key && after.poolKey === key)));
     return {
         ok: verified,
         verified,
         reason: verified ? '' : '刷新未生效(可能今日免费刷新已用完)',
         wishBagKey: key,
+        candidateIds: decodeCharmKeyToIds(keyBuf),
+        candidates: (after && after.candidates) || [],
         refreshedAt: toInt((findField(f, 2) || {}).v),
         wishBags: after,
     };
 }
 
 /**
- * 按锦囊 id 选择 (推荐): payload = charm_id 对应的单字符 (实测 id=102 → "f")
+ * 按锦囊 id 选择 (推荐): payload = charm_id 对应的单字节 (实测 id=102 → "f")
  */
 async function selectCharmById(charmId) {
     const id = toInt(charmId);
@@ -928,22 +958,29 @@ async function selectCharmById(charmId) {
     return { ...(await selectWishBag(String.fromCharCode(id))), charmId: id, charm: info };
 }
 
-/** 选择锦囊 (cmd=42, payload field142 = 锦囊 key 字符串) */
+/**
+ * 选择锦囊 (cmd=42, payload field142 = 锦囊 key 单字节)
+ * 抓包实测(09-14): 选 "f"(102 奖池上限) → err=0, 结果 #142 = 0a0166 = { #1: "f" } = 已生效的锦囊 key
+ */
 async function selectWishBag(wishBagKey) {
     const key = String(wishBagKey || '').trim();
     if (!key) throw new Error('缺少锦囊 key');
     const w = new protobuf.Writer();
-    w.uint32((1 << 3) | 2).bytes(Buffer.from(key, 'utf8'));
+    w.uint32((1 << 3) | 2).bytes(Buffer.from(key, 'latin1'));
     const res = await operateRaw(GROUP_MAIN, CMD_WISH_BAG_SELECT, MAIN_CMD_PAYLOAD_FIELD[42], w.finish());
     if (res.errorCode !== 0) throw new Error(`选择锦囊失败: code=${res.errorCode}`);
-    // 校验: 服务端接受了该 key(err=0) 且响应状态里确实带这个 key
+    // 校验: 结果 #142.#1 回显该 key, 或刷新后的状态里"生效锦囊"就是它
+    const rt = parseTop(Buffer.from(res.resultHex || '', 'hex'));
+    const echoBuf = findField(rt, 1);
+    const echoed = echoBuf && echoBuf.w === 2 ? echoBuf.v.toString('latin1') : '';
     const after = readWishBagsFromActivity(res.activity);
-    const accepted = !!(after && after.keys && after.keys.includes(key));
+    const accepted = echoed === key || !!(after && after.activeKey === key);
     return {
         ok: accepted,
         verified: accepted,
-        reason: accepted ? '' : '选择未生效(响应状态里没有该锦囊 key)',
+        reason: accepted ? '' : '选择未生效(服务端未回显该锦囊)',
         wishBagKey: key,
+        activeCharmId: after ? after.activeCharmId : 0,
         wishBags: after,
     };
 }
@@ -1223,7 +1260,9 @@ async function checkAndRunMengchongTasks() {
 }
 
 module.exports = {
-    __testing: { parseTop, parseGroupReply, parseSigninDays, parsePetState, parseShopBody, itemName },
+    __testing: { parseTop, parseGroupReply, parseSigninDays, parsePetState, parseShopBody, itemName, decodeCharmKeyToIds, charmInfo, loadCharmTable },
+    charmInfo,
+    loadCharmTable,
     GROUP_MAIN,
     GROUP_GIFT,
     getMengchongOverview,

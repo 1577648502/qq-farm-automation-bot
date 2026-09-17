@@ -3494,6 +3494,30 @@ app.use('/api', (req, res, next) => {
         } catch (e) { res.json({ ok: false, error: e.message }); }
     });
 
+    // 抢夺记录(成功/失败 + 获得的奖励, 按账号持久化)
+    app.get('/api/treasure/records', async (req, res) => {
+        const id = getAccId(req);
+        if (!id) return res.status(400).json({ ok: false, error: '缺少账号 ID' });
+        if (!checkAccountAccess(req, id)) return res.status(403).json({ ok: false, error: '无权访问此账号' });
+        const limit = Math.min(Math.max(Number.parseInt(req.query.limit) || 50, 1), 300);
+        const offset = Math.max(Number.parseInt(req.query.offset) || 0, 0);
+        try {
+            const data = await provider.listTreasureRobRecords(id, { limit, offset });
+            res.json({ ok: true, data });
+        } catch (e) { res.json({ ok: false, error: e.message }); }
+    });
+
+    // 清空抢夺记录
+    app.delete('/api/treasure/records', async (req, res) => {
+        const id = getAccId(req);
+        if (!id) return res.status(400).json({ ok: false, error: '缺少账号 ID' });
+        if (!checkAccountAccess(req, id)) return res.status(403).json({ ok: false, error: '无权访问此账号' });
+        try {
+            const data = await provider.clearTreasureRobRecords(id);
+            res.json({ ok: true, data });
+        } catch (e) { res.json({ ok: false, error: e.message }); }
+    });
+
     // 手动夺宝(用指定挑战书抢指定宝藏)
     app.post('/api/treasure/rob', async (req, res) => {
         const id = getAccId(req);
@@ -3511,6 +3535,8 @@ app.use('/api', (req, res, next) => {
                 gid,
                 treasureId,
                 bookItemId,
+                friendName: String(body.friendName || ''),
+                source: 'manual',
                 verify: body.verify !== false,
             });
             res.json({ ok: true, data });

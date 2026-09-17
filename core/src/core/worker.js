@@ -1062,12 +1062,20 @@ async function handleApiCall(msg) {
             case 'getTreasureMyStatus':
                 result = await treasureRob.getMyTreasureStatus();
                 break;
+            case 'listTreasureRobRecords':
+                result = treasureRob.listRobRecords(args[0] || {});
+                break;
+            case 'clearTreasureRobRecords':
+                result = treasureRob.clearRobRecords();
+                break;
             case 'robTreasure': {
                 const opt = args[0] || {};
                 result = await treasureRob.robOnce({
                     gid: opt.gid,
                     treasureId: opt.treasureId,
                     bookItemId: opt.bookItemId,
+                    friendName: opt.friendName || '',
+                    source: opt.source || 'manual',
                     verify: opt.verify !== false,
                 });
                 break;

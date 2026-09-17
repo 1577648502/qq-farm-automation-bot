@@ -214,6 +214,8 @@ async function loadProto() {
     types.TreasureInfo = root.lookupType('gamepb.activitypb.TreasureInfo');
     types.TreasureBookSlot = root.lookupType('gamepb.activitypb.TreasureBookSlot');
     types.TreasureHuntChallengeReq = root.lookupType('gamepb.activitypb.TreasureHuntChallengeReq');
+    types.TreasureHuntChallengeRsp = root.lookupType('gamepb.activitypb.TreasureHuntChallengeRsp');
+    types.TreasureHuntBattle = root.lookupType('gamepb.activitypb.TreasureHuntBattle');
     types.TreasureHuntMiscReq = root.lookupType('gamepb.activitypb.TreasureHuntMiscReq');
     types.TreasureHuntMiscRsp = root.lookupType('gamepb.activitypb.TreasureHuntMiscRsp');
     types.ActivityBodyTreasureHunt = root.lookupType('gamepb.activitypb.ActivityBodyTreasureHunt');

@@ -38,6 +38,26 @@ interface Target {
   treasureCount?: number
 }
 
+/** 一条抢夺记录(后端持久化, 含成功/失败/被拒 + 奖励) */
+interface RobRecord {
+  at: number
+  outcome: 'win' | 'lose' | 'rejected' | 'unknown' | 'error'
+  outcomeText: string
+  ok: boolean
+  reward: { id: number, count: number, name: string } | null
+  rewardText: string
+  message: string
+  gid: number
+  friendName: string
+  bookName: string
+  treasureShort?: string
+  myCharm?: string
+  theirCharm?: string
+  myWinRate?: number
+  theirWinRate?: number
+  source?: 'manual' | 'auto'
+}
+
 const accountStore = useAccountStore()
 const toast = useToastStore()
 const currentAccountId = computed(() => String(accountStore.currentAccountId || ''))
@@ -50,6 +70,10 @@ const autoRunning = ref(false)
 /** 每个宝藏选中的挑战书 id: treasureId -> bookItemId */
 const picked = ref<Record<string, number>>({})
 const logs = ref<string[]>([])
+const records = ref<RobRecord[]>([])
+const recordTotal = ref(0)
+const recordSummary = ref<{ win: number, lose: number, rejected: number, error: number, rewardTotal: number } | null>(null)
+const recordsLoading = ref(false)
 
 function pushLog(msg: string) {
   logs.value.unshift(`[${new Date().toLocaleTimeString('zh-CN', { hour12: false })}] ${msg}`)
@@ -120,8 +144,63 @@ async function fetchTargets() {
   }
 }
 
+async function fetchRecords() {
+  if (!currentAccountId.value) return
+  recordsLoading.value = true
+  try {
+    const res = await api.get('/api/treasure/records', {
+      headers: { 'x-account-id': currentAccountId.value },
+      params: { limit: 100 },
+    })
+    if (res.data?.ok) {
+      records.value = res.data.data?.records || []
+      recordTotal.value = Number(res.data.data?.total) || 0
+      recordSummary.value = res.data.data?.summary || null
+    }
+  } catch (e: any) {
+    // 记录拉取失败不打断主流程
+  } finally {
+    recordsLoading.value = false
+  }
+}
+
+async function clearRecords() {
+  if (!currentAccountId.value) return
+  try {
+    const res = await api.delete('/api/treasure/records', { headers: { 'x-account-id': currentAccountId.value } })
+    if (res.data?.ok) {
+      records.value = []
+      recordTotal.value = 0
+      recordSummary.value = null
+      toast.success('抢夺记录已清空')
+    } else {
+      toast.error(res.data?.error || '清空失败')
+    }
+  } catch (e: any) {
+    toast.error(e?.response?.data?.error || e?.message || '清空失败')
+  }
+}
+
+function fmtTime(ms: number) {
+  if (!ms) return '-'
+  const d = new Date(ms)
+  const p = (n: number) => String(n).padStart(2, '0')
+  return `${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`
+}
+
+/** 结果徽标配色: 成功=绿(夺到) / 失败=红 / 未发起=灰 */
+function outcomeClass(o: string) {
+  if (o === 'win')
+    return 'bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-300'
+  if (o === 'lose')
+    return 'bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-300'
+  if (o === 'error')
+    return 'bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300'
+  return 'bg-gray-100 text-gray-500 dark:bg-gray-700 dark:text-gray-300'
+}
+
 function refreshAll() {
-  return Promise.all([fetchBooks(), fetchTargets()])
+  return Promise.all([fetchBooks(), fetchTargets(), fetchRecords()])
 }
 
 async function robOne(t: Target) {
@@ -137,18 +216,31 @@ async function robOne(t: Target) {
       gid: t.gid,
       treasureId: t.treasureId,
       bookItemId,
+      friendName: t.friendName || '',
     }, { headers: { 'x-account-id': currentAccountId.value }, timeout: 60000 })
     if (res.data?.ok) {
       const d = res.data.data || {}
-      if (d.ok) {
-        pushLog(`✅ ${t.friendName || t.gid} 夺宝成功（${book?.name || bookItemId}）可夺价值 ${d.before} → ${d.after}`)
+      const who = t.friendName || t.gid
+      // 以后端战报为准: 成功/失败/未发起 三态, 并带上奖励
+      if (d.outcome === 'win') {
+        pushLog(`✅ ${who} 用【${book?.name || bookItemId}】夺得 ${d.rewardText || '奖励'}`)
+        toast.success(d.rewardText ? `夺得 ${d.rewardText}` : '夺宝成功')
+      } else if (d.outcome === 'lose') {
+        pushLog(`❌ ${who} 用【${book?.name || bookItemId}】落败, 返还 ${d.rewardText || '奖励'}`)
+        toast.warning(`夺宝落败, 返还 ${d.rewardText || '奖励'}`)
+      } else if (d.outcome === 'rejected') {
+        pushLog(`⛔ ${who} 用【${book?.name || bookItemId}】未发起: ${d.message || '被服务端拒绝'}`)
+        toast.warning(d.message || '服务端拒绝了这次夺宝')
+      } else if (d.ok) {
+        pushLog(`✅ ${who} 夺宝成功（${book?.name || bookItemId}）`)
         toast.success('夺宝成功')
       } else {
-        pushLog(`⚠️ ${t.friendName || t.gid} 用了【${book?.name || bookItemId}】但未生效（可夺价值 ${d.before} → ${d.after}），可能该宝藏已被夺到上限`)
+        pushLog(`⚠️ ${who} 用了【${book?.name || bookItemId}】但未生效（可夺价值 ${d.before} → ${d.after}），可能该宝藏已被夺到上限`)
         toast.warning('这次没有生效，换个宝藏试试')
       }
       await fetchBooks()
       await fetchTargets()
+      await fetchRecords()
     } else {
       toast.error(res.data?.error || '夺宝失败')
       pushLog(`❌ ${t.friendName || t.gid} 夺宝失败：${res.data?.error || '未知错误'}`)
@@ -174,9 +266,10 @@ async function runAutoNow() {
       if (d.skipped) {
         toast.warning('自动夺宝开关未开启（可在 设置 → 自动化 里打开）')
       } else {
-        pushLog(`🤖 自动夺宝: 尝试 ${d.attempted} 次，成功 ${d.success}，未生效 ${d.noEffect}，失败 ${d.failed}`)
+        pushLog(`🤖 自动夺宝: 尝试 ${d.attempted} 次，成功 ${d.win ?? d.success}，失败 ${d.lose ?? 0}，被拒 ${d.rejected ?? 0}，未生效 ${d.noEffect}，异常 ${d.failed}`)
         for (const it of (d.details || [])) {
-          pushLog(`   · ${it.friendName || it.gid} ${it.book} → ${it.ok ? '成功' : '未生效'}${it.error ? ' ' + it.error : ''}`)
+          const tail = it.rewardText ? ` → ${it.rewardText}` : (it.message || it.error || '')
+          pushLog(`   · ${it.friendName || it.gid} ${it.book} → ${it.outcomeText || (it.ok ? '成功' : '未生效')}${tail ? ' ' + tail : ''}`)
         }
         toast.success('自动夺宝执行完成')
       }
@@ -340,6 +433,74 @@ onMounted(() => {
             >
               夺宝
             </BaseButton>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 抢夺记录(持久化: 成功/失败 + 获得的奖励) -->
+    <div class="rounded-lg border border-gray-200 bg-white dark:border-gray-700 dark:bg-gray-800">
+      <div class="flex flex-wrap items-center justify-between gap-2 border-b border-gray-100 px-3 py-2 dark:border-gray-700">
+        <div class="flex flex-wrap items-center gap-2">
+          <span class="text-sm font-medium text-gray-700 dark:text-gray-200">
+            抢夺记录（{{ recordTotal }} 条）
+          </span>
+          <span v-if="recordSummary" class="text-xs text-gray-500 dark:text-gray-400">
+            成功
+            <span class="font-medium text-green-600 dark:text-green-400">{{ recordSummary.win }}</span>
+            · 失败 {{ recordSummary.lose }} · 未发起 {{ recordSummary.rejected }}
+            <span v-if="recordSummary.error">· 异常 {{ recordSummary.error }}</span>
+            <span class="ml-1 text-gray-500 dark:text-gray-400">累计夺得 {{ recordSummary.rewardTotal }} 幸运星</span>
+          </span>
+        </div>
+        <div class="flex items-center gap-3">
+          <button class="text-xs text-gray-400 hover:text-gray-600" :disabled="recordsLoading" @click="fetchRecords">
+            刷新
+          </button>
+          <button
+            class="text-xs text-gray-400 hover:text-red-500 disabled:opacity-50"
+            :disabled="!records.length"
+            @click="clearRecords"
+          >
+            清空
+          </button>
+        </div>
+      </div>
+
+      <div v-if="!records.length" class="px-3 py-6 text-center text-xs text-gray-400">
+        暂无抢夺记录（每次夺宝后都会在这里留下成功/失败与获得的奖励）
+      </div>
+      <div v-else class="max-h-80 divide-y divide-gray-100 overflow-y-auto dark:divide-gray-700">
+        <div v-for="(r, i) in records" :key="`${r.at}-${i}`" class="px-3 py-2">
+          <div class="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm">
+            <span class="text-xs text-gray-400">{{ fmtTime(r.at) }}</span>
+            <span class="min-w-[110px] font-medium text-gray-800 dark:text-gray-100">
+              {{ r.friendName || `gid:${r.gid}` }}
+            </span>
+            <span class="text-xs text-gray-500 dark:text-gray-400">{{ r.bookName || '-' }}</span>
+            <span class="rounded px-1.5 py-0.5 text-xs" :class="outcomeClass(r.outcome)">
+              {{ r.outcomeText }}
+            </span>
+            <span
+              v-if="r.rewardText"
+              class="text-xs font-medium"
+              :class="r.outcome === 'win'
+                ? 'text-amber-600 dark:text-amber-400'
+                : 'text-gray-500 dark:text-gray-400'"
+            >
+              {{ r.outcome === 'win' ? '夺得' : '返还' }} {{ r.rewardText }}
+            </span>
+            <span
+              v-if="r.source === 'auto'"
+              class="rounded bg-gray-100 px-1.5 py-0.5 text-xs text-gray-400 dark:bg-gray-700 dark:text-gray-300"
+            >
+              自动
+            </span>
+          </div>
+          <div v-if="r.message || r.theirCharm || r.myCharm" class="mt-0.5 text-xs text-gray-400">
+            <span v-if="r.message">{{ r.message }}</span>
+            <span v-if="r.theirCharm" class="ml-2">对方锦囊: {{ r.theirCharm }}</span>
+            <span v-if="r.myCharm" class="ml-2">我方锦囊: {{ r.myCharm }}</span>
           </div>
         </div>
       </div>

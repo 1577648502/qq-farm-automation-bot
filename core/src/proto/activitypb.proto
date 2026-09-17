@@ -323,6 +323,7 @@ message OperateReply {
     QingmeiSellRsp qingmei_sell = 115;
     StarLightUpRsp star_light_up = 120;   // 实测 cmd=21 响应
     TreasureHuntQueryRsp treasure_hunt_query = 147;        // 实测 cmd=47 响应(宝藏列表)
+    TreasureHuntChallengeRsp treasure_hunt_challenge = 143; // 实测 cmd=43 响应(战报: 胜负 + 奖励)
     TreasureHuntMiscRsp treasure_hunt_misc = 150;          // 实测 cmd=50 响应(回显)
 }
 
@@ -426,6 +427,42 @@ message TreasureHuntMiscReq {
 
 message TreasureHuntMiscRsp {
     int64 field1 = 1;            // 实测 = 1 (回显)
+}
+
+// --- cmd=43: 发起夺宝挑战的响应 = 战报 ---
+// 抓包实测 3 帧(2026-09-17, 见 services/treasure-rob.js):
+//   夺得: { #1: 1, #2: {1029, 510}, #3: "Kamiya Bunches", #6: 对手结算, #7: 4, #8: 3, #9: 对战详情 }
+//   被拒: { #10: 1, #12: "当前宝藏资金不足，无法使用该挑战书" }  ← err=0, 战斗没打起来, 必须读 #12
+// 奖励已交叉验证: 夺宝前后幸运星(#115.#3.#3) 2050 → 2560 → 2620, 与 #2 的 +510/+60 完全一致。
+// ⚠ 服务端在 proto 里只声明到 #150, 本响应是**未声明字段**; treasure-rob.js 用字段扫描读取,
+//   不要依赖整包 decode(见下方 TreasureHuntQueryRsp 的脏尾说明)。
+message TreasureHuntChallengeRsp {
+    int64 result = 1;                 // 实测 1 = 夺得(攻方胜)
+    ItemAmount reward = 2;            // 实测 {1: 1029 幸运星, 2: 510}: 本次到账奖励
+    string opponent_name = 3;         // 实测 "Kamiya Bunches": 对手昵称
+    ItemAmount opponent_settle = 6;   // 实测与 reward 同值, 语义待确认
+    int64 field7 = 7;                 // 实测 4 → 6, 语义待确认
+    int64 field8 = 8;                 // 实测 3 → 4, 语义待确认
+    TreasureHuntBattle battle = 9;    // 对战详情
+    int64 reject_flag = 10;           // 被拒时 = 1
+    string reject_text = 12;          // 被拒原因文案
+}
+
+message TreasureHuntBattle {
+    string my_charm = 1;              // 实测 "e" = 101 惜糕探宝: 我方锦囊(单字节 charm_id)
+    string their_charm = 2;           // 实测 "g" = 103 复仇机制: 对方锦囊
+    TreasureHuntStake stake = 4;      // 双方投入(规则: 双方投入等额博弈资金)
+    TreasureHuntRate rate = 5;        // 双方胜率
+}
+
+message TreasureHuntStake {
+    ItemAmount mine = 1;
+    ItemAmount theirs = 2;
+}
+
+message TreasureHuntRate {
+    double mine = 1;                  // 实测 0.5 (fixed64)
+    double theirs = 2;                // 实测 0.5
 }
 
 // 夺宝活动 body: 实测挂在 ActivityData field 115 (三次 cmd=43 响应内容一致, 是"我的夺宝状态")
