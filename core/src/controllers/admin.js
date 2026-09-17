@@ -2116,6 +2116,10 @@ app.use('/api', (req, res, next) => {
                     stealthOfflineMinMinutes: stealth.offlineMinMinutes,
                     stealthOfflineMaxMinutes: stealth.offlineMaxMinutes,
                     stealthWakeForRipe: !!stealth.wakeForRipe,
+                    // 夺宝(抢宝)
+                    robTreasureIntervalMinutes: (typeof store.getRobTreasureIntervalMinutes === 'function')
+                        ? store.getRobTreasureIntervalMinutes(id)
+                        : 10,
                     ui,
                     offlineReminder,
                 },
@@ -3453,6 +3457,75 @@ app.use('/api', (req, res, next) => {
         } catch (e) {
             res.status(500).json({ ok: false, error: e.message });
         }
+    });
+
+    // ===== 夺宝(抢宝) API =====
+    // 列出可夺宝藏(不传 gid = 遍历所有好友)
+    app.get('/api/treasure/targets', async (req, res) => {
+        const id = getAccId(req);
+        if (!id) return res.status(400).json({ ok: false, error: '缺少账号 ID' });
+        if (!checkAccountAccess(req, id)) return res.status(403).json({ ok: false, error: '无权访问此账号' });
+        try {
+            const gid = req.query.gid ? Number(req.query.gid) : 0;
+            const data = await provider.getTreasureTargets(id, gid ? { gid } : {});
+            res.json({ ok: true, data });
+        } catch (e) { res.json({ ok: false, error: e.message }); }
+    });
+
+    // 我的挑战书数量
+    app.get('/api/treasure/books', async (req, res) => {
+        const id = getAccId(req);
+        if (!id) return res.status(400).json({ ok: false, error: '缺少账号 ID' });
+        if (!checkAccountAccess(req, id)) return res.status(403).json({ ok: false, error: '无权访问此账号' });
+        try {
+            const data = await provider.getTreasureBooks(id);
+            res.json({ ok: true, data });
+        } catch (e) { res.json({ ok: false, error: e.message }); }
+    });
+
+    // 我的夺宝状态
+    app.get('/api/treasure/status', async (req, res) => {
+        const id = getAccId(req);
+        if (!id) return res.status(400).json({ ok: false, error: '缺少账号 ID' });
+        if (!checkAccountAccess(req, id)) return res.status(403).json({ ok: false, error: '无权访问此账号' });
+        try {
+            const data = await provider.getTreasureMyStatus(id);
+            res.json({ ok: true, data });
+        } catch (e) { res.json({ ok: false, error: e.message }); }
+    });
+
+    // 手动夺宝(用指定挑战书抢指定宝藏)
+    app.post('/api/treasure/rob', async (req, res) => {
+        const id = getAccId(req);
+        if (!id) return res.status(400).json({ ok: false, error: '缺少账号 ID' });
+        if (!checkAccountAccess(req, id)) return res.status(403).json({ ok: false, error: '无权访问此账号' });
+        const body = req.body || {};
+        const gid = Number(body.gid) || 0;
+        const treasureId = String(body.treasureId || '').trim();
+        const bookItemId = Number(body.bookItemId) || 0;
+        if (!gid || !treasureId || !bookItemId) {
+            return res.status(400).json({ ok: false, error: '缺少 gid / treasureId / bookItemId' });
+        }
+        try {
+            const data = await provider.robTreasure(id, {
+                gid,
+                treasureId,
+                bookItemId,
+                verify: body.verify !== false,
+            });
+            res.json({ ok: true, data });
+        } catch (e) { res.json({ ok: false, error: e.message }); }
+    });
+
+    // 立即执行一次自动夺宝
+    app.post('/api/treasure/run-auto', async (req, res) => {
+        const id = getAccId(req);
+        if (!id) return res.status(400).json({ ok: false, error: '缺少账号 ID' });
+        if (!checkAccountAccess(req, id)) return res.status(403).json({ ok: false, error: '无权访问此账号' });
+        try {
+            const data = await provider.runTreasureRobNow(id, req.body || {});
+            res.json({ ok: true, data });
+        } catch (e) { res.json({ ok: false, error: e.message }); }
     });
 
     app.post('/api/activity/star/light-up', async (req, res) => {

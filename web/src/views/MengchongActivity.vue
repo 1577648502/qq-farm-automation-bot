@@ -3,8 +3,12 @@ import { computed, onMounted, ref } from 'vue'
 import { usePageRefresh } from '@/composables/usePageRefresh'
 
 import api from '@/api'
+import TreasureRobPanel from '@/components/TreasureRobPanel.vue'
 import BaseButton from '@/components/ui/BaseButton.vue'
 import { useToastStore } from '@/stores/toast'
+
+/** 子页面切换: 萌宠游记本体 / 夺宝(抢宝) */
+const activeTab = ref<'mengchong' | 'treasure'>('mengchong')
 
 interface SigninItem {
   id: number
@@ -453,7 +457,7 @@ onMounted(fetchRules)
           S3 比熊萌宠 · 养成寻宝 · 比熊赠礼 · 每日免费种子礼包
         </p>
       </div>
-      <div class="flex gap-2">
+      <div v-if="activeTab === 'mengchong'" class="flex gap-2">
         <BaseButton variant="secondary" size="sm" :loading="loading || shopLoading" @click="refreshAll">
           刷新
         </BaseButton>
@@ -463,6 +467,33 @@ onMounted(fetchRules)
       </div>
     </div>
 
+    <!-- 子页面切换: 萌宠游记 / 夺宝 -->
+    <div class="flex gap-2 border-b border-gray-200 dark:border-gray-700">
+      <button
+        class="border-b-2 px-3 py-2 text-sm transition"
+        :class="activeTab === 'mengchong'
+          ? 'border-blue-500 text-blue-600 font-medium dark:text-blue-400'
+          : 'border-transparent text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200'"
+        @click="activeTab = 'mengchong'"
+      >
+        萌宠游记
+      </button>
+      <button
+        class="border-b-2 px-3 py-2 text-sm transition"
+        :class="activeTab === 'treasure'
+          ? 'border-blue-500 text-blue-600 font-medium dark:text-blue-400'
+          : 'border-transparent text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200'"
+        @click="activeTab = 'treasure'"
+      >
+        夺宝（抢宝）
+      </button>
+    </div>
+
+    <!-- ===== 子页面: 夺宝 ===== -->
+    <TreasureRobPanel v-if="activeTab === 'treasure'" />
+
+    <!-- ===== 子页面: 萌宠游记本体 ===== -->
+    <template v-if="activeTab === 'mengchong'">
     <!-- 未开启提示 -->
     <div v-if="!active && !loading" class="rounded border border-yellow-300 bg-yellow-50 p-4 text-yellow-800 dark:border-yellow-700 dark:bg-yellow-900/30 dark:text-yellow-200">
       活动未开启或已结束。
@@ -977,6 +1008,7 @@ onMounted(fetchRules)
           </div>
         </div>
       </div>
+    </template>
     </template>
   </div>
 </template>

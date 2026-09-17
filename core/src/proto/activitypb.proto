@@ -296,6 +296,9 @@ message OperateRequest {
     QingmeiBrewReq qingmei_brew = 113;
     QingmeiSellReq qingmei_sell = 114;
     StarLightUpReq star_light_up = 119;   // 实测 cmd=21 (观星礼录 点亮/领取)
+    TreasureHuntQueryReq treasure_hunt_query = 147;        // 实测 cmd=47 (夺宝: 查指定好友宝藏)
+    TreasureHuntChallengeReq treasure_hunt_challenge = 143; // 实测 cmd=43 (夺宝: 发起挑战/使用挑战书)
+    TreasureHuntMiscReq treasure_hunt_misc = 150;          // 实测 cmd=50 (夺宝: 查我的夺宝状态)
 }
 
 message OperateReply {
@@ -319,6 +322,8 @@ message OperateReply {
     QingmeiBrewRsp qingmei_brew = 114;
     QingmeiSellRsp qingmei_sell = 115;
     StarLightUpRsp star_light_up = 120;   // 实测 cmd=21 响应
+    TreasureHuntQueryRsp treasure_hunt_query = 147;        // 实测 cmd=47 响应(宝藏列表)
+    TreasureHuntMiscRsp treasure_hunt_misc = 150;          // 实测 cmd=50 响应(回显)
 }
 
 // 观星礼录 点亮/领取 (实测: 小程序打开活动页即发 cmd=21 + 本空请求体,
@@ -337,4 +342,122 @@ message ActiviesChangeNotify {
 
 message CloseGroup {
     int64 group_id = 1;
+}
+
+// ============================================================================
+// 夺宝(抢宝) —— 实测于 2026-09-17 抓包 (活动 id=2026090101, group=2026090100, 名称 "S3 萌宠")
+//
+// 完整流程(客户端实际行为, 每步都有抓包证据):
+//   1) FriendService.GetGameFriends                    刷新好友列表
+//      每个 GameFriend 带 field 18 = {1: 2026090100(活动组id), 2: 1} —— 标记该好友参与了夺宝活动
+//      (注意: 所有参与活动的好友都有这个字段, 不是"正在运送"的判据)
+//   2) Operate cmd=47 + field147 { gid }               查这个好友有哪些可夺宝藏
+//      响应根层 field147.treasures[] 即宝藏列表; 列表非空 = 有宝可夺
+//   3) Operate cmd=43 + field143 { gid, treasure_id, book_item_id }   用挑战书发起夺宝
+//   4) 服务端下发 ItemNotify: 挑战书 delta=-1(消耗) + 幸运星(1029)增加
+//   5) ActiviesChangeNotify + 再次 cmd=47 刷新宝藏价值(每次成功后可夺价值被扣减)
+//
+// 挑战书 item id (来自 gameConfig/ItemInfo.json, type=19 "夺宝道具"):
+//   80101 初级挑战书  价值100  胜+120  败返还80
+//   80102 中级挑战书  价值300  胜+450  败返还150
+//   80103 高级挑战书  价值700  胜+1260 败返还140
+// ============================================================================
+
+// --- cmd=47: 查询指定好友的夺宝列表 ---
+message TreasureHuntQueryReq {
+    int64 gid = 1;            // 实测: 好友 gid (与 GetGameFriends 的 #1 一致)
+}
+
+message TreasureHuntQueryRsp {
+    repeated TreasureInfo treasures = 1;   // 实测: 该好友当前可夺的宝藏(挑战后再次查询会看到价值被扣减)
+}
+
+// 单个宝藏
+message TreasureInfo {
+    string treasure_id = 1;      // 实测形如 "1004896646-1789598933572389645-cc8db275" (好友gid-雪花号-8位hex), 挑战时原样回填
+    int64 settle_item_id = 2;    // 实测 1029 (= 幸运星 item id), 疑似结算币种
+    int64 stealable_value = 3;   // 实测 350 → 140 → 130: 可被夺走的价值, **每次夺宝成功后会被扣减**
+    int64 start_time = 4;        // 实测 unix 秒, 宝藏开始时间
+    int64 status = 5;            // 实测 2 = 运送中(本次挑战的目标都是 2) / 3 = 另一个宝藏为 3, 语义待确认
+    int64 end_time = 6;          // 实测 unix 秒, 护送截止时间
+    int64 field7 = 7;            // 实测与 start_time 或 end_time 相同, 待确认
+    int64 max_value = 8;         // 实测 350 = 价值上限
+    int64 bonus_value = 9;       // 实测 50 = 增值部分(活动说明: 增值部分不可被掠夺)
+    int64 field10 = 10;          // 实测 2000
+    repeated TreasureBookSlot book_slots = 12;  // 按挑战书档位给出的"这刀能夺到多少"
+    int64 field13 = 13;          // 实测 3 → 1 → 2 → 2, 语义待确认(疑似剩余可夺次数)
+    int64 field14 = 14;          // 实测 3
+}
+
+// 某个挑战书档位对应的可夺金额
+message TreasureBookSlot {
+    string treasure_id = 1;      // 同 TreasureInfo.treasure_id
+    int64 book_item_id = 2;      // 80101 / 80102 / 80103
+    int64 field3 = 3;            // 实测: 首次=1(空 msg 时), 语义待确认
+    int64 field4 = 4;
+    int64 field5 = 5;
+    int64 gold = 6;              // 实测 300 → 90 → 80: 用该档挑战书这一刀能夺到的金额
+}
+
+// --- cmd=43: 发起夺宝挑战(消耗一张挑战书) ---
+message TreasureHuntChallengeReq {
+    int64 gid = 1;               // 实测: 目标好友 gid
+    string treasure_id = 2;      // 实测: 来自 cmd=47 响应, 原样回填(字符串, 不是 message!)
+    int64 book_item_id = 3;      // 实测: 80103 高级 / 80101 初级 / 80102 中级 —— 就是"用哪张挑战书"
+}
+
+// --- cmd=50: 查我的夺宝状态 (请求体 {1:1}) ---
+message TreasureHuntMiscReq {
+    int64 field1 = 1;            // 实测 = 1
+}
+
+message TreasureHuntMiscRsp {
+    int64 field1 = 1;            // 实测 = 1 (回显)
+}
+
+// 夺宝活动 body: 实测挂在 ActivityData field 115 (三次 cmd=43 响应内容一致, 是"我的夺宝状态")
+message ActivityBodyTreasureHunt {
+    MyTreasure mine = 1;             // 实测 {1:1, 3:7000, 4:2, 5:1789614882, 6:1}: 我正在护送的宝藏
+    TreasureHuntCounter counter = 2; // 实测 {1:10}: 疑似今日剩余次数
+    TreasureHuntBalance balance = 3; // 实测 {3: 幸运星数, 4:{item_id:1028, count:630}, 5:1}
+    repeated TreasureHuntReport reports = 4;  // 实测 390B / 8 条: 夺宝战报(带 photo JSON)
+    int64 field5 = 5;
+    TreasureHuntExtra extra = 6;     // 实测 {2:"e", 4:{...}, 6:1, 9:1}
+    bytes field7 = 7;
+    bytes field8 = 8;
+    bytes field9 = 9;
+}
+
+message MyTreasure {
+    int64 field1 = 1;   // 实测 1
+    int64 value = 3;    // 实测 7000
+    int64 field4 = 4;   // 实测 2
+    int64 field5 = 5;   // 实测 unix 秒
+    int64 field6 = 6;   // 实测 1
+}
+
+message TreasureHuntCounter {
+    int64 field1 = 1;   // 实测 10
+}
+
+message TreasureHuntBalance {
+    int64 field3 = 3;   // 实测 2050 → 2560: 幸运星数量
+    ItemAmount field4 = 4;  // 实测 {1:1028(item id), 2:630(count)}
+    int64 field5 = 5;   // 实测 1
+}
+
+message ItemAmount {
+    int64 item_id = 1;
+    int64 count = 2;
+}
+
+message TreasureHuntReport {
+    bytes field1 = 1;   // 实测 180B/176B/2B...: 首条含 {"photo": "gui/texture/Season/S3/S3PhotoWallPhotos/..."}
+}
+
+message TreasureHuntExtra {
+    string field2 = 2;  // 实测 "e"
+    bytes field4 = 4;
+    int64 field6 = 6;
+    int64 field9 = 9;
 }

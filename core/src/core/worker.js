@@ -18,6 +18,7 @@ const { getInteractRecords } = require('../services/interact');
 const { processInviteCodes } = require('../services/invite');
 const { autoBuyOrganicFertilizer, autoBuyFertilizer, checkAndBuyFertilizerBoth, buyFreeGifts, getFreeGiftDailyState } = require('../services/mall');
 const { getMallCatalog, purchaseCatalogGoods } = require('../services/mall');
+const treasureRob = require('../services/treasure-rob');
 const { getActivityOverview, drawLottery, drawActivity, claimBattlePassRewards, claimActivityTasks, claimDailySignin, exchangeShopGoods, performQingniangBrew, sellQingniangBrew, shareSellQingniangBrew, getStarActivityOverview, exchangeStarShopGoods, lightUpStarRegister, checkAndLightUpStar } = require('../services/activity');
 const { performDailyMonthCardGift, getMonthCardDailyState } = require('../services/monthcard');
 const { performDailyVipGift, getVipDailyState } = require('../services/qqvip');
@@ -171,9 +172,12 @@ async function runDailyRoutines(force = false) {
     }
 }
 
+let lastTreasureRobAt = 0;
+
 function stopDailyRoutineTimer() {
     workerScheduler.clear('daily_routine_interval');
     workerScheduler.clear('mystery_shop_interval');
+    workerScheduler.clear('treasure_rob_interval');
 }
 
 function startDailyRoutineTimer() {
@@ -192,6 +196,14 @@ function startDailyRoutineTimer() {
     workerScheduler.setIntervalTask('mystery_shop_interval', 10 * 60 * 1000, () => {
         if (!loginReady) return;
         checkAndBuyMysteryShop().catch(() => null);
+    }, { preventOverlap: true });
+    // 夺宝: 60s 轮询一次, 内部按"配置的检查间隔"节流(这样改间隔不用重启 worker)
+    workerScheduler.setIntervalTask('treasure_rob_interval', 60 * 1000, () => {
+        if (!loginReady) return;
+        const intervalMs = treasureRob.getAutoRobIntervalMs();
+        if (Date.now() - lastTreasureRobAt < intervalMs) return;
+        lastTreasureRobAt = Date.now();
+        treasureRob.checkAndRobTreasure().catch(() => null);
     }, { preventOverlap: true });
 }
 
@@ -451,6 +463,15 @@ function applyRuntimeConfig(snapshot, syncNow = false) {
                 workerScheduler.setTimeoutTask('star_light_up_immediate', 500, () => {
                     if (!loginReady) return;
                     checkAndLightUpStar().catch(() => null);
+                });
+            }
+
+            // 夺宝自动抢夺 关->开 时立即执行一次
+            if (!(prevAuto && prevAuto.rob_treasure) && (nextAuto && nextAuto.rob_treasure)) {
+                workerScheduler.setTimeoutTask('treasure_rob_immediate', 600, () => {
+                    if (!loginReady) return;
+                    lastTreasureRobAt = Date.now();
+                    treasureRob.runAutoRobTreasure().catch(() => null);
                 });
             }
 
@@ -1024,6 +1045,35 @@ async function handleApiCall(msg) {
                 break;
             case 'lightUpStar':
                 result = await lightUpStarRegister(args[0] || {});
+                break;
+            // ===== 夺宝(抢宝) =====
+            case 'getTreasureBooks':
+                result = { books: await treasureRob.getBookInventory() };
+                break;
+            case 'getTreasureTargets': {
+                const opt = args[0] || {};
+                if (opt.gid) {
+                    result = { gid: Number(opt.gid), treasures: await treasureRob.queryFriendTreasures(opt.gid) };
+                } else {
+                    result = await treasureRob.collectTargets(opt);
+                }
+                break;
+            }
+            case 'getTreasureMyStatus':
+                result = await treasureRob.getMyTreasureStatus();
+                break;
+            case 'robTreasure': {
+                const opt = args[0] || {};
+                result = await treasureRob.robOnce({
+                    gid: opt.gid,
+                    treasureId: opt.treasureId,
+                    bookItemId: opt.bookItemId,
+                    verify: opt.verify !== false,
+                });
+                break;
+            }
+            case 'runTreasureRobNow':
+                result = await treasureRob.runAutoRobTreasure(args[0] || {});
                 break;
             case 'getSolarTerms':
                 result = await getSolarTerms();

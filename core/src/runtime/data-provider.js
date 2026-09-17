@@ -333,7 +333,10 @@ function createDataProvider(options) {
                 stealthOnlineMaxMinutes: body.stealthOnlineMaxMinutes,
                 stealthOfflineMinMinutes: body.stealthOfflineMinMinutes,
                 stealthOfflineMaxMinutes: body.stealthOfflineMaxMinutes,
-                stealthWakeForRipe: body.stealthWakeForRipe
+                stealthWakeForRipe: body.stealthWakeForRipe,
+
+                // 夺宝(抢宝)
+                robTreasureIntervalMinutes: body.robTreasureIntervalMinutes
 
             };
 
@@ -721,6 +724,13 @@ function createDataProvider(options) {
         exchangeStarGoods: (accountRef, options) => callWorkerApi(resolveAccountRefId(accountRef), 'exchangeStarGoods', options),
 
         lightUpStar: (accountRef, options) => callWorkerApi(resolveAccountRefId(accountRef), 'lightUpStar', options),
+
+        // ===== 夺宝(抢宝) =====
+        getTreasureBooks: (accountRef) => callWorkerApi(resolveAccountRefId(accountRef), 'getTreasureBooks'),
+        getTreasureTargets: (accountRef, options) => callWorkerApi(resolveAccountRefId(accountRef), 'getTreasureTargets', options || {}),
+        getTreasureMyStatus: (accountRef) => callWorkerApi(resolveAccountRefId(accountRef), 'getTreasureMyStatus'),
+        robTreasure: (accountRef, options) => callWorkerApi(resolveAccountRefId(accountRef), 'robTreasure', options || {}),
+        runTreasureRobNow: (accountRef, options) => callWorkerApi(resolveAccountRefId(accountRef), 'runTreasureRobNow', options || {}),
 
         getSolarTerms: (accountRef) => callWorkerApi(resolveAccountRefId(accountRef), 'getSolarTerms'),
 

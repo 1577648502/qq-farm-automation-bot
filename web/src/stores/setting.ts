@@ -77,6 +77,8 @@ export interface SettingsState {
   stealthOfflineMinMinutes: number
   stealthOfflineMaxMinutes: number
   stealthWakeForRipe: boolean
+  // 夺宝(抢宝)
+  robTreasureIntervalMinutes: number
 }
 
 export const useSettingStore = defineStore('setting', () => {
@@ -113,6 +115,7 @@ export const useSettingStore = defineStore('setting', () => {
     stealthOfflineMinMinutes: 20,
     stealthOfflineMaxMinutes: 60,
     stealthWakeForRipe: true,
+    robTreasureIntervalMinutes: 10,
   })
   const loading = ref(false)
 
@@ -158,6 +161,7 @@ export const useSettingStore = defineStore('setting', () => {
         settings.value.bagSeedPriority = d.bagSeedPriority ?? []
         settings.value.bagSeedFallbackStrategy = d.bagSeedFallbackStrategy ?? 'level'
         settings.value.plantSeedExclude = d.plantSeedExclude ?? []
+        settings.value.robTreasureIntervalMinutes = d.robTreasureIntervalMinutes ?? 10
       }
     }
     finally {
@@ -195,6 +199,7 @@ export const useSettingStore = defineStore('setting', () => {
         stealthOfflineMinMinutes: newSettings.stealthOfflineMinMinutes,
         stealthOfflineMaxMinutes: newSettings.stealthOfflineMaxMinutes,
         stealthWakeForRipe: newSettings.stealthWakeForRipe,
+        robTreasureIntervalMinutes: newSettings.robTreasureIntervalMinutes,
       }
 
       await api.post('/api/settings/save', settingsPayload, {

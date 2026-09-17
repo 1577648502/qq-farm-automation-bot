@@ -160,6 +160,7 @@ const DEFAULT_ACCOUNT_CONFIG = {
         fertilizer_land_types: [...DEFAULT_FERTILIZER_LAND_TYPES],
         fertilizer_smart_seconds: 300,
         skip_own_weed_bug: true,  // 不除自己草虫
+        rob_treasure: false,      // 夺宝: 自动遍历好友可夺宝藏并用挑战书抢夺
     },
     plantingStrategy: 'max_exp',
     preferredSeedId: 0,
@@ -216,6 +217,8 @@ const DEFAULT_ACCOUNT_CONFIG = {
     stealthOfflineMinMinutes: 20,     // 离线时长下限(分钟)
     stealthOfflineMaxMinutes: 60,     // 离线时长上限(分钟)
     stealthWakeForRipe: true,         // 作物成熟时优先上线收取
+    // ===== 夺宝(抢宝)=====
+    robTreasureIntervalMinutes: 10,   // 自动夺宝检查间隔(分钟)
     // 背包种子优先顺序（seedId 数组）
     bagSeedPriority: [],
     // 背包种子用完后的回退策略
@@ -492,6 +495,9 @@ function normalizeAccountConfig(input, fallback = accountFallbackConfig) {
     if (src.stealthWakeForRipe !== undefined && src.stealthWakeForRipe !== null) {
         cfg.stealthWakeForRipe = !!src.stealthWakeForRipe;
     }
+    if (src.robTreasureIntervalMinutes !== undefined && src.robTreasureIntervalMinutes !== null) {
+        cfg.robTreasureIntervalMinutes = Math.max(1, Math.min(1440, Number(src.robTreasureIntervalMinutes) || 10));
+    }
 
     // 有机化肥购买数量
     if (src.fertilizerBuyOrganicCount !== undefined && src.fertilizerBuyOrganicCount !== null) {
@@ -756,6 +762,7 @@ function getConfigSnapshot(accountId) {
         stealthOfflineMinMinutes: Math.max(1, Math.min(1440, Number(cfg.stealthOfflineMinMinutes) || 20)),
         stealthOfflineMaxMinutes: Math.max(1, Math.min(1440, Number(cfg.stealthOfflineMaxMinutes) || 60)),
         stealthWakeForRipe: cfg.stealthWakeForRipe === undefined ? true : !!cfg.stealthWakeForRipe,
+        robTreasureIntervalMinutes: Math.max(1, Math.min(1440, Number(cfg.robTreasureIntervalMinutes) || 10)),
         stealDelaySeconds: Math.max(0, Math.min(300, Number(cfg.stealDelaySeconds) || 0)),
         plantOrderRandom: !!cfg.plantOrderRandom,
         plantDelaySeconds: Math.max(0, Math.min(60, Number(cfg.plantDelaySeconds) || 0)),
@@ -881,6 +888,9 @@ function applyConfigSnapshot(snapshot, options = {}) {
     }
     if (cfg.stealthWakeForRipe !== undefined && cfg.stealthWakeForRipe !== null) {
         next.stealthWakeForRipe = !!cfg.stealthWakeForRipe;
+    }
+    if (cfg.robTreasureIntervalMinutes !== undefined && cfg.robTreasureIntervalMinutes !== null) {
+        next.robTreasureIntervalMinutes = Math.max(1, Math.min(1440, Number(cfg.robTreasureIntervalMinutes) || 10));
     }
 
     // 种植延迟
@@ -1399,6 +1409,12 @@ function getStealthConfig(accountId) {
     };
 }
 
+/** 夺宝(抢宝)自动检查间隔(分钟) */
+function getRobTreasureIntervalMinutes(accountId) {
+    const cfg = (typeof getConfigSnapshot === 'function' ? getConfigSnapshot(accountId) : (globalConfig.accountConfig || {})) || {};
+    return Math.max(1, Math.min(1440, Number(cfg.robTreasureIntervalMinutes) || 10));
+}
+
 function getActivityStatus() {
     const cfg = globalConfig.systemConfig || {};
     return {
@@ -1448,6 +1464,7 @@ module.exports = {
     isAutomationOn,
     getPreferredSeed,
     getPlantingStrategy,
+    getRobTreasureIntervalMinutes,
     getBagSeedPriority,
     getBagSeedFallbackStrategy,
     getIntervals,

@@ -608,12 +608,15 @@ const localAutomationSettings = ref({
     charity_task: false,
     mengchong_task: false,
     mengchong_hunt: false,
+    rob_treasure: false,
     fertilizer: 'normal',
     skip_own_weed_bug: false,
     fertilizer_multi_season: false,
     fertilizer_land_types: [...allFertilizerLandTypes],
     fertilizer_smart_seconds: 300,
   },
+  // 夺宝(抢宝)
+  robTreasureIntervalMinutes: 10,
   // 防封号(低调)模式
   stealthEnabled: false,
   stealthOnlineMinMinutes: 3,
@@ -844,6 +847,7 @@ function syncLocalAutomationSettings() {
         charity_task: false,
         mengchong_task: false,
     mengchong_hunt: false,
+    rob_treasure: false,
         fertilizer: 'none',
         skip_own_weed_bug: false,
         fertilizer_multi_season: false,
@@ -874,6 +878,7 @@ function syncLocalAutomationSettings() {
         charity_task: false,
         mengchong_task: false,
     mengchong_hunt: false,
+    rob_treasure: false,
         fertilizer: 'none',
         skip_own_weed_bug: false,
         fertilizer_multi_season: false,
@@ -895,12 +900,45 @@ function syncLocalAutomationSettings() {
     localAutomationSettings.value.stealthOfflineMinMinutes = settings.value.stealthOfflineMinMinutes ?? 20
     localAutomationSettings.value.stealthOfflineMaxMinutes = settings.value.stealthOfflineMaxMinutes ?? 60
     localAutomationSettings.value.stealthWakeForRipe = settings.value.stealthWakeForRipe !== false
+    localAutomationSettings.value.robTreasureIntervalMinutes = settings.value.robTreasureIntervalMinutes ?? 10
     localAutomationSettings.value.fertilizerBuyOrganicCount = settings.value.fertilizerBuyOrganicCount ?? 10
     localAutomationSettings.value.fertilizerBuyOrganicThresholdHours = settings.value.fertilizerBuyOrganicThresholdHours ?? 10
     localAutomationSettings.value.fertilizerBuyNormalCount = settings.value.fertilizerBuyNormalCount ?? 10
     localAutomationSettings.value.fertilizerBuyNormalThresholdHours = settings.value.fertilizerBuyNormalThresholdHours ?? 10
     localAutomationSettings.value.fertilizerBuyCheckIntervalMinutes = settings.value.fertilizerBuyCheckIntervalMinutes ?? 30
     applyActivityGate()
+  }
+}
+
+/** 立即执行一次自动夺宝 */
+const treasureRunning = ref(false)
+async function runTreasureNow() {
+  if (!currentAccountId.value)
+    return
+  treasureRunning.value = true
+  try {
+    const res = await api.post('/api/treasure/run-auto', {}, {
+      headers: { 'x-account-id': currentAccountId.value },
+      timeout: 180000,
+    })
+    if (res.data?.ok) {
+      const d = res.data.data || {}
+      if (d.skipped) {
+        showAlert('自动夺宝开关未开启（请先勾选上面的"启用自动夺宝"）', 'danger')
+      } else if (d.reason === 'no_book') {
+        showAlert('没有可用的挑战书', 'danger')
+      } else if (d.reason === 'no_target') {
+        showAlert(`已查 ${d.friends} 位好友，暂无可夺宝藏`, 'primary')
+      } else {
+        showAlert(`自动夺宝完成：尝试 ${d.attempted} 次，成功 ${d.success}，未生效 ${d.noEffect}，失败 ${d.failed}`, 'primary')
+      }
+    } else {
+      showAlert(res.data?.error || '执行失败', 'danger')
+    }
+  } catch (e: any) {
+    showAlert(e?.response?.data?.error || e?.message || '执行失败', 'danger')
+  } finally {
+    treasureRunning.value = false
   }
 }
 
@@ -920,6 +958,7 @@ async function saveAutomationSettings() {
       stealthOfflineMinMinutes: localAutomationSettings.value.stealthOfflineMinMinutes,
       stealthOfflineMaxMinutes: localAutomationSettings.value.stealthOfflineMaxMinutes,
       stealthWakeForRipe: localAutomationSettings.value.stealthWakeForRipe,
+      robTreasureIntervalMinutes: localAutomationSettings.value.robTreasureIntervalMinutes,
       fertilizerBuyOrganicCount: localAutomationSettings.value.fertilizerBuyOrganicCount,
       fertilizerBuyOrganicThresholdHours: localAutomationSettings.value.fertilizerBuyOrganicThresholdHours,
       fertilizerBuyNormalCount: localAutomationSettings.value.fertilizerBuyNormalCount,
@@ -1641,6 +1680,39 @@ async function handleTestOffline() {
             <BaseSwitch v-model="localAutomationSettings.automation.fertilizer_buy_normal" label="自动购买无机化肥" />
             <BaseSwitch v-model="localAutomationSettings.automation.mystery_shop" label="自动购买神秘商店" />
             <BaseSwitch v-model="localAutomationSettings.automation.star_light_up" :label="autoLabel('star_light_up', '千星游记自动点亮领取')" :disabled="isAutomationGated('star_light_up')" />
+
+            <!-- 夺宝(抢宝) -->
+            <div class="space-y-2 rounded border border-amber-200 bg-amber-50 p-3 dark:border-amber-900/40 dark:bg-amber-900/10">
+              <div class="flex flex-wrap items-center justify-between gap-2">
+                <div>
+                  <div class="text-sm text-amber-800 font-medium dark:text-amber-300">
+                    夺宝（抢宝）
+                  </div>
+                  <div class="mt-0.5 text-xs text-gray-600 dark:text-gray-400">
+                    自动遍历好友，找到正在运送的宝藏并抢夺；挑战书优先用高等级（高级 → 中级 → 初级）。
+                  </div>
+                  <div class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                    手动夺宝请到「萌宠游记」页面 → 顶部「夺宝（抢宝）」子页面。
+                  </div>
+                </div>
+                <BaseSwitch v-model="localAutomationSettings.automation.rob_treasure" label="启用自动夺宝" />
+              </div>
+              <div v-if="localAutomationSettings.automation.rob_treasure" class="flex flex-wrap items-end gap-3">
+                <BaseInput
+                  v-model.number="localAutomationSettings.robTreasureIntervalMinutes"
+                  label="检查间隔 (分钟)"
+                  type="number"
+                  min="1"
+                  max="1440"
+                />
+                <BaseButton variant="secondary" size="sm" :loading="treasureRunning" @click="runTreasureNow">
+                  立即执行一次
+                </BaseButton>
+              </div>
+              <div class="text-xs text-gray-500 dark:text-gray-400">
+                修改后自动保存；自动夺宝在后台按上面的间隔巡检（每次最多抢 3 个宝藏）。
+              </div>
+            </div>
             <BaseSwitch v-model="localAutomationSettings.automation.solar_terms" label="节令小礼自动领取" />
             <BaseSwitch v-model="localAutomationSettings.automation.weather_task" :label="autoLabel('weather_task', '雨落成诗：每日买采集瓶+对好友使用+雷雨瓶自用')" :disabled="isAutomationGated('weather_task')" />
             <BaseSwitch v-model="localAutomationSettings.automation.weather_research" :label="autoLabel('weather_research', '雨落成诗：气象研究自动升级（消耗雷电徽章）')" :disabled="isAutomationGated('weather_research')" />

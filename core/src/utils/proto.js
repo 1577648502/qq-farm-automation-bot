@@ -207,6 +207,15 @@ async function loadProto() {
     types.ActivityListReply = root.lookupType('gamepb.activitypb.ListReply');
     types.ActivityOperateRequest = root.lookupType('gamepb.activitypb.OperateRequest');
     types.ActivityOperateReply = root.lookupType('gamepb.activitypb.OperateReply');
+    // 夺宝(抢宝) —— 实测 2026-09-17 抓包
+    types.TreasureHuntQueryReq = root.lookupType('gamepb.activitypb.TreasureHuntQueryReq');
+    types.TreasureHuntQueryRsp = root.lookupType('gamepb.activitypb.TreasureHuntQueryRsp');
+    types.TreasureInfo = root.lookupType('gamepb.activitypb.TreasureInfo');
+    types.TreasureBookSlot = root.lookupType('gamepb.activitypb.TreasureBookSlot');
+    types.TreasureHuntChallengeReq = root.lookupType('gamepb.activitypb.TreasureHuntChallengeReq');
+    types.TreasureHuntMiscReq = root.lookupType('gamepb.activitypb.TreasureHuntMiscReq');
+    types.TreasureHuntMiscRsp = root.lookupType('gamepb.activitypb.TreasureHuntMiscRsp');
+    types.ActivityBodyTreasureHunt = root.lookupType('gamepb.activitypb.ActivityBodyTreasureHunt');
 
     // 赛季/战令
     types.GetSeasonInfoRequest = root.lookupType('gamepb.seasonpb.GetSeasonInfoRequest');
