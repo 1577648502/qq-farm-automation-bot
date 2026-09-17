@@ -34,6 +34,8 @@ interface Target {
   bonusValue: number
   endTime: number
   bookSlots: BookSlot[]
+  /** 该好友当前在运送的宝藏数量(列表只展示最好的一个) */
+  treasureCount?: number
 }
 
 const accountStore = useAccountStore()
@@ -53,6 +55,18 @@ function pushLog(msg: string) {
   logs.value.unshift(`[${new Date().toLocaleTimeString('zh-CN', { hour12: false })}] ${msg}`)
   if (logs.value.length > 200) logs.value.length = 200
 }
+
+/** 只展示"运送中且未结束"的宝藏(后端已过滤, 这里再兜一层) */
+const visibleTargets = computed(() => (targets.value || []).filter((t) => {
+  if (Number(t.status) !== 2)
+    return false
+  if (t.endTime) {
+    const endMs = t.endTime > 1e12 ? t.endTime : t.endTime * 1000
+    if (endMs <= Date.now())
+      return false
+  }
+  return true
+}))
 
 const availableBooks = computed(() => books.value.filter(b => Number(b.count) > 0))
 /** 优先高等级可用的挑战书 */
@@ -90,8 +104,12 @@ async function fetchTargets() {
       for (const t of list) {
         if (bestBook.value) picked.value[t.treasureId] = bestBook.value.id
       }
-      if (!list.length) pushLog('没有找到可夺的宝藏（好友里暂时没人运送宝藏）')
-      else pushLog(`刷新到 ${list.length} 个可夺宝藏（已查 ${res.data.data?.friendCount || 0} 位好友）`)
+      const skipped = Number(res.data.data?.skippedEnded) || 0
+      if (!list.length) {
+        pushLog(`没有可夺的宝藏（已查 ${res.data.data?.friendCount || 0} 位好友${skipped ? `，已忽略 ${skipped} 个已结束/非运送中的宝藏` : ''}）`)
+      } else {
+        pushLog(`刷新到 ${list.length} 位好友的可夺宝藏（已查 ${res.data.data?.friendCount || 0} 位好友${skipped ? `，已忽略 ${skipped} 个已结束/非运送中的宝藏` : ''}）`)
+      }
     } else {
       toast.error(res.data?.error || '刷新失败')
     }
@@ -242,26 +260,29 @@ onMounted(() => {
     <div class="rounded-lg border border-gray-200 bg-white dark:border-gray-700 dark:bg-gray-800">
       <div class="flex items-center justify-between border-b border-gray-100 px-3 py-2 dark:border-gray-700">
         <span class="text-sm font-medium text-gray-700 dark:text-gray-200">
-          可夺宝藏（{{ targets.length }}）
+          可夺宝藏（{{ visibleTargets.length }}）
         </span>
-        <span class="text-xs text-gray-400">遍历好友查询，好友多时较慢</span>
+        <span class="text-xs text-gray-400">只显示正在运送的宝藏 · 遍历好友查询，好友多时较慢</span>
       </div>
 
       <div v-if="loading" class="px-3 py-6 text-center text-sm text-gray-400">
         正在遍历好友查询宝藏…
       </div>
-      <div v-else-if="!targets.length" class="px-3 py-6 text-center text-sm text-gray-400">
-        暂无可夺宝藏
+      <div v-else-if="!visibleTargets.length" class="px-3 py-6 text-center text-sm text-gray-400">
+        暂无可夺宝藏（好友里暂时没人正在运送宝藏）
       </div>
       <div v-else class="divide-y divide-gray-100 dark:divide-gray-700">
         <div
-          v-for="t in targets"
-          :key="t.treasureId"
+          v-for="t in visibleTargets"
+          :key="t.gid"
           class="flex flex-wrap items-center gap-3 px-3 py-2 text-sm"
         >
           <div class="min-w-[140px]">
             <div class="font-medium text-gray-800 dark:text-gray-100">
               {{ t.friendName || `gid:${t.gid}` }}
+              <span v-if="Number(t.treasureCount) > 1" class="ml-1 text-xs text-gray-400 font-normal">
+                (在运送 {{ t.treasureCount }} 个)
+              </span>
             </div>
             <div class="text-xs text-gray-400">
               {{ t.treasureId.slice(-8) }}
@@ -277,12 +298,12 @@ onMounted(() => {
             </div>
           </div>
 
-          <div class="min-w-[90px]">
+          <div class="min-w-[80px]">
             <div class="text-xs text-gray-400">
               状态
             </div>
-            <div :class="t.status === 2 ? 'text-green-600 dark:text-green-400' : 'text-gray-500'">
-              {{ t.status === 2 ? '运送中' : `其它(${t.status})` }}
+            <div class="text-green-600 dark:text-green-400">
+              运送中
             </div>
           </div>
 

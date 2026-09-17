@@ -158,15 +158,18 @@ function collectTreasureEntries(raw147) {
 function parseTreasureList(body) {
     const raw147 = pickRawField(body, 147);
     if (!raw147) {
-        const fields = scanFields(body).map(f => f.no).join(',');
-        log('夺宝', `响应里没有字段147(夺宝数据), 原始长度 ${body.length}, 顶层字段=[${fields}]`, { module: 'activity', event: '夺宝查询', result: 'error' });
+        // #147 缺失很少见(通常是响应异常), 只留一行简短提示, 不打 hex
+        log('夺宝', `响应里没有夺宝数据(#147 缺失, 长度 ${body.length})`, { module: 'activity', event: '夺宝查询', result: 'warn' });
         return [];
     }
     const entries = collectTreasureEntries(raw147);
     const list = entries.map(parseTreasureBytes).filter(t => t && t.treasureId);
-    if (!list.length) {
+    // 注意: #147 存在但条目为空 = 该好友当前没有可夺宝藏, 属**正常情况**, 不打日志。
+    // 只有"有条目却一个都没解析出来"才是异常, 且详细 hex 仅在 TREASURE_DEBUG=1 时输出。
+    if (!list.length && entries.length && process.env.TREASURE_DEBUG === '1') {
         const tail = body.subarray(Math.max(0, body.length - 32)).toString('hex');
-        log('夺宝', `响应解析失败: #147=${raw147.length}B, 条目=${entries.length}, 原始长度=${body.length}, 尾部hex=${tail}`, { module: 'activity', event: '夺宝查询', result: 'error' });
+        log('夺宝', `响应解析异常: #147=${raw147.length}B, 条目=${entries.length}, 长度=${body.length}, 尾部hex=${tail}`,
+            { module: 'activity', event: '夺宝查询', result: 'error' });
     }
     return list;
 }
@@ -192,6 +195,17 @@ async function operateActivityRaw(cmd, payload = {}) {
     const body = types.ActivityOperateRequest.encode(types.ActivityOperateRequest.create(req)).finish();
     const { body: replyBody } = await sendMsgAsync(ACTIVITY_SERVICE, 'Operate', body);
     return { body: Buffer.isBuffer(replyBody) ? replyBody : Buffer.from(replyBody || []) };
+}
+
+/** 宝藏是否"正在进行中"(运送中 + 未到结束时间) */
+function isActiveTreasure(t) {
+    if (!t) return false;
+    if (t.status !== TREASURE_STATUS.ESCORTING) return false;
+    if (t.endTime) {
+        const endMs = t.endTime > 1e12 ? t.endTime : t.endTime * 1000;   // 兼容秒/毫秒
+        if (endMs <= Date.now()) return false;
+    }
+    return true;
 }
 
 /** 规范化一条宝藏 */
@@ -304,32 +318,36 @@ async function collectTargets(options = {}) {
     const delayMs = options.delayMs === undefined ? 120 : Math.max(0, toNum(options.delayMs));
     const targets = [];
     let queried = 0;
+    let skippedEnded = 0;   // 已结束/非运送中的宝藏(仅统计, 不展示)
     for (const f of (Array.isArray(friends) ? friends : [])) {
         const gid = toNum(f && f.gid);
         if (!gid) continue;
         queried += 1;
         try {
             const list = await queryFriendTreasures(gid);
-            for (const t of list) {
+            const friendName = String((f && (f.name || f.remark)) || '');
+            const active = list.filter(isActiveTreasure);
+            if (active.length) {
+                // 同一好友可能有多个宝藏, 只保留"最好抢的"那个(可夺价值最高), 其余仅计数
+                const best = active.slice().sort((a, b) => b.stealableValue - a.stealableValue)[0];
                 targets.push({
-                    ...t,
+                    ...best,
                     gid,
-                    friendName: String((f && (f.name || f.remark)) || ''),
+                    friendName,
+                    treasureCount: active.length,
+                    // 该好友全部宝藏ID(手动夺宝时若某个失败可换下一个)
+                    allTreasureIds: active.map(x => x.treasureId),
                 });
+                skippedEnded += (list.length - active.length);
             }
         } catch (e) {
             log('夺宝', `查询好友 ${gid} 宝藏失败: ${e.message}`, { module: 'activity', event: '夺宝查询', result: 'error' });
         }
         if (delayMs) await new Promise(r => setTimeout(r, delayMs));
     }
-    // 排序: 运送中的优先, 其次可夺价值高的优先
-    targets.sort((a, b) => {
-        const sa = a.status === TREASURE_STATUS.ESCORTING ? 1 : 0;
-        const sb = b.status === TREASURE_STATUS.ESCORTING ? 1 : 0;
-        if (sa !== sb) return sb - sa;
-        return b.stealableValue - a.stealableValue;
-    });
-    return { targets, friendCount: queried };
+    // 排序: 可夺价值高的优先
+    targets.sort((a, b) => b.stealableValue - a.stealableValue);
+    return { targets, friendCount: queried, skippedEnded };
 }
 
 /**
@@ -390,9 +408,10 @@ async function runAutoRobTreasure(options = {}) {
         return { ...result, reason: 'no_book' };
     }
 
-    const { targets, friendCount } = await collectTargets();
+    const { targets, friendCount, skippedEnded } = await collectTargets();
     result.friends = friendCount;
     result.targets = targets.length;
+    result.skippedEnded = skippedEnded || 0;
     if (!targets.length) return { ...result, reason: 'no_target' };
 
     for (const t of targets) {
@@ -451,6 +470,7 @@ module.exports = {
     challengeTreasure,
     collectTargets,
     getAutoRobIntervalMs,
+    isActiveTreasure,
     getBookInventory,
     getMyTreasureStatus,
     operateActivityRaw,
