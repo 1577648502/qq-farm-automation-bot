@@ -210,6 +210,7 @@ async function loadProto() {
     // 夺宝(抢宝) —— 实测 2026-09-17 抓包
     types.TreasureHuntQueryReq = root.lookupType('gamepb.activitypb.TreasureHuntQueryReq');
     types.TreasureHuntQueryRsp = root.lookupType('gamepb.activitypb.TreasureHuntQueryRsp');
+    types.TreasureHuntList = root.lookupType('gamepb.activitypb.TreasureHuntList');
     types.TreasureInfo = root.lookupType('gamepb.activitypb.TreasureInfo');
     types.TreasureBookSlot = root.lookupType('gamepb.activitypb.TreasureBookSlot');
     types.TreasureHuntChallengeReq = root.lookupType('gamepb.activitypb.TreasureHuntChallengeReq');

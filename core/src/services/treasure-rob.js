@@ -15,6 +15,8 @@
  * 结果判定: 挑战响应本身不带结果字段, 用"再查一次好友宝藏, 可夺价值(#3)下降 / 宝藏消失"判定成功;
  *   同时用背包里挑战书数量是否减少做交叉验证。
  */
+const { Buffer } = require('node:buffer');
+const protobuf = require('protobufjs');
 const { types } = require('../utils/proto');
 const { sendMsgAsync } = require('../utils/network');
 const { toLong, toNum, log } = require('../utils/utils');
@@ -41,6 +43,134 @@ function bookName(id) {
     return hit ? hit.name : `挑战书(${toNum(id)})`;
 }
 
+/**
+ * 容错读取 protobuf 字段(不依赖 .proto, 长度越界时截断而不是抛错)。
+ * 背景: 线上抓到的部分 cmd=47 响应用 protobufjs 整包 decode 会报
+ *   "index out of range: 8250 + 10 > 8250" / "invalid wire type 6 at offset 8250",
+ *   即尾部有 1~10 字节对不上(疑似服务端截断/脏尾)。我们只需要某个字段,
+ *   所以自己扫字段、不整包 decode, 遇到脏尾直接停下。
+ */
+function scanFields(buf) {
+    const out = [];
+    if (!buf || !buf.length) return out;
+    let r;
+    try { r = protobuf.Reader.create(buf); } catch (e) { return out; }
+    while (r.pos < r.len) {
+        let tag;
+        try { tag = r.uint64(); } catch { break; }
+        const no = Math.floor(Number(tag) / 8);
+        const wire = Number(tag) & 7;
+        try {
+            if (wire === 0) out.push({ no, wire, v: r.uint64().toString() });
+            else if (wire === 1) out.push({ no, wire, v: r.fixed64().toString() });
+            else if (wire === 5) out.push({ no, wire, v: String(r.fixed32()) });
+            else if (wire === 2) {
+                const declared = Number(r.uint64());
+                const remain = r.len - r.pos;
+                const take = Math.min(declared, Math.max(0, remain)); // 越界就截断
+                out.push({ no, wire, b: buf.subarray(r.pos, r.pos + take), truncated: take < declared });
+                r.pos += take;
+                if (take < declared) break;   // 脏尾, 停止
+            } else break;                      // 非法 wire type, 停止
+        } catch { break; }
+    }
+    return out;
+}
+
+function asString(b) {
+    if (!b || !b.length) return '';
+    const s = Buffer.from(b).toString('utf8');
+    if (s.includes('\uFFFD')) return '';
+    return s;
+}
+
+/** 从 OperateReply 原始字节里取出根层某个字段的原始字节 */
+function pickRawField(body, fieldNo) {
+    const fields = scanFields(body);
+    const hit = fields.find(f => f.no === fieldNo && f.b);
+    return hit ? hit.b : null;
+}
+
+/** 把一条宝藏的原始字节解析成对象(先试 typed, 失败退回手工扫字段) */
+function parseTreasureBytes(bytes) {
+    try {
+        return normalizeTreasure(types.TreasureInfo.decode(bytes));
+    } catch (e) {
+        const f = scanFields(bytes);
+        const get = (n) => f.find(x => x.no === n);
+        const num = (n) => toNum(get(n) && get(n).v);
+        const slots = f.filter(x => x.no === 12 && x.b).map(sb => {
+            const sf = scanFields(sb.b);
+            return {
+                bookItemId: toNum(sf.find(x => x.no === 2) && sf.find(x => x.no === 2).v),
+                gold: toNum(sf.find(x => x.no === 6) && sf.find(x => x.no === 6).v),
+            };
+        });
+        return {
+            treasureId: asString(get(1) && get(1).b),
+            settleItemId: num(2),
+            stealableValue: num(3),
+            startTime: num(4),
+            status: num(5),
+            endTime: num(6),
+            maxValue: num(8),
+            bonusValue: num(9),
+            field13: num(13),
+            field14: num(14),
+            bookSlots: slots,
+        };
+    }
+}
+
+/** 一段字节是否是"宝藏条目"(其 #1 应是形如 gid-雪花号-8hex 的字符串) */
+function isTreasureMessage(bytes) {
+    const idField = scanFields(bytes).find(f => f.no === 1 && f.b);
+    if (!idField) return false;
+    return /^[0-9]{4,}-[0-9]+-[0-9a-fA-F]{3,}$/.test(asString(idField.b));
+}
+
+/**
+ * 从 #147 里收集宝藏条目原始字节。
+ * 实测结构: #147 { #1(包装) { #1[]=宝藏 }, #2=gid }
+ * 兼容两种形态: 直接 repeated 宝藏 / 多一层包装(递归下钻)。
+ */
+function collectTreasureEntries(raw147) {
+    const out = [];
+    const walk = (buf, depth) => {
+        if (depth > 4) return;
+        const children = scanFields(buf).filter(f => f.no === 1 && f.b);
+        if (!children.length) return;
+        if (children.every(c => isTreasureMessage(c.b))) {
+            children.forEach(c => out.push(c.b));
+            return;
+        }
+        children.forEach(c => walk(c.b, depth + 1));
+    };
+    walk(raw147, 0);
+    return out;
+}
+
+/**
+ * 从 cmd=47 响应里取出宝藏列表。
+ * 注意: 该响应末尾常有 1~10 字节脏尾, 整包 decode 会抛错, 所以这里直接走
+ * 字段扫描(scanFields 越界即停), 不做整包 decode。
+ */
+function parseTreasureList(body) {
+    const raw147 = pickRawField(body, 147);
+    if (!raw147) {
+        const fields = scanFields(body).map(f => f.no).join(',');
+        log('夺宝', `响应里没有字段147(夺宝数据), 原始长度 ${body.length}, 顶层字段=[${fields}]`, { module: 'activity', event: '夺宝查询', result: 'error' });
+        return [];
+    }
+    const entries = collectTreasureEntries(raw147);
+    const list = entries.map(parseTreasureBytes).filter(t => t && t.treasureId);
+    if (!list.length) {
+        const tail = body.subarray(Math.max(0, body.length - 32)).toString('hex');
+        log('夺宝', `响应解析失败: #147=${raw147.length}B, 条目=${entries.length}, 原始长度=${body.length}, 尾部hex=${tail}`, { module: 'activity', event: '夺宝查询', result: 'error' });
+    }
+    return list;
+}
+
 async function operateActivity(cmd, payload = {}) {
     const req = {
         id: toLong(TREASURE_ACTIVITY_ID),
@@ -50,6 +180,18 @@ async function operateActivity(cmd, payload = {}) {
     const body = types.ActivityOperateRequest.encode(types.ActivityOperateRequest.create(req)).finish();
     const { body: replyBody } = await sendMsgAsync(ACTIVITY_SERVICE, 'Operate', body);
     return types.ActivityOperateReply.decode(replyBody);
+}
+
+/** 发送 Operate 并返回原始响应字节(不整包 decode, 避免脏尾导致失败) */
+async function operateActivityRaw(cmd, payload = {}) {
+    const req = {
+        id: toLong(TREASURE_ACTIVITY_ID),
+        cmd: toLong(cmd),
+        ...payload,
+    };
+    const body = types.ActivityOperateRequest.encode(types.ActivityOperateRequest.create(req)).finish();
+    const { body: replyBody } = await sendMsgAsync(ACTIVITY_SERVICE, 'Operate', body);
+    return { body: Buffer.isBuffer(replyBody) ? replyBody : Buffer.from(replyBody || []) };
 }
 
 /** 规范化一条宝藏 */
@@ -77,29 +219,39 @@ function normalizeTreasure(t) {
 async function queryFriendTreasures(gid) {
     const targetGid = toNum(gid);
     if (!targetGid) throw new Error('缺少好友 gid');
-    const reply = await operateActivity(CMD.QUERY, {
+    const { body } = await operateActivityRaw(CMD.QUERY, {
         treasure_hunt_query: { gid: toLong(targetGid) },
     });
-    const rsp = reply && reply.treasure_hunt_query ? reply.treasure_hunt_query : {};
-    const list = Array.isArray(rsp.treasures) ? rsp.treasures : [];
-    return list.map(normalizeTreasure).filter(t => t && t.treasureId);
+    return parseTreasureList(body);
 }
 
 /** 我的夺宝状态 (含我自己的宝藏/余额等, 实测挂在 activity.body field115) */
 async function getMyTreasureStatus() {
-    const reply = await operateActivity(CMD.MISC, {
+    const { body } = await operateActivityRaw(CMD.MISC, {
         treasure_hunt_misc: { field1: toLong(1) },
     });
-    const activity = reply && reply.activity;
-    const body = activity && activity.body_treasure_hunt ? activity.body_treasure_hunt : null;
-    return {
-        raw: reply,
-        mine: body && body.mine ? {
-            value: toNum(body.mine.value),
-            startAt: toNum(body.mine.field5),
-        } : null,
-        counter: body && body.counter ? toNum(body.counter.field1) : 0,
-    };
+    // 我的夺宝状态是 optional 展示信息, 解析失败不影响主流程
+    let mine = null;
+    let counter = 0;
+    try {
+        const reply = types.ActivityOperateReply.decode(body);
+        const body115 = pickRawField(pickRawField(body, 3) || Buffer.alloc(0), 115);
+        if (body115) {
+            const f = scanFields(body115);
+            const mineRaw = f.find(x => x.no === 1 && x.b);
+            if (mineRaw) {
+                const mf = scanFields(mineRaw.b);
+                mine = {
+                    value: toNum(mf.find(x => x.no === 3) && mf.find(x => x.no === 3).v),
+                    startAt: toNum(mf.find(x => x.no === 5) && mf.find(x => x.no === 5).v),
+                };
+            }
+            counter = toNum(f.find(x => x.no === 2 && x.b) && toNum(scanFields(f.find(x => x.no === 2).b).find(y => y.no === 1)?.v));
+        }
+        return { raw: reply, mine, counter };
+    } catch (e) {
+        return { raw: null, mine, counter, decodeError: e.message };
+    }
 }
 
 /** 发起夺宝挑战(消耗一张挑战书)。三级挑战书传参完全一致, 只有 book_item_id 不同 */
@@ -148,6 +300,8 @@ function pickBestBook(inventory) {
 async function collectTargets(options = {}) {
     const { getFriendsList } = require('./friend');
     const friends = await getFriendsList(!!options.forceSync);
+    // 逐个好友查询, 默认加一点间隔(避免连续高频请求)
+    const delayMs = options.delayMs === undefined ? 120 : Math.max(0, toNum(options.delayMs));
     const targets = [];
     let queried = 0;
     for (const f of (Array.isArray(friends) ? friends : [])) {
@@ -166,7 +320,7 @@ async function collectTargets(options = {}) {
         } catch (e) {
             log('夺宝', `查询好友 ${gid} 宝藏失败: ${e.message}`, { module: 'activity', event: '夺宝查询', result: 'error' });
         }
-        if (options.delayMs) await new Promise(r => setTimeout(r, options.delayMs));
+        if (delayMs) await new Promise(r => setTimeout(r, delayMs));
     }
     // 排序: 运送中的优先, 其次可夺价值高的优先
     targets.sort((a, b) => {
@@ -299,8 +453,11 @@ module.exports = {
     getAutoRobIntervalMs,
     getBookInventory,
     getMyTreasureStatus,
+    operateActivityRaw,
+    parseTreasureList,
     pickBestBook,
     queryFriendTreasures,
+    scanFields,
     robOnce,
     runAutoRobTreasure,
 };

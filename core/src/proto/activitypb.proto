@@ -352,7 +352,14 @@ message CloseGroup {
 //      每个 GameFriend 带 field 18 = {1: 2026090100(活动组id), 2: 1} —— 标记该好友参与了夺宝活动
 //      (注意: 所有参与活动的好友都有这个字段, 不是"正在运送"的判据)
 //   2) Operate cmd=47 + field147 { gid }               查这个好友有哪些可夺宝藏
-//      响应根层 field147.treasures[] 即宝藏列表; 列表非空 = 有宝可夺
+//      响应根层 field147 -> 147.list.treasures[] 即宝藏列表; 列表非空 = 有宝可夺
+//
+// ⚠️ 两个实测坑 (2026-09-17 线上验证, 务必遵守):
+//   (1) cmd=47 响应末尾有 1~10 字节"脏尾": protobufjs 整包 decode 必报
+//       "invalid wire type 6 at offset <bodyLen>" 或 "index out of range: N + k > N"。
+//       => 不要整包 decode; 按字段扫描, 越界/非法 wire 就停止
+//          (见 services/treasure-rob.js 的 scanFields / parseTreasureList)。
+//   (2) 宝藏列表在 #147 的 #1(包装层) 里的 repeated #1[], 即比"直接 repeated"多一层。
 //   3) Operate cmd=43 + field143 { gid, treasure_id, book_item_id }   用挑战书发起夺宝
 //   4) 服务端下发 ItemNotify: 挑战书 delta=-1(消耗) + 幸运星(1029)增加
 //   5) ActiviesChangeNotify + 再次 cmd=47 刷新宝藏价值(每次成功后可夺价值被扣减)
@@ -369,7 +376,13 @@ message TreasureHuntQueryReq {
 }
 
 message TreasureHuntQueryRsp {
+    TreasureHuntList list = 1;   // 实测: 多一层包装(不是直接 repeated)
+    int64 gid = 2;               // 实测: 回显请求的好友 gid
+}
+
+message TreasureHuntList {
     repeated TreasureInfo treasures = 1;   // 实测: 该好友当前可夺的宝藏(挑战后再次查询会看到价值被扣减)
+    bytes field2 = 2;                      // 实测 1B, 语义待确认
 }
 
 // 单个宝藏
