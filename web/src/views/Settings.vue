@@ -733,7 +733,9 @@ async function saveStealthSettings() {
   stealthSaveState.value = 'saving'
   stealthSaveError.value = ''
   try {
-    const res = await settingStore.saveSettings(currentAccountId.value, stealthPayload())
+    // 用「已保存的完整设置」打底, 只覆盖防封号字段 —— 避免部分保存把其它设置(背包种子顺序/排外等)冲掉
+    const payload = { ...(settings.value || {}), ...stealthPayload() }
+    const res = await settingStore.saveSettings(currentAccountId.value, payload)
     if (res?.ok) {
       // 同步到本地 settings, 让"未保存"提示消失
       Object.assign(settings.value as any, stealthPayload())

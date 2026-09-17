@@ -170,28 +170,31 @@ export const useSettingStore = defineStore('setting', () => {
       return { ok: false, error: '未选择账号' }
     loading.value = true
     try {
+      // 注意: 未传的字段一律保持 undefined 透传(JSON 序列化时自动省略, 后端跳过不动现有值)。
+      // 千万不要在这里填默认值 —— 部分字段的保存(如防封号自动保存)只传增量字段,
+      // 填默认值会把用户已配置的 背包种子顺序/排外列表/偷取延迟 等冲掉(踩过的坑)。
       const settingsPayload = {
         plantingStrategy: newSettings.plantingStrategy,
         preferredSeedId: newSettings.preferredSeedId,
-        bagSeedPriority: newSettings.bagSeedPriority ?? [],
-        bagSeedFallbackStrategy: newSettings.bagSeedFallbackStrategy ?? 'level',
-        plantSeedExclude: newSettings.plantSeedExclude ?? [],
+        bagSeedPriority: newSettings.bagSeedPriority,
+        bagSeedFallbackStrategy: newSettings.bagSeedFallbackStrategy,
+        plantSeedExclude: newSettings.plantSeedExclude,
         intervals: newSettings.intervals,
         friendQuietHours: newSettings.friendQuietHours,
-        stealDelaySeconds: newSettings.stealDelaySeconds ?? 0,
-        plantOrderRandom: newSettings.plantOrderRandom ?? false,
-        plantDelaySeconds: newSettings.plantDelaySeconds ?? 0,
-        fertilizerBuyOrganicCount: newSettings.fertilizerBuyOrganicCount ?? 10,
-        fertilizerBuyOrganicThresholdHours: newSettings.fertilizerBuyOrganicThresholdHours ?? 10,
-        fertilizerBuyNormalCount: newSettings.fertilizerBuyNormalCount ?? 10,
-        fertilizerBuyNormalThresholdHours: newSettings.fertilizerBuyNormalThresholdHours ?? 10,
-        fertilizerBuyCheckIntervalMinutes: newSettings.fertilizerBuyCheckIntervalMinutes ?? 30,
+        stealDelaySeconds: newSettings.stealDelaySeconds,
+        plantOrderRandom: newSettings.plantOrderRandom,
+        plantDelaySeconds: newSettings.plantDelaySeconds,
+        fertilizerBuyOrganicCount: newSettings.fertilizerBuyOrganicCount,
+        fertilizerBuyOrganicThresholdHours: newSettings.fertilizerBuyOrganicThresholdHours,
+        fertilizerBuyNormalCount: newSettings.fertilizerBuyNormalCount,
+        fertilizerBuyNormalThresholdHours: newSettings.fertilizerBuyNormalThresholdHours,
+        fertilizerBuyCheckIntervalMinutes: newSettings.fertilizerBuyCheckIntervalMinutes,
         stealthEnabled: newSettings.stealthEnabled,
-        stealthOnlineMinMinutes: newSettings.stealthOnlineMinMinutes ?? 3,
-        stealthOnlineMaxMinutes: newSettings.stealthOnlineMaxMinutes ?? 8,
-        stealthOfflineMinMinutes: newSettings.stealthOfflineMinMinutes ?? 20,
-        stealthOfflineMaxMinutes: newSettings.stealthOfflineMaxMinutes ?? 60,
-        stealthWakeForRipe: newSettings.stealthWakeForRipe !== false,
+        stealthOnlineMinMinutes: newSettings.stealthOnlineMinMinutes,
+        stealthOnlineMaxMinutes: newSettings.stealthOnlineMaxMinutes,
+        stealthOfflineMinMinutes: newSettings.stealthOfflineMinMinutes,
+        stealthOfflineMaxMinutes: newSettings.stealthOfflineMaxMinutes,
+        stealthWakeForRipe: newSettings.stealthWakeForRipe,
       }
 
       await api.post('/api/settings/save', settingsPayload, {
