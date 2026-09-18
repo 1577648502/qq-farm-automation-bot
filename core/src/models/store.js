@@ -221,7 +221,7 @@ const DEFAULT_ACCOUNT_CONFIG = {
     robTreasureIntervalMinutes: 10,   // 自动夺宝检查间隔(分钟)
     robMaxPerRun: 1,                  // 每轮最多抢几个宝藏(挑战书消耗节奏, 1 = 最省)
     robDailyLimit: 20,                // 每日夺宝次数上限(官方规则 20 次; 0 = 不限)
-    buyBookEnabled: false,            // 每日自动购买中级挑战书(150 金豆豆/个)
+    buyBookEnabled: true,             // 每日自动购买中级挑战书(150 金豆豆/个), 默认开启
     buyBookCount: 2,                  // 每日购买数量
     // 背包种子优先顺序（seedId 数组）
     bagSeedPriority: [],
@@ -781,7 +781,7 @@ function getConfigSnapshot(accountId) {
         robTreasureIntervalMinutes: Math.max(1, Math.min(1440, Number(cfg.robTreasureIntervalMinutes) || 10)),
         robMaxPerRun: Math.max(1, Math.min(20, Number(cfg.robMaxPerRun) || 1)),
         robDailyLimit: Math.max(0, Math.min(200, Number(cfg.robDailyLimit) || 0)),
-        buyBookEnabled: cfg.buyBookEnabled === undefined ? false : !!cfg.buyBookEnabled,
+        buyBookEnabled: cfg.buyBookEnabled === undefined ? true : !!cfg.buyBookEnabled,
         buyBookCount: Math.max(0, Math.min(20, Number(cfg.buyBookCount) || 0)),
         stealDelaySeconds: Math.max(0, Math.min(300, Number(cfg.stealDelaySeconds) || 0)),
         plantOrderRandom: !!cfg.plantOrderRandom,

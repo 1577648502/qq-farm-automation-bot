@@ -336,7 +336,12 @@ function createDataProvider(options) {
                 stealthWakeForRipe: body.stealthWakeForRipe,
 
                 // 夺宝(抢宝)
-                robTreasureIntervalMinutes: body.robTreasureIntervalMinutes
+                robTreasureIntervalMinutes: body.robTreasureIntervalMinutes,
+                robMaxPerRun: body.robMaxPerRun,
+                robDailyLimit: body.robDailyLimit,
+                // 每日购买中级挑战书(150 金豆豆/个)
+                buyBookEnabled: body.buyBookEnabled,
+                buyBookCount: body.buyBookCount
 
             };
 

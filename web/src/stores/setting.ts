@@ -122,7 +122,7 @@ export const useSettingStore = defineStore('setting', () => {
     robTreasureIntervalMinutes: 10,
   robMaxPerRun: 1,
   robDailyLimit: 20,
-  buyBookEnabled: false,
+  buyBookEnabled: true,
   buyBookCount: 2,
   })
   const loading = ref(false)
@@ -172,7 +172,7 @@ export const useSettingStore = defineStore('setting', () => {
         settings.value.robTreasureIntervalMinutes = d.robTreasureIntervalMinutes ?? 10
   settings.value.robMaxPerRun = d.robMaxPerRun ?? 1
   settings.value.robDailyLimit = d.robDailyLimit ?? 20
-  settings.value.buyBookEnabled = d.buyBookEnabled ?? false
+  settings.value.buyBookEnabled = d.buyBookEnabled ?? true
   settings.value.buyBookCount = d.buyBookCount ?? 2
       }
     }
@@ -212,10 +212,10 @@ export const useSettingStore = defineStore('setting', () => {
         stealthOfflineMaxMinutes: newSettings.stealthOfflineMaxMinutes,
         stealthWakeForRipe: newSettings.stealthWakeForRipe,
         robTreasureIntervalMinutes: newSettings.robTreasureIntervalMinutes,
-  robMaxPerRun: newSettings.robMaxPerRun,
-  robDailyLimit: newSettings.robDailyLimit,
-  buyBookEnabled: newSettings.buyBookEnabled,
-  buyBookCount: newSettings.buyBookCount,
+        robMaxPerRun: newSettings.robMaxPerRun,
+        robDailyLimit: newSettings.robDailyLimit,
+        buyBookEnabled: newSettings.buyBookEnabled,
+        buyBookCount: newSettings.buyBookCount,
       }
 
       await api.post('/api/settings/save', settingsPayload, {

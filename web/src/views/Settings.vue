@@ -619,7 +619,7 @@ const localAutomationSettings = ref({
   robTreasureIntervalMinutes: 10,
   robMaxPerRun: 1,
   robDailyLimit: 20,
-  buyBookEnabled: false,
+  buyBookEnabled: true,
   buyBookCount: 2,
   // 防封号(低调)模式
   stealthEnabled: false,
@@ -907,7 +907,7 @@ function syncLocalAutomationSettings() {
     localAutomationSettings.value.robTreasureIntervalMinutes = settings.value.robTreasureIntervalMinutes ?? 10
   localAutomationSettings.value.robMaxPerRun = settings.value.robMaxPerRun ?? 1
   localAutomationSettings.value.robDailyLimit = settings.value.robDailyLimit ?? 20
-  localAutomationSettings.value.buyBookEnabled = settings.value.buyBookEnabled ?? false
+  localAutomationSettings.value.buyBookEnabled = settings.value.buyBookEnabled ?? true
   localAutomationSettings.value.buyBookCount = settings.value.buyBookCount ?? 2
     localAutomationSettings.value.fertilizerBuyOrganicCount = settings.value.fertilizerBuyOrganicCount ?? 10
     localAutomationSettings.value.fertilizerBuyOrganicThresholdHours = settings.value.fertilizerBuyOrganicThresholdHours ?? 10
