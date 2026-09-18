@@ -35,9 +35,9 @@ if (parentPort && workerData && workerData.accountId && !process.env.FARM_ACCOUN
     process.env.FARM_ACCOUNT_ID = String(workerData.accountId);
 }
 const { activateDog, deployDog, withdrawDog, feedDog, getDogStatus, getPetBagInfo, getDogFoodList, getPetList, getGuardLogs, getGuardReward, claimGuardReward, getCapitalMode, setCapitalMode } = require('../services/pet');
-const { connect, reconnect, cleanup, getWs, getUserState, networkEvents } = require('../utils/network');
+const { connect, reconnect, cleanup, getWs, getUserState, networkEvents, isConnected, disableAutoReconnect, getWsErrorState } = require('../utils/network');
 const { loadProto } = require('../utils/proto');
-const { setLogHook, log, toNum } = require('../utils/utils');
+const { setLogHook, log, logWarn, toNum } = require('../utils/utils');
 
 function sendToMaster(payload) {
     if (process.send) {
@@ -123,6 +123,34 @@ setRecordGoldExpHook((gold, exp) => {
 
 let isRunning = false;
 let loginReady = false;
+
+/**
+ * 定时任务统一闸门
+ *
+ * ⚠ 历史 bug: 各处只用 loginReady 判断, 而 loginReady 只在"暂停等 Code / 停账号"时被复位。
+ *   WS 被服务端关掉(掉线、心跳超时重连拿到 400 等)时 loginReady 仍是 true, 于是所有定时任务
+ *   继续拿一个**已关闭的 socket** 发请求, 每 20s 刷一条"连接未打开: TaskInfo/Bag/...",
+ *   而状态栏用的是 ws.readyState → 界面显示"已离线"。两者判据不一致, 就成了
+ *   "显示离线 + 一直报错"的僵尸状态。
+ *   现在统一用 canRunTasks(): 既要登录过, 也要 socket 真的可用。
+ */
+function canRunTasks() {
+    return !!(loginReady && isConnected());
+}
+
+/**
+ * 当前"为什么不在线"的可读原因(推给面板, 免得用户只看到"已离线"却不知道原因)
+ * null = 在线
+ */
+let connectionDownInfo = null;
+
+function setConnectionDown(reason, detail = '') {
+    connectionDownInfo = { reason, detail: detail || reason, since: Date.now() };
+}
+
+function clearConnectionDown() {
+    connectionDownInfo = null;
+}
 let appliedConfigRevision = 0;
 let unifiedSchedulerRunning = false;
 let farmTaskRunning = false;
@@ -133,6 +161,7 @@ let onSellGain = null;
 let onFarmHarvested = null;
 let harvestSellRunning = false;
 let onWsError = null;
+let onDisconnected = null;
 let wsErrorHandledAt = 0;
 let lastDailyRunDate = '';
 let keepRunningOnKickout = false;
@@ -152,7 +181,7 @@ function getLocalDateKey() {
 }
 
 async function runDailyRoutines(force = false) {
-    if (!loginReady) return;
+    if (!canRunTasks()) return;
     try {
         // 以下功能默认启用，不再检查开关
         await checkAndClaimEmails(force);
@@ -186,7 +215,7 @@ function startDailyRoutineTimer() {
     // 新账号登录后按当前设置强制执行一次领取
     runDailyRoutines(true).catch(() => null);
     workerScheduler.setIntervalTask('daily_routine_interval', 30 * 1000, () => {
-        if (!loginReady) return;
+        if (!canRunTasks()) return;
         const today = getLocalDateKey();
         if (today === lastDailyRunDate) return;
         lastDailyRunDate = today;
@@ -194,12 +223,12 @@ function startDailyRoutineTimer() {
     });
     // 神秘商店 NPC 会在一天中随时刷新，定时检测自动购买（开关关闭时内部直接返回）
     workerScheduler.setIntervalTask('mystery_shop_interval', 10 * 60 * 1000, () => {
-        if (!loginReady) return;
+        if (!canRunTasks()) return;
         checkAndBuyMysteryShop().catch(() => null);
     }, { preventOverlap: true });
     // 夺宝: 60s 轮询一次, 内部按"配置的检查间隔"节流(这样改间隔不用重启 worker)
     workerScheduler.setIntervalTask('treasure_rob_interval', 60 * 1000, () => {
-        if (!loginReady) return;
+        if (!canRunTasks()) return;
         const intervalMs = treasureRob.getAutoRobIntervalMs();
         if (Date.now() - lastTreasureRobAt < intervalMs) return;
         lastTreasureRobAt = Date.now();
@@ -349,7 +378,7 @@ async function runStealTick(auto) {
 }
 
 async function runUnifiedTick() {
-    if (!unifiedSchedulerRunning || !loginReady) return;
+    if (!unifiedSchedulerRunning || !canRunTasks()) return;
     const now = Date.now();
     const dueFarm = now >= nextFarmRunAt;
     const dueHelp = now >= nextHelpRunAt;
@@ -366,7 +395,7 @@ async function runUnifiedTick() {
 function scheduleUnifiedNextTick() {
     if (!unifiedSchedulerRunning) return;
     workerScheduler.clear('unified_next_tick');
-    if (!loginReady) return;
+    if (!canRunTasks()) return;
 
     const now = Date.now();
     const nextAt = Math.min(
@@ -399,6 +428,9 @@ function stopUnifiedScheduler() {
     stealTaskRunning = false;
     workerScheduler.clear('unified_next_tick');
 }
+
+/** 只在本进程第一次登录成功时跑一次的动作(邀请码/化肥礼包/放虫放草) */
+let startupOnceDone = false;
 
 function pauseForCodeRefresh() {
     loginReady = false;
@@ -453,7 +485,7 @@ function applyRuntimeConfig(snapshot, syncNow = false) {
             // 神秘商店自动购买 关->开 时立即检测一次
             if (!(prevAuto && prevAuto.mystery_shop) && (nextAuto && nextAuto.mystery_shop)) {
                 workerScheduler.setTimeoutTask('mystery_shop_immediate', 500, () => {
-                    if (!loginReady) return;
+                    if (!canRunTasks()) return;
                     checkAndBuyMysteryShop().catch(() => null);
                 });
             }
@@ -461,7 +493,7 @@ function applyRuntimeConfig(snapshot, syncNow = false) {
             // 千星游记自动点亮 关->开 时立即执行一次
             if (!(prevAuto && prevAuto.star_light_up) && (nextAuto && nextAuto.star_light_up)) {
                 workerScheduler.setTimeoutTask('star_light_up_immediate', 500, () => {
-                    if (!loginReady) return;
+                    if (!canRunTasks()) return;
                     checkAndLightUpStar().catch(() => null);
                 });
             }
@@ -469,7 +501,7 @@ function applyRuntimeConfig(snapshot, syncNow = false) {
             // 夺宝自动抢夺 关->开 时立即执行一次
             if (!(prevAuto && prevAuto.rob_treasure) && (nextAuto && nextAuto.rob_treasure)) {
                 workerScheduler.setTimeoutTask('treasure_rob_immediate', 600, () => {
-                    if (!loginReady) return;
+                    if (!canRunTasks()) return;
                     lastTreasureRobAt = Date.now();
                     treasureRob.runAutoRobTreasure().catch(() => null);
                 });
@@ -478,7 +510,7 @@ function applyRuntimeConfig(snapshot, syncNow = false) {
             // 节令小礼自动领取 关->开 时立即执行一次
             if (!(prevAuto && prevAuto.solar_terms) && (nextAuto && nextAuto.solar_terms)) {
                 workerScheduler.setTimeoutTask('solar_terms_immediate', 500, () => {
-                    if (!loginReady) return;
+                    if (!canRunTasks()) return;
                     checkAndClaimSolarTerms().catch(() => null);
                 });
             }
@@ -486,7 +518,7 @@ function applyRuntimeConfig(snapshot, syncNow = false) {
             // 雨落成诗每日任务 关->开 时立即执行一次
             if (!(prevAuto && prevAuto.weather_task) && (nextAuto && nextAuto.weather_task)) {
                 workerScheduler.setTimeoutTask('weather_task_immediate', 500, () => {
-                    if (!loginReady) return;
+                    if (!canRunTasks()) return;
                     require('../services/weather').checkAndRunWeatherTasks().catch(() => null);
                 });
             }
@@ -494,7 +526,7 @@ function applyRuntimeConfig(snapshot, syncNow = false) {
             // 雨落成诗气象研究 关->开 时立即执行一次
             if (!(prevAuto && prevAuto.weather_research) && (nextAuto && nextAuto.weather_research)) {
                 workerScheduler.setTimeoutTask('weather_research_immediate', 500, () => {
-                    if (!loginReady) return;
+                    if (!canRunTasks()) return;
                     require('../services/weather').checkAndRunWeatherResearch().catch(() => null);
                 });
             }
@@ -502,7 +534,7 @@ function applyRuntimeConfig(snapshot, syncNow = false) {
             // 公益小红花每日任务 关->开 时立即执行一次
             if (!(prevAuto && prevAuto.charity_task) && (nextAuto && nextAuto.charity_task)) {
                 workerScheduler.setTimeoutTask('charity_task_immediate', 500, () => {
-                    if (!loginReady) return;
+                    if (!canRunTasks()) return;
                     require('../services/charity').checkAndRunCharityTasks().catch(() => null);
                 });
             }
@@ -510,7 +542,7 @@ function applyRuntimeConfig(snapshot, syncNow = false) {
             // 萌宠游记每日任务 关->开 时立即执行一次
             if (!(prevAuto && prevAuto.mengchong_task) && (nextAuto && nextAuto.mengchong_task)) {
                 workerScheduler.setTimeoutTask('mengchong_task_immediate', 500, () => {
-                    if (!loginReady) return;
+                    if (!canRunTasks()) return;
                     require('../services/mengchong').checkAndRunMengchongTasks().catch(() => null);
                 });
             }
@@ -522,7 +554,7 @@ function applyRuntimeConfig(snapshot, syncNow = false) {
             if (fertilizerChanged && (nextFertilizerMode === 'both' || nextFertilizerMode === 'organic' || nextFertilizerMode === 'smart')) {
                 // 保存设置时 /api/automation 可能连续触发多次 config_sync，这里做防抖为一次立即施肥
                 workerScheduler.setTimeoutTask('fertilizer_immediate_after_save', 600, async () => {
-                    if (!loginReady) return;
+                    if (!canRunTasks()) return;
                     try {
                         // await runFertilizerByConfig([]);
                         await runFertilizerByConfig([], { skipNormal: true });
@@ -580,6 +612,10 @@ async function startBot(config) {
     initStatusBar();
     setStatusPlatform(CONFIG.platform);
 
+    if (onDisconnected) {
+        networkEvents.off('disconnected', onDisconnected);
+        onDisconnected = null;
+    }
     if (onWsError) {
         networkEvents.off('ws_error', onWsError);
         onWsError = null;
@@ -587,9 +623,11 @@ async function startBot(config) {
     onWsError = (payload) => {
         if ((Number(payload?.code) || 0) !== 400) return;
         const now = Date.now();
-        if (now - wsErrorHandledAt < 4000) return;
+        // 同一类 400 每分钟只处理/记一次: 自动重连会反复拿旧 Code 重试, 别把日志刷爆
+        if (now - wsErrorHandledAt < 60000) return;
         wsErrorHandledAt = now;
-        log('系统', '连接被拒绝，可能需要更新 Code');
+        logWarn('系统', '连接被拒绝(HTTP 400)：Code 已失效，需要更新 Code；任务已暂停，将按退避策略重试');
+        setConnectionDown('Code 已失效，请更新 Code', '服务端拒绝连接(HTTP 400)，Code 已失效；任务已暂停，更新 Code 后会自动恢复');
         sendToMaster({
             type: 'ws_error',
             code: 400,
@@ -603,11 +641,32 @@ async function startBot(config) {
     };
     networkEvents.on('ws_error', onWsError);
 
+    // 连接断开: 立刻关掉任务闸门, 避免拿死连接空转发请求刷屏(只打一条日志, 别每 20s 一条)
+    onDisconnected = (payload) => {
+        const wasOnline = loginReady;
+        loginReady = false;                       // 立刻关闸门: 别再拿死连接发请求
+        const errState = getWsErrorState();
+        const codeInvalid = Number(errState && errState.code) === 400;
+        setConnectionDown(
+            codeInvalid ? 'Code 已失效，请更新 Code' : '连接已断开，正在自动重连',
+            codeInvalid
+                ? `服务端拒绝连接(HTTP 400)，Code 已失效；已暂停自动任务，更新 Code 后会自动恢复`
+                : `连接已断开${payload && payload.code ? ` (code=${payload.code})` : ''}，已暂停自动任务，正在按退避策略自动重连`,
+        );
+        // 只在"本来在线"时提示一次; 启动就连不上的情况由 ws_error(400) 那条日志说明
+        if (wasOnline) {
+            logWarn('系统', `连接已断开${payload && payload.code ? ` (code=${payload.code})` : ''}，已暂停自动任务，正在按退避策略自动重连…`);
+        }
+        syncStatus();
+    };
+    networkEvents.on('disconnected', onDisconnected);
+
     networkEvents.on('kickout', onKickout);
 
     const onLoginSuccess = async () => {
         const isCodeRefresh = loginMode === 'refresh';
         loginReady = true;
+        clearConnectionDown();
         if (onSellGain) {
             networkEvents.off('sell', onSellGain);
         }
@@ -659,19 +718,24 @@ async function startBot(config) {
 
         if (!isCodeRefresh) {
             // 登录成功后启动各模块
-            await processInviteCodes();
-            if (getAutomation().fertilizer_gift) {
-                await openFertilizerGiftPacksSilently().catch(() => 0);
-            }
-
-            // 启动时执行一次放虫放草（只在账号启动时执行）
-            workerScheduler.setTimeoutTask('bad_startup_once', 10000, async () => {
-                try {
-                    await runBadOnceOnStartup();
-                } catch (e) {
-                    log('好友', `启动时放虫放草执行失败: ${e.message}`, { module: 'friend', event: '启动放虫放草失败', error: e.message });
+            // ⚠ 邀请码/化肥礼包/放虫放草只应在"本进程第一次登录"时执行:
+            //   掉线自动重连也会走这里, 否则每次重连都会再放一遍虫草、再开一批礼包。
+            if (!startupOnceDone) {
+                startupOnceDone = true;
+                await processInviteCodes();
+                if (getAutomation().fertilizer_gift) {
+                    await openFertilizerGiftPacksSilently().catch(() => 0);
                 }
-            });
+
+                // 启动时执行一次放虫放草（只在账号启动时执行）
+                workerScheduler.setTimeoutTask('bad_startup_once', 10000, async () => {
+                    try {
+                        await runBadOnceOnStartup();
+                    } catch (e) {
+                        log('好友', `启动时放虫放草执行失败: ${e.message}`, { module: 'friend', event: '启动放虫放草失败', error: e.message });
+                    }
+                });
+            }
 
             startFarmCheckLoop({ externalScheduler: true });
             startFriendCheckLoop({ externalScheduler: true });
@@ -706,8 +770,13 @@ async function stopBot() {
     saveStats();
     isRunning = false;
     loginReady = false;
+    disableAutoReconnect();   // 先停自动重连, 再关 socket
     stopUnifiedScheduler();
     networkEvents.off('kickout', onKickout);
+    if (onDisconnected) {
+        networkEvents.off('disconnected', onDisconnected);
+        onDisconnected = null;
+    }
     if (onWsError) {
         networkEvents.off('ws_error', onWsError);
         onWsError = null;
@@ -1216,6 +1285,7 @@ function syncStatus() {
     const userState = getUserState();
     const ws = getWs();
     const connected = !!(loginReady && ws && ws.readyState === 1);
+    if (connected && connectionDownInfo) connectionDownInfo = null;
 
     let expProgress = null;
     const level = (userState.level ?? statusData.level ?? 0);
@@ -1238,6 +1308,15 @@ function syncStatus() {
         friendRemainSec: Math.max(helpRemainSec, stealRemainSec),
     };
 
+    if (fullStats.connection) {
+        fullStats.connection = {
+            ...fullStats.connection,
+            connected,
+            reason: connected ? '' : (connectionDownInfo ? connectionDownInfo.reason : ''),
+            detail: connected ? '' : (connectionDownInfo ? connectionDownInfo.detail : ''),
+            since: connected ? 0 : (connectionDownInfo ? connectionDownInfo.since : 0),
+        };
+    }
     fullStats.automation = getAutomation();
     fullStats.preferredSeed = getPreferredSeed();
     fullStats.levelProgress = expProgress;

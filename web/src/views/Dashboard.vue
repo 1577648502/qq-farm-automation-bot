@@ -568,9 +568,17 @@ useIntervalFn(updateCountdowns, 1000)
         </div>
         <div class="mt-4 border-t border-gray-100 pt-3 dark:border-gray-700">
           <div class="flex items-center justify-between">
-            <div class="flex items-center gap-2">
-              <div class="h-2.5 w-2.5 rounded-full" :class="status?.connection?.connected ? 'bg-green-500' : 'bg-red-500'" />
-              <span class="text-xs font-bold">{{ status?.connection?.connected ? '在线' : '离线' }}</span>
+            <div class="flex min-w-0 items-center gap-2">
+              <div class="h-2.5 w-2.5 shrink-0 rounded-full" :class="status?.connection?.connected ? 'bg-green-500' : 'bg-red-500'" />
+              <span class="shrink-0 text-xs font-bold">{{ status?.connection?.connected ? '在线' : '离线' }}</span>
+              <!-- 离线原因: 以前只显示"已离线", 用户不知道是掉线还是 Code 失效 -->
+              <span
+                v-if="!status?.connection?.connected && status?.connection?.reason"
+                class="truncate text-xs text-red-400"
+                :title="status?.connection?.detail || status?.connection?.reason"
+              >
+                {{ status?.connection?.reason }}
+              </span>
             </div>
             <div class="flex items-center gap-1.5 text-xs text-gray-400">
               <div class="i-fas-clock text-purple-400" />

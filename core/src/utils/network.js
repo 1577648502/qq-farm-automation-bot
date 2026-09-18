@@ -589,6 +589,65 @@ let savedLoginCallback = null;
 let savedCode = null;
 let autoReconnectPausedUntil = 0;
 
+// ============ 自动重连(独立于 networkScheduler) ============
+// ⚠ 历史 bug: 原来用 networkScheduler.setTimeoutTask('auto_reconnect', 2000) 排重连,
+//   但 400(Code 失效) 时 worker 会在 1s 后调 cleanup() → networkScheduler.clearAll()
+//   → 刚排好的重连任务被清掉 → **永远不会再重连**, 账号卡在"已离线 + 任务空转报错"直到人工重启。
+//   现在改用独立的原生定时器, 任何 clearAll() 都清不到它。
+const RECONNECT_BASE_DELAY_MS = 2000;
+const RECONNECT_MAX_DELAY_MS = 60000;
+let autoReconnectTimer = null;
+let autoReconnectDelayMs = RECONNECT_BASE_DELAY_MS;
+let autoReconnectAttempts = 0;
+let autoReconnectEnabled = true;
+
+/** 当前 socket 是否真的可写(状态栏/任务闸门都应该用它, 而不是只看"登录过") */
+function isConnected() {
+    return !!(ws && ws.readyState === WebSocket.OPEN);
+}
+
+function clearAutoReconnect() {
+    if (autoReconnectTimer) {
+        clearTimeout(autoReconnectTimer);
+        autoReconnectTimer = null;
+    }
+}
+
+/**
+ * 排一次自动重连(带指数退避, 上限 60s)
+ * · 处于 pauseAutoReconnect 窗口时, 等窗口结束再排(而不是直接放弃)
+ * · 只有显式 disableAutoReconnect()(停止账号) 才会真正停止
+ */
+function scheduleAutoReconnect(reason = '连接关闭') {
+    if (!autoReconnectEnabled || !savedLoginCallback) return;
+    clearAutoReconnect();
+    const waitPaused = Math.max(0, autoReconnectPausedUntil - Date.now());
+    const delayMs = Math.max(autoReconnectDelayMs, waitPaused);
+    autoReconnectTimer = setTimeout(() => {
+        autoReconnectTimer = null;
+        if (!autoReconnectEnabled) return;
+        if (Date.now() < autoReconnectPausedUntil) return scheduleAutoReconnect(reason);
+        autoReconnectAttempts += 1;
+        const attempt = autoReconnectAttempts;
+        // 前 3 次每次都记, 之后每 5 次记一次, 避免刷屏
+        if (attempt <= 3 || attempt % 5 === 0) {
+            log('系统', `[WS] 自动重连中... (${reason}, 第 ${attempt} 次, 下次间隔 ${Math.round(Math.min(autoReconnectDelayMs * 2, RECONNECT_MAX_DELAY_MS) / 1000)}s)`);
+        }
+        autoReconnectDelayMs = Math.min(autoReconnectDelayMs * 2, RECONNECT_MAX_DELAY_MS);
+        reconnect(null);
+    }, delayMs);
+}
+
+/** 账号被显式停止时调用, 否则停掉的账号还会被自动重连拉起来 */
+function disableAutoReconnect() {
+    autoReconnectEnabled = false;
+    clearAutoReconnect();
+}
+
+function enableAutoReconnect() {
+    autoReconnectEnabled = true;
+}
+
 function pauseAutoReconnect(ms = 0) {
     const delay = Math.max(0, Number(ms) || 0);
     autoReconnectPausedUntil = Math.max(autoReconnectPausedUntil, Date.now() + delay);
@@ -597,6 +656,11 @@ function pauseAutoReconnect(ms = 0) {
 function connect(code, onLoginSuccess) {
     savedLoginCallback = onLoginSuccess;
     if (code) savedCode = code;
+    // 新连接: 恢复自愈能力并清掉待重连任务
+    // ⚠ 这里**不**复位退避计数: 自动重连也走 connect(), 若在此复位, 退避永远是 2s(打爆服务端)。
+    //   退避只在"握手成功"(open) 或"用户提供了新 Code"(reconnect 带参) 时复位。
+    clearAutoReconnect();
+    autoReconnectEnabled = true;
     const url = `${CONFIG.serverUrl}?platform=${CONFIG.platform}&os=${CONFIG.os}&ver=${CONFIG.clientVersion}&code=${savedCode}&openID=`;
 
     ws = new WebSocket(url, {
@@ -609,6 +673,9 @@ function connect(code, onLoginSuccess) {
     ws.binaryType = 'arraybuffer';
 
     ws.on('open', () => {
+        // 连接恢复: 退避归零, 下一次断线仍从 2s 开始重试
+        autoReconnectDelayMs = RECONNECT_BASE_DELAY_MS;
+        autoReconnectAttempts = 0;
         sendLogin(onLoginSuccess);
     });
 
@@ -619,13 +686,10 @@ function connect(code, onLoginSuccess) {
     ws.on('close', (code, _reason) => {
         console.warn(`[WS] 连接关闭 (code=${code})`);
         cleanup();
-        // 自动重连：延迟 2s 后重试，复用已保存的登录回调
-        if (savedLoginCallback && Date.now() >= autoReconnectPausedUntil) {
-            networkScheduler.setTimeoutTask('auto_reconnect', 2000, () => {
-                log('系统', '[WS] 尝试自动重连...');
-                reconnect(null);
-            });
-        }
+        // 通知上层"已经断开" → worker 立刻关掉任务闸门(否则会一直拿死 socket 发请求刷屏)
+        networkEvents.emit('disconnected', { code: Number(code) || 0 });
+        // 自动重连：独立定时器 + 指数退避, 不会被 cleanup()/clearAll() 清掉
+        scheduleAutoReconnect(`连接关闭(code=${Number(code) || 0})`);
     });
 
     ws.on('error', (err) => {
@@ -645,10 +709,18 @@ function connect(code, onLoginSuccess) {
 function cleanup(reason = '网络清理') {
     rejectAllPendingRequests(`请求已中断: ${reason}`);
     networkScheduler.clearAll();
+    // ⚠ 只清 networkScheduler(心跳/请求超时等)。自动重连用的是独立的原生定时器,
+    //   故意不受这里影响 —— 否则 400 错误触发的 cleanup() 会把重连任务一起清掉(历史 bug)。
     // pendingCallbacks.clear();
 }
 
 function reconnect(newCode) {
+    // 用户/上层提供了新 Code → 是新的一次尝试, 退避从头开始
+    if (newCode) {
+        autoReconnectDelayMs = RECONNECT_BASE_DELAY_MS;
+        autoReconnectAttempts = 0;
+    }
+    clearAutoReconnect();
     cleanup('主动重连');
     if (ws) {
         ws.removeAllListeners();
@@ -666,6 +738,10 @@ module.exports = {
     sendMsg, sendMsgAsync,
     getUserState,
     getWsErrorState,
+    isConnected,
+    scheduleAutoReconnect,
+    disableAutoReconnect,
+    enableAutoReconnect,
     networkEvents,
     pauseAutoReconnect,
 };
