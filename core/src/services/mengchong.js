@@ -35,7 +35,7 @@ const protobuf = require('protobufjs');
 const { sendMsgAsync } = require('../utils/network');
 const { toLong, toNum, log, logWarn, randomDelay } = require('../utils/utils');
 const { isAutomationOn, getActivityStatus } = require('../models/store');
-const { getItemById } = require('../config/gameConfig');
+const { getItemById, getItemImageById } = require('../config/gameConfig');
 const { getDataDir, getResourcePath } = require('../config/runtime-paths');
 
 const ACTIVITY_SERVICE = 'gamepb.activitypb.ActivityService';
@@ -269,7 +269,7 @@ function parsePetState(stateBuf) {
                 const inner = parseTop(x.v);
                 const id = toInt((findField(inner, 1) || {}).v);
                 const count = toInt((findField(inner, 2) || {}).v);
-                if (id > 0) pet.items.push({ id, count, name: itemName(id) });
+                if (id > 0) pet.items.push({ id, count, name: itemName(id), image: getItemImageById(id) });
             }
         }
     }
@@ -415,11 +415,23 @@ function parsePetState(stateBuf) {
                 unlocked: opened,                        // 兼容旧字段名
                 claimable: opened && !claimed,
                 photo,
+                // 照片/配字图(game-config-sync 已把 S3PhotoWallPhotos 同步到 mengchong_images)
+                image: photoImageUrl(photo && photo.photo),
+                sayImage: photoImageUrl(photo && photo.say),
             });
         }
     }
     pet.handnotes.sort((a, b) => a.id - b.id);
     return pet;
+}
+
+/** 游戏贴图路径 → 本地同步好的图片地址 (game-config-sync 同步到 mengchong_images) */
+function photoImageUrl(res) {
+    const parts = String(res || '').split('/').filter(Boolean);
+    if (!parts.length) return '';
+    const name = parts[parts.length - 1] === 'spriteFrame' ? parts[parts.length - 2] : parts[parts.length - 1];
+    if (!name) return '';
+    return `/game-config/mengchong_images/${encodeURIComponent(name)}.png`;
 }
 
 /**
@@ -598,6 +610,7 @@ function parseShopBody(activityBuf) {
             const it = parseTop(itemField.v);
             item = { id: toInt((findField(it, 1) || {}).v), count: toInt((findField(it, 2) || {}).v) || 1 };
             item.name = itemName(item.id);
+            item.image = getItemImageById(item.id);
         }
         let cost = null;
         if (costField && costField.w === 2) {

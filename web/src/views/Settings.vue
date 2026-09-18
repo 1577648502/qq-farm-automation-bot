@@ -619,6 +619,8 @@ const localAutomationSettings = ref({
   robTreasureIntervalMinutes: 10,
   robMaxPerRun: 1,
   robDailyLimit: 20,
+  buyBookEnabled: false,
+  buyBookCount: 2,
   // 防封号(低调)模式
   stealthEnabled: false,
   stealthOnlineMinMinutes: 3,
@@ -905,6 +907,8 @@ function syncLocalAutomationSettings() {
     localAutomationSettings.value.robTreasureIntervalMinutes = settings.value.robTreasureIntervalMinutes ?? 10
   localAutomationSettings.value.robMaxPerRun = settings.value.robMaxPerRun ?? 1
   localAutomationSettings.value.robDailyLimit = settings.value.robDailyLimit ?? 20
+  localAutomationSettings.value.buyBookEnabled = settings.value.buyBookEnabled ?? false
+  localAutomationSettings.value.buyBookCount = settings.value.buyBookCount ?? 2
     localAutomationSettings.value.fertilizerBuyOrganicCount = settings.value.fertilizerBuyOrganicCount ?? 10
     localAutomationSettings.value.fertilizerBuyOrganicThresholdHours = settings.value.fertilizerBuyOrganicThresholdHours ?? 10
     localAutomationSettings.value.fertilizerBuyNormalCount = settings.value.fertilizerBuyNormalCount ?? 10
@@ -965,6 +969,8 @@ async function saveAutomationSettings() {
       robTreasureIntervalMinutes: localAutomationSettings.value.robTreasureIntervalMinutes,
       robMaxPerRun: localAutomationSettings.value.robMaxPerRun,
       robDailyLimit: localAutomationSettings.value.robDailyLimit,
+      buyBookEnabled: localAutomationSettings.value.buyBookEnabled,
+      buyBookCount: localAutomationSettings.value.buyBookCount,
       fertilizerBuyOrganicCount: localAutomationSettings.value.fertilizerBuyOrganicCount,
       fertilizerBuyOrganicThresholdHours: localAutomationSettings.value.fertilizerBuyOrganicThresholdHours,
       fertilizerBuyNormalCount: localAutomationSettings.value.fertilizerBuyNormalCount,
@@ -1728,6 +1734,23 @@ async function handleTestOffline() {
                 <BaseButton variant="secondary" size="sm" :loading="treasureRunning" @click="runTreasureNow">
                   立即执行一次
                 </BaseButton>
+              </div>
+              <div class="mt-2 space-y-2 border-t border-amber-200 pt-2 dark:border-amber-900/40">
+                <div class="flex flex-wrap items-center gap-3">
+                  <BaseSwitch v-model="localAutomationSettings.buyBookEnabled" label="每日购买中级挑战书" />
+                  <BaseInput
+                    v-model.number="localAutomationSettings.buyBookCount"
+                    label="每日数量 (个)"
+                    type="number"
+                    min="0"
+                    max="20"
+                    class="w-32"
+                  />
+                </div>
+                <div class="text-xs text-gray-500 dark:text-gray-400">
+                  每天自动在商城买中级挑战书，150 金豆豆/个（商城 goodsId 1050）；
+                  金豆豆不足时只买够的部分，进度跨重启累计。
+                </div>
               </div>
               <div class="text-xs text-gray-500 dark:text-gray-400">
                 修改后自动保存；自动夺宝在后台按上面的间隔巡检。每次抢夺消耗 1 张挑战书（无论胜负），

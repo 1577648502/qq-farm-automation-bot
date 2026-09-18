@@ -38,6 +38,9 @@ interface Handnote {
   claimed: boolean       // 已领取奖励
   unlocked?: boolean     // 兼容字段 = opened
   photo: { photo?: string, say?: string } | null
+  /** 本地同步好的照片/配字图(/game-config/mengchong_images) */
+  image?: string
+  sayImage?: string
 }
 
 interface PetState {
@@ -48,7 +51,7 @@ interface PetState {
   feedCount: number
   luckyStar?: number
   baseValue?: number
-  items: { id: number, count: number, name: string }[]
+  items: { id: number, count: number, name: string, image?: string }[]
   handnotes: Handnote[]
   wishBags?: {
     /** 当前生效锦囊(#6.#2) */
@@ -108,7 +111,7 @@ interface MengchongOverview {
 interface ShopItem {
   id: number
   name: string
-  item: { id: number, count: number, name: string } | null
+  item: { id: number, count: number, name: string, image?: string } | null
   cost: { id: number, amount: number, name: string } | null
   limit: number
   bought: number
@@ -128,6 +131,15 @@ const shopLoading = ref(false)
 const rules = ref<{ uid: string, sections: { key: string, title: string, lines: string[] }[] } | null>(null)
 const rulesOpen = ref(false)
 const charmCodexOpen = ref(false)
+/** 概览里的固定物品图标(/game-config 静态目录, 由 game-config-sync 同步) */
+const yuanqigaoImage = computed(() => {
+  const hit = (overview.value?.pet?.items || []).find(i => i.id === 1028)
+  return (hit && hit.image) || '/game-config/seed_images_named/1028_萌宠元气糕_icon_s3_petCost.png'
+})
+const luckyStarImage = computed(() => {
+  const hit = (overview.value?.pet?.items || []).find(i => i.id === 1029)
+  return (hit && hit.image) || '/game-config/seed_images_named/1029_幸运星_icon_s3luckyStar.png'
+})
 const rulesLoading = ref(false)
 // 说明里的关键数值 (摘自活动说明) — 便于对照操作
 const CHALLENGE_TIERS = [
@@ -567,21 +579,46 @@ onMounted(fetchRules)
             <div class="text-xs text-gray-500 dark:text-gray-400">成长值</div>
             <div class="mt-1 text-xl font-bold">{{ fmtNum(overview.pet.growth) }}</div>
           </div>
-          <div class="rounded border border-gray-200 p-3 dark:border-gray-700">
-            <div class="text-xs text-gray-500 dark:text-gray-400">元气糕(背包)</div>
-            <div class="mt-1 text-xl font-bold">{{ fmtNum(overview.yuanqigao) }}</div>
+          <div class="flex items-center gap-2 rounded border border-gray-200 p-3 dark:border-gray-700">
+            <img
+              v-if="yuanqigaoImage"
+              :src="yuanqigaoImage"
+              alt="萌宠元气糕"
+              class="h-9 w-9 rounded object-contain"
+            >
+            <div class="min-w-0">
+              <div class="text-xs text-gray-500 dark:text-gray-400">元气糕(背包)</div>
+              <div class="mt-1 text-xl font-bold">{{ fmtNum(overview.yuanqigao) }}</div>
+            </div>
           </div>
-          <div class="rounded border border-gray-200 p-3 dark:border-gray-700">
-            <div class="text-xs text-gray-500 dark:text-gray-400">幸运星(背包)</div>
-            <div class="mt-1 text-xl font-bold">{{ fmtNum(overview.luckyStar) }}</div>
+          <div class="flex items-center gap-2 rounded border border-gray-200 p-3 dark:border-gray-700">
+            <img
+              v-if="luckyStarImage"
+              :src="luckyStarImage"
+              alt="幸运星"
+              class="h-9 w-9 rounded object-contain"
+            >
+            <div class="min-w-0">
+              <div class="text-xs text-gray-500 dark:text-gray-400">幸运星(背包)</div>
+              <div class="mt-1 text-xl font-bold">{{ fmtNum(overview.luckyStar) }}</div>
+            </div>
           </div>
           <div
             v-for="it in otherPetItems"
             :key="it.id"
-            class="rounded border border-gray-200 p-3 dark:border-gray-700"
+            class="flex items-center gap-2 rounded border border-gray-200 p-3 dark:border-gray-700"
           >
-            <div class="text-xs text-gray-500 dark:text-gray-400">{{ it.name }}</div>
-            <div class="mt-1 text-xl font-bold">{{ fmtNum(it.count) }}</div>
+            <img
+              v-if="it.image"
+              :src="it.image"
+              :alt="it.name"
+              loading="lazy"
+              class="h-9 w-9 rounded object-contain"
+            >
+            <div class="min-w-0">
+              <div class="text-xs text-gray-500 dark:text-gray-400">{{ it.name }}</div>
+              <div class="mt-1 text-xl font-bold">{{ fmtNum(it.count) }}</div>
+            </div>
           </div>
         </div>
         <p class="mt-2 text-xs text-gray-500 dark:text-gray-400">
@@ -636,6 +673,13 @@ onMounted(fetchRules)
                 ? 'border-rose-300 bg-rose-50 dark:border-rose-700 dark:bg-rose-900/20'
                 : 'border-gray-200 bg-gray-50 dark:border-gray-700 dark:bg-gray-900/40'"
           >
+            <img
+              v-if="h.image"
+              :src="h.image"
+              :alt="`手记 ${h.id}`"
+              loading="lazy"
+              class="mb-2 h-28 w-full rounded object-cover"
+            >
             <span class="font-medium">手记 {{ h.id }}</span>
             <span class="mt-1 flex-1 text-xs text-gray-500 dark:text-gray-400">
               <template v-if="h.claimed">
@@ -733,7 +777,16 @@ onMounted(fetchRules)
               : 'border-gray-200 dark:border-gray-700'"
           >
             <div class="flex items-start justify-between gap-2">
-              <span class="text-sm font-medium">{{ g.name }}</span>
+              <div class="flex min-w-0 items-center gap-2">
+                <img
+                  v-if="g.item && g.item.image"
+                  :src="g.item.image"
+                  :alt="g.item.name || g.name"
+                  loading="lazy"
+                  class="h-10 w-10 shrink-0 rounded object-contain"
+                >
+                <span class="truncate text-sm font-medium">{{ g.name }}</span>
+              </div>
               <span v-if="g.remaining !== null" class="shrink-0 text-xs text-gray-500">
                 {{ g.remaining > 0 ? `可兑 ${g.remaining}` : '已兑完' }}
               </span>

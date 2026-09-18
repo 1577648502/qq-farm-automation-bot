@@ -17,6 +17,7 @@ interface Book {
   name: string
   level: number
   count: number
+  image?: string
 }
 
 interface BookSlot {
@@ -46,6 +47,7 @@ interface RobRecord {
   ok: boolean
   reward: { id: number, count: number, name: string } | null
   rewardText: string
+  rewardImage?: string
   message: string
   gid: number
   friendName: string
@@ -374,7 +376,10 @@ onMounted(() => {
             ? 'border-green-200 bg-green-50 text-green-700 dark:border-green-900/40 dark:bg-green-900/20 dark:text-green-300'
             : 'border-gray-200 bg-gray-50 text-gray-400 dark:border-gray-700 dark:bg-gray-900/40 dark:text-gray-500'"
         >
-          {{ b.name }} × {{ b.count }}
+          <span class="flex items-center gap-2">
+            <img v-if="b.image" :src="b.image" :alt="b.name" class="h-7 w-7 rounded object-contain">
+            {{ b.name }} × {{ b.count }}
+          </span>
         </div>
         <div v-if="!books.length" class="text-sm text-gray-400">
           读取中…
@@ -523,6 +528,12 @@ onMounted(() => {
             <span class="rounded px-1.5 py-0.5 text-xs" :class="outcomeClass(r.outcome)">
               {{ r.outcomeText }}
             </span>
+            <img
+              v-if="r.rewardImage"
+              :src="r.rewardImage"
+              alt="奖励"
+              class="h-5 w-5 rounded object-contain"
+            >
             <span
               v-if="r.rewardText"
               class="text-xs font-medium"

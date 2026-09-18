@@ -9,14 +9,14 @@ if (parentPort && workerData && workerData.startupMode === 'code_refresh') {
     process.env.FARM_STARTUP_MODE = 'code_refresh';
 }
 const { getLevelExpProgress } = require('../config/gameConfig');
-const { getAutomation, getPreferredSeed, getConfigSnapshot, applyConfigSnapshot, getFertilizerBuyType, getFertilizerBuyCount } = require('../models/store');
+const { getAutomation, getPreferredSeed, getConfigSnapshot, applyConfigSnapshot, getFertilizerBuyType, getFertilizerBuyCount, getBuyBookConfig } = require('../models/store');
 const { checkAndClaimEmails } = require('../services/email');
 const { getEmailDailyState } = require('../services/email');
 const { checkFarm, startFarmCheckLoop, stopFarmCheckLoop, refreshFarmCheckLoop, getLandsDetail, getAvailableSeeds, buySeed, runFarmOperation, runFertilizerByConfig } = require('../services/farm');
 const { checkFriends, startFriendCheckLoop, stopFriendCheckLoop, refreshFriendCheckLoop, runBadOnceOnStartup, isHelpExpLimitReached, getFriendsList, getFriendLandsDetail, doFriendOperation } = require('../services/friend');
 const { getInteractRecords } = require('../services/interact');
 const { processInviteCodes } = require('../services/invite');
-const { autoBuyOrganicFertilizer, autoBuyFertilizer, checkAndBuyFertilizerBoth, buyFreeGifts, getFreeGiftDailyState } = require('../services/mall');
+const { autoBuyOrganicFertilizer, autoBuyFertilizer, checkAndBuyFertilizerBoth, buyFreeGifts, getFreeGiftDailyState, checkAndBuyChallengeBooks } = require('../services/mall');
 const { getMallCatalog, purchaseCatalogGoods } = require('../services/mall');
 const treasureRob = require('../services/treasure-rob');
 const { getActivityOverview, drawLottery, drawActivity, claimBattlePassRewards, claimActivityTasks, claimDailySignin, exchangeShopGoods, performQingniangBrew, sellQingniangBrew, shareSellQingniangBrew, getStarActivityOverview, exchangeStarShopGoods, lightUpStarRegister, checkAndLightUpStar } = require('../services/activity');
@@ -196,6 +196,18 @@ async function runDailyRoutines(force = false) {
         await require('../services/weather').checkAndRunWeatherResearch();
         await require('../services/charity').checkAndRunCharityTasks();
         await require('../services/mengchong').checkAndRunMengchongTasks();
+        // 每日购买中级挑战书(150 金豆豆/个, 数量可在设置里调)
+        const bookCfg = getBuyBookConfig();
+        if (bookCfg.enabled && bookCfg.count > 0) {
+            try {
+                const r = await checkAndBuyChallengeBooks(force, bookCfg.count);
+                if (r.boughtNow > 0) {
+                    log('商城', `每日购买中级挑战书: 本次 ${r.boughtNow} 本, 累计 ${r.bought}/${r.target} (150 金豆豆/个)`, { module: 'mall', event: '购买挑战书', result: 'ok' });
+                }
+            } catch (e) {
+                log('商城', `每日购买中级挑战书失败: ${e.message}`, { module: 'mall', event: '购买挑战书', result: 'error' });
+            }
+        }
     } catch (e) {
         log('系统', `每日任务调度失败: ${e.message}`, { module: 'system', event: '每日任务', result: 'error' });
     }

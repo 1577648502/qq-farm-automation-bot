@@ -7,6 +7,10 @@ const { sendMsgAsync, getUserState } = require('../utils/network');
 const { types } = require('../utils/proto');
 const { toNum, log, sleep } = require('../utils/utils');
 const { getItemById, getAllItems, getItemImageById } = require('../config/gameConfig');
+const { getDataFile } = require('../config/runtime-paths');
+const { readJson, writeJsonFileAtomic } = require('./json-db');
+const path = require('node:path');
+const fs = require('node:fs');
 
 // 名称 -> 物品 索引 (懒加载; gameConfig 未导出 getItemByName, 这里自建, 同时避免未收录物品抛错)
 let itemNameIndex = null;
@@ -789,6 +793,92 @@ function isDoneTodayByKey(key) {
     return String(key || '') === getDateKey();
 }
 
+// ===== 每日购买中级挑战书 (商城 goodsId=1050, 150 金豆豆/个, 2026-09-18 抓包实测) =====
+const BUY_BOOK_GOODS_ID = 1050;
+const BUY_BOOK_ITEM_ID = 80102;      // 中级挑战书
+const BUY_BOOK_EXPECT_PRICE = 150;   // 单价(金豆豆), 用于防止改价误买
+const BUY_BOOK_STATE_FILE = getDataFile(path.join('mall-state', 'buy-challenge-book.json'));
+let buyBookState = null;
+
+function loadBuyBookState() {
+    if (buyBookState) return buyBookState;
+    const j = readJson(BUY_BOOK_STATE_FILE, () => ({}));
+    buyBookState = {
+        dateKey: String(j.dateKey || ''),
+        bought: Math.max(0, Number(j.bought) || 0),
+    };
+    return buyBookState;
+}
+
+function saveBuyBookState() {
+    try {
+        writeJsonFileAtomic(BUY_BOOK_STATE_FILE, { ...loadBuyBookState(), updatedAt: Date.now() });
+    } catch (e) { /* 状态保存失败不影响购买 */ }
+}
+
+/**
+ * 每日购买中级挑战书 (默认 2 个, 150 金豆豆/个)
+ * · 每天一次, 进度持久化(重启不清零)
+ * · 购买前校验商城里该商品的单价仍是 150 金豆豆, 改价就停(防止误买)
+ * · 金豆豆不足时买到余额不够为止
+ */
+async function checkAndBuyChallengeBooks(force = false, targetCount = 2, opts = {}) {
+    const today = getDateKey();
+    const st = loadBuyBookState();
+    if (st.dateKey !== today) {
+        st.dateKey = today;
+        st.bought = 0;
+    }
+    const target = Math.max(0, Math.min(20, Number(targetCount) || 0));
+    const result = { ok: true, dateKey: today, target, bought: st.bought, boughtNow: 0, skipped: '' };
+    if (target <= 0) { result.skipped = '未启用'; return result; }
+    if (!force && st.bought >= target) { result.skipped = `今日已购满 ${st.bought}/${target}`; return result; }
+
+    const goodsList = await getMallGoodsList(1);
+    const goods = goodsList.find((g) => toNum(g && g.goods_id) === BUY_BOOK_GOODS_ID)
+        || (await getMallCatalog(1)).find((g) => Number(g.goodsId) === BUY_BOOK_GOODS_ID) || null;
+    if (!goods) { result.ok = false; result.skipped = '商城里没有中级挑战书(goodsId=1050)'; return result; }
+
+    const singlePrice = parseMallPriceValue(goods.price);
+    if (singlePrice > 0 && singlePrice !== BUY_BOOK_EXPECT_PRICE) {
+        result.ok = false;
+        result.skipped = `单价已变为 ${singlePrice}(预期 ${BUY_BOOK_EXPECT_PRICE}), 停止购买`;
+        log('商城', `中级挑战书单价异常(${singlePrice}), 停止自动购买`, { module: 'mall', event: '购买挑战书', result: 'price_changed' });
+        return result;
+    }
+
+    // 金豆豆余额(getUserState 在登录时从背包初始化)
+    let balance = toNum(getUserState().goldBean) || 0;
+    let need = target - st.bought;
+    if (balance > 0 && balance < need * BUY_BOOK_EXPECT_PRICE) {
+        need = Math.floor(balance / BUY_BOOK_EXPECT_PRICE);
+        result.skipped = need <= 0 ? '金豆豆不足' : result.skipped;
+        if (need <= 0) { result.skipped = '金豆豆不足(150/个)'; return result; }
+        log('商城', `金豆豆余额只够买 ${need} 本中级挑战书(目标 ${target})`, { module: 'mall', event: '购买挑战书' });
+    }
+
+    for (let i = 0; i < need; i++) {
+        try {
+            await purchaseMallGoods(BUY_BOOK_GOODS_ID, 1);
+            st.bought += 1;
+            result.bought = st.bought;
+            result.boughtNow += 1;
+            balance = Math.max(0, balance - BUY_BOOK_EXPECT_PRICE);
+            saveBuyBookState();
+            log('商城', `已购买中级挑战书 ${st.bought}/${target} (150 金豆豆/个, 余额约 ${balance})`, {
+                module: 'mall', event: '购买挑战书', result: 'ok', goodsId: BUY_BOOK_GOODS_ID,
+            });
+            if (i < need - 1) await sleep(800);
+        } catch (e) {
+            result.ok = false;
+            result.skipped = e.message;
+            log('商城', `购买中级挑战书失败: ${e.message}`, { module: 'mall', event: '购买挑战书', result: 'error' });
+            break;
+        }
+    }
+    return result;
+}
+
 async function buyFreeGifts(force = false) {
     const now = Date.now();
     if (!force && isDoneTodayByKey(freeGiftDoneDateKey)) return 0;
@@ -976,6 +1066,7 @@ module.exports = {
     purchaseCatalogGoods,
     autoBuyOrganicFertilizer,
     autoBuyFertilizer,
+    checkAndBuyChallengeBooks,
     checkAndBuyFertilizerByThreshold,
     checkAndBuyFertilizerBoth,
     buyFreeGifts,

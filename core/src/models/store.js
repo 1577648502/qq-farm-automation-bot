@@ -221,6 +221,8 @@ const DEFAULT_ACCOUNT_CONFIG = {
     robTreasureIntervalMinutes: 10,   // 自动夺宝检查间隔(分钟)
     robMaxPerRun: 1,                  // 每轮最多抢几个宝藏(挑战书消耗节奏, 1 = 最省)
     robDailyLimit: 20,                // 每日夺宝次数上限(官方规则 20 次; 0 = 不限)
+    buyBookEnabled: false,            // 每日自动购买中级挑战书(150 金豆豆/个)
+    buyBookCount: 2,                  // 每日购买数量
     // 背包种子优先顺序（seedId 数组）
     bagSeedPriority: [],
     // 背包种子用完后的回退策略
@@ -506,6 +508,12 @@ function normalizeAccountConfig(input, fallback = accountFallbackConfig) {
     if (src.robDailyLimit !== undefined && src.robDailyLimit !== null) {
         cfg.robDailyLimit = Math.max(0, Math.min(200, Number(src.robDailyLimit) || 0));
     }
+    if (src.buyBookEnabled !== undefined && src.buyBookEnabled !== null) {
+        cfg.buyBookEnabled = !!src.buyBookEnabled;
+    }
+    if (src.buyBookCount !== undefined && src.buyBookCount !== null) {
+        cfg.buyBookCount = Math.max(0, Math.min(20, Number(src.buyBookCount) || 0));
+    }
 
     // 有机化肥购买数量
     if (src.fertilizerBuyOrganicCount !== undefined && src.fertilizerBuyOrganicCount !== null) {
@@ -773,6 +781,8 @@ function getConfigSnapshot(accountId) {
         robTreasureIntervalMinutes: Math.max(1, Math.min(1440, Number(cfg.robTreasureIntervalMinutes) || 10)),
         robMaxPerRun: Math.max(1, Math.min(20, Number(cfg.robMaxPerRun) || 1)),
         robDailyLimit: Math.max(0, Math.min(200, Number(cfg.robDailyLimit) || 0)),
+        buyBookEnabled: cfg.buyBookEnabled === undefined ? false : !!cfg.buyBookEnabled,
+        buyBookCount: Math.max(0, Math.min(20, Number(cfg.buyBookCount) || 0)),
         stealDelaySeconds: Math.max(0, Math.min(300, Number(cfg.stealDelaySeconds) || 0)),
         plantOrderRandom: !!cfg.plantOrderRandom,
         plantDelaySeconds: Math.max(0, Math.min(60, Number(cfg.plantDelaySeconds) || 0)),
@@ -907,6 +917,12 @@ function applyConfigSnapshot(snapshot, options = {}) {
     }
     if (cfg.robDailyLimit !== undefined && cfg.robDailyLimit !== null) {
         next.robDailyLimit = Math.max(0, Math.min(200, Number(cfg.robDailyLimit) || 0));
+    }
+    if (cfg.buyBookEnabled !== undefined && cfg.buyBookEnabled !== null) {
+        next.buyBookEnabled = !!cfg.buyBookEnabled;
+    }
+    if (cfg.buyBookCount !== undefined && cfg.buyBookCount !== null) {
+        next.buyBookCount = Math.max(0, Math.min(20, Number(cfg.buyBookCount) || 0));
     }
 
     // 种植延迟
@@ -1431,6 +1447,14 @@ function getRobTreasureIntervalMinutes(accountId) {
     return Math.max(1, Math.min(1440, Number(cfg.robTreasureIntervalMinutes) || 10));
 }
 
+function getBuyBookConfig(accountId) {
+    const cfg = (typeof getConfigSnapshot === 'function' ? getConfigSnapshot(accountId) : (globalConfig.accountConfig || {})) || {};
+    return {
+        enabled: cfg.buyBookEnabled === undefined ? false : !!cfg.buyBookEnabled,
+        count: Math.max(0, Math.min(20, Number(cfg.buyBookCount) || 0)),
+    };
+}
+
 function getRobThrottleConfig(accountId) {
     const cfg = (typeof getConfigSnapshot === 'function' ? getConfigSnapshot(accountId) : (globalConfig.accountConfig || {})) || {};
     return {
@@ -1490,6 +1514,7 @@ module.exports = {
     getPlantingStrategy,
     getRobTreasureIntervalMinutes,
     getRobThrottleConfig,
+    getBuyBookConfig,
     getBagSeedPriority,
     getBagSeedFallbackStrategy,
     getIntervals,

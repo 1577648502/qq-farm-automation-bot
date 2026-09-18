@@ -134,6 +134,15 @@ function scanCacheDir(fsRoot, hasAccountDir) {
     return candidates;
 }
 
+function findAllQQFarmCaches() {
+    const candidates = [];
+    candidates.push.apply(candidates, scanCacheDir(path.join(os.homedir(), QQ_CACHE_RELATIVE_ROOT), true));
+    candidates.push.apply(candidates, scanCacheDir(path.join(os.homedir(), WINDOWS_QQ_CACHE_ROOT), true));
+    candidates.push.apply(candidates, scanCacheDir(path.join(os.homedir(), WINDOWS_QQNT_CACHE_ROOT), false));
+    candidates.sort((a, b) => b.mtimeMs - a.mtimeMs);
+    return candidates;
+}
+
 function findLatestQQFarmCache() {
     var candidates = [];
     // macOS
@@ -619,6 +628,81 @@ async function syncOtherItemImages(cache, cacheList, bundles, items, outputDir) 
 }
 
 /**
+ * 同步萌宠游记的图片资源 (爪印手记照片墙等 S3 贴图)
+ * 来源: delayRes bundle 配置里的 gui/texture/Season/S3/... 路径, 命中本地缓存直接拷贝,
+ *       未缓存则从 CDN 下载 (png 变体优先, astc 浏览器渲染不了)。
+ * 输出: data/gameConfig/mengchong_images/<basename>.png (同时写一份到内置目录供前端打包)
+ */
+async function syncMengchongImages(options = {}) {
+    // 本机可能有多个 QQ 缓存目录(新旧版本并存), findLatestQQFarmCache 只挑一个,
+    // 而 S3 贴图只在部分缓存里 → 遍历所有候选, 找到有资源的为止
+    const caches = findAllQQFarmCaches();
+    if (!caches.length) return { skipped: true, reason: '未找到 QQ 农场前台缓存', synced: 0, missing: [], caches: 0 };
+
+    const prefix = 'gui/texture/Season/S3/S3PhotoWallPhotos/';
+    let wanted = [];
+    for (const cache of caches) {
+        let cacheList = null;
+        try { cacheList = readJson(cache.cacheListPath); } catch (e) { continue; }
+        const found = [];
+        for (const bundleName of ['delayRes', 'extraRes', 'mainscene']) {
+            let bundle = null;
+            try { bundle = findBundleConfig(cacheList, cache, bundleName); } catch (e) { bundle = null; }
+            if (!bundle || !bundle.config) continue;
+            // ⚠ bundle.config 已经是解析好的 JSON(findBundleConfig 内部 readJson), 不要再 readFileSync
+            const index = buildAssetPathIndex(bundle.config);
+            for (const assetPath of index.keys()) {
+                if (!String(assetPath).startsWith(prefix)) continue;
+                if (found.some(w => w.assetPath === assetPath)) continue;
+                found.push({ assetPath, cfg: bundle.config, sourceUrl: bundle.sourceUrl, cache });
+            }
+        }
+        if (found.length > wanted.length) wanted = found;
+    }
+    if (!wanted.length) return { skipped: true, reason: '各缓存里都没有 S3 照片墙资源', synced: 0, missing: [], caches: caches.length };
+    const indexByCfg = new Map();
+    for (const w of wanted) {
+        if (!indexByCfg.has(w.cfg)) indexByCfg.set(w.cfg, buildAssetPathIndex(w.cfg));
+    }
+
+    const dataDir = path.join(getDataDir(), 'gameConfig', 'mengchong_images');
+    const bundledDir = getResourcePath('gameConfig', 'mengchong_images');
+    fs.mkdirSync(dataDir, { recursive: true });
+    try { fs.mkdirSync(bundledDir, { recursive: true }); } catch (e) { /* 内置目录可能只读 */ }
+
+    let synced = 0;
+    const missing = [];
+    for (const w of wanted) {
+        const base = path.posix.basename(w.assetPath);
+        const fileName = `${base}.png`;
+        const dataPath = path.join(dataDir, fileName);
+        if (!options.force && fs.existsSync(dataPath) && fs.statSync(dataPath).size > 100) { synced += 1; continue; }
+        try {
+            const nativeAsset = resolveNativeAsset(w.cfg, w.sourceUrl, cacheListOf(w.cache), indexByCfg.get(w.cfg).get(w.assetPath));
+            if (!nativeAsset) { missing.push(base); continue; }
+            const content = await readNativeAssetContent(w.cache, cacheListOf(w.cache), nativeAsset);
+            if (!content || content.length < 100) { missing.push(base); continue; }
+            writeAtomic(dataPath, content);
+            try { writeAtomic(path.join(bundledDir, fileName), content); } catch (e) { /* 只读忽略 */ }
+            synced += 1;
+        } catch (e) {
+            missing.push(base);
+        }
+    }
+    return { skipped: false, synced, total: wanted.length, missing, outputDir: dataDir };
+}
+
+/** 按缓存目录读 cacheList(带 30s 微缓存, 避免同目录重复读盘) */
+const _cacheListCache = new Map();
+function cacheListOf(cache) {
+    const hit = _cacheListCache.get(cache.cacheListPath);
+    if (hit && Date.now() - hit.at < 30000) return hit.list;
+    const list = readJson(cache.cacheListPath);
+    _cacheListCache.set(cache.cacheListPath, { at: Date.now(), list });
+    return list;
+}
+
+/**
  * 同步萌宠游记「锦囊」配置表 (config/ActivityPetTreasureHuntCharm)
  * 属于同一个 delayRes bundle, 用于把 charm_id 映射成名称/效果
  */
@@ -662,6 +746,15 @@ async function syncGameConfigFromQQCache(options = {}) {
     const imageOutputDir = path.join(outputDir, 'seed_images_named');
     const statePath = path.join(outputDir, 'sync-state.json');
     const previousState = fs.existsSync(statePath) ? readJson(statePath) : {};
+    // 萌宠游记图片(爪印手记照片墙等): 失败不影响其它同步
+    try {
+        const img = await syncMengchongImages({ force: !!options.force });
+        mengchongImages = img;
+    } catch (e) {
+        console.warn('[配置] 同步萌宠游记图片失败:', e.message);
+    }
+
+    let mengchongImages = null;
     // 锦囊配置(萌宠游记): 独立判断是否需要同步(表缺失 / bundle 资源变化 / force), 失败不影响其它同步
     let charmCount = 0;
     let charmUrl = '';
@@ -775,6 +868,7 @@ async function syncGameConfigFromQQCache(options = {}) {
         missingImages: images.missing,
         imageErrors: images.errors,
         outputDir,
+        mengchongImages,
         itemInfoUrl,
         plantUrl,
     };
@@ -790,4 +884,5 @@ module.exports = {
     syncGameConfigFromQQCache,
     syncItemInfoFromQQCache: syncGameConfigFromQQCache,
     syncPetCharmConfig,
+    syncMengchongImages,
 };

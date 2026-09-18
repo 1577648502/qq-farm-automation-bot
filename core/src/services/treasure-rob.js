@@ -52,7 +52,7 @@ const { toLong, toNum, log } = require('../utils/utils');
 const { isAutomationOn, getRobTreasureIntervalMinutes, getRobThrottleConfig } = require('../models/store');
 const { getBag, getBagItems } = require('./warehouse');
 const { getDataFile } = require('../config/runtime-paths');
-const { getItemById } = require('../config/gameConfig');
+const { getItemById, getItemImageById } = require('../config/gameConfig');
 const { readJsonFile, writeJsonFileAtomic } = require('./json-db');
 
 const ACTIVITY_SERVICE = 'gamepb.activitypb.ActivityService';
@@ -643,6 +643,7 @@ function addRobRecord(entry) {
     };
     rec.outcomeText = OUTCOME_TEXT[rec.outcome] || OUTCOME_TEXT.unknown;
     rec.rewardText = rec.reward ? `${rec.reward.name || itemNameOf(rec.reward.id)}×${rec.reward.count}` : '';
+    rec.rewardImage = rec.reward ? getItemImageById(rec.reward.id) : '';
     list.push(rec);
     if (list.length > RECORD_LIMIT) list.splice(0, list.length - RECORD_LIMIT);
     saveRobRecords();
@@ -719,7 +720,7 @@ async function getBookInventory() {
         const id = toNum(it && it.id);
         if (counts[id] !== undefined) counts[id] += toNum(it && it.count);
     }
-    return CHALLENGE_BOOKS.map(b => ({ ...b, count: counts[b.id] || 0 }));
+    return CHALLENGE_BOOKS.map(b => ({ ...b, count: counts[b.id] || 0, image: getItemImageById(b.id) }));
 }
 
 /** 挑一张可用挑战书: 优先高等级 */
