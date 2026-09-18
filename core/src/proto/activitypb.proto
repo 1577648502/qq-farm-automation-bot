@@ -297,6 +297,7 @@ message OperateRequest {
     QingmeiSellReq qingmei_sell = 114;
     StarLightUpReq star_light_up = 119;   // 实测 cmd=21 (观星礼录 点亮/领取)
     TreasureHuntQueryReq treasure_hunt_query = 147;        // 实测 cmd=47 (夺宝: 查指定好友宝藏)
+    TreasureHuntSettleReq treasure_hunt_settle = 145;      // 实测 cmd=45 (领取护送结算奖励, 09-18)
     TreasureHuntChallengeReq treasure_hunt_challenge = 143; // 实测 cmd=43 (夺宝: 发起挑战/使用挑战书)
     TreasureHuntMiscReq treasure_hunt_misc = 150;          // 实测 cmd=50 (夺宝: 查我的夺宝状态)
 }
@@ -324,6 +325,7 @@ message OperateReply {
     StarLightUpRsp star_light_up = 120;   // 实测 cmd=21 响应
     TreasureHuntQueryRsp treasure_hunt_query = 147;        // 实测 cmd=47 响应(宝藏列表)
     TreasureHuntChallengeRsp treasure_hunt_challenge = 143; // 实测 cmd=43 响应(战报: 胜负 + 奖励)
+    TreasureHuntSettleRsp treasure_hunt_settle = 145;      // 实测 cmd=45 响应(护送结算奖励)
     TreasureHuntMiscRsp treasure_hunt_misc = 150;          // 实测 cmd=50 响应(回显)
 }
 
@@ -403,14 +405,15 @@ message TreasureInfo {
     int64 field14 = 14;          // 实测 3
 }
 
-// 某个挑战书档位对应的可夺金额
+// 某个挑战书档位对应的结算信息 (2026-09-18 补全: 服务端直接下发胜/败金额!)
 message TreasureBookSlot {
     string treasure_id = 1;      // 同 TreasureInfo.treasure_id
     int64 book_item_id = 2;      // 80101 / 80102 / 80103
     int64 field3 = 3;            // 实测: 首次=1(空 msg 时), 语义待确认
-    int64 field4 = 4;
-    int64 field5 = 5;
-    int64 gold = 6;              // 实测 300 → 90 → 80: 用该档挑战书这一刀能夺到的金额
+    ItemAmount win_amount = 4;   // 实测 初级{1029,60} 中级{1029,225} 高级{1029,510}: 该档胜利可获得
+    ItemAmount lose_amount = 5;  // 实测 初级{1029,40} 中级{1029,75} 高级{1029,90}: 该档失败可返还
+    int64 gold = 6;              // 实测 300: 该宝藏当前**可博弈资金**(#3 价值 - #9 保底), 各档相同;
+                                 //   挑战书面值 > 它会被服务端拒绝("当前宝藏资金不足")
 }
 
 // --- cmd=43: 发起夺宝挑战(消耗一张挑战书) ---
@@ -418,6 +421,16 @@ message TreasureHuntChallengeReq {
     int64 gid = 1;               // 实测: 目标好友 gid
     string treasure_id = 2;      // 实测: 来自 cmd=47 响应, 原样回填(字符串, 不是 message!)
     int64 book_item_id = 3;      // 实测: 80103 高级 / 80101 初级 / 80102 中级 —— 就是"用哪张挑战书"
+}
+
+// --- cmd=45: 领取护送结算奖励 (2026-09-18) ---
+// 护送结束(到期/被夺满 3 次/爆仓)后宝藏资金要主动领取; 客户端打开活动页时自动领一次。
+// 实测: 响应 #145 = { #1: { #1: 1029, #2: 690 } }, 幸运星 +690 = 两条已结束护送的价值(350+340)
+message TreasureHuntSettleReq {
+}
+
+message TreasureHuntSettleRsp {
+    ItemAmount reward = 1;   // 实测 {1: 1029, 2: 690}
 }
 
 // --- cmd=50: 查我的夺宝状态 (请求体 {1:1}) ---
@@ -437,10 +450,11 @@ message TreasureHuntMiscRsp {
 // ⚠ 服务端在 proto 里只声明到 #150, 本响应是**未声明字段**; treasure-rob.js 用字段扫描读取,
 //   不要依赖整包 decode(见下方 TreasureHuntQueryRsp 的脏尾说明)。
 message TreasureHuntChallengeRsp {
-    int64 result = 1;                 // 实测 1 = 夺得(攻方胜)
-    ItemAmount reward = 2;            // 实测 {1: 1029 幸运星, 2: 510}: 本次到账奖励
+    // ⚠ 09-18 实测: **落败时 #1 和 #2 都不下发**(只剩 #3/#6/#9) —— 判定落败要按"有战报主体但无 #1"
+    int64 result = 1;                 // 实测 1 = 夺得(攻方胜); 落败时整个字段缺省
+    ItemAmount reward = 2;            // 实测 {1: 1029 幸运星, 2: 510}: 胜利时到账奖励; 落败时缺省
     string opponent_name = 3;         // 实测 "Kamiya Bunches": 对手昵称
-    ItemAmount opponent_settle = 6;   // 实测与 reward 同值, 语义待确认
+    ItemAmount opponent_settle = 6;   // 实测 = 我方本次到账金额(胜=赢得/败=返还), 与 ItemNotify 增量一致
     int64 field7 = 7;                 // 实测 4 → 6, 语义待确认
     int64 field8 = 8;                 // 实测 3 → 4, 语义待确认
     TreasureHuntBattle battle = 9;    // 对战详情

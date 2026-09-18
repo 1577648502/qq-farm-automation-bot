@@ -3494,6 +3494,17 @@ app.use('/api', (req, res, next) => {
         } catch (e) { res.json({ ok: false, error: e.message }); }
     });
 
+    // 领取护送结算奖励 (cmd=45; 护送结束后的宝藏资金要主动领)
+    app.post('/api/treasure/claim-settlement', async (req, res) => {
+        const id = getAccId(req);
+        if (!id) return res.status(400).json({ ok: false, error: '缺少账号 ID' });
+        if (!checkAccountAccess(req, id)) return res.status(403).json({ ok: false, error: '无权访问此账号' });
+        try {
+            const data = await provider.checkAndClaimEscortSettlement(id);
+            res.json({ ok: true, data });
+        } catch (e) { res.json({ ok: false, error: e.message }); }
+    });
+
     // 抢夺记录(成功/失败 + 获得的奖励, 按账号持久化)
     app.get('/api/treasure/records', async (req, res) => {
         const id = getAccId(req);

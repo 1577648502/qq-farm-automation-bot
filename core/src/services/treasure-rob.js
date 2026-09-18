@@ -11,27 +11,36 @@
  * 挑战书(ItemInfo.json type=19 "夺宝道具"): 80101 初级 · 80102 中级 · 80103 高级
  *   三级**传参完全一致**, 只是 book_item_id 不同 —— 所以统一按同一套流程处理。
  *
- * ⭐ 战报 = 挑战响应结果字段 #143 (2026-09-17 抓包定案, 不用再"再查一次"猜结果):
- *   ✅ 夺得(实测 2 次): #143 {
+ * ⭐ 战报 = 挑战响应结果字段 #143 (2026-09-17/09-18 抓包定案, 共 7 帧: 4 胜 2 败 1 被拒):
+ *   ✅ 夺得(实测 4 次): #143 {
  *          #1: 1                胜负标志(1 = 夺得)
  *          #2: { #1: 1029 幸运星, #2: 510 }   本次奖励(已与余额变化交叉验证)
  *          #3: "Kamiya Bunches" 对方昵称
- *          #6: { 同 #2 }        对方结算
+ *          #6: { 同 #2 }        本次结算金额(见下)
  *          #7: 4, #8: 3         语义未确认
  *          #9: { #1: "e" 我方锦囊, #2: "g" 对方锦囊,
  *                #4: { #1: 我方争资, #2: 对方争资 },
  *                #5: { #1: 0.5, #2: 0.5 } 双方胜率(fixed64 double) } }
+ *   ❌ 落败(2026-09-18 实测 2 帧, 关键差异!): **#1 和 #2 都不存在**, 只有
+ *          #143 { #3: 对方昵称, #6: { #1: 1029, #2: 40/75 }(落败返还金额), #9: 对战详情 }
+ *        ⇒ 判定规则: 有战报主体(#3/#6/#9)但没有 #1 ⇒ 就是落败;
+ *           返还金额在 **#6**(已用 ItemNotify 交叉验证: +40/+75 与 #6 完全一致)
  *   ⛔ 被拒(战斗没打起来): #143 { #10: 1, #12: "当前宝藏资金不足，无法使用该挑战书" }
  *        —— err=0, 必须读 #12 文案才知道失败原因
- *   ✅ 奖励字段交叉验证: 夺宝前后 幸运星(#115.#3.#3) 2050 → 2560 → 2620,
- *        与 #143.#2 的 +510 / +60 完全一致 ⇒ #2 就是"本次实际到账奖励"
- *   ✅ 实际结算金额(活动内官方说明「【夺宝博弈】」, 已由 60/510 两次实测印证) 见 BOOK_SETTLE:
+ *   ✅ 奖励字段交叉验证: 夺宝前后 幸运星(#115.#3.#3) 2050 → 2560 → 2620 (09-17),
+ *        09-18 四连夺: +40/+75/+60/+60, 与 #6 完全一致 ⇒ **#6 = 我方本次到账金额(胜=赢得/败=返还)**
+ *   ✅ 实际结算金额(活动内官方说明「【夺宝博弈】」, 且 book_slots.#4/#5 服务端直接下发) 见 BOOK_SETTLE:
  *        初级 胜 60 / 败 40 · 中级 胜 225 / 败 75 · 高级 胜 510 / 败 90
  *      ⚠ ItemInfo 里描述写的 120/80 · 450/150 · 1260/140 是**旧数值**, 不要拿来判定
  *
  * 结果判定: 以 #143 为准(夺得/落败/被拒); 只有 #143 缺失时才回落到
  *   "再查一次好友宝藏, 可夺价值(#3)下降 / 宝藏消失"的老办法。
  * 每次抢夺(含被拒/异常)都会写入"抢夺记录"列表(见 listRobRecords)。
+ *
+ * ⭐ 护送结算领取 = cmd=45 (2026-09-18 抓包实测):
+ *   护送结束(到期/被夺满 3 次/爆仓)后, 宝藏资金要**主动领取**, 不领就一直挂着!
+ *   客户端打开活动页时会自动领一次: 响应 #145 = { #1: { #1: 1029, #2: 690 } }
+ *   实测 +690 幸运星 = 两条已结束护送的宝藏价值(350 + 340)。
  */
 const fs = require('node:fs');
 const path = require('node:path');
@@ -40,7 +49,7 @@ const protobuf = require('protobufjs');
 const { types } = require('../utils/proto');
 const { sendMsgAsync } = require('../utils/network');
 const { toLong, toNum, log } = require('../utils/utils');
-const { isAutomationOn, getRobTreasureIntervalMinutes } = require('../models/store');
+const { isAutomationOn, getRobTreasureIntervalMinutes, getRobThrottleConfig } = require('../models/store');
 const { getBag, getBagItems } = require('./warehouse');
 const { getDataFile } = require('../config/runtime-paths');
 const { getItemById } = require('../config/gameConfig');
@@ -48,13 +57,18 @@ const { readJsonFile, writeJsonFileAtomic } = require('./json-db');
 
 const ACTIVITY_SERVICE = 'gamepb.activitypb.ActivityService';
 const TREASURE_ACTIVITY_ID = 2026090101;
-const CMD = { QUERY: 47, CHALLENGE: 43, MISC: 50 };
+const CMD = { QUERY: 47, CHALLENGE: 43, MISC: 50, SETTLE_CLAIM: 45 };
 
-/** 挑战书档位(从高到低, 自动化优先用高等级可用挑战书) */
+/**
+ * 挑战书档位(从高到低, 自动化优先用高等级可用挑战书)
+ * value = 书的面值(幸运星): 用于判断"对方宝藏的博弈资金够不够用这一档" ——
+ *   规则: 挑战书价值需与对方宝藏当前博弈资金匹配, 资金不足会被服务端拒绝
+ *   (实测: 宝藏可博弈资金 = book_slots[].gold, 例如 350 价值的宝藏 = 350 - 50 保底 = 300)
+ */
 const CHALLENGE_BOOKS = [
-    { id: 80103, name: '高级挑战书', level: 3 },
-    { id: 80102, name: '中级挑战书', level: 2 },
-    { id: 80101, name: '初级挑战书', level: 1 },
+    { id: 80103, name: '高级挑战书', level: 3, value: 300 },
+    { id: 80102, name: '中级挑战书', level: 2, value: 150 },
+    { id: 80101, name: '初级挑战书', level: 1, value: 50 },
 ];
 const BOOK_IDS = CHALLENGE_BOOKS.map(b => b.id);
 
@@ -171,12 +185,21 @@ function parseTreasureBytes(bytes) {
     } catch (e) {
         const f = scanFields(bytes);
         const get = (n) => f.find(x => x.no === n);
-        const num = (n) => toNum(get(n) && get(n).v);
+        // ⚠ 这里必须用 toInt: scanFields 的 varint 是字符串, toNum 会原样返回,
+        //   否则 stealableValue 等会变成 "350" 这样的字符串, 排序/比较全乱
+        const num = (n) => toInt(get(n) && get(n).v);
         const slots = f.filter(x => x.no === 12 && x.b).map(sb => {
             const sf = scanFields(sb.b);
+            const readAmt = (no) => {
+                const b = (sf.find(x => x.no === no) || {}).b;
+                if (!b) return 0;
+                return toInt((scanFields(b).find(x => x.no === 2) || {}).v);
+            };
             return {
-                bookItemId: toNum(sf.find(x => x.no === 2) && sf.find(x => x.no === 2).v),
-                gold: toNum(sf.find(x => x.no === 6) && sf.find(x => x.no === 6).v),
+                bookItemId: toInt((sf.find(x => x.no === 2) || {}).v),
+                gold: toInt((sf.find(x => x.no === 6) || {}).v),
+                winValue: readAmt(4),      // 该档胜利可获得(09-18)
+                loseValue: readAmt(5),     // 该档失败可返还(09-18)
             };
         });
         return {
@@ -284,9 +307,11 @@ function normalizeTreasure(t) {
         bonusValue: toNum(t.bonus_value),
         field13: toNum(t.field13),
         field14: toNum(t.field14),
-        bookSlots: (Array.isArray(t.book_slots) ? t.book_slots : []).map(s => ({
-            bookItemId: toNum(s && s.book_item_id),
-            gold: toNum(s && s.gold),
+        bookSlots: (Array.isArray(t.book_slots) ? t.book_slots : []).map(sl => ({
+            bookItemId: toInt(sl && sl.book_item_id),
+            gold: toInt(sl && sl.gold),                     // 该宝藏当前可博弈资金(各档相同, 09-18)
+            winValue: toInt(sl && sl.win_amount && sl.win_amount.count),    // 该档胜利可获得(09-18)
+            loseValue: toInt(sl && sl.lose_amount && sl.lose_amount.count), // 该档失败可返还(09-18)
         })),
     };
 }
@@ -301,7 +326,10 @@ async function queryFriendTreasures(gid) {
     return parseTreasureList(body);
 }
 
-/** 我的夺宝状态 (含我自己的宝藏/余额等, 实测挂在 activity.body field115) */
+/**
+ * 我的夺宝状态 (含我自己的宝藏/余额等, 实测挂在 activity.body field115)
+ * #115 = ActivityBodyTreasureHunt { #1 mine, #2 counter, #3 balance, #4 手记, #6 锦囊, #7 护送记录 }
+ */
 async function getMyTreasureStatus() {
     const { body } = await operateActivityRaw(CMD.MISC, {
         treasure_hunt_misc: { field1: toLong(1) },
@@ -309,8 +337,8 @@ async function getMyTreasureStatus() {
     // 我的夺宝状态是 optional 展示信息, 解析失败不影响主流程
     let mine = null;
     let counter = 0;
+    let escorts = [];
     try {
-        const reply = types.ActivityOperateReply.decode(body);
         const body115 = pickRawField(pickRawField(body, 3) || Buffer.alloc(0), 115);
         if (body115) {
             const f = scanFields(body115);
@@ -318,16 +346,102 @@ async function getMyTreasureStatus() {
             if (mineRaw) {
                 const mf = scanFields(mineRaw.b);
                 mine = {
-                    value: toNum(mf.find(x => x.no === 3) && mf.find(x => x.no === 3).v),
-                    startAt: toNum(mf.find(x => x.no === 5) && mf.find(x => x.no === 5).v),
+                    value: toInt(mf.find(x => x.no === 3) && mf.find(x => x.no === 3).v),
+                    startAt: toInt(mf.find(x => x.no === 5) && mf.find(x => x.no === 5).v),
                 };
             }
-            counter = toNum(f.find(x => x.no === 2 && x.b) && toNum(scanFields(f.find(x => x.no === 2).b).find(y => y.no === 1)?.v));
+            const counterRaw = f.find(x => x.no === 2 && x.b);
+            if (counterRaw) {
+                counter = toInt(scanFields(counterRaw.b).find(y => y.no === 1)?.v);
+            }
+            // #7 = 我的护送记录(可能含已结束未领取的)
+            const escortRaw = f.find(x => x.no === 7 && x.b);
+            if (escortRaw) escorts = parseEscortList(escortRaw.b);
         }
-        return { raw: reply, mine, counter };
+        const nowSec = Math.floor(Date.now() / 1000);
+        const ended = escorts.filter(e => e.endTime > 0 && e.endTime <= nowSec);
+        return { raw: null, mine, counter, escorts, endedEscorts: ended, endedUnclaimed: ended.length };
     } catch (e) {
-        return { raw: null, mine, counter, decodeError: e.message };
+        return { raw: null, mine, counter, escorts, endedEscorts: [], endedUnclaimed: 0, decodeError: e.message };
     }
+}
+
+/**
+ * 解析 #115.#7 = 我的护送记录(可能多条: 进行中 + 已结束待领取)
+ * 实测字段: #1 宝藏ID, #2 币种, #3 当前价值, #4 开始, #5 状态, #6 结束,
+ *           #8 博弈资金, #9 保底, #10 上限, #13 疑似已被夺次数, #14 夺宝次数上限
+ */
+function parseEscortList(raw) {
+    const out = [];
+    if (!raw || !raw.length) return out;
+    for (const entry of scanFields(raw)) {
+        if (entry.no !== 1 || !entry.b) continue;
+        const f = scanFields(entry.b);
+        const get = (n) => f.find(x => x.no === n);
+        const treasureId = asString(get(1) && get(1).b);
+        if (!treasureId) continue;
+        out.push({
+            treasureId,
+            settleItemId: toInt(get(2) && get(2).v),
+            value: toInt(get(3) && get(3).v),
+            startTime: toInt(get(4) && get(4).v),
+            status: toInt(get(5) && get(5).v),
+            endTime: toInt(get(6) && get(6).v),
+            funds: toInt(get(8) && get(8).v),
+            bonusValue: toInt(get(9) && get(9).v),
+            maxValue: toInt(get(10) && get(10).v),
+            robbedCount: toInt(get(13) && get(13).v),      // 疑似已被夺次数(语义待确认)
+            maxRobCount: toInt(get(14) && get(14).v),
+        });
+    }
+    return out;
+}
+
+/**
+ * 领取护送结算奖励 (cmd=45)
+ * 护送结束(到期/被夺满 3 次/爆仓)后宝藏资金不会自动到账, 客户端打开活动页时会自动领一次。
+ * 实测(09-18): 响应 #145 = { #1: { #1: 1029, #2: 690 } }, 幸运星 +690 = 两条已结束护送的价值(350+340)
+ */
+async function claimEscortSettlement() {
+    const { body } = await operateActivityRaw(CMD.SETTLE_CLAIM, {});
+    if (!body || !body.length) return { ok: false, reason: 'empty_reply' };
+    const raw145 = pickRawField(body, 145);
+    if (!raw145 || !raw145.length) {
+        // 没有结果字段: 多半是无可领取(err=0), 不当错误
+        return { ok: true, claimed: false, reward: null };
+    }
+    const f = scanFields(raw145);
+    const inner = f.find(x => x.no === 1 && x.b);
+    const reward = inner ? readItemAmount(inner.b) : null;
+    // 被拒文案(与战报同款结构, 防御式读取)
+    const message = asString(f.find(x => x.no === 12) && f.find(x => x.no === 12).b);
+    const claimed = !!(reward && reward.count > 0);
+    if (claimed) {
+        log('夺宝', `已领取护送结算奖励: ${reward.name || itemNameOf(reward.id)}×${reward.count}`, {
+            module: 'activity', event: '护送结算', result: 'ok', rewardCount: reward.count,
+        });
+    }
+    return { ok: true, claimed, reward, message };
+}
+
+/**
+ * 检查并领取护送结算: 有已结束未领取的护送才调 cmd=45, 避免空跑
+ */
+async function checkAndClaimEscortSettlement() {
+    const st = await getMyTreasureStatus();
+    if (!st.endedEscorts || !st.endedEscorts.length) {
+        return { ok: true, claimed: false, reason: 'no_ended_escort', endedUnclaimed: 0 };
+    }
+    const names = st.endedEscorts.map(e => String(e.treasureId).slice(-8)).join(',');
+    const r = await claimEscortSettlement();
+    if (!r.claimed) return { ...r, reason: r.message || 'no_reward', endedUnclaimed: st.endedEscorts.length };
+    addRobRecord({
+        outcome: 'win', ok: true, won: true,
+        gid: 0, friendName: '护送结算', bookName: '护送结算领取',
+        reward: r.reward, source: 'auto',
+        message: `已结束护送: ${names}`,
+    });
+    return { ...r, endedUnclaimed: st.endedEscorts.length, treasures: names };
 }
 
 // ============ 战报解析 (cmd=43 结果 #143) ============
@@ -408,9 +522,16 @@ function parseChallengeResult(raw143, ctx = {}) {
     }
 
     const winFlag = hit(1) ? num(1) : null;
-    const reward = readItemAmount(hit(2) && hit(2).b);
-    const opponentName = asString(hit(3) && hit(3).b);
+    // 胜: #1=1 且 #2=奖励; 败(09-18 实测): #1/#2 都缺省, 返还金额在 #6
+    const hasBattleBody = !!(hit(3) || hit(6) || hit(9));
+    let won;
+    if (winFlag !== null) won = winFlag === 1;
+    else if (hasBattleBody) won = false;      // 打了但没有胜负标志 = 落败
+    else won = null;                          // 连战报主体都没有
+    let reward = readItemAmount(hit(2) && hit(2).b);
     const mySettle = readItemAmount(hit(6) && hit(6).b);
+    if (!reward && mySettle) reward = mySettle;   // 落败: 返还金额在 #6
+    const opponentName = asString(hit(3) && hit(3).b);
 
     // #9 = 对战详情 { #1 我方锦囊, #2 对方锦囊, #4 双方争资, #5 双方胜率 }
     let myCharmKey = ''; let theirCharmKey = '';
@@ -436,7 +557,6 @@ function parseChallengeResult(raw143, ctx = {}) {
         }
     }
 
-    const won = winFlag === null ? null : winFlag === 1;
     // 用奖励金额反查档位, 与 #1 交叉校验
     let rewardGuess = null;
     if (settle && reward && reward.count) {
@@ -552,6 +672,9 @@ function listRobRecords(options = {}) {
             error: all.filter(r => r.outcome === 'error').length,
             // 累计夺得奖励只统计成功的(落败是返还, 不计入"夺得")
             rewardTotal: all.reduce((n, r) => n + (r.outcome === 'win' && r.reward ? toInt(r.reward.count) : 0), 0),
+            // 今日已用次数 / 每日上限(面板显示"今日 X/20")
+            today: countTodayRobAttempts(),
+            dailyLimit: toInt(getRobThrottleConfig().dailyLimit),
         },
     };
 }
@@ -604,6 +727,51 @@ function pickBestBook(inventory) {
     const list = Array.isArray(inventory) ? inventory : [];
     const sorted = [...list].sort((a, b) => b.level - a.level);
     return sorted.find(b => toNum(b.count) > 0) || null;
+}
+
+/**
+ * 针对具体宝藏挑书(优先): 在"有库存"且"这个宝藏用得动"的档位里, 选面值最大的。
+ * · 宝藏的 book_slots[].gold = 当前可博弈资金; 资金不够的档位会被服务端拒绝(白贴一张挑战书)
+ * · 没有槽位数据时退回 pickBestBook(老行为)
+ */
+function pickBestBookForTreasure(inventory, target) {
+    const slots = Array.isArray(target && target.bookSlots) ? target.bookSlots : [];
+    if (!slots.length) return pickBestBook(inventory);
+    const list = Array.isArray(inventory) ? inventory : [];
+    const byId = {};
+    for (const s of slots) byId[toNum(s.bookItemId)] = s;
+    const funds = Math.max(0, ...slots.map(s => toNum(s.gold)));
+    const owned = list.filter(b => toNum(b.count) > 0);
+    const usable = owned.filter((b) => {
+        const slot = byId[toNum(b.id)];
+        // 有槽位数据时, 服务端没列出的档位 / gold=0 的档位都视为"用不了"
+        // (宁可跳过也别白贴一张书 —— 面值超资金会被拒)
+        if (slots.length && (!slot || toNum(slot.gold) <= 0)) return false;
+        // 面值超过宝藏可博弈资金 → 会被拒绝
+        // 面值以 CHALLENGE_BOOKS 为准(库存对象可能没带 value 字段)
+        const meta = CHALLENGE_BOOKS.find(x => toNum(x.id) === toNum(b.id)) || {};
+        const bookValue = toNum(b.value !== undefined ? b.value : meta.value);
+        if (funds > 0 && bookValue > funds) return false;
+        return true;
+    });
+    if (!usable.length) return null;
+    return usable.sort((a, b) => b.level - a.level)[0];
+}
+
+/** 今日已发起的夺宝次数(成功+落败; 被拒不计, 护送结算不计) */
+function countTodayRobAttempts() {
+    const today = new Date();
+    const isSameDay = (ms) => {
+        if (!ms) return false;
+        const d = new Date(ms);
+        return d.getFullYear() === today.getFullYear()
+            && d.getMonth() === today.getMonth()
+            && d.getDate() === today.getDate();
+    };
+    const all = loadRobRecords();
+    return all.filter(r => isSameDay(r.at)
+        && (r.outcome === 'win' || r.outcome === 'lose')
+        && toNum(r.bookItemId) > 0).length;
 }
 
 /**
@@ -773,16 +941,24 @@ async function robOnce({ gid, treasureId, bookItemId, friendName = '', verify = 
 async function runAutoRobTreasure(options = {}) {
     if (!isAutomationOn('rob_treasure')) return { skipped: true };
 
-    const maxPerRun = Math.max(1, Math.min(20, toNum(options.maxPerRun) || 3));
+    // 消耗节奏(2026-09-18 调整): 每轮默认只抢 1 个 + 每日上限 20(官方规则),
+    // 以前是"每 10 分钟抢 3 个", 一小时最多烧 18 张挑战书 → 用户反馈"消耗有点快"
+    const throttle = getRobThrottleConfig();
+    const maxPerRun = Math.max(1, Math.min(20, toNum(options.maxPerRun) || throttle.maxPerRun || 1));
+    const dailyLimit = (options.dailyLimit === undefined || options.dailyLimit === null)
+        ? throttle.dailyLimit
+        : Math.max(0, toNum(options.dailyLimit));
+
     const result = {
         friends: 0, targets: 0, attempted: 0,
         win: 0,        // 战报 #1=1 夺得
-        lose: 0,       // 战报 #1=0 落败
+        lose: 0,       // 战报 #1 缺省(落败, 09-18 实测)
         rejected: 0,   // 服务端拒绝(战斗没打起来)
         verified: 0,   // 响应里没有 #143, 复查发现可夺价值下降(老路径)
         noEffect: 0,   // 响应里没有 #143 且复查无变化
         failed: 0,     // 请求异常
         success: 0,    // 兼容旧字段: = win + verified
+        todayAttempts: 0, dailyLimit, skippedNoUsableBook: 0,
         books: [], details: [],
     };
 
@@ -793,6 +969,13 @@ async function runAutoRobTreasure(options = {}) {
         return { ...result, reason: 'no_book' };
     }
 
+    // 每日上限(官方规则: 每日最多夺宝 20 次; 0 = 不限)
+    result.todayAttempts = countTodayRobAttempts();
+    if (dailyLimit > 0 && result.todayAttempts >= dailyLimit) {
+        log('夺宝', `今日已夺宝 ${result.todayAttempts} 次(上限 ${dailyLimit}), 跳过自动夺宝`, { module: 'activity', event: '夺宝', result: 'daily_limit' });
+        return { ...result, reason: 'daily_limit' };
+    }
+
     const { targets, friendCount, skippedEnded } = await collectTargets();
     result.friends = friendCount;
     result.targets = targets.length;
@@ -801,9 +984,16 @@ async function runAutoRobTreasure(options = {}) {
 
     for (const t of targets) {
         if (result.attempted >= maxPerRun) break;
+        if (dailyLimit > 0 && result.todayAttempts + (result.win + result.lose) >= dailyLimit) {
+            result.reason = 'daily_limit';
+            log('夺宝', `本轮达到每日上限 ${dailyLimit}, 提前收手(本轮已抢 ${result.win + result.lose} 次)`, { module: 'activity', event: '夺宝', result: 'daily_limit' });
+            break;
+        }
         const inv = await getBookInventory();
-        const book = pickBestBook(inv);
-        if (!book) { result.reason = 'no_book'; break; }
+        // 按宝藏挑书: 面值超过对方可博弈资金的档位会被服务端拒绝(白贴一张书),
+        // 只在"用得动"的档位里选面值最大的; 都用不动就跳过这个宝藏
+        const book = pickBestBookForTreasure(inv, t) || pickBestBook(inv);
+        if (!book) { result.skippedNoUsableBook += 1; continue; }
 
         result.attempted += 1;
         try {
@@ -831,7 +1021,7 @@ async function runAutoRobTreasure(options = {}) {
         await new Promise(r => setTimeout(r, 1500));
     }
 
-    log('夺宝', `自动夺宝完成: 好友 ${result.friends} 人 / 可夺宝藏 ${result.targets} 个 → 尝试 ${result.attempted}, 成功 ${result.win}, 失败 ${result.lose}, 被拒 ${result.rejected}, 复查生效 ${result.verified}, 未生效 ${result.noEffect}, 异常 ${result.failed}`, {
+    log('夺宝', `自动夺宝完成: 好友 ${result.friends} 人 / 可夺宝藏 ${result.targets} 个 → 尝试 ${result.attempted}, 成功 ${result.win}, 失败 ${result.lose}, 被拒 ${result.rejected}, 复查生效 ${result.verified}, 未生效 ${result.noEffect}, 异常 ${result.failed}, 今日 ${result.todayAttempts + result.win + result.lose}/${dailyLimit || '∞'}`, {
         module: 'activity', event: '夺宝', result: 'done',
     });
     return result;
@@ -875,7 +1065,12 @@ module.exports = {
     listRobRecords,
     operateActivityRaw,
     parseChallengeResult,
+    parseEscortList,
     parseTreasureList,
+    pickBestBookForTreasure,
+    claimEscortSettlement,
+    checkAndClaimEscortSettlement,
+    countTodayRobAttempts,
     pickBestBook,
     queryFriendTreasures,
     scanDoubles,

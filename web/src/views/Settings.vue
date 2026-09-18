@@ -617,6 +617,8 @@ const localAutomationSettings = ref({
   },
   // 夺宝(抢宝)
   robTreasureIntervalMinutes: 10,
+  robMaxPerRun: 1,
+  robDailyLimit: 20,
   // 防封号(低调)模式
   stealthEnabled: false,
   stealthOnlineMinMinutes: 3,
@@ -901,6 +903,8 @@ function syncLocalAutomationSettings() {
     localAutomationSettings.value.stealthOfflineMaxMinutes = settings.value.stealthOfflineMaxMinutes ?? 60
     localAutomationSettings.value.stealthWakeForRipe = settings.value.stealthWakeForRipe !== false
     localAutomationSettings.value.robTreasureIntervalMinutes = settings.value.robTreasureIntervalMinutes ?? 10
+  localAutomationSettings.value.robMaxPerRun = settings.value.robMaxPerRun ?? 1
+  localAutomationSettings.value.robDailyLimit = settings.value.robDailyLimit ?? 20
     localAutomationSettings.value.fertilizerBuyOrganicCount = settings.value.fertilizerBuyOrganicCount ?? 10
     localAutomationSettings.value.fertilizerBuyOrganicThresholdHours = settings.value.fertilizerBuyOrganicThresholdHours ?? 10
     localAutomationSettings.value.fertilizerBuyNormalCount = settings.value.fertilizerBuyNormalCount ?? 10
@@ -959,6 +963,8 @@ async function saveAutomationSettings() {
       stealthOfflineMaxMinutes: localAutomationSettings.value.stealthOfflineMaxMinutes,
       stealthWakeForRipe: localAutomationSettings.value.stealthWakeForRipe,
       robTreasureIntervalMinutes: localAutomationSettings.value.robTreasureIntervalMinutes,
+      robMaxPerRun: localAutomationSettings.value.robMaxPerRun,
+      robDailyLimit: localAutomationSettings.value.robDailyLimit,
       fertilizerBuyOrganicCount: localAutomationSettings.value.fertilizerBuyOrganicCount,
       fertilizerBuyOrganicThresholdHours: localAutomationSettings.value.fertilizerBuyOrganicThresholdHours,
       fertilizerBuyNormalCount: localAutomationSettings.value.fertilizerBuyNormalCount,
@@ -1705,12 +1711,27 @@ async function handleTestOffline() {
                   min="1"
                   max="1440"
                 />
+                <BaseInput
+                  v-model.number="localAutomationSettings.robMaxPerRun"
+                  label="每轮最多抢 (个)"
+                  type="number"
+                  min="1"
+                  max="20"
+                />
+                <BaseInput
+                  v-model.number="localAutomationSettings.robDailyLimit"
+                  label="每日上限 (次, 0=不限)"
+                  type="number"
+                  min="0"
+                  max="200"
+                />
                 <BaseButton variant="secondary" size="sm" :loading="treasureRunning" @click="runTreasureNow">
                   立即执行一次
                 </BaseButton>
               </div>
               <div class="text-xs text-gray-500 dark:text-gray-400">
-                修改后自动保存；自动夺宝在后台按上面的间隔巡检（每次最多抢 3 个宝藏）。
+                修改后自动保存；自动夺宝在后台按上面的间隔巡检。每次抢夺消耗 1 张挑战书（无论胜负），
+                每日最多 20 次；会按对方宝藏的可博弈资金挑挑战书面值，面值超了会被拒绝（白贴书）。
               </div>
             </div>
             <BaseSwitch v-model="localAutomationSettings.automation.solar_terms" label="节令小礼自动领取" />

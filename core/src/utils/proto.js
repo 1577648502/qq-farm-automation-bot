@@ -218,6 +218,7 @@ async function loadProto() {
     types.TreasureHuntBattle = root.lookupType('gamepb.activitypb.TreasureHuntBattle');
     types.TreasureHuntMiscReq = root.lookupType('gamepb.activitypb.TreasureHuntMiscReq');
     types.TreasureHuntMiscRsp = root.lookupType('gamepb.activitypb.TreasureHuntMiscRsp');
+    types.TreasureHuntSettleRsp = root.lookupType('gamepb.activitypb.TreasureHuntSettleRsp');
     types.ActivityBodyTreasureHunt = root.lookupType('gamepb.activitypb.ActivityBodyTreasureHunt');
 
     // 赛季/战令

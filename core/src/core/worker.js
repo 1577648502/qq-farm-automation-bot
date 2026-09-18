@@ -207,6 +207,7 @@ function stopDailyRoutineTimer() {
     workerScheduler.clear('daily_routine_interval');
     workerScheduler.clear('mystery_shop_interval');
     workerScheduler.clear('treasure_rob_interval');
+    workerScheduler.clear('escort_settle_interval');
 }
 
 function startDailyRoutineTimer() {
@@ -233,6 +234,12 @@ function startDailyRoutineTimer() {
         if (Date.now() - lastTreasureRobAt < intervalMs) return;
         lastTreasureRobAt = Date.now();
         treasureRob.checkAndRobTreasure().catch(() => null);
+    }, { preventOverlap: true });
+    // 护送结算领取: 护送结束(到期/被夺满/爆仓)后宝藏资金要主动领, 官方客户端打开活动页时自动领;
+    // 这里每 5 分钟查一次, 有"已结束未领取"的才发领取请求(领取成功会写进抢夺记录)
+    workerScheduler.setIntervalTask('escort_settle_interval', 5 * 60 * 1000, () => {
+        if (!canRunTasks()) return;
+        treasureRob.checkAndClaimEscortSettlement().catch(() => null);
     }, { preventOverlap: true });
 }
 
@@ -1130,6 +1137,12 @@ async function handleApiCall(msg) {
             }
             case 'getTreasureMyStatus':
                 result = await treasureRob.getMyTreasureStatus();
+                break;
+            case 'claimTreasureSettlement':
+                result = await treasureRob.claimEscortSettlement();
+                break;
+            case 'checkAndClaimEscortSettlement':
+                result = await treasureRob.checkAndClaimEscortSettlement();
                 break;
             case 'listTreasureRobRecords':
                 result = treasureRob.listRobRecords(args[0] || {});

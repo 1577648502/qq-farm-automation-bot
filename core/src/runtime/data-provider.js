@@ -730,6 +730,8 @@ function createDataProvider(options) {
         getTreasureTargets: (accountRef, options) => callWorkerApi(resolveAccountRefId(accountRef), 'getTreasureTargets', options || {}),
         getTreasureMyStatus: (accountRef) => callWorkerApi(resolveAccountRefId(accountRef), 'getTreasureMyStatus'),
         robTreasure: (accountRef, options) => callWorkerApi(resolveAccountRefId(accountRef), 'robTreasure', options || {}),
+        claimTreasureSettlement: (accountRef) => callWorkerApi(resolveAccountRefId(accountRef), 'claimTreasureSettlement'),
+        checkAndClaimEscortSettlement: (accountRef) => callWorkerApi(resolveAccountRefId(accountRef), 'checkAndClaimEscortSettlement'),
         listTreasureRobRecords: (accountRef, opts) => callWorkerApi(resolveAccountRefId(accountRef), 'listTreasureRobRecords', opts || {}),
         clearTreasureRobRecords: (accountRef) => callWorkerApi(resolveAccountRefId(accountRef), 'clearTreasureRobRecords'),
         runTreasureRobNow: (accountRef, options) => callWorkerApi(resolveAccountRefId(accountRef), 'runTreasureRobNow', options || {}),

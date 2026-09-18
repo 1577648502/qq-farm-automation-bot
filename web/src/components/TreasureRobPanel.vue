@@ -72,7 +72,16 @@ const picked = ref<Record<string, number>>({})
 const logs = ref<string[]>([])
 const records = ref<RobRecord[]>([])
 const recordTotal = ref(0)
-const recordSummary = ref<{ win: number, lose: number, rejected: number, error: number, rewardTotal: number } | null>(null)
+const claimingSettle = ref(false)
+const recordSummary = ref<{
+  win: number
+  lose: number
+  rejected: number
+  error: number
+  rewardTotal: number
+  today?: number
+  dailyLimit?: number
+} | null>(null)
 const recordsLoading = ref(false)
 
 function pushLog(msg: string) {
@@ -161,6 +170,33 @@ async function fetchRecords() {
     // 记录拉取失败不打断主流程
   } finally {
     recordsLoading.value = false
+  }
+}
+
+/** 领取护送结算奖励(护送结束后的宝藏资金不会自动到账) */
+async function claimSettlement() {
+  if (!currentAccountId.value) return
+  claimingSettle.value = true
+  try {
+    const res = await api.post('/api/treasure/claim-settlement', {}, { headers: { 'x-account-id': currentAccountId.value } })
+    const d = res.data?.data || {}
+    if (res.data?.ok) {
+      if (d.claimed && d.reward) {
+        pushLog(`💰 护送结算已领取：${d.reward.name || '幸运星'}×${d.reward.count}`)
+        toast.success(`已领取护送结算 ${d.reward.name || '幸运星'}×${d.reward.count}`)
+      } else {
+        pushLog('护送结算：当前没有可领取的奖励')
+        toast.info('当前没有可领取的护送结算')
+      }
+      await fetchRecords()
+      await fetchBooks()
+    } else {
+      toast.error(res.data?.error || '领取失败')
+    }
+  } catch (e: any) {
+    toast.error(e?.response?.data?.error || e?.message || '领取失败')
+  } finally {
+    claimingSettle.value = false
   }
 }
 
@@ -312,6 +348,9 @@ onMounted(() => {
         </p>
       </div>
       <div class="flex gap-2">
+        <BaseButton variant="secondary" size="sm" :loading="claimingSettle" @click="claimSettlement">
+          领取护送结算
+        </BaseButton>
         <BaseButton variant="secondary" size="sm" :loading="autoRunning" @click="runAutoNow">
           立即自动夺宝一次
         </BaseButton>
@@ -444,6 +483,9 @@ onMounted(() => {
         <div class="flex flex-wrap items-center gap-2">
           <span class="text-sm font-medium text-gray-700 dark:text-gray-200">
             抢夺记录（{{ recordTotal }} 条）
+            <span v-if="recordSummary" class="ml-2 text-xs text-gray-400 font-normal">
+              今日已抢 {{ recordSummary.today || 0 }}{{ recordSummary.dailyLimit ? `/${recordSummary.dailyLimit}` : '' }} 次
+            </span>
           </span>
           <span v-if="recordSummary" class="text-xs text-gray-500 dark:text-gray-400">
             成功

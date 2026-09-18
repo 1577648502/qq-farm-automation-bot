@@ -219,6 +219,8 @@ const DEFAULT_ACCOUNT_CONFIG = {
     stealthWakeForRipe: true,         // 作物成熟时优先上线收取
     // ===== 夺宝(抢宝)=====
     robTreasureIntervalMinutes: 10,   // 自动夺宝检查间隔(分钟)
+    robMaxPerRun: 1,                  // 每轮最多抢几个宝藏(挑战书消耗节奏, 1 = 最省)
+    robDailyLimit: 20,                // 每日夺宝次数上限(官方规则 20 次; 0 = 不限)
     // 背包种子优先顺序（seedId 数组）
     bagSeedPriority: [],
     // 背包种子用完后的回退策略
@@ -498,6 +500,12 @@ function normalizeAccountConfig(input, fallback = accountFallbackConfig) {
     if (src.robTreasureIntervalMinutes !== undefined && src.robTreasureIntervalMinutes !== null) {
         cfg.robTreasureIntervalMinutes = Math.max(1, Math.min(1440, Number(src.robTreasureIntervalMinutes) || 10));
     }
+    if (src.robMaxPerRun !== undefined && src.robMaxPerRun !== null) {
+        cfg.robMaxPerRun = Math.max(1, Math.min(20, Number(src.robMaxPerRun) || 1));
+    }
+    if (src.robDailyLimit !== undefined && src.robDailyLimit !== null) {
+        cfg.robDailyLimit = Math.max(0, Math.min(200, Number(src.robDailyLimit) || 0));
+    }
 
     // 有机化肥购买数量
     if (src.fertilizerBuyOrganicCount !== undefined && src.fertilizerBuyOrganicCount !== null) {
@@ -763,6 +771,8 @@ function getConfigSnapshot(accountId) {
         stealthOfflineMaxMinutes: Math.max(1, Math.min(1440, Number(cfg.stealthOfflineMaxMinutes) || 60)),
         stealthWakeForRipe: cfg.stealthWakeForRipe === undefined ? true : !!cfg.stealthWakeForRipe,
         robTreasureIntervalMinutes: Math.max(1, Math.min(1440, Number(cfg.robTreasureIntervalMinutes) || 10)),
+        robMaxPerRun: Math.max(1, Math.min(20, Number(cfg.robMaxPerRun) || 1)),
+        robDailyLimit: Math.max(0, Math.min(200, Number(cfg.robDailyLimit) || 0)),
         stealDelaySeconds: Math.max(0, Math.min(300, Number(cfg.stealDelaySeconds) || 0)),
         plantOrderRandom: !!cfg.plantOrderRandom,
         plantDelaySeconds: Math.max(0, Math.min(60, Number(cfg.plantDelaySeconds) || 0)),
@@ -891,6 +901,12 @@ function applyConfigSnapshot(snapshot, options = {}) {
     }
     if (cfg.robTreasureIntervalMinutes !== undefined && cfg.robTreasureIntervalMinutes !== null) {
         next.robTreasureIntervalMinutes = Math.max(1, Math.min(1440, Number(cfg.robTreasureIntervalMinutes) || 10));
+    }
+    if (cfg.robMaxPerRun !== undefined && cfg.robMaxPerRun !== null) {
+        next.robMaxPerRun = Math.max(1, Math.min(20, Number(cfg.robMaxPerRun) || 1));
+    }
+    if (cfg.robDailyLimit !== undefined && cfg.robDailyLimit !== null) {
+        next.robDailyLimit = Math.max(0, Math.min(200, Number(cfg.robDailyLimit) || 0));
     }
 
     // 种植延迟
@@ -1415,6 +1431,14 @@ function getRobTreasureIntervalMinutes(accountId) {
     return Math.max(1, Math.min(1440, Number(cfg.robTreasureIntervalMinutes) || 10));
 }
 
+function getRobThrottleConfig(accountId) {
+    const cfg = (typeof getConfigSnapshot === 'function' ? getConfigSnapshot(accountId) : (globalConfig.accountConfig || {})) || {};
+    return {
+        maxPerRun: Math.max(1, Math.min(20, Number(cfg.robMaxPerRun) || 1)),
+        dailyLimit: Math.max(0, Math.min(200, Number(cfg.robDailyLimit) || 0)),
+    };
+}
+
 function getActivityStatus() {
     const cfg = globalConfig.systemConfig || {};
     return {
@@ -1465,6 +1489,7 @@ module.exports = {
     getPreferredSeed,
     getPlantingStrategy,
     getRobTreasureIntervalMinutes,
+    getRobThrottleConfig,
     getBagSeedPriority,
     getBagSeedFallbackStrategy,
     getIntervals,
