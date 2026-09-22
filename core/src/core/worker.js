@@ -204,6 +204,7 @@ async function runDailyRoutines(force = false) {
 }
 
 let lastTreasureRobAt = 0;
+let lastBuyBookSkipLog = '';
 
 function stopDailyRoutineTimer() {
     workerScheduler.clear('daily_routine_interval');
@@ -226,11 +227,20 @@ async function runBuyChallengeBooks(reason = 'interval') {
     try {
         const r = await checkAndBuyChallengeBooks(false, cfg.count);
         if (r.boughtNow > 0) {
-            log('商城', `每日购买中级挑战书: 本次 ${r.boughtNow} 本, 累计 ${r.bought}/${r.target} (150 金豆豆/个${r.gameDailyLimit ? `, 游戏每日限购 ${r.gameDailyLimit}` : ''})`, {
+            log('商城', `每日购买中级挑战书: 本次 ${r.boughtNow} 本 (150 金豆豆/个, 本进程累计 ${r.bought}/${r.target}${r.gameDailyLimit ? `, 接口侧已购 ${r.gameBought}/${r.gameDailyLimit}` : ''})`, {
                 module: 'mall', event: '购买挑战书', result: 'ok', trigger: reason,
             });
+            lastBuyBookSkipLog = '';
         } else if (r.ok === false) {
             log('商城', `每日购买中级挑战书未完成: ${r.skipped || '未知原因'}`, { module: 'mall', event: '购买挑战书', result: 'warn', trigger: reason });
+            lastBuyBookSkipLog = '';
+        } else if (r.skipped && r.skipped !== lastBuyBookSkipLog) {
+            // 跳过原因变了才记一条, 既能看到"定时器在工作、为什么没买", 又不会每 10 分钟刷屏
+            lastBuyBookSkipLog = r.skipped;
+            log('商城', `每日购买中级挑战书: 本次未买 — ${r.skipped}`, {
+                module: 'mall', event: '购买挑战书', result: 'skip', trigger: reason,
+                gameBought: r.gameBought, gameLimit: r.gameDailyLimit, botBought: r.todayBoughtByBot,
+            });
         }
         return r;
     } catch (e) {

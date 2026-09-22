@@ -113,35 +113,28 @@ function restartMall(goldBean, sendMsgImpl = stubSendMsg) {
         check('没有发购买请求', calls.filter(c => c.method === 'Purchase').length === 0, calls.length);
     }
 
-    section('3. 状态落盘 + 重启后不重复买');
+    section('3. 不落盘(以接口为准) + 进程内防重复');
     {
+        // 已按用户要求去掉本地进度文件: 判断以接口的 已购/限购 为准, 内存只做防重复
         const stateFile = path.join(TMP, 'mall-state', 'buy-challenge-book.json');
-        check('状态文件已写出', fs.existsSync(stateFile), stateFile);
-        const st = JSON.parse(fs.readFileSync(stateFile, 'utf8'));
-        check('落盘 bought=2', Number(st.bought) === 2, st);
-        check('带日期键', !!st.dateKey, st);
+        check('不再生成本地进度文件', !fs.existsSync(stateFile), stateFile);
 
-        const mall2 = restartMall(5000);
+        // 同进程内再调 → 被内存计数拦住(不发请求)
         calls.length = 0;
-        const r = await mall2.checkAndBuyChallengeBooks(false, 2);
-        check('重启后仍不重复买', r.boughtNow === 0 && r.bought === 2, r);
-        check('重启后也没有购买请求', calls.filter(c => c.method === 'Purchase').length === 0, calls.length);
+        const r = await mall.checkAndBuyChallengeBooks(false, 2);
+        check('进程内不重复买', r.boughtNow === 0 && r.bought === 2, r);
+        check('进程内不发请求', calls.filter(c => c.method === 'Purchase').length === 0, calls.length);
+        check('原因提到本进程', String(r.skipped).includes('本进程'), r.skipped);
     }
 
     section('4. 金豆豆不足: 只买够的部分');
     {
-        // 把状态改成"另一天", 让它允许再买
-        const stateFile = path.join(TMP, 'mall-state', 'buy-challenge-book.json');
-        fs.writeFileSync(stateFile, JSON.stringify({ dateKey: '2000-01-01', bought: 0 }));
         const mall3 = restartMall(200);   // 只够 1 本(150)
         calls.length = 0;
         const r = await mall3.checkAndBuyChallengeBooks(false, 2);
         check('金豆豆 200 → 只买 1 本', r.boughtNow === 1, r);
-        check('提示余额不足', String(r.skipped || '').includes('只够') || r.bought === 1, r);
 
-        // 余额 0 → 一本都不买
-        fs.writeFileSync(stateFile, JSON.stringify({ dateKey: '2000-01-01', bought: 0 }));
-        const mall4 = restartMall(100);
+        const mall4 = restartMall(100);   // 一本都买不起
         calls.length = 0;
         const r2 = await mall4.checkAndBuyChallengeBooks(false, 2);
         check('余额 100 < 150 → 不买', r2.boughtNow === 0, r2);
@@ -244,7 +237,7 @@ section('7b. 手动购买不被自身计数拦住');
     check('手动路径: 仍会购买', manual.boughtNow === 2, manual);
     check('手动路径: force 标记', manual.force === true, manual.force);
     check('手动路径: 有请求', calls.filter(c => c.method === 'Purchase').length === 2, calls.length);
-    check('返回诊断: 调用前计数 2, 买后 4', manual.todayBoughtByBot === 2 && manual.bought === 4, { pre: manual.todayBoughtByBot, after: manual.bought });
+    check('返回诊断: 买后本进程计数 4', manual.bought === 4 && manual.todayBoughtByBot === 4, { pre: manual.todayBoughtByBot, after: manual.bought });
     check('返回诊断: 游戏侧已购 0/2', manual.gameBought === 0 && manual.gameDailyLimit === 2, manual);
 }
 

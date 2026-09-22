@@ -7,9 +7,6 @@ const { sendMsgAsync, getUserState } = require('../utils/network');
 const { types } = require('../utils/proto');
 const { toNum, log, sleep } = require('../utils/utils');
 const { getItemById, getAllItems, getItemImageById } = require('../config/gameConfig');
-const { getDataFile } = require('../config/runtime-paths');
-const { readJsonFile, writeJsonFileAtomic } = require('./json-db');
-const path = require('node:path');
 const fs = require('node:fs');
 
 // 名称 -> 物品 索引 (懒加载; gameConfig 未导出 getItemByName, 这里自建, 同时避免未收录物品抛错)
@@ -834,73 +831,76 @@ function isDoneTodayByKey(key) {
 const BUY_BOOK_GOODS_ID = 1050;
 const BUY_BOOK_ITEM_ID = 80102;      // 中级挑战书
 const BUY_BOOK_EXPECT_PRICE = 150;   // 单价(金豆豆), 用于防止改价误买
-const BUY_BOOK_STATE_FILE = getDataFile(path.join('mall-state', 'buy-challenge-book.json'));
-let buyBookState = null;
 
-function loadBuyBookState() {
-    if (buyBookState) return buyBookState;
-    const j = readJsonFile(BUY_BOOK_STATE_FILE, () => ({}));
-    buyBookState = {
-        dateKey: String(j.dateKey || ''),
-        bought: Math.max(0, Number(j.bought) || 0),
-    };
-    return buyBookState;
-}
+/**
+ * 今日"本进程"已买数量 —— **只在内存里, 不落盘**
+ *
+ * 设计原则(用户要求 + 安全网):
+ *   · 判断"还能不能买"以**接口为准**: 商城的 #7 给出 {已购, 限购}, 剩余 = 限购 - 已购
+ *   · 但服务端有时不把我们的购买计进去(实测买完 #7 仍显示已购 0),
+ *     没有这个内存兜底, 10 分钟一次的定时器会一轮轮地买, 直到把金豆豆烧完
+ *   · 所以它只是"防重复采购的安全网", 不是账本; 重启即清零(用户明确说不需要本地记录)
+ */
+let buyBookMemory = { dateKey: '', bought: 0 };
 
-function saveBuyBookState() {
-    try {
-        writeJsonFileAtomic(BUY_BOOK_STATE_FILE, { ...loadBuyBookState(), updatedAt: Date.now() });
-    } catch (e) {
-        // 之前这里是静默忽略 → 会出现"文件没写成功、内存计数却在涨"的诡异现象
-        //   (表现: 界面说已买满、重启后又从头买)
-        log('商城', `买书进度落盘失败(内存计数仍有效, 重启会丢): ${e.message}`, {
-            module: 'mall', event: '购买挑战书', result: 'warn', file: BUY_BOOK_STATE_FILE,
-        });
-    }
+function buyBookTodayCount() {
+    const today = getDateKey();
+    if (buyBookMemory.dateKey !== today) buyBookMemory = { dateKey: today, bought: 0 };
+    return buyBookMemory.bought;
 }
 
 /**
- * 每日购买中级挑战书 (默认 2 个, 150 金豆豆/个)
- * · 每天一次, 进度持久化(重启不清零)
- * · 购买前校验商城里该商品的单价仍是 150 金豆豆, 改价就停(防止误买)
- * · 金豆豆不足时买到余额不够为止
+ * 每日购买中级挑战书 (默认 2 个/天, 150 金豆豆/个)
+ * 每次调用都会去商城读一次接口(拿 已购/限购/价格), 再决定买几本:
+ *   本进程还能买 = 配置数量 - 本进程已买
+ *   接口还能买   = 限购 - 已购        ← 服务端说了算
+ *   实际购买     = min(上面两个, 金豆豆余额买得起的本数)
+ *
+ * @param force 手动点"立即购买一次"时为 true: 忽略"本进程已按计划买满"这一条(仍受服务端限购约束)
  */
-async function checkAndBuyChallengeBooks(force = false, targetCount = 2, opts = {}) {
+async function checkAndBuyChallengeBooks(force = false, targetCount = 2) {
     const today = getDateKey();
-    const st = loadBuyBookState();
-    if (st.dateKey !== today) {
-        st.dateKey = today;
-        st.bought = 0;
-    }
+    const botBought = buyBookTodayCount();
     const target = Math.max(0, Math.min(20, Number(targetCount) || 0));
     const result = {
-        ok: true, dateKey: today, target, bought: st.bought, boughtNow: 0, skipped: '',
-        // 诊断用: 让界面/日志能直接看出"到底是谁拦住的"
-        todayBoughtByBot: st.bought, force: !!force,
+        ok: true, dateKey: today, target, bought: botBought, boughtNow: 0, skipped: '',
+        todayBoughtByBot: botBought, force: !!force,
     };
-    if (target <= 0) { result.skipped = '每日数量为 0(未启用)'; return result; }
-    if (!force && st.bought >= target) {
-        // 自动路径: 我们自己的计数达标就够了
-        result.skipped = `今日已按计划买满 ${st.bought}/${target}(想再买点"立即购买一次")`;
+    if (target <= 0) {
+        result.skipped = '每日数量为 0(未启用)';
         return result;
     }
 
+    // ① 以接口为准: 读商城商品的 已购/限购/价格
     const goodsList = await getMallGoodsList(1);
     const goods = goodsList.find((g) => toNum(g && g.goods_id) === BUY_BOOK_GOODS_ID)
         || (await getMallCatalog(1)).find((g) => Number(g.goodsId) === BUY_BOOK_GOODS_ID) || null;
-    if (!goods) { result.ok = false; result.skipped = '商城里没有中级挑战书(goodsId=1050)'; return result; }
-
-    // 游戏自身的每日限购(实测 #7 = {1: 每日, 2: 已购, 3: 限购数}) → 别买超, 否则被服务端拒
-    const lim = parseMallLimit(goods.limit, goods.name);
-    const gameDailyLimit = (lim && lim.limitType === 'daily' && lim.limitCount > 0) ? lim.limitCount : 0;
-    result.gameDailyLimit = gameDailyLimit;
-    result.gameBought = lim ? lim.boughtNum : null;
-    result.gameRemaining = lim ? lim.remaining : null;
-    if (gameDailyLimit > 0 && lim.remaining <= 0) {
-        result.skipped = `游戏侧今日限购已满 ${lim.boughtNum}/${gameDailyLimit}`;
+    if (!goods) {
+        result.ok = false;
+        result.skipped = '商城里没有中级挑战书(goodsId=1050)';
         return result;
     }
 
+    const lim = parseMallLimit(goods.limit, goods.name);
+    const gameDailyLimit = (lim && lim.limitType === 'daily' && lim.limitCount > 0) ? lim.limitCount : 0;
+    const serverRemaining = lim ? lim.remaining : null;      // null = 该商品不限购
+    result.gameDailyLimit = gameDailyLimit;
+    result.gameBought = lim ? lim.boughtNum : null;
+    result.gameRemaining = serverRemaining;
+
+    // ② 本进程预算(用户配置的每日数量)
+    let need = force ? target : (target - botBought);
+    // ③ 服务端限购兜住
+    if (serverRemaining !== null) need = Math.min(need, Math.max(0, serverRemaining));
+    result.need = need;
+    if (need <= 0) {
+        result.skipped = (serverRemaining !== null && serverRemaining <= 0)
+            ? `游戏侧今日限购已满 ${result.gameBought}/${gameDailyLimit || lim.limitCount}`
+            : `本进程今日已按计划买满 ${botBought}/${target}(可点"立即购买一次")`;
+        return result;
+    }
+
+    // ④ 价格校验: 改价就停, 防止误买
     const singlePrice = parseMallPriceValue(goods.price);
     if (singlePrice > 0 && singlePrice !== BUY_BOOK_EXPECT_PRICE) {
         result.ok = false;
@@ -909,34 +909,31 @@ async function checkAndBuyChallengeBooks(force = false, targetCount = 2, opts = 
         return result;
     }
 
-    // 金豆豆余额(getUserState 在登录时从背包初始化)
+    // ⑤ 金豆豆余额(getUserState 在登录时从背包初始化)
     let balance = toNum(getUserState().goldBean) || 0;
-    // 手动(force) = "现在就买 N 本", 不再减去我们自己的计数; 自动则只补差额
-    let need = force ? target : (target - st.bought);
-    if (gameDailyLimit > 0) need = Math.min(need, Math.max(0, lim.remaining));   // 游戏限购兜住
-    result.need = need;
-    if (need <= 0) {
-        result.skipped = gameDailyLimit > 0 && lim.remaining <= 0
-            ? `游戏侧今日限购已满 ${lim.boughtNum}/${gameDailyLimit}`
-            : `今日已按计划买满 ${st.bought}/${target}(想再买点"立即购买一次")`;
-        return result;
-    }
     if (balance > 0 && balance < need * BUY_BOOK_EXPECT_PRICE) {
-        need = Math.floor(balance / BUY_BOOK_EXPECT_PRICE);
-        result.skipped = need <= 0 ? '金豆豆不足' : result.skipped;
-        if (need <= 0) { result.skipped = '金豆豆不足(150/个)'; return result; }
-        log('商城', `金豆豆余额只够买 ${need} 本中级挑战书(目标 ${target})`, { module: 'mall', event: '购买挑战书' });
+        const affordable = Math.floor(balance / BUY_BOOK_EXPECT_PRICE);
+        if (affordable <= 0) {
+            result.skipped = `金豆豆不足(${balance} < ${BUY_BOOK_EXPECT_PRICE}/个)`;
+            return result;
+        }
+        log('商城', `金豆豆余额只够买 ${affordable} 本中级挑战书(计划 ${need} 本)`, { module: 'mall', event: '购买挑战书' });
+        need = affordable;
     }
+
+    log('商城', `准备购买中级挑战书 ${need} 本 (接口: 已购 ${result.gameBought === null ? '?' : result.gameBought}/${gameDailyLimit || '不限'}, 本进程已买 ${botBought}/${target})`, {
+        module: 'mall', event: '购买挑战书', goodsId: BUY_BOOK_GOODS_ID,
+    });
 
     for (let i = 0; i < need; i++) {
         try {
             await purchaseMallGoods(BUY_BOOK_GOODS_ID, 1);
-            st.bought += 1;
-            result.bought = st.bought;
+            buyBookMemory.bought += 1;                 // 只更新内存计数(不落盘)
+            result.bought = buyBookMemory.bought;
+            result.todayBoughtByBot = buyBookMemory.bought;
             result.boughtNow += 1;
             balance = Math.max(0, balance - BUY_BOOK_EXPECT_PRICE);
-            saveBuyBookState();
-            log('商城', `已购买中级挑战书 ${st.bought}/${target} (150 金豆豆/个, 余额约 ${balance})`, {
+            log('商城', `已购买中级挑战书 第 ${buyBookMemory.bought} 本 (150 金豆豆/个, 余额约 ${balance})`, {
                 module: 'mall', event: '购买挑战书', result: 'ok', goodsId: BUY_BOOK_GOODS_ID,
             });
             if (i < need - 1) await sleep(800);
