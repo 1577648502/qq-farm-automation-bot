@@ -2085,6 +2085,14 @@ app.use('/api', (req, res, next) => {
             const stealth = id && (typeof store.getStealthConfig === 'function')
                 ? store.getStealthConfig(id)
                 : { enabled: false, onlineMinMinutes: 3, onlineMaxMinutes: 8, offlineMinMinutes: 20, offlineMaxMinutes: 60, wakeForRipe: true };
+            // 夺宝节奏 + 每日购买挑战书(按账号): 这两个是"读取侧白名单"最容易漏的地方,
+            // 漏了会表现为"设置保存了但页面回显成默认值"(本仓库踩过两次)
+            const robThrottle = (id && typeof store.getRobThrottleConfig === 'function')
+                ? store.getRobThrottleConfig(id)
+                : { maxPerRun: 1, dailyLimit: 20 };
+            const buyBookConfig = (id && typeof store.getBuyBookConfig === 'function')
+                ? store.getBuyBookConfig(id)
+                : { enabled: true, count: 2 };
             const ui = store.getUI();
             // 获取用户隔离的下线提醒配置
             const offlineReminder = store.getOfflineReminder && currentUser
@@ -2120,6 +2128,11 @@ app.use('/api', (req, res, next) => {
                     robTreasureIntervalMinutes: (typeof store.getRobTreasureIntervalMinutes === 'function')
                         ? store.getRobTreasureIntervalMinutes(id)
                         : 10,
+                    robMaxPerRun: robThrottle.maxPerRun,
+                    robDailyLimit: robThrottle.dailyLimit,
+                    // 每日购买中级挑战书(150 金豆豆/个)
+                    buyBookEnabled: buyBookConfig.enabled,
+                    buyBookCount: buyBookConfig.count,
                     ui,
                     offlineReminder,
                 },
