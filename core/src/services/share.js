@@ -144,6 +144,9 @@ async function performDailyShare(force = false) {
 
 module.exports = {
     performDailyShare,
+    // activity.shareSellQingniangBrew(青酿分享卖出) 需要它上报分享, 之前漏导出 →
+    // 调用处拿到 undefined, 分享上报被 try/catch 吞掉, 静默拿不到 1.5 倍收益
+    reportShare,
     getShareDailyState: () => ({
         key: DAILY_KEY,
         doneToday: isDoneToday(),

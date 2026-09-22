@@ -8,7 +8,7 @@ const { types } = require('../utils/proto');
 const { toNum, log, sleep } = require('../utils/utils');
 const { getItemById, getAllItems, getItemImageById } = require('../config/gameConfig');
 const { getDataFile } = require('../config/runtime-paths');
-const { readJson, writeJsonFileAtomic } = require('./json-db');
+const { readJsonFile, writeJsonFileAtomic } = require('./json-db');
 const path = require('node:path');
 const fs = require('node:fs');
 
@@ -338,10 +338,47 @@ function inferLimitType(name, typeValue, fallback = 'permanent') {
     return fallback;
 }
 
+/**
+ * 限购信息(#7)解析 —— 2026-09-18 抓包按商品名逐个对照确认的结构:
+ *   #1 = 周期类型: 1 = 每日, 4 = 总计(永久/活动期间)
+ *   #2 = 已购数量(为 0 时不下发)
+ *   #3 = 限购数量
+ * 实测样本:
+ *   中级挑战书 {1, 3}    = 每日 2     ← 用户反馈的"每天限购 2 个"
+ *   高级挑战书 {1, 3}    = 每日 2
+ *   20小时化肥 {1, 3}    = 每日 10
+ *   每日福利   {1, 2, 3} = 每日 1, 已购 1
+ *   时装礼包/分享有礼 {4, 3} = 总计 1
+ *   比熊点券礼包 {4, 2, 3} = 总计 3, 已购 3
+ *   普通化肥/狗粮: 无 #7  → 不限购
+ * ⚠ 老的"猜字段"启发式对 {1,2,3} 完全猜不中(把 #1 当剩余、#2 当上限), 限购数会解析成空,
+ *   面板就显示不出限购 —— 现在先按实测结构取, 猜的那套只作兜底。
+ */
 function parseMallLimit(limitField, goodsName) {
     const bytes = Buffer.isBuffer(limitField) ? limitField : Buffer.from(limitField || []);
     if (!bytes.length) return null;
 
+    // ① 实测结构: {1: 周期, 2: 已购, 3: 限购数}
+    for (const numeric of collectWireNumericMessages(bytes)) {
+        const values = new Map();
+        for (const entry of numeric) {
+            if (!values.has(entry.field) || entry.value > values.get(entry.field)) values.set(entry.field, entry.value);
+        }
+        const limitCount = values.get(3) || 0;
+        const cycle = values.get(1) || 0;
+        if (limitCount <= 0) continue;
+        if (cycle !== 1 && cycle !== 4) continue;   // 只认实测过的周期值, 其它交给兜底
+        const boughtNum = Math.min(values.get(2) || 0, limitCount);
+        return {
+            limitCount,
+            boughtNum,
+            remaining: Math.max(0, limitCount - boughtNum),
+            cycle,
+            limitType: cycle === 1 ? 'daily' : 'permanent',
+        };
+    }
+
+    // ② 兜底: 老启发式(其它 slot 的老格式)
     const candidates = [];
     const messages = collectWireNumericMessages(bytes);
     const addCandidate = (values, remainingField, limitFieldId, typeField, score) => {
@@ -802,7 +839,7 @@ let buyBookState = null;
 
 function loadBuyBookState() {
     if (buyBookState) return buyBookState;
-    const j = readJson(BUY_BOOK_STATE_FILE, () => ({}));
+    const j = readJsonFile(BUY_BOOK_STATE_FILE, () => ({}));
     buyBookState = {
         dateKey: String(j.dateKey || ''),
         bought: Math.max(0, Number(j.bought) || 0),
@@ -839,6 +876,15 @@ async function checkAndBuyChallengeBooks(force = false, targetCount = 2, opts = 
         || (await getMallCatalog(1)).find((g) => Number(g.goodsId) === BUY_BOOK_GOODS_ID) || null;
     if (!goods) { result.ok = false; result.skipped = '商城里没有中级挑战书(goodsId=1050)'; return result; }
 
+    // 游戏自身的每日限购(实测 #7 = {1: 每日, 3: 2}) → 别买超, 否则被服务端拒
+    const lim = parseMallLimit(goods.limit, goods.name);
+    const gameDailyLimit = (lim && lim.limitType === 'daily' && lim.limitCount > 0) ? lim.limitCount : 0;
+    result.gameDailyLimit = gameDailyLimit;
+    if (gameDailyLimit > 0 && lim.remaining <= 0) {
+        result.skipped = `今日已达游戏限购 ${lim.boughtNum}/${gameDailyLimit}`;
+        return result;
+    }
+
     const singlePrice = parseMallPriceValue(goods.price);
     if (singlePrice > 0 && singlePrice !== BUY_BOOK_EXPECT_PRICE) {
         result.ok = false;
@@ -850,6 +896,8 @@ async function checkAndBuyChallengeBooks(force = false, targetCount = 2, opts = 
     // 金豆豆余额(getUserState 在登录时从背包初始化)
     let balance = toNum(getUserState().goldBean) || 0;
     let need = target - st.bought;
+    if (gameDailyLimit > 0) need = Math.min(need, Math.max(0, lim.remaining));   // 游戏限购兜住
+    if (need <= 0) { result.skipped = `今日已达游戏限购 ${lim.boughtNum}/${gameDailyLimit}`; return result; }
     if (balance > 0 && balance < need * BUY_BOOK_EXPECT_PRICE) {
         need = Math.floor(balance / BUY_BOOK_EXPECT_PRICE);
         result.skipped = need <= 0 ? '金豆豆不足' : result.skipped;
@@ -1067,6 +1115,7 @@ module.exports = {
     autoBuyOrganicFertilizer,
     autoBuyFertilizer,
     checkAndBuyChallengeBooks,
+    parseMallLimit,
     checkAndBuyFertilizerByThreshold,
     checkAndBuyFertilizerBoth,
     buyFreeGifts,
