@@ -109,7 +109,7 @@ function restartMall(goldBean, sendMsgImpl = stubSendMsg) {
         calls.length = 0;
         const r = await mall.checkAndBuyChallengeBooks(false, 2);
         check('未再购买', r.boughtNow === 0, r);
-        check('给出跳过原因', String(r.skipped).includes('已购满'), r.skipped);
+        check('给出跳过原因(按计划买满)', String(r.skipped).includes('按计划买满'), r.skipped);
         check('没有发购买请求', calls.filter(c => c.method === 'Purchase').length === 0, calls.length);
     }
 
@@ -217,8 +217,35 @@ section('7. 手动购买与游戏限购');
     calls.length = 0;
     const r = await mall.checkAndBuyChallengeBooks(true, 2);     // force=true 也不能突破游戏限购
     check('游戏限购买满时不购买', r.boughtNow === 0, r);
-    check('原因写明游戏限购', String(r.skipped).includes('游戏限购'), r.skipped);
+    check('原因写明游戏侧限购', String(r.skipped).includes('游戏侧今日限购已满'), r.skipped);
     check('no purchase request', calls.filter(c => c.method === 'Purchase').length === 0, calls.length);
+}
+
+// ---------- 7b. force 语义: 机器人自己记的"已买满"不该拦住手动购买 ----------
+section('7b. 手动购买不被自身计数拦住');
+{
+    // 用真实抓包(游戏侧 已购 0 / 限购 2)
+    const mall = restartMall(5000);
+    calls.length = 0;
+    // 先把"今天"用自动路径买满
+    const first = await mall.checkAndBuyChallengeBooks(false, 2);
+    check('自动路径先买 2 本', first.boughtNow === 2, first);
+
+    // 自动路径再调 → 应被我们自己的计数拦住
+    calls.length = 0;
+    const auto = await mall.checkAndBuyChallengeBooks(false, 2);
+    check('自动路径: 已买满就跳过', auto.boughtNow === 0, auto);
+    check('自动路径: 原因说明"按计划买满"', String(auto.skipped).includes('按计划买满'), auto.skipped);
+    check('自动路径: 没有发请求', calls.filter(c => c.method === 'Purchase').length === 0, calls.length);
+
+    // 手动(force) → 应继续买(受游戏侧限购约束, 这里游戏侧允许 2 本)
+    calls.length = 0;
+    const manual = await mall.checkAndBuyChallengeBooks(true, 2);
+    check('手动路径: 仍会购买', manual.boughtNow === 2, manual);
+    check('手动路径: force 标记', manual.force === true, manual.force);
+    check('手动路径: 有请求', calls.filter(c => c.method === 'Purchase').length === 2, calls.length);
+    check('返回诊断: 调用前计数 2, 买后 4', manual.todayBoughtByBot === 2 && manual.bought === 4, { pre: manual.todayBoughtByBot, after: manual.bought });
+    check('返回诊断: 游戏侧已购 0/2', manual.gameBought === 0 && manual.gameDailyLimit === 2, manual);
 }
 
 // ---------- 8. 默认值三处一致(踩过的坑) ----------

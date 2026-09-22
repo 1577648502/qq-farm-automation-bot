@@ -850,7 +850,13 @@ function loadBuyBookState() {
 function saveBuyBookState() {
     try {
         writeJsonFileAtomic(BUY_BOOK_STATE_FILE, { ...loadBuyBookState(), updatedAt: Date.now() });
-    } catch (e) { /* 状态保存失败不影响购买 */ }
+    } catch (e) {
+        // 之前这里是静默忽略 → 会出现"文件没写成功、内存计数却在涨"的诡异现象
+        //   (表现: 界面说已买满、重启后又从头买)
+        log('商城', `买书进度落盘失败(内存计数仍有效, 重启会丢): ${e.message}`, {
+            module: 'mall', event: '购买挑战书', result: 'warn', file: BUY_BOOK_STATE_FILE,
+        });
+    }
 }
 
 /**
@@ -867,21 +873,31 @@ async function checkAndBuyChallengeBooks(force = false, targetCount = 2, opts = 
         st.bought = 0;
     }
     const target = Math.max(0, Math.min(20, Number(targetCount) || 0));
-    const result = { ok: true, dateKey: today, target, bought: st.bought, boughtNow: 0, skipped: '' };
-    if (target <= 0) { result.skipped = '未启用'; return result; }
-    if (!force && st.bought >= target) { result.skipped = `今日已购满 ${st.bought}/${target}`; return result; }
+    const result = {
+        ok: true, dateKey: today, target, bought: st.bought, boughtNow: 0, skipped: '',
+        // 诊断用: 让界面/日志能直接看出"到底是谁拦住的"
+        todayBoughtByBot: st.bought, force: !!force,
+    };
+    if (target <= 0) { result.skipped = '每日数量为 0(未启用)'; return result; }
+    if (!force && st.bought >= target) {
+        // 自动路径: 我们自己的计数达标就够了
+        result.skipped = `今日已按计划买满 ${st.bought}/${target}(想再买点"立即购买一次")`;
+        return result;
+    }
 
     const goodsList = await getMallGoodsList(1);
     const goods = goodsList.find((g) => toNum(g && g.goods_id) === BUY_BOOK_GOODS_ID)
         || (await getMallCatalog(1)).find((g) => Number(g.goodsId) === BUY_BOOK_GOODS_ID) || null;
     if (!goods) { result.ok = false; result.skipped = '商城里没有中级挑战书(goodsId=1050)'; return result; }
 
-    // 游戏自身的每日限购(实测 #7 = {1: 每日, 3: 2}) → 别买超, 否则被服务端拒
+    // 游戏自身的每日限购(实测 #7 = {1: 每日, 2: 已购, 3: 限购数}) → 别买超, 否则被服务端拒
     const lim = parseMallLimit(goods.limit, goods.name);
     const gameDailyLimit = (lim && lim.limitType === 'daily' && lim.limitCount > 0) ? lim.limitCount : 0;
     result.gameDailyLimit = gameDailyLimit;
+    result.gameBought = lim ? lim.boughtNum : null;
+    result.gameRemaining = lim ? lim.remaining : null;
     if (gameDailyLimit > 0 && lim.remaining <= 0) {
-        result.skipped = `今日已达游戏限购 ${lim.boughtNum}/${gameDailyLimit}`;
+        result.skipped = `游戏侧今日限购已满 ${lim.boughtNum}/${gameDailyLimit}`;
         return result;
     }
 
@@ -895,9 +911,16 @@ async function checkAndBuyChallengeBooks(force = false, targetCount = 2, opts = 
 
     // 金豆豆余额(getUserState 在登录时从背包初始化)
     let balance = toNum(getUserState().goldBean) || 0;
-    let need = target - st.bought;
+    // 手动(force) = "现在就买 N 本", 不再减去我们自己的计数; 自动则只补差额
+    let need = force ? target : (target - st.bought);
     if (gameDailyLimit > 0) need = Math.min(need, Math.max(0, lim.remaining));   // 游戏限购兜住
-    if (need <= 0) { result.skipped = `今日已达游戏限购 ${lim.boughtNum}/${gameDailyLimit}`; return result; }
+    result.need = need;
+    if (need <= 0) {
+        result.skipped = gameDailyLimit > 0 && lim.remaining <= 0
+            ? `游戏侧今日限购已满 ${lim.boughtNum}/${gameDailyLimit}`
+            : `今日已按计划买满 ${st.bought}/${target}(想再买点"立即购买一次")`;
+        return result;
+    }
     if (balance > 0 && balance < need * BUY_BOOK_EXPECT_PRICE) {
         need = Math.floor(balance / BUY_BOOK_EXPECT_PRICE);
         result.skipped = need <= 0 ? '金豆豆不足' : result.skipped;

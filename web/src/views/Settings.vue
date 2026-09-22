@@ -941,11 +941,12 @@ async function buyBooksNow() {
       buyBookResult.value = res.data?.error || '购买失败'
       return
     }
+    const botPart = `机器人今日 ${d.todayBoughtByBot ?? d.bought ?? 0}/${d.target ?? '-'}`
+    const gamePart = d.gameDailyLimit ? `，游戏侧已购 ${d.gameBought ?? 0}/${d.gameDailyLimit}` : ''
     if (d.boughtNow > 0) {
-      buyBookResult.value = `本次购买 ${d.boughtNow} 本，今日累计 ${d.bought}/${d.target}` +
-        (d.gameDailyLimit ? `（游戏每日限购 ${d.gameDailyLimit}）` : '')
+      buyBookResult.value = `本次购买 ${d.boughtNow} 本（${botPart}${gamePart}）`
     } else {
-      buyBookResult.value = `未购买：${d.skipped || '未知原因'}`
+      buyBookResult.value = `未购买：${d.skipped || '未知原因'}（${botPart}${gamePart}）`
     }
   } catch (e: any) {
     buyBookResult.value = e?.response?.data?.error || e?.message || '购买失败（账号未运行？）'

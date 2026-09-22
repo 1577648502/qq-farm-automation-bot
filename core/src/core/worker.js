@@ -1183,6 +1183,13 @@ async function handleApiCall(msg) {
                 const cfgNow = getBuyBookConfig();
                 const count = Math.max(0, Math.min(20, toNum(opt.count) || cfgNow.count || 0));
                 result = await checkAndBuyChallengeBooks(!!opt.force, count);
+                // 把这几个数字打进日志: 排查"为什么没买"时一眼能看出是谁拦住的
+                log('商城', `手动购买挑战书: ${result.boughtNow > 0 ? `成功 ${result.boughtNow} 本` : `未购买(${result.skipped || '未知'})`}` +
+                    ` | 机器人计数 ${result.todayBoughtByBot}/${result.target}` +
+                    ` | 游戏侧已购 ${result.gameBought === null || result.gameBought === undefined ? '?' : result.gameBought}/${result.gameDailyLimit || '不限'}` +
+                    ` | 本次计划 ${result.need === undefined ? '?' : result.need} 本`, {
+                    module: 'mall', event: '购买挑战书', result: result.boughtNow > 0 ? 'ok' : 'warn', manual: true,
+                });
                 break;
             }
             case 'claimTreasureSettlement':
