@@ -197,17 +197,7 @@ async function runDailyRoutines(force = false) {
         await require('../services/charity').checkAndRunCharityTasks();
         await require('../services/mengchong').checkAndRunMengchongTasks();
         // 每日购买中级挑战书(150 金豆豆/个, 数量可在设置里调)
-        const bookCfg = getBuyBookConfig();
-        if (bookCfg.enabled && bookCfg.count > 0) {
-            try {
-                const r = await checkAndBuyChallengeBooks(force, bookCfg.count);
-                if (r.boughtNow > 0) {
-                    log('商城', `每日购买中级挑战书: 本次 ${r.boughtNow} 本, 累计 ${r.bought}/${r.target} (150 金豆豆/个)`, { module: 'mall', event: '购买挑战书', result: 'ok' });
-                }
-            } catch (e) {
-                log('商城', `每日购买中级挑战书失败: ${e.message}`, { module: 'mall', event: '购买挑战书', result: 'error' });
-            }
-        }
+        await runBuyChallengeBooks('daily_routine');
     } catch (e) {
         log('系统', `每日任务调度失败: ${e.message}`, { module: 'system', event: '每日任务', result: 'error' });
     }
@@ -220,6 +210,33 @@ function stopDailyRoutineTimer() {
     workerScheduler.clear('mystery_shop_interval');
     workerScheduler.clear('treasure_rob_interval');
     workerScheduler.clear('escort_settle_interval');
+    workerScheduler.clear('buy_book_interval');
+}
+
+/**
+ * 每日购买中级挑战书 —— 独立检查(不依赖"每日任务"的触发时机)
+ * 之前只挂在 runDailyRoutines 里, 而它只在"登录后 / 跨日"才跑,
+ * 于是中途打开开关要等到第二天才生效。现在每 10 分钟自查一次:
+ *   已按目标买满当天 → 直接返回(零网络请求), 有缺口才去商城买。
+ */
+async function runBuyChallengeBooks(reason = 'interval') {
+    if (!canRunTasks()) return { skipped: true, reason: 'offline' };
+    const cfg = getBuyBookConfig();
+    if (!cfg.enabled || cfg.count <= 0) return { skipped: true, reason: 'disabled' };
+    try {
+        const r = await checkAndBuyChallengeBooks(false, cfg.count);
+        if (r.boughtNow > 0) {
+            log('商城', `每日购买中级挑战书: 本次 ${r.boughtNow} 本, 累计 ${r.bought}/${r.target} (150 金豆豆/个${r.gameDailyLimit ? `, 游戏每日限购 ${r.gameDailyLimit}` : ''})`, {
+                module: 'mall', event: '购买挑战书', result: 'ok', trigger: reason,
+            });
+        } else if (r.ok === false) {
+            log('商城', `每日购买中级挑战书未完成: ${r.skipped || '未知原因'}`, { module: 'mall', event: '购买挑战书', result: 'warn', trigger: reason });
+        }
+        return r;
+    } catch (e) {
+        log('商城', `每日购买中级挑战书失败: ${e.message}`, { module: 'mall', event: '购买挑战书', result: 'error', trigger: reason });
+        return { ok: false, error: e.message };
+    }
 }
 
 function startDailyRoutineTimer() {
@@ -252,6 +269,10 @@ function startDailyRoutineTimer() {
     workerScheduler.setIntervalTask('escort_settle_interval', 5 * 60 * 1000, () => {
         if (!canRunTasks()) return;
         treasureRob.checkAndClaimEscortSettlement().catch(() => null);
+    }, { preventOverlap: true });
+    // 每日购买中级挑战书: 每 10 分钟自查(买满当天就不再发请求)
+    workerScheduler.setIntervalTask('buy_book_interval', 10 * 60 * 1000, () => {
+        runBuyChallengeBooks('interval').catch(() => null);
     }, { preventOverlap: true });
 }
 
@@ -516,6 +537,13 @@ function applyRuntimeConfig(snapshot, syncNow = false) {
                     checkAndLightUpStar().catch(() => null);
                 });
             }
+
+            // 打开"每日购买中级挑战书"后立即试一次(不必等到明天)
+            workerScheduler.setTimeoutTask('buy_book_immediate', 3000, () => {
+                if (!canRunTasks()) return;
+                const now = getBuyBookConfig();
+                if (now.enabled && now.count > 0) runBuyChallengeBooks('config_changed').catch(() => null);
+            });
 
             // 夺宝自动抢夺 关->开 时立即执行一次
             if (!(prevAuto && prevAuto.rob_treasure) && (nextAuto && nextAuto.rob_treasure)) {
@@ -1150,6 +1178,13 @@ async function handleApiCall(msg) {
             case 'getTreasureMyStatus':
                 result = await treasureRob.getMyTreasureStatus();
                 break;
+            case 'buyChallengeBooks': {
+                const opt = args[0] || {};
+                const cfgNow = getBuyBookConfig();
+                const count = Math.max(0, Math.min(20, toNum(opt.count) || cfgNow.count || 0));
+                result = await checkAndBuyChallengeBooks(!!opt.force, count);
+                break;
+            }
             case 'claimTreasureSettlement':
                 result = await treasureRob.claimEscortSettlement();
                 break;

@@ -63,7 +63,7 @@ let net = require(`${SB}/src/utils/network`);
 net.sendMsgAsync = stubSendMsg;
 
 /** 模拟"进程重启": 清模块缓存 → 重新打桩 → 重新 require mall */
-function restartMall(goldBean) {
+function restartMall(goldBean, sendMsgImpl = stubSendMsg) {
     for (const k of Object.keys(require.cache)) {
         if (k.includes(SB + '/src/') && !k.includes('/utils/proto')) delete require.cache[k];
     }
@@ -72,7 +72,9 @@ function restartMall(goldBean) {
     const rp2 = require(`${SB}/src/config/runtime-paths`);
     rp2.getDataFile = (f) => path.join(TMP, f);
     net = require(`${SB}/src/utils/network`);
-    net.sendMsgAsync = stubSendMsg;
+    // ⚠ 打桩必须在 require mall 之前: mall 在 require 时就解构了 sendMsgAsync,
+    //   之后再改 net.sendMsgAsync 对它无效(本测试第二版踩的坑)
+    net.sendMsgAsync = sendMsgImpl;
     net.getUserState().goldBean = goldBean;
     return require(`${SB}/src/services/mall`);
 }
@@ -183,6 +185,53 @@ section('6. 限购解析 #7 = {周期, 已购, 限购数}');
     // 已购 > 限购(脏数据)也要夹住
     const dirty = mall.parseMallLimit(Buffer.from('080110051801', 'hex'), 'x');
     check('已购超过限购时 remaining 不为负', dirty.remaining === 0 && dirty.boughtNum === 1, dirty);
+}
+
+// ---------- 7. 手动购买(force) + 游戏每日限购拦截 ----------
+section('7. 手动购买与游戏限购');
+{
+    // 自造商城响应: 中级挑战书 已购 2 / 限购 2(#7 = {1:1, 2:2, 3:2}) → 应直接跳过
+    // ⚠ goods_list 是 repeated bytes, 必须传"编码好的 MallGoods 字节", 直接传对象会编码成空
+    const { types } = require(`${SB}/src/utils/proto`);
+    const goodsBytes = types.MallGoods.encode(types.MallGoods.create({
+        goods_id: 1050,
+        name: '中级挑战书',
+        type: 1,
+        item_ids: [Buffer.from('08e6f1041001', 'hex')],       // {80102, 1}
+        price: Buffer.from('08f907109601', 'hex'),            // {1005(金豆豆), 150}
+        limit: Buffer.from('080110021802', 'hex'),            // {1:每日, 2:已购2, 3:限购2}
+        is_limited: true,
+    })).finish();
+    const limitReached = types.GetMallListBySlotTypeResponse.encode(types.GetMallListBySlotTypeResponse.create({
+        goods_list: [goodsBytes],
+    })).finish();
+
+    const mall = restartMall(5000, async (service, method) => {
+        if (method === 'GetMallListBySlotType') return { body: limitReached };
+        if (method === 'Purchase') {
+            const { types: t } = require(`${SB}/src/utils/proto`);
+            return { body: t.PurchaseResponse.encode(t.PurchaseResponse.create({})).finish() };
+        }
+        throw new Error('未 stub: ' + service + '.' + method);
+    });
+    calls.length = 0;
+    const r = await mall.checkAndBuyChallengeBooks(true, 2);     // force=true 也不能突破游戏限购
+    check('游戏限购买满时不购买', r.boughtNow === 0, r);
+    check('原因写明游戏限购', String(r.skipped).includes('游戏限购'), r.skipped);
+    check('no purchase request', calls.filter(c => c.method === 'Purchase').length === 0, calls.length);
+}
+
+// ---------- 8. 默认值三处一致(踩过的坑) ----------
+section('8. 默认开启的一致性');
+{
+    const store = require(`${SB}/src/models/store`);
+    const cfg = store.getBuyBookConfig('never-configured-account');
+    check('未配置账号默认开启', cfg.enabled === true, cfg);
+    check('默认数量 2', cfg.count === 2, cfg);
+    const snap = store.getConfigSnapshot('never-configured-account');
+    check('快照里也是开启(与 getBuyBookConfig 一致)', snap.buyBookEnabled === true, snap.buyBookEnabled);
+    const def = typeof store.getDefaultAccountConfig === 'function' ? store.getDefaultAccountConfig() : {};
+    check('账号默认配置里也是开启', def.buyBookEnabled === true, def.buyBookEnabled);
 }
 
     console.log(`\n通过 ${pass} / ${pass + fails.length}`);

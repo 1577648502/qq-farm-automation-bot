@@ -1450,7 +1450,9 @@ function getRobTreasureIntervalMinutes(accountId) {
 function getBuyBookConfig(accountId) {
     const cfg = (typeof getConfigSnapshot === 'function' ? getConfigSnapshot(accountId) : (globalConfig.accountConfig || {})) || {};
     return {
-        enabled: cfg.buyBookEnabled === undefined ? false : !!cfg.buyBookEnabled,
+        // 默认开启: 这里必须与 normalizeAccountConfig/getConfigSnapshot 的默认值一致,
+        // 不一致会出现"设置页显示开着、worker 认为关着"的诡异现象
+        enabled: cfg.buyBookEnabled === undefined ? true : !!cfg.buyBookEnabled,
         count: Math.max(0, Math.min(20, Number(cfg.buyBookCount) || 0)),
     };
 }

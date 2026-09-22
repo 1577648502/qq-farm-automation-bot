@@ -919,6 +919,41 @@ function syncLocalAutomationSettings() {
 }
 
 /** 立即执行一次自动夺宝 */
+const buyBookRunning = ref(false)
+const buyBookResult = ref('')
+
+/** 立即购买一次中级挑战书(手动, 便于当场看到成功/失败原因) */
+async function buyBooksNow() {
+  const accountId = String(currentAccountId.value || '')
+  if (!accountId) {
+    showAlert('请先选择账号', 'danger')
+    return
+  }
+  buyBookRunning.value = true
+  buyBookResult.value = ''
+  try {
+    const res = await api.post('/api/mall/buy-books', {
+      force: true,
+      count: localAutomationSettings.value.buyBookCount,
+    }, { headers: { 'x-account-id': accountId } })
+    const d = res.data?.data || {}
+    if (!res.data?.ok) {
+      buyBookResult.value = res.data?.error || '购买失败'
+      return
+    }
+    if (d.boughtNow > 0) {
+      buyBookResult.value = `本次购买 ${d.boughtNow} 本，今日累计 ${d.bought}/${d.target}` +
+        (d.gameDailyLimit ? `（游戏每日限购 ${d.gameDailyLimit}）` : '')
+    } else {
+      buyBookResult.value = `未购买：${d.skipped || '未知原因'}`
+    }
+  } catch (e: any) {
+    buyBookResult.value = e?.response?.data?.error || e?.message || '购买失败（账号未运行？）'
+  } finally {
+    buyBookRunning.value = false
+  }
+}
+
 const treasureRunning = ref(false)
 async function runTreasureNow() {
   if (!currentAccountId.value)
@@ -1747,9 +1782,16 @@ async function handleTestOffline() {
                     class="w-32"
                   />
                 </div>
+                <div class="flex flex-wrap items-center gap-3">
+                  <BaseButton variant="secondary" size="sm" :loading="buyBookRunning" @click="buyBooksNow">
+                    立即购买一次
+                  </BaseButton>
+                  <span v-if="buyBookResult" class="text-xs text-gray-600 dark:text-gray-300">{{ buyBookResult }}</span>
+                </div>
                 <div class="text-xs text-gray-500 dark:text-gray-400">
-                  每天自动在商城买中级挑战书，150 金豆豆/个（商城 goodsId 1050）；
-                  金豆豆不足时只买够的部分，进度跨重启累计。
+                  每天自动在商城买中级挑战书，150 金豆豆/个（商城 goodsId 1050，游戏每日限购 2 个）；
+                  金豆豆不足时只买够的部分，进度跨重启累计。登录后 / 跨日 / 改设置后都会自动检查，
+                  另外每 10 分钟自查一次（当天买满就不再发请求）。
                 </div>
               </div>
               <div class="text-xs text-gray-500 dark:text-gray-400">

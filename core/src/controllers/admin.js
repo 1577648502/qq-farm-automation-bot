@@ -3507,6 +3507,21 @@ app.use('/api', (req, res, next) => {
         } catch (e) { res.json({ ok: false, error: e.message }); }
     });
 
+    // 立即购买中级挑战书(手动; force=true 时不受"当天已买满"限制, 但受游戏每日限购约束)
+    app.post('/api/mall/buy-books', async (req, res) => {
+        const id = getAccId(req);
+        if (!id) return res.status(400).json({ ok: false, error: '缺少账号 ID' });
+        if (!checkAccountAccess(req, id)) return res.status(403).json({ ok: false, error: '无权访问此账号' });
+        const body = req.body || {};
+        try {
+            const data = await provider.buyChallengeBooks(id, {
+                force: body.force !== false,
+                count: body.count,
+            });
+            res.json({ ok: true, data });
+        } catch (e) { res.json({ ok: false, error: e.message }); }
+    });
+
     // 领取护送结算奖励 (cmd=45; 护送结束后的宝藏资金要主动领)
     app.post('/api/treasure/claim-settlement', async (req, res) => {
         const id = getAccId(req);
