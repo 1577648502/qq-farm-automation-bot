@@ -9,7 +9,7 @@ if (parentPort && workerData && workerData.startupMode === 'code_refresh') {
     process.env.FARM_STARTUP_MODE = 'code_refresh';
 }
 const { getLevelExpProgress } = require('../config/gameConfig');
-const { getAutomation, getPreferredSeed, getConfigSnapshot, applyConfigSnapshot, getBuyBookConfig } = require('../models/store');
+const { getAutomation, getPreferredSeed, getConfigSnapshot, applyConfigSnapshot, getBuyBookConfig, getAutumnWishConfig, getHappyShareEnabled } = require('../models/store');
 const { checkAndClaimEmails } = require('../services/email');
 const { getEmailDailyState } = require('../services/email');
 const { checkFarm, startFarmCheckLoop, stopFarmCheckLoop, refreshFarmCheckLoop, getLandsDetail, getAvailableSeeds, buySeed, runFarmOperation, runFertilizerByConfig } = require('../services/farm');
@@ -19,6 +19,8 @@ const { processInviteCodes } = require('../services/invite');
 const { autoBuyOrganicFertilizer, autoBuyFertilizer, checkAndBuyFertilizerBoth, buyFreeGifts, getFreeGiftDailyState, checkAndBuyChallengeBooks } = require('../services/mall');
 const { getMallCatalog, purchaseCatalogGoods } = require('../services/mall');
 const treasureRob = require('../services/treasure-rob');
+const autumnWish = require('../services/autumn-wish');
+const happyShare = require('../services/happy-share');
 const { getActivityOverview, drawLottery, drawActivity, claimBattlePassRewards, claimActivityTasks, claimDailySignin, exchangeShopGoods, performQingniangBrew, sellQingniangBrew, shareSellQingniangBrew, getStarActivityOverview, exchangeStarShopGoods, lightUpStarRegister, checkAndLightUpStar } = require('../services/activity');
 const { performDailyMonthCardGift, getMonthCardDailyState } = require('../services/monthcard');
 const { performDailyVipGift, getVipDailyState } = require('../services/qqvip');
@@ -198,6 +200,10 @@ async function runDailyRoutines(force = false) {
         await require('../services/mengchong').checkAndRunMengchongTasks();
         // 每日购买中级挑战书(150 金豆豆/个, 数量可在设置里调)
         await runBuyChallengeBooks('daily_routine');
+        // 秋祈良愿: 每日祈愿领奖 + 可选放烟花
+        await runAutumnWish('daily_routine');
+        // 快乐不独享: 每日快乐值 + 档位奖励
+        await runHappyShare('daily_routine');
     } catch (e) {
         log('系统', `每日任务调度失败: ${e.message}`, { module: 'system', event: '每日任务', result: 'error' });
     }
@@ -212,6 +218,81 @@ function stopDailyRoutineTimer() {
     workerScheduler.clear('treasure_rob_interval');
     workerScheduler.clear('escort_settle_interval');
     workerScheduler.clear('buy_book_interval');
+    workerScheduler.clear('autumn_wish_interval');
+    workerScheduler.clear('happy_share_interval');
+}
+
+/**
+ * 秋祈良愿: 每日自动祈愿领奖励 + 可选自动放烟花
+ * 协议见 services/autumn-wish.js
+ */
+async function runAutumnWish(reason = 'interval') {
+    if (!canRunTasks()) return { skipped: true, reason: 'offline' };
+    const cfg = getAutumnWishConfig();
+    const out = { wish: null, firework: null };
+
+    if (cfg.wishEnabled) {
+        try {
+            const r = await autumnWish.checkAndClaimAutumnWish(false);
+            out.wish = r;
+            if (r && r.ok && !r.skipped) {
+                log('活动', `秋祈良愿: 已祈愿并领取 ${(r.rewards || []).map(x => x.name).join('、') || '(无回包)'}`, {
+                    module: 'activity', event: '秋祈良愿', result: 'ok', trigger: reason,
+                });
+            }
+        } catch (e) {
+            log('活动', `秋祈良愿处理失败: ${e.message}`, { module: 'activity', event: '秋祈良愿', result: 'error', trigger: reason });
+        }
+    }
+
+    if (cfg.fireworkEnabled && cfg.fireworkCount > 0) {
+        try {
+            const have = await autumnWish.getFireworkCount().catch(() => 0);
+            if (have > 0) {
+                const n = Math.min(cfg.fireworkCount, have);
+                for (let i = 0; i < n; i++) {
+                    const r = await autumnWish.useFirework({ mode: cfg.fireworkMode });
+                    out.firework = r;
+                    if (!r.ok) break;
+                    if (i < n - 1) await new Promise(res => setTimeout(res, 1500 + Math.random() * 1500));
+                }
+                if (out.firework && out.firework.ok) {
+                    log('活动', `放烟花完成: ${cfg.fireworkMode === 'friend' ? '好友家' : '自己家'} ×${n} (每个 经验+30)`, {
+                        module: 'activity', event: '放烟花', result: 'ok', trigger: reason,
+                    });
+                }
+            }
+        } catch (e) {
+            log('活动', `放烟花失败: ${e.message}`, { module: 'activity', event: '放烟花', result: 'error', trigger: reason });
+        }
+    }
+    return out;
+}
+
+/**
+ * 快乐不独享: 每日领快乐值 + 领可领的档位奖励(协议见 services/happy-share.js)
+ */
+async function runHappyShare(reason = 'interval') {
+    if (!canRunTasks()) return { skipped: true, reason: 'offline' };
+    if (!getHappyShareEnabled()) return { skipped: true, reason: 'disabled' };
+    try {
+        const r = await happyShare.checkAndRunHappyShare(false);
+        if (r.daily && r.daily.ok) {
+            log('活动', `快乐不独享: 领取快乐值 +${r.daily.gained} (现有 ${r.daily.happy})`, {
+                module: 'activity', event: '快乐不独享', result: 'ok', trigger: reason,
+            });
+        }
+        if (r.tiers && r.tiers.claimed && r.tiers.claimed.length) {
+            const names = r.tiers.claimed.map(x => `档位${x.tier}→${(x.reward && x.reward.name) || '已发放'}`).join('、');
+            log('活动', `快乐不独享: 领取档位奖励 ${names}`, {
+                module: 'activity', event: '快乐不独享', result: 'ok', trigger: reason,
+            });
+        }
+        return r;
+    } catch (e) {
+        log('活动', `快乐不独享处理失败: ${e.message}`, { module: 'activity', event: '快乐不独享', result: 'error', trigger: reason });
+        return { ok: false, reason: e.message };
+    }
 }
 
 /**
@@ -283,6 +364,14 @@ function startDailyRoutineTimer() {
     // 每日购买中级挑战书: 每 10 分钟自查(买满当天就不再发请求)
     workerScheduler.setIntervalTask('buy_book_interval', 10 * 60 * 1000, () => {
         runBuyChallengeBooks('interval').catch(() => null);
+    }, { preventOverlap: true });
+    // 秋祈良愿(每日祈愿 + 可选放烟花): 每 20 分钟自查一次
+    workerScheduler.setIntervalTask('autumn_wish_interval', 20 * 60 * 1000, () => {
+        runAutumnWish('interval').catch(() => null);
+    }, { preventOverlap: true });
+    // 快乐不独享: 每 20 分钟自查一次(没得领不会发请求)
+    workerScheduler.setIntervalTask('happy_share_interval', 20 * 60 * 1000, () => {
+        runHappyShare('interval').catch(() => null);
     }, { preventOverlap: true });
 }
 
@@ -547,6 +636,16 @@ function applyRuntimeConfig(snapshot, syncNow = false) {
                     checkAndLightUpStar().catch(() => null);
                 });
             }
+
+            // 快乐不独享: 改设置后也立即试一次
+            workerScheduler.setTimeoutTask('happy_share_immediate', 7000, () => {
+                if (canRunTasks()) runHappyShare('config_changed').catch(() => null);
+            });
+
+            // 打开秋祈良愿/改设置后立即试一次(不必等到下一轮)
+            workerScheduler.setTimeoutTask('autumn_wish_immediate', 5000, () => {
+                if (canRunTasks()) runAutumnWish('config_changed').catch(() => null);
+            });
 
             // 打开"每日购买中级挑战书"后立即试一次(不必等到明天)
             workerScheduler.setTimeoutTask('buy_book_immediate', 3000, () => {
@@ -1188,6 +1287,23 @@ async function handleApiCall(msg) {
             case 'getTreasureMyStatus':
                 result = await treasureRob.getMyTreasureStatus();
                 break;
+            case 'getHappyShareStatus':
+                result = await happyShare.getHappyStatus();
+                break;
+            case 'runHappyShare':
+                result = await happyShare.checkAndRunHappyShare(!!(args[0] && args[0].force));
+                break;
+            case 'getAutumnWishStatus':
+                result = await autumnWish.getWishStatus();
+                break;
+            case 'claimAutumnWish':
+                result = await autumnWish.checkAndClaimAutumnWish(!!(args[0] && args[0].force));
+                break;
+            case 'useFirework': {
+                const fo = args[0] || {};
+                result = await autumnWish.useFirework({ mode: fo.mode, friendGid: fo.friendGid, itemId: fo.itemId });
+                break;
+            }
             case 'buyChallengeBooks': {
                 const opt = args[0] || {};
                 const cfgNow = getBuyBookConfig();

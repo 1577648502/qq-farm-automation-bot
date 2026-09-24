@@ -1273,6 +1273,13 @@ async function checkAndRunMengchongTasks() {
 }
 
 module.exports = {
+    // 活动通用请求器与 wire 工具: 新活动(如秋祈良愿)直接复用, 避免复制一遍
+    operateRaw,
+    getGroupRaw,
+    parseGroupReply,
+    parseTop,
+    findField,
+    encodeOperateRaw,
     __testing: { parseTop, parseGroupReply, parseSigninDays, parsePetState, parseShopBody, itemName, decodeCharmKeyToIds, charmInfo, loadCharmTable },
     charmInfo,
     loadCharmTable,

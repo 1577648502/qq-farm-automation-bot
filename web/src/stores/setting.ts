@@ -83,6 +83,11 @@ export interface SettingsState {
   robDailyLimit: number
   buyBookEnabled: boolean
   buyBookCount: number
+  autumnWishEnabled: boolean
+  fireworkEnabled: boolean
+  fireworkMode: 'self' | 'friend'
+  fireworkCount: number
+  happyShareEnabled: boolean
 }
 
 export const useSettingStore = defineStore('setting', () => {
@@ -124,6 +129,11 @@ export const useSettingStore = defineStore('setting', () => {
   robDailyLimit: 20,
   buyBookEnabled: true,
   buyBookCount: 2,
+  autumnWishEnabled: true,
+  fireworkEnabled: false,
+  fireworkMode: 'self',
+  fireworkCount: 1,
+  happyShareEnabled: true,
   })
   const loading = ref(false)
 
@@ -174,6 +184,11 @@ export const useSettingStore = defineStore('setting', () => {
   settings.value.robDailyLimit = d.robDailyLimit ?? 20
   settings.value.buyBookEnabled = d.buyBookEnabled ?? true
   settings.value.buyBookCount = d.buyBookCount ?? 2
+  settings.value.autumnWishEnabled = d.autumnWishEnabled ?? true
+  settings.value.fireworkEnabled = d.fireworkEnabled ?? false
+  settings.value.fireworkMode = d.fireworkMode === 'friend' ? 'friend' : 'self'
+  settings.value.fireworkCount = d.fireworkCount ?? 1
+  settings.value.happyShareEnabled = d.happyShareEnabled ?? true
       }
     }
     finally {
@@ -216,6 +231,11 @@ export const useSettingStore = defineStore('setting', () => {
         robDailyLimit: newSettings.robDailyLimit,
         buyBookEnabled: newSettings.buyBookEnabled,
         buyBookCount: newSettings.buyBookCount,
+        autumnWishEnabled: newSettings.autumnWishEnabled,
+        fireworkEnabled: newSettings.fireworkEnabled,
+        fireworkMode: newSettings.fireworkMode,
+        fireworkCount: newSettings.fireworkCount,
+        happyShareEnabled: newSettings.happyShareEnabled,
       }
 
       await api.post('/api/settings/save', settingsPayload, {

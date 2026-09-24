@@ -144,8 +144,19 @@ function randomDelay(minMs, maxMs) {
     return new Promise(r => setTimeout(r, delay));
 }
 
+/**
+ * varint 场景专用取整:
+ * parseTop/scanFields 解析出来的 varint 是**字符串**, toNum 会原样返回,
+ * 直接拿去比较/相加会静默出错(项目里踩过多次) → 统一用 toInt。
+ */
+function toInt(value) {
+    if (value === null || value === undefined || value === '') return 0;
+    const n = Number(value);
+    return Number.isFinite(n) ? n : 0;
+}
+
 module.exports = {
-    toLong, toNum, now,
+    toLong, toNum, toInt, now,
     setLogHook,
     getServerTimeSec, syncServerTime, toTimeSec,
     log, logWarn, sleep, randomDelay,

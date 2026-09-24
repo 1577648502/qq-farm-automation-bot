@@ -741,6 +741,9 @@ async function syncGameConfigFromQQCache(options = {}) {
 
     const outputDir = path.join(getDataDir(), 'gameConfig');
 
+    // 萌宠游记图片(爪印手记照片墙)同步结果, 见下方 try 块
+    let mengchongImages = null;
+
     const itemOutputPath = path.join(outputDir, 'ItemInfo.json');
     const plantOutputPath = path.join(outputDir, 'Plant.json');
     const imageOutputDir = path.join(outputDir, 'seed_images_named');
@@ -754,7 +757,6 @@ async function syncGameConfigFromQQCache(options = {}) {
         console.warn('[配置] 同步萌宠游记图片失败:', e.message);
     }
 
-    let mengchongImages = null;
     // 锦囊配置(萌宠游记): 独立判断是否需要同步(表缺失 / bundle 资源变化 / force), 失败不影响其它同步
     let charmCount = 0;
     let charmUrl = '';

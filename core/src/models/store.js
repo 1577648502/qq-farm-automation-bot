@@ -223,6 +223,13 @@ const DEFAULT_ACCOUNT_CONFIG = {
     robDailyLimit: 20,                // 每日夺宝次数上限(官方规则 20 次; 0 = 不限)
     buyBookEnabled: true,             // 每日自动购买中级挑战书(150 金豆豆/个), 默认开启
     buyBookCount: 2,                  // 每日购买数量
+    // ===== 秋祈良愿(2026-09-24 新活动) =====
+    autumnWishEnabled: true,          // 每日自动祈愿领奖励(默认开启, 1 次/天)
+    fireworkEnabled: false,           // 自动放烟花(默认关闭): 用烟花桶换经验 + 好友可见
+    fireworkMode: 'self',             // 放烟花位置: self=自己家 / friend=去好友家
+    fireworkCount: 1,                 // 每日放几个(每个 经验+30)
+    // ===== 快乐不独享(2026-09-24 新活动) =====
+    happyShareEnabled: true,          // 每日自动领快乐值 + 领可领的档位奖励
     // 背包种子优先顺序（seedId 数组）
     bagSeedPriority: [],
     // 背包种子用完后的回退策略
@@ -514,6 +521,21 @@ function normalizeAccountConfig(input, fallback = accountFallbackConfig) {
     if (src.buyBookCount !== undefined && src.buyBookCount !== null) {
         cfg.buyBookCount = Math.max(0, Math.min(20, Number(src.buyBookCount) || 0));
     }
+    if (src.autumnWishEnabled !== undefined && src.autumnWishEnabled !== null) {
+        cfg.autumnWishEnabled = !!src.autumnWishEnabled;
+    }
+    if (src.fireworkEnabled !== undefined && src.fireworkEnabled !== null) {
+        cfg.fireworkEnabled = !!src.fireworkEnabled;
+    }
+    if (src.fireworkMode !== undefined && src.fireworkMode !== null) {
+        cfg.fireworkMode = src.fireworkMode === 'friend' ? 'friend' : 'self';
+    }
+    if (src.fireworkCount !== undefined && src.fireworkCount !== null) {
+        cfg.fireworkCount = Math.max(0, Math.min(20, Number(src.fireworkCount) || 0));
+    }
+    if (src.happyShareEnabled !== undefined && src.happyShareEnabled !== null) {
+        cfg.happyShareEnabled = !!src.happyShareEnabled;
+    }
 
     // 有机化肥购买数量
     if (src.fertilizerBuyOrganicCount !== undefined && src.fertilizerBuyOrganicCount !== null) {
@@ -783,6 +805,11 @@ function getConfigSnapshot(accountId) {
         robDailyLimit: Math.max(0, Math.min(200, Number(cfg.robDailyLimit) || 0)),
         buyBookEnabled: cfg.buyBookEnabled === undefined ? true : !!cfg.buyBookEnabled,
         buyBookCount: Math.max(0, Math.min(20, Number(cfg.buyBookCount) || 0)),
+        autumnWishEnabled: cfg.autumnWishEnabled === undefined ? true : !!cfg.autumnWishEnabled,
+        fireworkEnabled: !!cfg.fireworkEnabled,
+        fireworkMode: cfg.fireworkMode === 'friend' ? 'friend' : 'self',
+        fireworkCount: Math.max(0, Math.min(20, Number(cfg.fireworkCount) || 0)),
+        happyShareEnabled: cfg.happyShareEnabled === undefined ? true : !!cfg.happyShareEnabled,
         stealDelaySeconds: Math.max(0, Math.min(300, Number(cfg.stealDelaySeconds) || 0)),
         plantOrderRandom: !!cfg.plantOrderRandom,
         plantDelaySeconds: Math.max(0, Math.min(60, Number(cfg.plantDelaySeconds) || 0)),
@@ -923,6 +950,21 @@ function applyConfigSnapshot(snapshot, options = {}) {
     }
     if (cfg.buyBookCount !== undefined && cfg.buyBookCount !== null) {
         next.buyBookCount = Math.max(0, Math.min(20, Number(cfg.buyBookCount) || 0));
+    }
+    if (cfg.autumnWishEnabled !== undefined && cfg.autumnWishEnabled !== null) {
+        next.autumnWishEnabled = !!cfg.autumnWishEnabled;
+    }
+    if (cfg.fireworkEnabled !== undefined && cfg.fireworkEnabled !== null) {
+        next.fireworkEnabled = !!cfg.fireworkEnabled;
+    }
+    if (cfg.fireworkMode !== undefined && cfg.fireworkMode !== null) {
+        next.fireworkMode = cfg.fireworkMode === 'friend' ? 'friend' : 'self';
+    }
+    if (cfg.fireworkCount !== undefined && cfg.fireworkCount !== null) {
+        next.fireworkCount = Math.max(0, Math.min(20, Number(cfg.fireworkCount) || 0));
+    }
+    if (cfg.happyShareEnabled !== undefined && cfg.happyShareEnabled !== null) {
+        next.happyShareEnabled = !!cfg.happyShareEnabled;
     }
 
     // 种植延迟
@@ -1457,6 +1499,21 @@ function getBuyBookConfig(accountId) {
     };
 }
 
+function getAutumnWishConfig(accountId) {
+    const cfg = (typeof getConfigSnapshot === 'function' ? getConfigSnapshot(accountId) : (globalConfig.accountConfig || {})) || {};
+    return {
+        wishEnabled: cfg.autumnWishEnabled === undefined ? true : !!cfg.autumnWishEnabled,
+        fireworkEnabled: !!cfg.fireworkEnabled,
+        fireworkMode: cfg.fireworkMode === 'friend' ? 'friend' : 'self',
+        fireworkCount: Math.max(0, Math.min(20, Number(cfg.fireworkCount) || 0)),
+    };
+}
+
+function getHappyShareEnabled(accountId) {
+    const cfg = (typeof getConfigSnapshot === 'function' ? getConfigSnapshot(accountId) : (globalConfig.accountConfig || {})) || {};
+    return cfg.happyShareEnabled === undefined ? true : !!cfg.happyShareEnabled;
+}
+
 function getRobThrottleConfig(accountId) {
     const cfg = (typeof getConfigSnapshot === 'function' ? getConfigSnapshot(accountId) : (globalConfig.accountConfig || {})) || {};
     return {
@@ -1517,6 +1574,8 @@ module.exports = {
     getRobTreasureIntervalMinutes,
     getRobThrottleConfig,
     getBuyBookConfig,
+    getAutumnWishConfig,
+    getHappyShareEnabled,
     getBagSeedPriority,
     getBagSeedFallbackStrategy,
     getIntervals,

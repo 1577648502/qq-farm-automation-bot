@@ -341,7 +341,13 @@ function createDataProvider(options) {
                 robDailyLimit: body.robDailyLimit,
                 // 每日购买中级挑战书(150 金豆豆/个)
                 buyBookEnabled: body.buyBookEnabled,
-                buyBookCount: body.buyBookCount
+                buyBookCount: body.buyBookCount,
+                // 秋祈良愿(每日祈愿) + 放烟花
+                autumnWishEnabled: body.autumnWishEnabled,
+                fireworkEnabled: body.fireworkEnabled,
+                fireworkMode: body.fireworkMode,
+                fireworkCount: body.fireworkCount,
+                happyShareEnabled: body.happyShareEnabled
 
             };
 
@@ -735,6 +741,11 @@ function createDataProvider(options) {
         getTreasureTargets: (accountRef, options) => callWorkerApi(resolveAccountRefId(accountRef), 'getTreasureTargets', options || {}),
         getTreasureMyStatus: (accountRef) => callWorkerApi(resolveAccountRefId(accountRef), 'getTreasureMyStatus'),
         robTreasure: (accountRef, options) => callWorkerApi(resolveAccountRefId(accountRef), 'robTreasure', options || {}),
+        getHappyShareStatus: (accountRef) => callWorkerApi(resolveAccountRefId(accountRef), 'getHappyShareStatus'),
+        runHappyShare: (accountRef, opts) => callWorkerApi(resolveAccountRefId(accountRef), 'runHappyShare', opts || {}),
+        getAutumnWishStatus: (accountRef) => callWorkerApi(resolveAccountRefId(accountRef), 'getAutumnWishStatus'),
+        claimAutumnWish: (accountRef, opts) => callWorkerApi(resolveAccountRefId(accountRef), 'claimAutumnWish', opts || {}),
+        useFirework: (accountRef, opts) => callWorkerApi(resolveAccountRefId(accountRef), 'useFirework', opts || {}),
         buyChallengeBooks: (accountRef, opts) => callWorkerApi(resolveAccountRefId(accountRef), 'buyChallengeBooks', opts || {}),
         claimTreasureSettlement: (accountRef) => callWorkerApi(resolveAccountRefId(accountRef), 'claimTreasureSettlement'),
         checkAndClaimEscortSettlement: (accountRef) => callWorkerApi(resolveAccountRefId(accountRef), 'checkAndClaimEscortSettlement'),

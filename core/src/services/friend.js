@@ -2050,6 +2050,8 @@ module.exports = {
     getOperationLimits,
     getFriendsList,
     getFriendLandsDetail,
+    enterFriendFarm,
+    leaveFriendFarm,
     doFriendOperation,
     clearFriendsListCache,
 };

@@ -621,6 +621,11 @@ const localAutomationSettings = ref({
   robDailyLimit: 20,
   buyBookEnabled: true,
   buyBookCount: 2,
+  autumnWishEnabled: true,
+  fireworkEnabled: false,
+  fireworkMode: 'self',
+  fireworkCount: 1,
+  happyShareEnabled: true,
   // 防封号(低调)模式
   stealthEnabled: false,
   stealthOnlineMinMinutes: 3,
@@ -909,6 +914,11 @@ function syncLocalAutomationSettings() {
   localAutomationSettings.value.robDailyLimit = settings.value.robDailyLimit ?? 20
   localAutomationSettings.value.buyBookEnabled = settings.value.buyBookEnabled ?? true
   localAutomationSettings.value.buyBookCount = settings.value.buyBookCount ?? 2
+  localAutomationSettings.value.autumnWishEnabled = settings.value.autumnWishEnabled ?? true
+  localAutomationSettings.value.fireworkEnabled = settings.value.fireworkEnabled ?? false
+  localAutomationSettings.value.fireworkMode = settings.value.fireworkMode === 'friend' ? 'friend' : 'self'
+  localAutomationSettings.value.fireworkCount = settings.value.fireworkCount ?? 1
+  localAutomationSettings.value.happyShareEnabled = settings.value.happyShareEnabled ?? true
     localAutomationSettings.value.fertilizerBuyOrganicCount = settings.value.fertilizerBuyOrganicCount ?? 10
     localAutomationSettings.value.fertilizerBuyOrganicThresholdHours = settings.value.fertilizerBuyOrganicThresholdHours ?? 10
     localAutomationSettings.value.fertilizerBuyNormalCount = settings.value.fertilizerBuyNormalCount ?? 10
@@ -921,6 +931,64 @@ function syncLocalAutomationSettings() {
 /** 立即执行一次自动夺宝 */
 const buyBookRunning = ref(false)
 const buyBookResult = ref('')
+
+/** 快乐不独享: 立即跑一次(领快乐值 + 领档位) */
+const happyBusy = ref(false)
+const happyResult = ref('')
+async function happyAction() {
+  const accountId = String(currentAccountId.value || '')
+  if (!accountId) { showAlert('请先选择账号', 'danger'); return }
+  happyBusy.value = true
+  happyResult.value = ''
+  try {
+    const res = await api.post('/api/activity/happy-share/run', {}, { headers: { 'x-account-id': accountId } })
+    const d = res.data?.data || {}
+    if (!res.data?.ok) { happyResult.value = res.data?.error || '失败'; return }
+    const parts: string[] = []
+    if (d.daily && d.daily.ok) parts.push(`快乐值 +${d.daily.gained}（现有 ${d.daily.happy}）`)
+    else if (d.daily && d.daily.reason) parts.push(`快乐值未领：${d.daily.reason}`)
+    if (d.tiers && d.tiers.claimed && d.tiers.claimed.length) {
+      parts.push(...d.tiers.claimed.map((x: any) => `档位${x.tier}→${x.reward ? x.reward.name : '已发放'}`))
+    } else if (d.tiers && d.tiers.reason) {
+      parts.push(`无可领档位（快乐值 ${d.tiers.happy}）`)
+    }
+    happyResult.value = parts.join('；') || '本次没有可领取的内容'
+  } catch (e: any) {
+    happyResult.value = e?.response?.data?.error || e?.message || '请求失败(账号未运行?)'
+  } finally {
+    happyBusy.value = false
+  }
+}
+
+/** 秋祈良愿: 立即祈愿 / 放一个烟花(手动试跑) */
+const autumnBusy = ref('')
+const autumnResult = ref('')
+async function autumnAction(kind: 'claim' | 'firework') {
+  const accountId = String(currentAccountId.value || '')
+  if (!accountId) { showAlert('请先选择账号', 'danger'); return }
+  autumnBusy.value = kind
+  autumnResult.value = ''
+  try {
+    const url = kind === 'claim' ? '/api/activity/autumn-wish/claim' : '/api/activity/firework'
+    const payload = kind === 'claim' ? {} : { mode: localAutomationSettings.value.fireworkMode }
+    const res = await api.post(url, payload, { headers: { 'x-account-id': accountId } })
+    const d = res.data?.data || {}
+    if (!res.data?.ok) { autumnResult.value = res.data?.error || '失败'; return }
+    if (kind === 'claim') {
+      if (d.skipped) autumnResult.value = `本次未领取：${d.reason || '无可领奖励'}`
+      else if (d.ok) autumnResult.value = `已领取 ${(d.rewards || []).map((r: any) => r.name).join('、') || '(无回包)'}`
+      else autumnResult.value = `领取失败：${d.reason || '未知'}`
+    } else {
+      autumnResult.value = d.ok
+        ? `已在${d.mode === 'friend' ? '好友家' : '自己家'}放烟花${d.friendGid ? ` @${d.friendGid}` : ''}`
+        : `放烟花失败：${d.reason || '未知'}`
+    }
+  } catch (e: any) {
+    autumnResult.value = e?.response?.data?.error || e?.message || '请求失败(账号未运行?)'
+  } finally {
+    autumnBusy.value = ''
+  }
+}
 
 /** 立即购买一次中级挑战书(手动, 便于当场看到成功/失败原因) */
 async function buyBooksNow() {
@@ -1007,6 +1075,11 @@ async function saveAutomationSettings() {
       robDailyLimit: localAutomationSettings.value.robDailyLimit,
       buyBookEnabled: localAutomationSettings.value.buyBookEnabled,
       buyBookCount: localAutomationSettings.value.buyBookCount,
+      autumnWishEnabled: localAutomationSettings.value.autumnWishEnabled,
+      fireworkEnabled: localAutomationSettings.value.fireworkEnabled,
+      fireworkMode: localAutomationSettings.value.fireworkMode,
+      fireworkCount: localAutomationSettings.value.fireworkCount,
+      happyShareEnabled: localAutomationSettings.value.happyShareEnabled,
       fertilizerBuyOrganicCount: localAutomationSettings.value.fertilizerBuyOrganicCount,
       fertilizerBuyOrganicThresholdHours: localAutomationSettings.value.fertilizerBuyOrganicThresholdHours,
       fertilizerBuyNormalCount: localAutomationSettings.value.fertilizerBuyNormalCount,
@@ -1799,6 +1872,68 @@ async function handleTestOffline() {
                 修改后自动保存；自动夺宝在后台按上面的间隔巡检。每次抢夺消耗 1 张挑战书（无论胜负），
                 每日最多 20 次；会按对方宝藏的可博弈资金挑挑战书面值，面值超了会被拒绝（白贴书）。
               </div>
+            </div>
+            <!-- 秋祈良愿(2026-09-24 新活动) -->
+            <div class="space-y-2 rounded border border-amber-200 bg-amber-50 p-3 dark:border-amber-900/40 dark:bg-amber-900/10">
+              <div>
+                <div class="text-sm text-amber-800 font-medium dark:text-amber-300">
+                  秋祈良愿（9/24 – 10/7）
+                </div>
+                <div class="mt-0.5 text-xs text-gray-600 dark:text-gray-400">
+                  每日祈愿领好运奖励（限定种子 / 烟花桶 / 盆栽装扮），每日 0 点刷新，可存 5 天；漏领会走邮件补发。
+                </div>
+              </div>
+              <div class="flex flex-wrap items-center gap-3">
+                <BaseSwitch v-model="localAutomationSettings.autumnWishEnabled" label="每日自动祈愿" />
+                <BaseButton variant="secondary" size="sm" :loading="autumnBusy === 'claim'" @click="autumnAction('claim')">
+                  立即祈愿一次
+                </BaseButton>
+              </div>
+              <div class="mt-1 space-y-2 border-t border-amber-200 pt-2 dark:border-amber-900/40">
+                <div class="flex flex-wrap items-center gap-3">
+                  <BaseSwitch v-model="localAutomationSettings.fireworkEnabled" label="自动放烟花（每个 +30 经验）" />
+                  <BaseInput
+                    v-model.number="localAutomationSettings.fireworkCount"
+                    label="每日放几个"
+                    type="number"
+                    min="0"
+                    max="20"
+                    class="w-28"
+                  />
+                  <select
+                    v-model="localAutomationSettings.fireworkMode"
+                    class="rounded border border-gray-300 bg-white px-2 py-1 text-xs dark:border-gray-600 dark:bg-gray-800"
+                  >
+                    <option value="self">在自己家放</option>
+                    <option value="friend">去好友家放</option>
+                  </select>
+                  <BaseButton variant="secondary" size="sm" :loading="autumnBusy === 'firework'" @click="autumnAction('firework')">
+                    放一个试试
+                  </BaseButton>
+                </div>
+                <div v-if="autumnResult" class="text-xs text-gray-600 dark:text-gray-300">{{ autumnResult }}</div>
+                <div class="text-xs text-gray-500 dark:text-gray-400">
+                  烟花桶来自祈愿奖励（商城另有「烟花·花好月圆」6 钻石/个）；放完会给好友推送社交事件。
+                </div>
+              </div>
+            </div>
+            <!-- 快乐不独享(2026-09-24 新活动) -->
+            <div class="space-y-2 rounded border border-emerald-200 bg-emerald-50 p-3 dark:border-emerald-900/40 dark:bg-emerald-900/10">
+              <div>
+                <div class="text-sm text-emerald-800 font-medium dark:text-emerald-300">
+                  快乐不独享（9/24 – 10/12）
+                </div>
+                <div class="mt-0.5 text-xs text-gray-600 dark:text-gray-400">
+                  每日领快乐值（+5），攒够门槛自动领档位奖励：10→化肥4h、20→有机化肥8h、30→点券×50、60→90042。
+                </div>
+              </div>
+              <div class="flex flex-wrap items-center gap-3">
+                <BaseSwitch v-model="localAutomationSettings.happyShareEnabled" label="每日自动领快乐值 + 档位奖励" />
+                <BaseButton variant="secondary" size="sm" :loading="happyBusy" @click="happyAction">
+                  立即领取一次
+                </BaseButton>
+              </div>
+              <div v-if="happyResult" class="text-xs text-gray-600 dark:text-gray-300">{{ happyResult }}</div>
             </div>
             <BaseSwitch v-model="localAutomationSettings.automation.solar_terms" label="节令小礼自动领取" />
             <BaseSwitch v-model="localAutomationSettings.automation.weather_task" :label="autoLabel('weather_task', '雨落成诗：每日买采集瓶+对好友使用+雷雨瓶自用')" :disabled="isAutomationGated('weather_task')" />

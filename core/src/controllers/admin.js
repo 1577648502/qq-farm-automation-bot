@@ -2087,6 +2087,12 @@ app.use('/api', (req, res, next) => {
                 : { enabled: false, onlineMinMinutes: 3, onlineMaxMinutes: 8, offlineMinMinutes: 20, offlineMaxMinutes: 60, wakeForRipe: true };
             // 夺宝节奏 + 每日购买挑战书(按账号): 这两个是"读取侧白名单"最容易漏的地方,
             // 漏了会表现为"设置保存了但页面回显成默认值"(本仓库踩过两次)
+            const happyShareEnabled = (id && typeof store.getHappyShareEnabled === 'function')
+                ? store.getHappyShareEnabled(id)
+                : true;
+            const autumnWish = (id && typeof store.getAutumnWishConfig === 'function')
+                ? store.getAutumnWishConfig(id)
+                : { wishEnabled: true, fireworkEnabled: false, fireworkMode: 'self', fireworkCount: 1 };
             const robThrottle = (id && typeof store.getRobThrottleConfig === 'function')
                 ? store.getRobThrottleConfig(id)
                 : { maxPerRun: 1, dailyLimit: 20 };
@@ -2133,6 +2139,13 @@ app.use('/api', (req, res, next) => {
                     // 每日购买中级挑战书(150 金豆豆/个)
                     buyBookEnabled: buyBookConfig.enabled,
                     buyBookCount: buyBookConfig.count,
+                    // 秋祈良愿 + 放烟花
+                    autumnWishEnabled: autumnWish.wishEnabled,
+                    fireworkEnabled: autumnWish.fireworkEnabled,
+                    fireworkMode: autumnWish.fireworkMode,
+                    fireworkCount: autumnWish.fireworkCount,
+                    // 快乐不独享
+                    happyShareEnabled,
                     ui,
                     offlineReminder,
                 },
@@ -3503,6 +3516,51 @@ app.use('/api', (req, res, next) => {
         if (!checkAccountAccess(req, id)) return res.status(403).json({ ok: false, error: '无权访问此账号' });
         try {
             const data = await provider.getTreasureMyStatus(id);
+            res.json({ ok: true, data });
+        } catch (e) { res.json({ ok: false, error: e.message }); }
+    });
+
+    // ===== 秋祈良愿(新活动) =====
+    app.get('/api/activity/autumn-wish/status', async (req, res) => {
+        const id = getAccId(req);
+        if (!id) return res.status(400).json({ ok: false, error: '缺少账号 ID' });
+        if (!checkAccountAccess(req, id)) return res.status(403).json({ ok: false, error: '无权访问此账号' });
+        try { res.json({ ok: true, data: await provider.getAutumnWishStatus(id) }); }
+        catch (e) { res.json({ ok: false, error: e.message }); }
+    });
+
+    app.post('/api/activity/autumn-wish/claim', async (req, res) => {
+        const id = getAccId(req);
+        if (!id) return res.status(400).json({ ok: false, error: '缺少账号 ID' });
+        if (!checkAccountAccess(req, id)) return res.status(403).json({ ok: false, error: '无权访问此账号' });
+        try { res.json({ ok: true, data: await provider.claimAutumnWish(id, { force: true }) }); }
+        catch (e) { res.json({ ok: false, error: e.message }); }
+    });
+
+    // 快乐不独享: 查状态 / 立即跑一次
+    app.get('/api/activity/happy-share/status', async (req, res) => {
+        const id = getAccId(req);
+        if (!id) return res.status(400).json({ ok: false, error: '缺少账号 ID' });
+        if (!checkAccountAccess(req, id)) return res.status(403).json({ ok: false, error: '无权访问此账号' });
+        try { res.json({ ok: true, data: await provider.getHappyShareStatus(id) }); }
+        catch (e) { res.json({ ok: false, error: e.message }); }
+    });
+
+    app.post('/api/activity/happy-share/run', async (req, res) => {
+        const id = getAccId(req);
+        if (!id) return res.status(400).json({ ok: false, error: '缺少账号 ID' });
+        if (!checkAccountAccess(req, id)) return res.status(403).json({ ok: false, error: '无权访问此账号' });
+        try { res.json({ ok: true, data: await provider.runHappyShare(id, { force: true }) }); }
+        catch (e) { res.json({ ok: false, error: e.message }); }
+    });
+
+    app.post('/api/activity/firework', async (req, res) => {
+        const id = getAccId(req);
+        if (!id) return res.status(400).json({ ok: false, error: '缺少账号 ID' });
+        if (!checkAccountAccess(req, id)) return res.status(403).json({ ok: false, error: '无权访问此账号' });
+        const b = req.body || {};
+        try {
+            const data = await provider.useFirework(id, { mode: b.mode, friendGid: b.friendGid, itemId: b.itemId });
             res.json({ ok: true, data });
         } catch (e) { res.json({ ok: false, error: e.message }); }
     });
