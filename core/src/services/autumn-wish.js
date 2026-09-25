@@ -14,7 +14,10 @@
  *   **#119 = 可领奖励红点**(有奖时存在; 领完与 #23 一起消失 —— 这是幂等判据)
  *   cmd=51 (祈愿/签文) → 结果 #151 = {#1: 14(签文号), #2: 1, #3: {物品, 数量}}
  *   cmd=52 (领取奖励)   → 结果 #152 = {#1: {物品, 数量, ...}}  → 紧跟 ItemNotify 实际到账
- *   ⚠ 上行 body 加密, 请求 payload 具体字段未知 → 用空 payload 试发 + 严格校验
+ *   ⚠ **请求必须带参数**: 2026-09-25 把上行解开确认(core/scripts/ws-frame-lib 的 decodeFrame
+ *     能解密 message_type=1 的请求) → {#151: {#1: 4}} / {#152: {#1: 4}} 都要带 #1
+ *     发空 payload 会直接报"参数错误"。#1 疑似"选择的愿望/签位"编号(服务端会回显到 #119.#3.#1),
+ *     实测 4 可用; 这里做成候选序列自动试探(4 → 1,2,3,5,6), 成功的记在内存里
  *
  * ════════ 烟花 (两处抓包已确认, 同一个接口) ════════
  *   自己家:  ItemService.Use(6001 烟花桶)
@@ -45,43 +48,59 @@ function itemLabel(id, count) {
     return `${name}×${count}`;
 }
 
-/** 从 GetGroup 回复里抠出本活动的 {head字段, 是否有待领奖励} */
+/**
+ * 从活动回复里抠出 {活动名, 状态, 是否有待领奖励, 回显的愿望编号}
+ * 兼容两种回复:
+ *   · GetGroup 回复: 活动体在 #1.#2 里(children = [#1 活动头, #119 红点...])
+ *   · Operate 回复 : 活动体在 #3 里(结构同上)
+ * ⚠ #1 在 Operate 回复里是 varint(group), 不能直接当 message 解析 —— 只看 w===2 的
+ */
 function parseWishGroup(replyBuf) {
     const out = { ok: false, name: '', state: 0, hasPending: false, group: 0 };
     if (!replyBuf || !replyBuf.length) return out;
-    const top = parseTop(replyBuf);
-    const lvl1 = findField(top, 1);
-    const lvl1Fields = lvl1 ? parseTop(lvl1.v) : top;
+    try {
+        const top = parseTop(replyBuf);
+        const containers = [];
+        const pushIfMsg = (f) => { if (f && f.w === 2) containers.push(f); };
+        pushIfMsg(findField(top, 3));                    // Operate 回复
+        const lvl1 = findField(top, 1);                  // GetGroup 回复
+        if (lvl1 && lvl1.w === 2) {
+            const lvl1Fields = parseTop(lvl1.v);
+            pushIfMsg(findField(lvl1Fields, 2));         // 组容器
+            containers.push(lvl1);
+        }
+        containers.push({ v: replyBuf });                // 兜底: 直接当容器找
 
-    // 活动头可能在 #2 容器里, 也可能直接挂在 #1 下 → 两边都找一遍
-    const containers = [];
-    const c2 = findField(lvl1Fields, 2);
-    if (c2) containers.push(c2);
-    containers.push({ v: replyBuf });
-
-    for (const box of containers) {
-        const items = parseTop(box.v);
-        const headField = findField(items, 1);
-        const head = headField && headField.w === 2 ? parseTop(headField.v) : null;
-        if (head) {
-            const gid = toInt((findField(head, 1) || {}).v);
-            const sub = toInt((findField(head, 2) || {}).v);
-            if (gid === GROUP || sub === SUB_ID) {
-                const nameField = findField(head, 4);
-                out.group = gid;
-                out.name = nameField && nameField.w === 2 ? nameField.v.toString('utf8') : '';
-                out.state = toInt((findField(head, 3) || {}).v);
-                out.pendingFlag = toInt((findField(head, 23) || {}).v);
+        for (const box of containers) {
+            const items = parseTop(box.v);
+            const headField = findField(items, 1);
+            const head = (headField && headField.w === 2) ? parseTop(headField.v) : null;
+            if (head) {
+                const gid = toInt((findField(head, 1) || {}).v);
+                const sub = toInt((findField(head, 2) || {}).v);
+                if (gid === GROUP || sub === SUB_ID) {
+                    const nameField = findField(head, 4);
+                    out.group = gid;
+                    out.name = nameField && nameField.w === 2 ? nameField.v.toString('utf8') : '';
+                    out.state = toInt((findField(head, 3) || {}).v);
+                    out.pendingFlag = toInt((findField(head, 23) || {}).v);
+                    const redDot = findField(items, PENDING_RED_DOT);
+                    if (redDot && redDot.w === 2) {
+                        out.redDot = Buffer.from(redDot.v).toString('hex');
+                        // ⚠ 领完之后 #119 仍在(内容变成 {#2: 1}) → 判据是"内部有没有 #1"
+                        const inner = parseTop(redDot.v);
+                        out.redDotInner = inner.map(x => x.f);
+                        // #119.#3 = { #1: 愿望编号, #2: 签文号, ... } → 回读上次用的编号
+                        const pick = inner.find(x => x.f === 3 && x.w === 2);
+                        if (pick) {
+                            const idx = toInt((findField(parseTop(pick.v), 1) || {}).v);
+                            if (idx > 0) out.echoWishIndex = idx;
+                        }
+                    }
+                }
             }
         }
-        const redDot = findField(items, PENDING_RED_DOT);
-        if (redDot && redDot.w === 2) {
-            out.redDot = redDot.v.toString('hex');
-            // ⚠ 实测: 领完之后 #119 **仍然存在**(只是内容变成 {#2: 1}), 内部 #1 消失
-            //   → 不能用"#119 是否存在"当判据, 要看它内部有没有 #1
-            out.redDotInner = parseTop(redDot.v).map(x => x.f);
-        }
-    }
+    } catch (e) { /* 解析失败按"读不到状态"处理, 由调用方决定 */ }
     out.hasPending = (out.redDotInner || []).includes(1) || (out.pendingFlag || 0) > 0;
     out.ok = !!out.name;
     return out;
@@ -91,7 +110,11 @@ function parseWishGroup(replyBuf) {
 async function getWishStatus() {
     const reply = await getGroupRaw(GROUP);
     const st = parseWishGroup(reply);
-    return { ok: st.ok, name: st.name || '秋祈良愿', state: st.state, hasPending: st.hasPending, redDot: st.redDot || '' };
+    return {
+        ok: st.ok, name: st.name || '秋祈良愿', state: st.state,
+        hasPending: st.hasPending, redDot: st.redDot || '',
+        echoWishIndex: st.echoWishIndex || 0,        // 上次用过的愿望编号(可直接复用, 省去试探)
+    };
 }
 
 /** 从结果字段里读出奖励(#{#1: 物品ID, #2: 数量}) */
@@ -109,28 +132,67 @@ function parseRewardFromResult(resultHex) {
     return out;
 }
 
+/** 本进程内试出来的可用愿望编号(省得每次都试一遍) */
+let workingWishIndex = 0;
+/** 候选编号: 实测 4 可用; 其它作为兜底(游戏改版/编号变化时自动适应) */
+const WISH_INDEX_CANDIDATES = [4, 1, 2, 3, 5, 6];
+
+/** 把愿望编号编成 payload: {#1: idx} (wire: 字段1 varint) */
+function encodeWishPayload(index) {
+    const idx = Math.max(0, Math.min(999, toInt(index)));
+    return Buffer.from([0x08, idx & 0x7f]);      // 0x08 = (1<<3)|0
+}
+
 /**
  * 领取今日祈愿奖励
  * 客户端实测顺序: cmd=51(祈愿) → 隔几秒 cmd=52(领取) → ItemNotify 到账
- * 两个响应都带奖励信息, 我们以"响应里有奖励 或 之后红点消失"作为成功判据
+ * 两个请求都必须带 {#1: 愿望编号}, 否则服务端报"参数错误"(2026-09-25 实测)
+ * @param wishIndex 指定愿望编号; 不传则用"上次成功的", 再不行按候选序列试探
  */
-async function claimWishReward() {
+async function claimWishReward(wishIndex) {
     const result = { ok: false, rewards: [], steps: [] };
-    const r51 = await operateRaw(GROUP, CMD_WISH, FIELD_WISH, Buffer.alloc(0));
-    result.steps.push({ cmd: CMD_WISH, errorCode: r51.errorCode, field: r51.resultFieldNo, hex: r51.resultHex });
-    if (r51.errorCode !== 0) {
-        result.reason = `祈愿失败 code=${r51.errorCode}`;
-        return result;
+    const candidates = [];
+    const push = (v) => { const n = toInt(v); if (n > 0 && !candidates.includes(n)) candidates.push(n); };
+    push(wishIndex);
+    push(workingWishIndex);
+    WISH_INDEX_CANDIDATES.forEach(push);
+
+    let r51 = null;
+    for (const idx of candidates) {
+        let r = null;
+        try {
+            r = await operateRaw(GROUP, CMD_WISH, FIELD_WISH, encodeWishPayload(idx));
+        } catch (e) {
+            // ⚠ 服务端拒绝时 sendMsgAsync 是**抛异常**的(不是 err!=0), 必须逐个捕获才能换编号重试
+            result.steps.push({ cmd: CMD_WISH, wishIndex: idx, error: e.message });
+            result.reason = `祈愿失败: ${e.message}(愿望编号 ${idx})`;
+            continue;
+        }
+        result.steps.push({ cmd: CMD_WISH, wishIndex: idx, errorCode: r.errorCode, field: r.resultFieldNo, hex: r.resultHex });
+        if (r.errorCode === 0) { r51 = r; workingWishIndex = idx; break; }
+        result.reason = `祈愿失败 code=${r.errorCode}(愿望编号 ${idx})`;
     }
+    if (!r51) return result;
+    result.wishIndex = workingWishIndex;
+
     const wishRewards = parseRewardFromResult(r51.resultHex);
     await sleep(1500);
-    const r52 = await operateRaw(GROUP, CMD_CLAIM, FIELD_CLAIM, Buffer.alloc(0));
-    result.steps.push({ cmd: CMD_CLAIM, errorCode: r52.errorCode, field: r52.resultFieldNo, hex: r52.resultHex });
-    if (r52.errorCode !== 0) {
-        result.reason = `领取失败 code=${r52.errorCode}`;
-        result.rewards = wishRewards;
-        return result;
+    let r52 = null;
+    for (const idx of candidates) {
+        let r = null;
+        try {
+            r = await operateRaw(GROUP, CMD_CLAIM, FIELD_CLAIM, encodeWishPayload(idx));
+        } catch (e) {
+            result.steps.push({ cmd: CMD_CLAIM, wishIndex: idx, error: e.message });
+            result.reason = `领取失败: ${e.message}(愿望编号 ${idx})`;
+            continue;
+        }
+        result.steps.push({ cmd: CMD_CLAIM, wishIndex: idx, errorCode: r.errorCode, field: r.resultFieldNo, hex: r.resultHex });
+        if (r.errorCode === 0) { r52 = r; workingWishIndex = idx; break; }
+        result.reason = `领取失败 code=${r.errorCode}(愿望编号 ${idx})`;
     }
+    if (!r52) { result.rewards = wishRewards; return result; }
+
     result.rewards = parseRewardFromResult(r52.resultHex);
     if (!result.rewards.length) result.rewards = wishRewards;
     result.ok = true;
@@ -148,7 +210,8 @@ async function checkAndClaimAutumnWish(force = false) {
     if (!force && !before.hasPending) {
         return { ok: true, skipped: true, reason: '今日无可领奖励(已祈愿)', hasPending: false };
     }
-    const claim = await claimWishReward();
+    // 优先用状态里回显的编号(上次成功过的), 再退回试探
+    const claim = await claimWishReward(before.echoWishIndex);
     if (!claim.ok) {
         // 服务端可能已经把奖励发了(51 成功 52 报错), 用状态复核一次
         const after = await getWishStatus().catch(() => null);
@@ -245,4 +308,6 @@ module.exports = {
     checkAndClaimAutumnWish,
     useFirework,
     getFireworkCount,
+    encodeWishPayload,
+    getWorkingWishIndex: () => workingWishIndex,
 };
