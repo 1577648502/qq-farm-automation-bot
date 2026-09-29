@@ -18,6 +18,8 @@ process.env.FARM_ACCOUNT_ID = 'ad-test';
 isolateDataDir(SB, 'ad-test');
 
 const CAP = path.join(__dirname, '..', '..', 'wx-code-grabber', 'captures', '20260929-102536_商城看广告购买化肥.jsonl');
+// 第二份: 换账号后的抓包(领取前 #7={1,1} 可领 → 领取后 #7={1,1,1}) —— 回归"误判已领过"
+const CAP2 = path.join(__dirname, '..', '..', 'wx-code-grabber', 'captures', '20260929-110043_商城看广告购买化肥1.jsonl');
 
 function loadFrames(file) {
     const byKey = {};
@@ -34,6 +36,9 @@ function loadFrames(file) {
     return { byKey, all };
 }
 const { byKey: F, all: ALL } = loadFrames(CAP);
+const { byKey: F2 } = loadFrames(CAP2);
+const MALL_BEFORE = (F2['gamepb.mallpb.MallService.GetMallListBySlotType'] || []).find(x => x.idx === 90);   // 领取前
+const MALL_AFTER = (F2['gamepb.mallpb.MallService.GetMallListBySlotType'] || []).find(x => x.idx === 118);   // 领取后
 const AD = 'gamepb.iaapb.IaaService';
 const MALL = 'gamepb.mallpb.MallService.GetMallListBySlotType';
 
@@ -137,31 +142,75 @@ const MALL = 'gamepb.mallpb.MallService.GetMallListBySlotType';
         check('没有调用商城购买(Purchase)', calls.filter(c => /MallService\.Purchase/.test(c.key)).length === 0, calls.map(c => c.key));
     }
 
-    section('5. 已领过时跳过(接口说没额度)');
+    section('5. 额度判断的两种路径(自动预检 / 手动真试)');
     {
         const mall = require(`${SB}/src/services/mall`);
         const orig = mall.getMallCatalog;
-        mall.getMallCatalog = async () => ([{
-            goodsId: 1052, name: '看广告礼包', limitType: 'daily', limitCount: 1, boughtNum: 1, remaining: 0,
-        }]);
+
+        // 自动路径: 接口说没额度 → 跳过且不发广告请求
+        mall.getMallCatalog = async () => ([{ goodsId: 1052, name: '看广告礼包', source: 'mall', slotType: 1, limitType: 'daily', limitCount: 1, boughtNum: 1, remaining: 0 }]);
         calls.length = 0;
         const r = await adGift.claimDailyAdGift(false);
-        check('跳过且说明原因', r.skipped === true && /今日已领过/.test(r.reason || ''), r);
-        check('跳过时不调广告接口', calls.filter(c => /IaaService/.test(c.key)).length === 0, calls.map(c => c.key));
+        check('自动: 已领过就跳过', r.skipped === true && /今日已领过/.test(r.reason || ''), r);
+        check('自动: 不发广告请求', calls.filter(c => /IaaService/.test(c.key)).length === 0, calls.map(c => c.key));
 
-        // force 也不能越过服务端额度(2026-09-29 线上踩过: 硬发请求 → 服务端 1031013)
+        // 手动(force): 用户明确要试 → **不被预检拦住**, 真发一次
         calls.length = 0;
         const rf = await adGift.claimDailyAdGift(true);
-        check('force 同样跳过(以接口为准)', rf.skipped === true, rf);
-        check('force 也不调广告接口', calls.filter(c => /IaaService/.test(c.key)).length === 0, calls.map(c => c.key));
+        check('手动: 不被预检拦住(真的发了广告请求)', calls.filter(c => /IaaService\.RequestAd/.test(c.key)).length === 1, calls.map(c => c.key));
+        check('手动: 服务端允许时领取成功', rf.ok === true, rf);
 
-        // 服务端拒绝 1031013 → 按"跳过"而不是报错(桩里模拟, 服务已绑定桩的引用)
-        mall.getMallCatalog = async () => ([{ goodsId: 1052, name: '看广告礼包', limitType: 'daily', limitCount: 1, boughtNum: 0, remaining: 1 }]);
+        // 手动 + 服务端拒绝(1031013) → 按跳过给友好文案
         failRequestAd = true;
-        const r2 = await adGift.claimDailyAdGift(false).catch(() => null);
+        const r2 = await adGift.claimDailyAdGift(true).catch(() => null);
         failRequestAd = false;
-        check('1031013 视为跳过(不算失败)', !!(r2 && r2.skipped === true), r2);
-        check('提示文案友好', /当前不可用/.test((r2 && r2.reason) || ''), r2 && r2.reason);
+        check('手动: 服务端拒绝时按跳过(不算失败)', !!(r2 && r2.skipped === true), r2);
+        check('手动: 文案友好', /当前不可用/.test((r2 && r2.reason) || ''), r2 && r2.reason);
+
+        mall.getMallCatalog = orig;
+    }
+
+    section('6. 回归: 新账号(领取前可领 / 领取后已领)不应被误判');
+    {
+        const mall = require(`${SB}/src/services/mall`);
+        const orig = mall.getMallCatalog;
+        const { types: T } = require(`${SB}/src/utils/proto`);
+
+        // 领取前的商城快照: 1052 的 #7 = {1, 1}(已购 0/上限 1) → 必须判为可领
+        mall.getMallCatalog = async () => ([{
+            goodsId: 1052, name: '看广告礼包', source: 'mall', slotType: 1,
+            limitType: 'daily', limitCount: 1, boughtNum: 0, remaining: 1,
+        }]);
+        const q1 = await adGift.getAdGiftQuota();
+        check('领取前: claimable = true', q1.ok === true && q1.claimable === true, q1);
+
+        // 领取后: #7 = {1,1,1} → 判为已领
+        mall.getMallCatalog = async () => ([{
+            goodsId: 1052, name: '看广告礼包', source: 'mall', slotType: 1,
+            limitType: 'daily', limitCount: 1, boughtNum: 1, remaining: 0,
+        }]);
+        const q2 = await adGift.getAdGiftQuota();
+        check('领取后: claimable = false', q2.ok === true && q2.claimable === false, q2);
+
+        // 直接从抓包快照解析 #7, 验证解析器本身: 领取前 {1,1} → 已购0/上限1
+        const mgx = require(`${SB}/src/services/mengchong`);
+        const parseLimit = (frame) => {
+            const body = bodyOf(frame.hex);
+            for (const c of mgx.parseTop(Buffer.from(body))) {
+                if (c.w !== 2) continue;
+                const sub = mgx.parseTop(Buffer.from(c.v));
+                const gid = Number((sub.find(x => x.f === 1) || {}).v) || 0;
+                if (gid !== 1052) continue;
+                const lim = sub.find(x => x.f === 7);
+                return lim ? mall.parseMallLimit(lim.v, '看广告礼包') : null;
+            }
+            return null;
+        };
+        const before = parseLimit(MALL_BEFORE);
+        const after = parseLimit(MALL_AFTER);
+        check('抓包(领取前): 上限1 已购0 → 剩余1', before && before.limitCount === 1 && before.boughtNum === 0 && before.remaining === 1, before);
+        check('抓包(领取后): 上限1 已购1 → 剩余0', after && after.limitCount === 1 && after.boughtNum === 1 && after.remaining === 0, after);
+
         mall.getMallCatalog = orig;
     }
 

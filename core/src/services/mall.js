@@ -500,6 +500,9 @@ function normalizeMallGoods(goods, slotType) {
         limitCount,
         limitType: limit ? limit.limitType : inferLimitType(goods && goods.name, 0, 'permanent'),
         remaining: limit ? limit.remaining : null,
+        // 原始 #7 字节(排查限购误判时很有用)
+        limitRawHex: (goods && goods.limit && Buffer.isBuffer(goods.limit)) ? goods.limit.toString('hex')
+            : (goods && goods.limit ? Buffer.from(goods.limit).toString('hex') : ''),
     };
 }
 

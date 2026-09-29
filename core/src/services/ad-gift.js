@@ -72,12 +72,18 @@ async function getFertilizerCount(itemId = AD_GIFT_ITEM_ID) {
     return 0;
 }
 
-/** 今天的看广告礼包还能不能领(以商城接口的限购信息为准) */
+/**
+ * 今天的看广告礼包还能不能领(以商城接口的限购信息为准)
+ * ⚠ 只看 slotType=1 的那条(客户端也是查 slot 1):
+ *   getMallCatalog 会把 slot 1..5 + 商店合并, 同 id 可能有多条, 取错就可能误判"已领过"
+ *   (2026-09-29: 新账号明明可领, 面板却提示已领过)
+ */
 async function getAdGiftQuota() {
     try {
         const mall = require('./mall');
         const catalog = await mall.getMallCatalog(1);
-        const goods = (catalog || []).find(g => Number(g.goodsId) === AD_GOODS_ID);
+        const candidates = (catalog || []).filter(g => Number(g.goodsId) === AD_GOODS_ID);
+        const goods = candidates.find(g => g.source === 'mall' && Number(g.slotType) === 1) || candidates[0];
         if (!goods) return { ok: false, reason: `商城没找到看广告礼包(goodsId=${AD_GOODS_ID})` };
         const limit = goods.limitCount || 0;
         const remaining = typeof goods.remaining === 'number' ? goods.remaining : null;
@@ -89,6 +95,9 @@ async function getAdGiftQuota() {
             remaining,
             claimable: remaining === null ? true : remaining > 0,
             goodsName: goods.name || '看广告礼包',
+            slotType: goods.slotType,
+            source: goods.source,
+            rawLimitHex: goods.limitRawHex || '',
         };
     } catch (e) {
         return { ok: false, reason: e.message };
@@ -105,13 +114,17 @@ async function claimDailyAdGift(force = false) {
     // ① 先看接口: 今天还有没有额度
     const quota = await getAdGiftQuota();
     result.quota = quota;
-    // ⚠ 以接口为准: 接口说没额度就跳过 —— **force 也不能越过服务端额度**
-    //   (2026-09-29 踩过: force 硬发 RequestAd, 服务端回 code=1031013 "分享礼包功能还不能使用",
-    //    文案看着像功能没开, 实际就是"当前不可用(今天已领过)")
-    if (quota.ok && !quota.claimable) {
+    // 手动(force) = 用户明确要试 → **不预检, 直接真发一次让服务端判定**
+    //   (2026-09-29 踩过两次: ①预检数据取错时把可领误判成"已领过"; ②服务端才是权威)
+    // 自动路径才用预检省掉无谓请求
+    if (!force && quota.ok && !quota.claimable) {
         result.skipped = true;
         result.reason = `今日已领过(${quota.boughtNum}/${quota.limitCount})`;
         return result;
+    }
+    if (quota.ok) {
+        log('商城', `看广告礼包: 接口限购 周期=${quota.limitType} 已购=${quota.boughtNum} 上限=${quota.limitCount} 剩余=${quota.remaining}` +
+            (quota.rawLimitHex ? ` (raw #7=${quota.rawLimitHex})` : ''), { module: 'mall', event: '看广告礼包', result: 'check' });
     }
     if (quota.ok === false) {
         // 商城读不到也不阻断(直接试广告接口), 只记下来
