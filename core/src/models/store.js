@@ -230,6 +230,7 @@ const DEFAULT_ACCOUNT_CONFIG = {
     fireworkCount: 1,                 // 每日放几个(每个 经验+30)
     // ===== 快乐不独享(2026-09-24 新活动) =====
     happyShareEnabled: true,          // 每日自动领快乐值 + 领可领的档位奖励
+    adGiftEnabled: true,              // 每日自动领「看广告礼包」(跳过广告直接领, 化肥×5)
     // 背包种子优先顺序（seedId 数组）
     bagSeedPriority: [],
     // 背包种子用完后的回退策略
@@ -536,6 +537,9 @@ function normalizeAccountConfig(input, fallback = accountFallbackConfig) {
     if (src.happyShareEnabled !== undefined && src.happyShareEnabled !== null) {
         cfg.happyShareEnabled = !!src.happyShareEnabled;
     }
+    if (src.adGiftEnabled !== undefined && src.adGiftEnabled !== null) {
+        cfg.adGiftEnabled = !!src.adGiftEnabled;
+    }
 
     // 有机化肥购买数量
     if (src.fertilizerBuyOrganicCount !== undefined && src.fertilizerBuyOrganicCount !== null) {
@@ -810,6 +814,7 @@ function getConfigSnapshot(accountId) {
         fireworkMode: cfg.fireworkMode === 'friend' ? 'friend' : 'self',
         fireworkCount: Math.max(0, Math.min(20, Number(cfg.fireworkCount) || 0)),
         happyShareEnabled: cfg.happyShareEnabled === undefined ? true : !!cfg.happyShareEnabled,
+        adGiftEnabled: cfg.adGiftEnabled === undefined ? true : !!cfg.adGiftEnabled,
         stealDelaySeconds: Math.max(0, Math.min(300, Number(cfg.stealDelaySeconds) || 0)),
         plantOrderRandom: !!cfg.plantOrderRandom,
         plantDelaySeconds: Math.max(0, Math.min(60, Number(cfg.plantDelaySeconds) || 0)),
@@ -965,6 +970,9 @@ function applyConfigSnapshot(snapshot, options = {}) {
     }
     if (cfg.happyShareEnabled !== undefined && cfg.happyShareEnabled !== null) {
         next.happyShareEnabled = !!cfg.happyShareEnabled;
+    }
+    if (cfg.adGiftEnabled !== undefined && cfg.adGiftEnabled !== null) {
+        next.adGiftEnabled = !!cfg.adGiftEnabled;
     }
 
     // 种植延迟
@@ -1514,6 +1522,11 @@ function getHappyShareEnabled(accountId) {
     return cfg.happyShareEnabled === undefined ? true : !!cfg.happyShareEnabled;
 }
 
+function getAdGiftEnabled(accountId) {
+    const cfg = (typeof getConfigSnapshot === 'function' ? getConfigSnapshot(accountId) : (globalConfig.accountConfig || {})) || {};
+    return cfg.adGiftEnabled === undefined ? true : !!cfg.adGiftEnabled;
+}
+
 function getRobThrottleConfig(accountId) {
     const cfg = (typeof getConfigSnapshot === 'function' ? getConfigSnapshot(accountId) : (globalConfig.accountConfig || {})) || {};
     return {
@@ -1576,6 +1589,7 @@ module.exports = {
     getBuyBookConfig,
     getAutumnWishConfig,
     getHappyShareEnabled,
+    getAdGiftEnabled,
     getBagSeedPriority,
     getBagSeedFallbackStrategy,
     getIntervals,

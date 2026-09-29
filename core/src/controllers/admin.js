@@ -2087,6 +2087,9 @@ app.use('/api', (req, res, next) => {
                 : { enabled: false, onlineMinMinutes: 3, onlineMaxMinutes: 8, offlineMinMinutes: 20, offlineMaxMinutes: 60, wakeForRipe: true };
             // 夺宝节奏 + 每日购买挑战书(按账号): 这两个是"读取侧白名单"最容易漏的地方,
             // 漏了会表现为"设置保存了但页面回显成默认值"(本仓库踩过两次)
+            const adGiftEnabled = (id && typeof store.getAdGiftEnabled === 'function')
+                ? store.getAdGiftEnabled(id)
+                : true;
             const happyShareEnabled = (id && typeof store.getHappyShareEnabled === 'function')
                 ? store.getHappyShareEnabled(id)
                 : true;
@@ -2146,6 +2149,8 @@ app.use('/api', (req, res, next) => {
                     fireworkCount: autumnWish.fireworkCount,
                     // 快乐不独享
                     happyShareEnabled,
+                    // 看广告礼包(跳过广告直接领)
+                    adGiftEnabled,
                     ui,
                     offlineReminder,
                 },
@@ -3534,6 +3539,23 @@ app.use('/api', (req, res, next) => {
         if (!id) return res.status(400).json({ ok: false, error: '缺少账号 ID' });
         if (!checkAccountAccess(req, id)) return res.status(403).json({ ok: false, error: '无权访问此账号' });
         try { res.json({ ok: true, data: await provider.claimAutumnWish(id, { force: true }) }); }
+        catch (e) { res.json({ ok: false, error: e.message }); }
+    });
+
+    // 看广告礼包: 查额度 / 跳过广告直接领
+    app.get('/api/mall/ad-gift/quota', async (req, res) => {
+        const id = getAccId(req);
+        if (!id) return res.status(400).json({ ok: false, error: '缺少账号 ID' });
+        if (!checkAccountAccess(req, id)) return res.status(403).json({ ok: false, error: '无权访问此账号' });
+        try { res.json({ ok: true, data: await provider.getAdGiftQuota(id) }); }
+        catch (e) { res.json({ ok: false, error: e.message }); }
+    });
+
+    app.post('/api/mall/ad-gift/claim', async (req, res) => {
+        const id = getAccId(req);
+        if (!id) return res.status(400).json({ ok: false, error: '缺少账号 ID' });
+        if (!checkAccountAccess(req, id)) return res.status(403).json({ ok: false, error: '无权访问此账号' });
+        try { res.json({ ok: true, data: await provider.claimAdGift(id, { force: true }) }); }
         catch (e) { res.json({ ok: false, error: e.message }); }
     });
 

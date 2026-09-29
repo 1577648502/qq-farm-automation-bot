@@ -626,6 +626,7 @@ const localAutomationSettings = ref({
   fireworkMode: 'self',
   fireworkCount: 1,
   happyShareEnabled: true,
+  adGiftEnabled: true,
   // 防封号(低调)模式
   stealthEnabled: false,
   stealthOnlineMinMinutes: 3,
@@ -919,6 +920,7 @@ function syncLocalAutomationSettings() {
   localAutomationSettings.value.fireworkMode = settings.value.fireworkMode === 'friend' ? 'friend' : 'self'
   localAutomationSettings.value.fireworkCount = settings.value.fireworkCount ?? 1
   localAutomationSettings.value.happyShareEnabled = settings.value.happyShareEnabled ?? true
+  localAutomationSettings.value.adGiftEnabled = settings.value.adGiftEnabled ?? true
     localAutomationSettings.value.fertilizerBuyOrganicCount = settings.value.fertilizerBuyOrganicCount ?? 10
     localAutomationSettings.value.fertilizerBuyOrganicThresholdHours = settings.value.fertilizerBuyOrganicThresholdHours ?? 10
     localAutomationSettings.value.fertilizerBuyNormalCount = settings.value.fertilizerBuyNormalCount ?? 10
@@ -931,6 +933,28 @@ function syncLocalAutomationSettings() {
 /** 立即执行一次自动夺宝 */
 const buyBookRunning = ref(false)
 const buyBookResult = ref('')
+
+/** 看广告礼包: 跳过广告直接领(手动试跑) */
+const adGiftBusy = ref(false)
+const adGiftResult = ref('')
+async function adGiftAction() {
+  const accountId = String(currentAccountId.value || '')
+  if (!accountId) { showAlert('请先选择账号', 'danger'); return }
+  adGiftBusy.value = true
+  adGiftResult.value = ''
+  try {
+    const res = await api.post('/api/mall/ad-gift/claim', {}, { headers: { 'x-account-id': accountId } })
+    const d = res.data?.data || {}
+    if (!res.data?.ok) { adGiftResult.value = res.data?.error || '失败'; return }
+    if (d.skipped) adGiftResult.value = `今日已领过：${d.reason || ''}`
+    else if (d.ok) adGiftResult.value = `已跳过广告领取 ${d.itemName || ''}${d.gained ? ` +${d.gained}` : ''}`
+    else adGiftResult.value = `未领取：${d.reason || '未知原因'}`
+  } catch (e: any) {
+    adGiftResult.value = e?.response?.data?.error || e?.message || '请求失败(账号未运行?)'
+  } finally {
+    adGiftBusy.value = false
+  }
+}
 
 /** 快乐不独享: 立即跑一次(领快乐值 + 领档位) */
 const happyBusy = ref(false)
@@ -1080,6 +1104,7 @@ async function saveAutomationSettings() {
       fireworkMode: localAutomationSettings.value.fireworkMode,
       fireworkCount: localAutomationSettings.value.fireworkCount,
       happyShareEnabled: localAutomationSettings.value.happyShareEnabled,
+      adGiftEnabled: localAutomationSettings.value.adGiftEnabled,
       fertilizerBuyOrganicCount: localAutomationSettings.value.fertilizerBuyOrganicCount,
       fertilizerBuyOrganicThresholdHours: localAutomationSettings.value.fertilizerBuyOrganicThresholdHours,
       fertilizerBuyNormalCount: localAutomationSettings.value.fertilizerBuyNormalCount,
@@ -1916,6 +1941,25 @@ async function handleTestOffline() {
                   烟花桶来自祈愿奖励（商城另有「烟花·花好月圆」6 钻石/个）；放完会给好友推送社交事件。
                 </div>
               </div>
+            </div>
+            <!-- 看广告礼包(跳过广告直接领) -->
+            <div class="space-y-2 rounded border border-sky-200 bg-sky-50 p-3 dark:border-sky-900/40 dark:bg-sky-900/10">
+              <div>
+                <div class="text-sm text-sky-800 font-medium dark:text-sky-300">
+                  看广告礼包（每日 1 次）
+                </div>
+                <div class="mt-0.5 text-xs text-gray-600 dark:text-gray-400">
+                  商城「看广告礼包」= 化肥(1小时)×5。这里直接调广告接口走完流程，<b>不需要真的看广告</b>；
+                  次数以商城接口为准，领过就不再请求。
+                </div>
+              </div>
+              <div class="flex flex-wrap items-center gap-3">
+                <BaseSwitch v-model="localAutomationSettings.adGiftEnabled" label="每日自动领取（跳过广告）" />
+                <BaseButton variant="secondary" size="sm" :loading="adGiftBusy" @click="adGiftAction">
+                  立即领取一次
+                </BaseButton>
+              </div>
+              <div v-if="adGiftResult" class="text-xs text-gray-600 dark:text-gray-300">{{ adGiftResult }}</div>
             </div>
             <!-- 快乐不独享(2026-09-24 新活动) -->
             <div class="space-y-2 rounded border border-emerald-200 bg-emerald-50 p-3 dark:border-emerald-900/40 dark:bg-emerald-900/10">

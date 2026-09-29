@@ -347,7 +347,8 @@ function createDataProvider(options) {
                 fireworkEnabled: body.fireworkEnabled,
                 fireworkMode: body.fireworkMode,
                 fireworkCount: body.fireworkCount,
-                happyShareEnabled: body.happyShareEnabled
+                happyShareEnabled: body.happyShareEnabled,
+                adGiftEnabled: body.adGiftEnabled
 
             };
 
@@ -741,6 +742,8 @@ function createDataProvider(options) {
         getTreasureTargets: (accountRef, options) => callWorkerApi(resolveAccountRefId(accountRef), 'getTreasureTargets', options || {}),
         getTreasureMyStatus: (accountRef) => callWorkerApi(resolveAccountRefId(accountRef), 'getTreasureMyStatus'),
         robTreasure: (accountRef, options) => callWorkerApi(resolveAccountRefId(accountRef), 'robTreasure', options || {}),
+        getAdGiftQuota: (accountRef) => callWorkerApi(resolveAccountRefId(accountRef), 'getAdGiftQuota'),
+        claimAdGift: (accountRef, opts) => callWorkerApi(resolveAccountRefId(accountRef), 'claimAdGift', opts || {}),
         getHappyShareStatus: (accountRef) => callWorkerApi(resolveAccountRefId(accountRef), 'getHappyShareStatus'),
         runHappyShare: (accountRef, opts) => callWorkerApi(resolveAccountRefId(accountRef), 'runHappyShare', opts || {}),
         getAutumnWishStatus: (accountRef) => callWorkerApi(resolveAccountRefId(accountRef), 'getAutumnWishStatus'),

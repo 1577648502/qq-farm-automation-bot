@@ -27,6 +27,7 @@ async function loadProto() {
         getResourcePath('proto', 'itempb.proto'),
         getResourcePath('proto', 'emailpb.proto'),
         getResourcePath('proto', 'mallpb.proto'),
+        getResourcePath('proto', 'iaapb.proto'),
         getResourcePath('proto', 'redpacketpb.proto'),
         getResourcePath('proto', 'qqvippb.proto'),
         getResourcePath('proto', 'sharepb.proto'),
@@ -109,6 +110,15 @@ async function loadProto() {
     types.GetMallListBySlotTypeRequest = root.lookupType('gamepb.mallpb.GetMallListBySlotTypeRequest');
     types.GetMallListBySlotTypeResponse = root.lookupType('gamepb.mallpb.GetMallListBySlotTypeResponse');
     types.MallGoods = root.lookupType('gamepb.mallpb.MallGoods');
+    // ===== 广告服务 (iaapb, 2026-09-29 抓包新增) =====
+    types.GetAdUnitsRequest = root.lookupType('gamepb.iaapb.GetAdUnitsRequest');
+    types.GetAdUnitsReply = root.lookupType('gamepb.iaapb.GetAdUnitsReply');
+    types.AdUnit = root.lookupType('gamepb.iaapb.AdUnit');
+    types.RequestAdRequest = root.lookupType('gamepb.iaapb.RequestAdRequest');
+    types.RequestAdReply = root.lookupType('gamepb.iaapb.RequestAdReply');
+    types.ReportAdRequest = root.lookupType('gamepb.iaapb.ReportAdRequest');
+    types.ReportAdReply = root.lookupType('gamepb.iaapb.ReportAdReply');
+    types.AdPurchasedNotify = root.lookupType('gamepb.iaapb.AdPurchasedNotify');
     types.PurchaseRequest = root.lookupType('gamepb.mallpb.PurchaseRequest');
     types.PurchaseResponse = root.lookupType('gamepb.mallpb.PurchaseResponse');
     types.GetDailyGiftStatusRequest = root.lookupType('gamepb.qqvippb.GetDailyGiftStatusRequest');

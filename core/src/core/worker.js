@@ -9,7 +9,7 @@ if (parentPort && workerData && workerData.startupMode === 'code_refresh') {
     process.env.FARM_STARTUP_MODE = 'code_refresh';
 }
 const { getLevelExpProgress } = require('../config/gameConfig');
-const { getAutomation, getPreferredSeed, getConfigSnapshot, applyConfigSnapshot, getBuyBookConfig, getAutumnWishConfig, getHappyShareEnabled } = require('../models/store');
+const { getAutomation, getPreferredSeed, getConfigSnapshot, applyConfigSnapshot, getBuyBookConfig, getAutumnWishConfig, getHappyShareEnabled, getAdGiftEnabled } = require('../models/store');
 const { checkAndClaimEmails } = require('../services/email');
 const { getEmailDailyState } = require('../services/email');
 const { checkFarm, startFarmCheckLoop, stopFarmCheckLoop, refreshFarmCheckLoop, getLandsDetail, getAvailableSeeds, buySeed, runFarmOperation, runFertilizerByConfig } = require('../services/farm');
@@ -21,6 +21,7 @@ const { getMallCatalog, purchaseCatalogGoods } = require('../services/mall');
 const treasureRob = require('../services/treasure-rob');
 const autumnWish = require('../services/autumn-wish');
 const happyShare = require('../services/happy-share');
+const adGift = require('../services/ad-gift');
 const { getActivityOverview, drawLottery, drawActivity, claimBattlePassRewards, claimActivityTasks, claimDailySignin, exchangeShopGoods, performQingniangBrew, sellQingniangBrew, shareSellQingniangBrew, getStarActivityOverview, exchangeStarShopGoods, lightUpStarRegister, checkAndLightUpStar } = require('../services/activity');
 const { performDailyMonthCardGift, getMonthCardDailyState } = require('../services/monthcard');
 const { performDailyVipGift, getVipDailyState } = require('../services/qqvip');
@@ -204,6 +205,8 @@ async function runDailyRoutines(force = false) {
         await runAutumnWish('daily_routine');
         // 快乐不独享: 每日快乐值 + 档位奖励
         await runHappyShare('daily_routine');
+        // 看广告礼包(跳过广告直接领)
+        await runAdGift('daily_routine');
     } catch (e) {
         log('系统', `每日任务调度失败: ${e.message}`, { module: 'system', event: '每日任务', result: 'error' });
     }
@@ -220,6 +223,7 @@ function stopDailyRoutineTimer() {
     workerScheduler.clear('buy_book_interval');
     workerScheduler.clear('autumn_wish_interval');
     workerScheduler.clear('happy_share_interval');
+    workerScheduler.clear('ad_gift_interval');
 }
 
 /**
@@ -267,6 +271,29 @@ async function runAutumnWish(reason = 'interval') {
         }
     }
     return out;
+}
+
+/**
+ * 看广告礼包: 跳过广告直接领(每日 1 次, 化肥×5) 协议见 services/ad-gift.js
+ */
+async function runAdGift(reason = 'interval') {
+    if (!canRunTasks()) return { skipped: true, reason: 'offline' };
+    if (!getAdGiftEnabled()) return { skipped: true, reason: 'disabled' };
+    try {
+        const r = await adGift.claimDailyAdGift(false);
+        if (r.skipped) return r;
+        if (r.ok) {
+            log('商城', `看广告礼包: 已跳过广告领取 ${r.itemName}${r.gained ? ` +${r.gained}` : ''}`, {
+                module: 'mall', event: '看广告礼包', result: 'ok', trigger: reason,
+            });
+        } else {
+            log('商城', `看广告礼包未领取: ${r.reason || '未知原因'}`, { module: 'mall', event: '看广告礼包', result: 'warn', trigger: reason });
+        }
+        return r;
+    } catch (e) {
+        log('商城', `看广告礼包失败: ${e.message}`, { module: 'mall', event: '看广告礼包', result: 'error', trigger: reason });
+        return { ok: false, reason: e.message };
+    }
 }
 
 /**
@@ -372,6 +399,10 @@ function startDailyRoutineTimer() {
     // 快乐不独享: 每 20 分钟自查一次(没得领不会发请求)
     workerScheduler.setIntervalTask('happy_share_interval', 20 * 60 * 1000, () => {
         runHappyShare('interval').catch(() => null);
+    }, { preventOverlap: true });
+    // 看广告礼包: 每 20 分钟自查一次(商城接口说已领就不再请求广告接口)
+    workerScheduler.setIntervalTask('ad_gift_interval', 20 * 60 * 1000, () => {
+        runAdGift('interval').catch(() => null);
     }, { preventOverlap: true });
 }
 
@@ -636,6 +667,11 @@ function applyRuntimeConfig(snapshot, syncNow = false) {
                     checkAndLightUpStar().catch(() => null);
                 });
             }
+
+            // 看广告礼包: 打开后立即试一次
+            workerScheduler.setTimeoutTask('ad_gift_immediate', 9000, () => {
+                if (canRunTasks()) runAdGift('config_changed').catch(() => null);
+            });
 
             // 快乐不独享: 改设置后也立即试一次
             workerScheduler.setTimeoutTask('happy_share_immediate', 7000, () => {
@@ -1286,6 +1322,12 @@ async function handleApiCall(msg) {
             }
             case 'getTreasureMyStatus':
                 result = await treasureRob.getMyTreasureStatus();
+                break;
+            case 'getAdGiftQuota':
+                result = await adGift.getAdGiftQuota();
+                break;
+            case 'claimAdGift':
+                result = await adGift.claimDailyAdGift(!!(args[0] && args[0].force));
                 break;
             case 'getHappyShareStatus':
                 result = await happyShare.getHappyStatus();

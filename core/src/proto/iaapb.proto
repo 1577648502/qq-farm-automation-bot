@@ -1,0 +1,58 @@
+syntax = "proto3";
+
+package gamepb.iaapb;
+
+import "corepb.proto";
+
+// 广告服务
+//
+// 2026-09-29 抓包(20260929-102536_商城看广告购买化肥)实测, 上行解密后确认:
+//   GetAdUnits (请求为空) → 响应 units = [{ unit_id: 10001, unit_key: "adunit-1e518c6aa22122d3" }]
+//   RequestAd  { unit_id: 10001 } → 响应 { token: 32字节, ad_payload: 116B(base64 JSON), field4: 1 }
+//   ReportAd   { token: <上面的 token>, result: 0 } → 响应 { result: 1(成功) }
+//        ⚠ 上报成功后**服务端直接发奖**(ItemNotify 化肥×5 + AdPurchasedNotify 商品 1052),
+//          全程没有 MallService.Purchase, 也不校验广告是否真的播放过 → 可以"跳过广告"直接领
+service IaaService {
+  rpc GetAdUnits(GetAdUnitsRequest) returns (GetAdUnitsReply);
+  rpc RequestAd(RequestAdRequest) returns (RequestAdReply);
+  rpc ReportAd(ReportAdRequest) returns (ReportAdReply);
+}
+
+message AdUnit {
+  int64 unit_id = 1;     // 实测 10001
+  bytes unit_key = 3;    // 实测 "adunit-1e518c6aa22122d3" (微信广告单元ID, 23 字节字符串)
+}
+
+message GetAdUnitsRequest {}
+
+message GetAdUnitsReply {
+  repeated AdUnit units = 1;
+}
+
+message RequestAdRequest {
+  int64 unit_id = 1;     // 实测 10001
+}
+
+message RequestAdReply {
+  bytes token = 1;       // 实测 32 字节 ASCII(如 f983d17c7c0b457eb6d0454dfb1a251d), 上报时原样带回
+  bytes ad_payload = 3;  // 实测 116B, base64 编码的 JSON 广告物料
+  int64 field4 = 4;      // 实测 1
+  AdUnit unit = 6;       // 广告位信息(与 GetAdUnits 一致)
+}
+
+message ReportAdRequest {
+  bytes token = 1;       // RequestAd 返回的 token, 原样带回
+  int64 result = 2;      // 实测 0
+}
+
+message ReportAdReply {
+  int64 result = 1;      // 实测 1 = 成功(发奖)
+}
+
+// 看广告购买成功通知(服务端主动下发; goods 1052 = 看广告礼包, 每日 1 次)
+message AdPurchasedNotify {
+  int64 goods_id = 1;    // 实测 1052
+  int64 count = 2;       // 实测 1
+  corepb.Item item = 3;  // 实测 化肥(1小时) 80001 ×5
+  bytes limit = 5;       // 实测 { #1: 1, #2: 1, #3: 1 }
+}

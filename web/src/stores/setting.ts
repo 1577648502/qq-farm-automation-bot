@@ -88,6 +88,7 @@ export interface SettingsState {
   fireworkMode: 'self' | 'friend'
   fireworkCount: number
   happyShareEnabled: boolean
+  adGiftEnabled: boolean
 }
 
 export const useSettingStore = defineStore('setting', () => {
@@ -134,6 +135,7 @@ export const useSettingStore = defineStore('setting', () => {
   fireworkMode: 'self',
   fireworkCount: 1,
   happyShareEnabled: true,
+  adGiftEnabled: true,
   })
   const loading = ref(false)
 
@@ -189,6 +191,7 @@ export const useSettingStore = defineStore('setting', () => {
   settings.value.fireworkMode = d.fireworkMode === 'friend' ? 'friend' : 'self'
   settings.value.fireworkCount = d.fireworkCount ?? 1
   settings.value.happyShareEnabled = d.happyShareEnabled ?? true
+  settings.value.adGiftEnabled = d.adGiftEnabled ?? true
       }
     }
     finally {
@@ -236,6 +239,7 @@ export const useSettingStore = defineStore('setting', () => {
         fireworkMode: newSettings.fireworkMode,
         fireworkCount: newSettings.fireworkCount,
         happyShareEnabled: newSettings.happyShareEnabled,
+        adGiftEnabled: newSettings.adGiftEnabled,
       }
 
       await api.post('/api/settings/save', settingsPayload, {
