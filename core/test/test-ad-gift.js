@@ -44,6 +44,7 @@ const MALL = 'gamepb.mallpb.MallService.GetMallListBySlotType';
     await require('../src/utils/proto').loadProto();
 
     const calls = [];
+    let failRequestAd = false;   // 模拟服务端拒绝 RequestAd(code=1031013)
     const bodyOf = (hex) => Buffer.from(types.GateMessage.decode(Buffer.from(hex, 'hex')).body || []);
 
     const net = require(`${SB}/src/utils/network`);
@@ -56,6 +57,7 @@ const MALL = 'gamepb.mallpb.MallService.GetMallListBySlotType';
             return { body: bodyOf(f.hex) };
         }
         if (key === `${AD}.RequestAd`) {
+            if (failRequestAd) throw new Error('gamepb.iaapb.IaaService.RequestAd 错误: code=1031013 分享礼包功能还不能使用');
             const f = (F[`${AD}.RequestAd`] || [])[0];
             if (!f) throw new Error('抓包里没有 RequestAd 响应');
             return { body: bodyOf(f.hex) };
@@ -146,6 +148,20 @@ const MALL = 'gamepb.mallpb.MallService.GetMallListBySlotType';
         const r = await adGift.claimDailyAdGift(false);
         check('跳过且说明原因', r.skipped === true && /今日已领过/.test(r.reason || ''), r);
         check('跳过时不调广告接口', calls.filter(c => /IaaService/.test(c.key)).length === 0, calls.map(c => c.key));
+
+        // force 也不能越过服务端额度(2026-09-29 线上踩过: 硬发请求 → 服务端 1031013)
+        calls.length = 0;
+        const rf = await adGift.claimDailyAdGift(true);
+        check('force 同样跳过(以接口为准)', rf.skipped === true, rf);
+        check('force 也不调广告接口', calls.filter(c => /IaaService/.test(c.key)).length === 0, calls.map(c => c.key));
+
+        // 服务端拒绝 1031013 → 按"跳过"而不是报错(桩里模拟, 服务已绑定桩的引用)
+        mall.getMallCatalog = async () => ([{ goodsId: 1052, name: '看广告礼包', limitType: 'daily', limitCount: 1, boughtNum: 0, remaining: 1 }]);
+        failRequestAd = true;
+        const r2 = await adGift.claimDailyAdGift(false).catch(() => null);
+        failRequestAd = false;
+        check('1031013 视为跳过(不算失败)', !!(r2 && r2.skipped === true), r2);
+        check('提示文案友好', /当前不可用/.test((r2 && r2.reason) || ''), r2 && r2.reason);
         mall.getMallCatalog = orig;
     }
 

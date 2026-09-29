@@ -97,7 +97,7 @@ async function getAdGiftQuota() {
 
 /**
  * 跳过广告直接领取每日看广告礼包
- * @param force true = 忽略"接口说已领过"的限制(手动按钮用), 仍然会发请求(失败则原样报错)
+ * @param force 仅用于"额度读不到(接口异常)"时也硬试一次; **接口说已领过时无论 force 都跳过**
  */
 async function claimDailyAdGift(force = false) {
     const result = { ok: false, steps: [] };
@@ -105,7 +105,10 @@ async function claimDailyAdGift(force = false) {
     // ① 先看接口: 今天还有没有额度
     const quota = await getAdGiftQuota();
     result.quota = quota;
-    if (quota.ok && !quota.claimable && !force) {
+    // ⚠ 以接口为准: 接口说没额度就跳过 —— **force 也不能越过服务端额度**
+    //   (2026-09-29 踩过: force 硬发 RequestAd, 服务端回 code=1031013 "分享礼包功能还不能使用",
+    //    文案看着像功能没开, 实际就是"当前不可用(今天已领过)")
+    if (quota.ok && !quota.claimable) {
         result.skipped = true;
         result.reason = `今日已领过(${quota.boughtNum}/${quota.limitCount})`;
         return result;
@@ -136,8 +139,15 @@ async function claimDailyAdGift(force = false) {
         ad = await requestAd(unitId);
         result.steps.push({ step: 'RequestAd', unitId, tokenLen: ad.token.length, token: ad.tokenText, payloadLen: ad.payloadLen });
     } catch (e) {
-        result.reason = `请求广告失败: ${e.message}`;
-        result.steps.push({ step: 'RequestAd', unitId, error: e.message });
+        const msg = String((e && e.message) || '');
+        result.steps.push({ step: 'RequestAd', unitId, error: msg });
+        // 1031013 = 服务端说该广告礼包当前不可用(实测就是"今天已领过"), 按跳过处理而不是报错
+        if (/1031013|还不能使用|暂不可用/.test(msg)) {
+            result.skipped = true;
+            result.reason = '服务端提示该礼包当前不可用(一般为今日已领过)';
+            return result;
+        }
+        result.reason = `请求广告失败: ${msg}`;
         return result;
     }
     result.unitId = unitId;
