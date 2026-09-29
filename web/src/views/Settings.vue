@@ -934,6 +934,12 @@ function syncLocalAutomationSettings() {
 const buyBookRunning = ref(false)
 const buyBookResult = ref('')
 
+/** 当前账号是不是 QQ 端 —— QQ 小程序没有广告能力, 看广告礼包只存在于微信端 */
+const isQQAccount = computed(() => {
+  const acc: any = accounts.value.find((a: any) => String(a.id) === String(currentAccountId.value))
+  return String(acc?.platform || '') === 'qq'
+})
+
 /** 看广告礼包: 跳过广告直接领(手动试跑) */
 const adGiftBusy = ref(false)
 const adGiftResult = ref('')
@@ -946,9 +952,8 @@ async function adGiftAction() {
     const res = await api.post('/api/mall/ad-gift/claim', {}, { headers: { 'x-account-id': accountId } })
     const d = res.data?.data || {}
     if (!res.data?.ok) { adGiftResult.value = res.data?.error || '失败'; return }
-    if (d.skipped) adGiftResult.value = `今日已领过：${d.reason || ''}`
-    else if (d.ok) adGiftResult.value = `已跳过广告领取 ${d.itemName || ''}${d.gained ? ` +${d.gained}` : ''}`
-    else adGiftResult.value = `未领取：${d.reason || '未知原因'}`
+    if (d.ok) adGiftResult.value = `已跳过广告领取 ${d.itemName || ''}${d.gained ? ` +${d.gained}` : ''}`
+    else adGiftResult.value = `未领取：${d.reason || '未知原因'}` + (d.hint ? `（${d.hint}）` : '')
   } catch (e: any) {
     adGiftResult.value = e?.response?.data?.error || e?.message || '请求失败(账号未运行?)'
   } finally {
@@ -1949,13 +1954,20 @@ async function handleTestOffline() {
                   看广告礼包（每日 1 次）
                 </div>
                 <div class="mt-0.5 text-xs text-gray-600 dark:text-gray-400">
-                  商城「看广告礼包」= 化肥(1小时)×5。这里直接调广告接口走完流程，<b>不需要真的看广告</b>；
-                  次数以商城接口为准，领过就不再请求。
-                </div>
+                商城「看广告礼包」= 化肥(1小时)×5。这里直接调广告接口走完流程，<b>不需要真的看广告</b>；
+                次数以商城接口为准，领过就不再请求。
+              </div>
+              <div v-if="isQQAccount" class="text-xs font-medium text-amber-700 dark:text-amber-300">
+                ⚠ 当前账号是 QQ 端 —— QQ 小程序没有广告能力（广告只在微信端），本功能会自动跳过。
+              </div>
               </div>
               <div class="flex flex-wrap items-center gap-3">
-                <BaseSwitch v-model="localAutomationSettings.adGiftEnabled" label="每日自动领取（跳过广告）" />
-                <BaseButton variant="secondary" size="sm" :loading="adGiftBusy" @click="adGiftAction">
+                <BaseSwitch
+                  v-model="localAutomationSettings.adGiftEnabled"
+                  label="每日自动领取（跳过广告）"
+                  :disabled="isQQAccount"
+                />
+                <BaseButton variant="secondary" size="sm" :loading="adGiftBusy" :disabled="isQQAccount" @click="adGiftAction">
                   立即领取一次
                 </BaseButton>
               </div>

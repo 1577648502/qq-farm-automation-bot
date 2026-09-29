@@ -80,6 +80,10 @@ const MALL = 'gamepb.mallpb.MallService.GetMallListBySlotType';
         throw new Error('未 stub 的接口: ' + key);
     };
 
+    // 沙箱里 CONFIG.platform 默认是 'qq' → 主体用例按微信端跑(QQ 端在最后一节单独测)
+    const CONFIG = require(`${SB}/src/config/config`);
+    CONFIG.platform = 'wx';
+
     const adGift = require(`${SB}/src/services/ad-gift`);
     const mg = require(`${SB}/src/services/mengchong`);
 
@@ -165,7 +169,16 @@ const MALL = 'gamepb.mallpb.MallService.GetMallListBySlotType';
         const r2 = await adGift.claimDailyAdGift(true).catch(() => null);
         failRequestAd = false;
         check('手动: 服务端拒绝时按跳过(不算失败)', !!(r2 && r2.skipped === true), r2);
-        check('手动: 文案友好', /当前不可用/.test((r2 && r2.reason) || ''), r2 && r2.reason);
+        check('手动: 记录服务端 code', r2 && r2.serverCode === '1031013', r2 && r2.serverCode);
+        // 此时接口说"已购1/上限1"(上一段 mock 的), 所以提示应指向"今日已领过"
+        check('手动: 接口已满时提示已领过', /今日已领过/.test((r2 && r2.reason) || ''), r2 && r2.reason);
+
+        // 接口说"还能领"(已购0/上限1)但服务端拒绝 → 提示指向账号/端不支持
+        mall.getMallCatalog = async () => ([{ goodsId: 1052, name: '看广告礼包', source: 'mall', slotType: 1, limitType: 'daily', limitCount: 1, boughtNum: 0, remaining: 1 }]);
+        failRequestAd = true;
+        const r3 = await adGift.claimDailyAdGift(true).catch(() => null);
+        failRequestAd = false;
+        check('接口可领+服务端拒绝: 提示指向账号/端', /该账号暂时领不了|QQ 端/.test((r3 && r3.reason) || ''), r3 && r3.reason);
 
         mall.getMallCatalog = orig;
     }
@@ -211,6 +224,32 @@ const MALL = 'gamepb.mallpb.MallService.GetMallListBySlotType';
         check('抓包(领取前): 上限1 已购0 → 剩余1', before && before.limitCount === 1 && before.boughtNum === 0 && before.remaining === 1, before);
         check('抓包(领取后): 上限1 已购1 → 剩余0', after && after.limitCount === 1 && after.boughtNum === 1 && after.remaining === 0, after);
 
+        mall.getMallCatalog = orig;
+    }
+
+    section('7. 端差异: QQ 端没有广告能力, 必须跳过');
+    {
+        CONFIG.platform = 'qq';
+        check('isQQPlatform 判定为真', adGift.isQQPlatform() === true);
+        calls.length = 0;
+        const r = await adGift.claimDailyAdGift(true);      // 即使 force 也跳过
+        check('QQ 端: 跳过', r.skipped === true, r);
+        check('QQ 端: 原因说明清楚', /QQ 端没有广告能力/.test(r.reason || ''), r.reason);
+        check('QQ 端: 一个广告接口都不请求', calls.filter(c => /IaaService/.test(c.key)).length === 0, calls.map(c => c.key));
+        CONFIG.platform = 'wx';
+        check('切回微信端: 判定为假', adGift.isQQPlatform() === false);
+    }
+
+    section('8. 本端商城没有该礼包 → 跳过, 不硬发广告请求');
+    {
+        const mall = require(`${SB}/src/services/mall`);
+        const orig = mall.getMallCatalog;
+        mall.getMallCatalog = async () => ([{ goodsId: 1001, name: '每日福利', source: 'mall', slotType: 1 }]);  // 没有 1052
+        calls.length = 0;
+        const r = await adGift.claimDailyAdGift(false);
+        check('跳过', r.skipped === true, r);
+        check('原因: 本端商城没有该礼包', /没有「看广告礼包」/.test(r.reason || ''), r.reason);
+        check('不发广告请求', calls.filter(c => /IaaService/.test(c.key)).length === 0, calls.map(c => c.key));
         mall.getMallCatalog = orig;
     }
 

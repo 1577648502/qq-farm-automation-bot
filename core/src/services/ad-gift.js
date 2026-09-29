@@ -26,6 +26,28 @@ const DEFAULT_UNIT_ID = 10001;      // 实测: 看广告礼包用的广告位
 const AD_GOODS_ID = 1052;           // 商城里的「看广告礼包」(每日 1 次)
 const AD_GIFT_ITEM_ID = 80001;      // 奖励: 化肥(1小时) ×5
 
+/**
+ * 当前账号是不是 QQ 端
+ * QQ 小程序**没有广告能力**(广告只在微信侧), 所以 QQ 账号不该走这个流程
+ * 判定顺序: 账号记录里的 platform(权威) → 退回 CONFIG.platform(与 friend.js 的 isQQ 一致)
+ */
+function isQQPlatform() {
+    try {
+        const store = require('../models/store');
+        const id = String(process.env.FARM_ACCOUNT_ID || '').trim();
+        const accounts = typeof store.getAccounts === 'function' ? (store.getAccounts() || []) : [];
+        const acc = accounts.find(a => String((a && a.id) || '') === id);
+        if (acc) {
+            const p = String(acc.platform || '').trim();
+            if (p) return p === 'qq';
+        }
+    } catch (e) { /* 忽略, 走下面的 CONFIG 兜底 */ }
+    try {
+        const CONFIG = require('../config/config');
+        return String((CONFIG && CONFIG.platform) || '').trim() === 'qq';
+    } catch (e) { return false; }
+}
+
 /** 拉广告位列表 */
 async function getAdUnits() {
     const body = types.GetAdUnitsRequest.encode(types.GetAdUnitsRequest.create({})).finish();
@@ -111,6 +133,13 @@ async function getAdGiftQuota() {
 async function claimDailyAdGift(force = false) {
     const result = { ok: false, steps: [] };
 
+    // ⓿ QQ 端没有广告能力 → 直接跳过(不请求任何广告接口)
+    if (isQQPlatform()) {
+        result.skipped = true;
+        result.reason = 'QQ 端没有广告能力(看广告礼包仅微信端有), 跳过';
+        return result;
+    }
+
     // ① 先看接口: 今天还有没有额度
     const quota = await getAdGiftQuota();
     result.quota = quota;
@@ -127,8 +156,14 @@ async function claimDailyAdGift(force = false) {
             (quota.rawLimitHex ? ` (raw #7=${quota.rawLimitHex})` : ''), { module: 'mall', event: '看广告礼包', result: 'check' });
     }
     if (quota.ok === false) {
-        // 商城读不到也不阻断(直接试广告接口), 只记下来
         result.quotaError = quota.reason;
+        // 商城**能读到但就是没这个礼包** → 本端没有该玩法, 别去发广告请求
+        if (/没找到看广告礼包/.test(quota.reason || '') && !force) {
+            result.skipped = true;
+            result.reason = '本端商城没有「看广告礼包」, 跳过';
+            return result;
+        }
+        // 其它情况(网络异常等)不阻断: 继续试广告接口
     }
 
     const before = await getFertilizerCount();
@@ -156,8 +191,25 @@ async function claimDailyAdGift(force = false) {
         result.steps.push({ step: 'RequestAd', unitId, error: msg });
         // 1031013 = 服务端说该广告礼包当前不可用(实测就是"今天已领过"), 按跳过处理而不是报错
         if (/1031013|还不能使用|暂不可用/.test(msg)) {
+            const code = (msg.match(/code=(\d+)/) || [])[1] || '';
             result.skipped = true;
-            result.reason = '服务端提示该礼包当前不可用(一般为今日已领过)';
+            result.serverCode = code;
+            if (quota && quota.ok && !quota.claimable) {
+                // 接口说已领满 + 服务端也拒绝 → 就是"今日已领过"
+                result.reason = `今日已领过(接口 已购 ${quota.boughtNum}/上限 ${quota.limitCount})`;
+            } else if (quota && quota.ok) {
+                // 接口说还能领, 服务端却拒绝 → 多半是账号/端不支持广告(QQ 端没有广告能力)
+                result.reason = `该账号暂时领不了：服务端 code=${code || '不可用'}，但接口仍显示可领(已购 ${quota.boughtNum}/上限 ${quota.limitCount})` +
+                    ' —— 常见原因: 该账号是 QQ 端(广告只在微信端) 或刚登录会话尚未就绪';
+                result.hint = '可先用游戏本体试一次: 游戏里也领不到 = 与本逻辑一致; 游戏里能领 = 请把这条日志发我';
+            } else {
+                result.reason = `服务端拒绝(code=${code || '不可用'})：${quota ? quota.reason : '接口未读到'}`;
+            }
+            log('商城', `看广告礼包: 服务端拒绝 code=${code || '?'} — ${result.reason}` +
+                (quota && quota.rawLimitHex ? ` (raw #7=${quota.rawLimitHex})` : ''), {
+                module: 'mall', event: '看广告礼包', result: 'skip', serverCode: code,
+                quota: quota ? { limitType: quota.limitType, boughtNum: quota.boughtNum, limitCount: quota.limitCount, claimable: quota.claimable } : null,
+            });
             return result;
         }
         result.reason = `请求广告失败: ${msg}`;
@@ -192,6 +244,10 @@ async function claimDailyAdGift(force = false) {
     result.gained = Math.max(0, after - before);
     result.ok = true;                       // ReportAd 成功即算成功(背包校验只作附加信息)
     result.verified = result.gained > 0;
+    if (!result.verified && quota && quota.ok && !quota.claimable) {
+        // 接口本来就说已领过 + 背包也没涨 → 说明这就是"重复领取", 标注清楚
+        result.reason = `今日已领过(接口 已购 ${quota.boughtNum}/上限 ${quota.limitCount})`;
+    }
 
     log('商城', `看广告礼包: 已跳过广告直接领取 → ${result.itemName}${result.gained ? ` +${result.gained}` : '(背包未变化, 今日可能已领)'}`, {
         module: 'mall', event: '看广告礼包', result: 'ok', unitId, tokenLen: ad.token.length, gained: result.gained,
@@ -209,4 +265,5 @@ module.exports = {
     reportAd,
     getAdGiftQuota,
     claimDailyAdGift,
+    isQQPlatform,
 };
