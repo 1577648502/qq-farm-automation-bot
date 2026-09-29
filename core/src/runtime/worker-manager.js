@@ -435,7 +435,9 @@ function createWorkerManager(options) {
             worker.requests.set(id, { resolve, reject });
 
             // 超时处理
-            const timeoutMs = method === 'refreshCode' ? 45000 : 10000;
+            // claimAdGift 要等满 30+ 秒(对齐"看广告"时长), 放宽到 60s; refreshCode 45s
+        const timeoutMs = method === 'refreshCode' ? 45000
+            : (method === 'claimAdGift' ? 60000 : 10000);
             managerScheduler.setTimeoutTask(`api_timeout_${accountId}_${id}`, timeoutMs, () => {
                 if (worker.requests.has(id)) {
                     worker.requests.delete(id);

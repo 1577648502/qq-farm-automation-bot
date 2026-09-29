@@ -949,7 +949,8 @@ async function adGiftAction() {
   adGiftBusy.value = true
   adGiftResult.value = ''
   try {
-    const res = await api.post('/api/mall/ad-gift/claim', {}, { headers: { 'x-account-id': accountId } })
+    // 该流程要等 30+ 秒(模拟看广告时长), 单独放宽超时
+    const res = await api.post('/api/mall/ad-gift/claim', {}, { headers: { 'x-account-id': accountId }, timeout: 65000 })
     const d = res.data?.data || {}
     if (!res.data?.ok) { adGiftResult.value = res.data?.error || '失败'; return }
     if (d.ok) adGiftResult.value = `已跳过广告领取 ${d.itemName || ''}${d.gained ? ` +${d.gained}` : ''}`
@@ -1968,7 +1969,7 @@ async function handleTestOffline() {
                   :disabled="isQQAccount"
                 />
                 <BaseButton variant="secondary" size="sm" :loading="adGiftBusy" :disabled="isQQAccount" @click="adGiftAction">
-                  立即领取一次
+                  {{ adGiftBusy ? '领取中（约 35 秒）…' : '立即领取一次' }}
                 </BaseButton>
               </div>
               <div v-if="adGiftResult" class="text-xs text-gray-600 dark:text-gray-300">{{ adGiftResult }}</div>

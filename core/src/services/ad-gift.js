@@ -10,8 +10,11 @@
  *   → ItemNotify: 化肥(1小时) 80001 ×5
  *   → AdPurchasedNotify: { goods_id: 1052(看广告礼包), count: 1, item: {80001, 5} }
  *
- * ⇒ **跳过广告的做法**: 只发 RequestAd + ReportAd(带 RequestAd 返回的 token) 即可,
- *   全过程没有 MallService.Purchase, 也没有任何"广告播放完成"的校验参数。
+ * ⚠ 2026-09-29 更正(实测踩到): ReportAd 离 RequestAd 太近会报
+ *   `1044006 广告未观看完成，无法获得奖励` —— **服务端确实会校验"广告是否看完"**
+ *   (要么看广告平台回调, 要么看时间间隔)。两次抓包里 RequestAd → ReportAd 分别是
+ *   **33.4s / 32.7s**(就是一段 30 秒激励视频) → 本实现默认**等满 32s 再上报**, 失败再等一会重试。
+ *   若这样仍报 1044006, 说明服务端等的是广告平台回调(S2S), 机器人无法伪造 → 该功能只能关闭。
  *
  * 每日次数以**接口为准**: 商城商品 1052 的限购信息(#7 = {周期, 已购, 上限}, 每日 1 次),
  * 已领过就不再请求(避免无谓的广告接口调用)。
@@ -21,8 +24,21 @@ const { types } = require('../utils/proto');
 const { log, toNum, sleep } = require('../utils/utils');
 const { getItemById, getItemImageById } = require('../config/gameConfig');
 
+/** 当前登录用的客户端版本(服务端会按它限制功能; 版本过旧会得到各种奇怪错误码) */
+function currentClientVersion() {
+    try {
+        // ⚠ 模块导出的是 { CONFIG, ... } 对象, 必须解构(直接 require 出来的是模块本身)
+        const { CONFIG } = require('../config/config');
+        return String((CONFIG && CONFIG.clientVersion) || '');
+    } catch (e) { return ''; }
+}
+
 const AD_SERVICE = 'gamepb.iaapb.IaaService';
 const DEFAULT_UNIT_ID = 10001;      // 实测: 看广告礼包用的广告位
+/** 请求广告之后等多久再上报完成: 实测客户端 32.7~33.4s(30 秒激励视频), 可用 FARM_AD_WATCH_MS 覆盖 */
+const AD_WATCH_MS = Math.max(0, Number(process.env.FARM_AD_WATCH_MS || 32000));
+const AD_REPORT_RETRY = 2;              // 1044006(未看完) 时再等一会重试几次
+const AD_REPORT_RETRY_WAIT_MS = 8000;
 const AD_GOODS_ID = 1052;           // 商城里的「看广告礼包」(每日 1 次)
 const AD_GIFT_ITEM_ID = 80001;      // 奖励: 化肥(1小时) ×5
 
@@ -43,7 +59,7 @@ function isQQPlatform() {
         }
     } catch (e) { /* 忽略, 走下面的 CONFIG 兜底 */ }
     try {
-        const CONFIG = require('../config/config');
+        const { CONFIG } = require('../config/config');
         return String((CONFIG && CONFIG.platform) || '').trim() === 'qq';
     } catch (e) { return false; }
 }
@@ -104,9 +120,19 @@ async function getAdGiftQuota() {
     try {
         const mall = require('./mall');
         const catalog = await mall.getMallCatalog(1);
-        const candidates = (catalog || []).filter(g => Number(g.goodsId) === AD_GOODS_ID);
+        const all = Array.isArray(catalog) ? catalog : [];
+        const candidates = all.filter(g => Number(g.goodsId) === AD_GOODS_ID);
         const goods = candidates.find(g => g.source === 'mall' && Number(g.slotType) === 1) || candidates[0];
-        if (!goods) return { ok: false, reason: `商城没找到看广告礼包(goodsId=${AD_GOODS_ID})` };
+        const diag = {
+            goodsCount: all.length,
+            slotTypes: [...new Set(all.map(g => Number(g.slotType) || 0))].sort((a, b) => a - b),
+            hasAdGoods: candidates.length > 0,
+        };
+        if (!goods) {
+            // goodsCount>0 = 商城确实读到了, 只是没这个商品(端/账号没有该玩法);
+            // goodsCount=0 = 读取异常(别据此下结论)
+            return { ok: false, reason: `商城没找到看广告礼包(goodsId=${AD_GOODS_ID})`, ...diag };
+        }
         const limit = goods.limitCount || 0;
         const remaining = typeof goods.remaining === 'number' ? goods.remaining : null;
         return {
@@ -120,6 +146,7 @@ async function getAdGiftQuota() {
             slotType: goods.slotType,
             source: goods.source,
             rawLimitHex: goods.limitRawHex || '',
+            ...diag,
         };
     } catch (e) {
         return { ok: false, reason: e.message };
@@ -130,8 +157,9 @@ async function getAdGiftQuota() {
  * 跳过广告直接领取每日看广告礼包
  * @param force 仅用于"额度读不到(接口异常)"时也硬试一次; **接口说已领过时无论 force 都跳过**
  */
-async function claimDailyAdGift(force = false) {
-    const result = { ok: false, steps: [] };
+async function claimDailyAdGift(force = false, opts = {}) {
+    const watchMs = opts.watchMs === undefined ? AD_WATCH_MS : Math.max(0, Number(opts.watchMs) || 0);
+    const result = { ok: false, steps: [], waitMs: watchMs };
 
     // ⓿ QQ 端没有广告能力 → 直接跳过(不请求任何广告接口)
     if (isQQPlatform()) {
@@ -157,13 +185,17 @@ async function claimDailyAdGift(force = false) {
     }
     if (quota.ok === false) {
         result.quotaError = quota.reason;
-        // 商城**能读到但就是没这个礼包** → 本端没有该玩法, 别去发广告请求
-        if (/没找到看广告礼包/.test(quota.reason || '') && !force) {
+        // 商城**读到了商品列表但没有这个礼包** → 这个账号/端没有该玩法(如 QQ 端没有广告), 直接跳过
+        if (/没找到看广告礼包/.test(quota.reason || '') && (quota.goodsCount || 0) > 0) {
             result.skipped = true;
-            result.reason = '本端商城没有「看广告礼包」, 跳过';
+            result.reason = `本端商城没有「看广告礼包」(读到 ${quota.goodsCount} 个商品, 但没有 1052)` +
+                ' —— 该账号/端不支持这个玩法(例如 QQ 端没有广告能力)';
+            log('商城', `看广告礼包: 商城无此商品, 跳过 (读到 ${quota.goodsCount} 个商品, slot=${(quota.slotTypes || []).join('/')})`, {
+                module: 'mall', event: '看广告礼包', result: 'skip',
+            });
             return result;
         }
-        // 其它情况(网络异常等)不阻断: 继续试广告接口
+        // goodsCount=0(读取异常) 或其它情况: 不据此下结论, 继续试广告接口
     }
 
     const before = await getFertilizerCount();
@@ -190,6 +222,19 @@ async function claimDailyAdGift(force = false) {
         const msg = String((e && e.message) || '');
         result.steps.push({ step: 'RequestAd', unitId, error: msg });
         // 1031013 = 服务端说该广告礼包当前不可用(实测就是"今天已领过"), 按跳过处理而不是报错
+        // 1031003 = 限购次数已用完(2026-09-29 实测: 已领过的账号就是这个码)
+        if (/1031003|限购次数已用完/.test(msg)) {
+            result.skipped = true;
+            result.serverCode = '1031003';
+            result.reason = quota && quota.ok
+                ? `今日已领过(限购次数已用完; 接口 已购 ${quota.boughtNum}/上限 ${quota.limitCount})`
+                : '今日已领过(限购次数已用完)';
+            log('商城', `看广告礼包: ${result.reason}`, {
+                module: 'mall', event: '看广告礼包', result: 'skip', serverCode: '1031003',
+                clientVersion: currentClientVersion(),
+            });
+            return result;
+        }
         if (/1031013|还不能使用|暂不可用/.test(msg)) {
             const code = (msg.match(/code=(\d+)/) || [])[1] || '';
             result.skipped = true;
@@ -205,9 +250,12 @@ async function claimDailyAdGift(force = false) {
             } else {
                 result.reason = `服务端拒绝(code=${code || '不可用'})：${quota ? quota.reason : '接口未读到'}`;
             }
+            if (result.hint) result.hint += `；当前客户端版本 ${currentClientVersion()}（过旧会被服务端限制功能）`;
             log('商城', `看广告礼包: 服务端拒绝 code=${code || '?'} — ${result.reason}` +
-                (quota && quota.rawLimitHex ? ` (raw #7=${quota.rawLimitHex})` : ''), {
+                (quota && quota.rawLimitHex ? ` (raw #7=${quota.rawLimitHex})` : '') +
+                ` [clientVersion=${currentClientVersion()}]`, {
                 module: 'mall', event: '看广告礼包', result: 'skip', serverCode: code,
+                clientVersion: currentClientVersion(),
                 quota: quota ? { limitType: quota.limitType, boughtNum: quota.boughtNum, limitCount: quota.limitCount, claimable: quota.claimable } : null,
             });
             return result;
@@ -217,19 +265,53 @@ async function claimDailyAdGift(force = false) {
     }
     result.unitId = unitId;
 
-    await sleep(600);   // 与抓包节奏一致(客户端在这中间播广告)
+    // 客户端在这段时间里真的播了广告(实测 32.7~33.4s), 服务端会校验"看完" → 等满再上报
+    await sleep(watchMs);
 
-    // ④ 上报完成 → 服务端发奖
-    try {
-        const rep = await reportAd(ad.token, 0);
-        result.steps.push({ step: 'ReportAd', result: rep.result });
-        if (!rep.ok) {
-            result.reason = `上报广告失败(result=${rep.result})`;
+    // ④ 上报完成 → 服务端发奖(1044006"未看完"时再等一会重试)
+    let lastErr = null;
+    for (let attempt = 0; attempt <= AD_REPORT_RETRY; attempt++) {
+        try {
+            const rep = await reportAd(ad.token, 0);
+            result.steps.push({ step: 'ReportAd', attempt, result: rep.result });
+            if (rep.ok) { lastErr = null; break; }
+            lastErr = new Error(`上报广告失败(result=${rep.result})`);
+        } catch (e) {
+            lastErr = e;
+            result.steps.push({ step: 'ReportAd', attempt, error: e.message });
+        }
+        const m = String((lastErr && lastErr.message) || '');
+        if (!/1044006|未观看完成|未完成/.test(m) || attempt === AD_REPORT_RETRY) break;
+        await sleep(AD_REPORT_RETRY_WAIT_MS);   // 时间间隔判定时这一步能救回来
+    }
+    if (lastErr) {
+        const e = lastErr;
+        const msg = String((e && e.message) || '');
+        // 1044006 = 广告未观看完成: 已等满时长 + 重试仍失败 → 服务端等的是广告平台回调, 伪造不了
+        if (/1044006|未观看完成/.test(msg)) {
+            result.skipped = true;
+            result.serverCode = '1044006';
+            result.reason = `服务端判定"广告未观看完成"(已等 ${Math.round(watchMs / 1000)}s 并重试 ${AD_REPORT_RETRY} 次)` +
+                ' —— 该玩法需要真的播放微信激励视频, 机器人无法伪造';
+            log('商城', `看广告礼包: ${result.reason}`, {
+                module: 'mall', event: '看广告礼包', result: 'skip', serverCode: '1044006',
+                clientVersion: currentClientVersion(),
+            });
             return result;
         }
-    } catch (e) {
-        result.reason = `上报广告失败: ${e.message}`;
-        result.steps.push({ step: 'ReportAd', error: e.message });
+        // 1031003 = 限购次数已用完(已领过的账号)
+        if (/1031003|限购次数已用完/.test(msg)) {
+            result.skipped = true;
+            result.serverCode = '1031003';
+            result.reason = quota && quota.ok
+                ? `今日已领过(限购次数已用完; 接口 已购 ${quota.boughtNum}/上限 ${quota.limitCount})`
+                : '今日已领过(限购次数已用完)';
+            return result;
+        }
+        result.reason = `上报广告失败: ${msg}`;
+        log('商城', `看广告礼包: ${result.reason} [clientVersion=${currentClientVersion()}]`, {
+            module: 'mall', event: '看广告礼包', result: 'error', clientVersion: currentClientVersion(),
+        });
         return result;
     }
 
@@ -251,6 +333,7 @@ async function claimDailyAdGift(force = false) {
 
     log('商城', `看广告礼包: 已跳过广告直接领取 → ${result.itemName}${result.gained ? ` +${result.gained}` : '(背包未变化, 今日可能已领)'}`, {
         module: 'mall', event: '看广告礼包', result: 'ok', unitId, tokenLen: ad.token.length, gained: result.gained,
+        clientVersion: currentClientVersion(),
     });
     return result;
 }
@@ -266,4 +349,6 @@ module.exports = {
     getAdGiftQuota,
     claimDailyAdGift,
     isQQPlatform,
+    AD_WATCH_MS,
+    AD_REPORT_RETRY,
 };

@@ -12,6 +12,8 @@ const fs = require('node:fs');
 const { setupSandbox, isolateDataDir, createChecker } = require('./harness');
 const { decodeFrame } = require('../scripts/ws-frame-lib');
 
+// ⚠ 真实默认是等 32 秒(实测广告时长), 测试里设为 0 免得整套跑几分钟
+process.env.FARM_AD_WATCH_MS = '0';
 const SB = setupSandbox();
 const { section, check, finish } = createChecker();
 process.env.FARM_ACCOUNT_ID = 'ad-test';
@@ -49,7 +51,13 @@ const MALL = 'gamepb.mallpb.MallService.GetMallListBySlotType';
     await require('../src/utils/proto').loadProto();
 
     const calls = [];
-    let failRequestAd = false;   // 模拟服务端拒绝 RequestAd(code=1031013)
+    let failRequestAd = false;   // 模拟服务端拒绝 RequestAd
+    let failRequestAdCode = '1031013';
+    let failRequestAdMsg = '分享礼包功能还不能使用';
+    let failReportAd = false;              // 模拟 ReportAd 被拒(如 1044006 未看完)
+    let failReportCode = '1044006';
+    let failReportMsg = '广告未观看完成，无法获得奖励';
+    let reportAttempts = 0;
     const bodyOf = (hex) => Buffer.from(types.GateMessage.decode(Buffer.from(hex, 'hex')).body || []);
 
     const net = require(`${SB}/src/utils/network`);
@@ -62,12 +70,14 @@ const MALL = 'gamepb.mallpb.MallService.GetMallListBySlotType';
             return { body: bodyOf(f.hex) };
         }
         if (key === `${AD}.RequestAd`) {
-            if (failRequestAd) throw new Error('gamepb.iaapb.IaaService.RequestAd 错误: code=1031013 分享礼包功能还不能使用');
+            if (failRequestAd) throw new Error(`gamepb.iaapb.IaaService.RequestAd 错误: code=${failRequestAdCode} ${failRequestAdMsg}`);
             const f = (F[`${AD}.RequestAd`] || [])[0];
             if (!f) throw new Error('抓包里没有 RequestAd 响应');
             return { body: bodyOf(f.hex) };
         }
         if (key === `${AD}.ReportAd`) {
+            reportAttempts += 1;
+            if (failReportAd) throw new Error(`gamepb.iaapb.IaaService.ReportAd 错误: code=${failReportCode} ${failReportMsg}`);
             const f = (F[`${AD}.ReportAd`] || [])[0];
             if (!f) throw new Error('抓包里没有 ReportAd 响应');
             return { body: bodyOf(f.hex) };
@@ -81,7 +91,8 @@ const MALL = 'gamepb.mallpb.MallService.GetMallListBySlotType';
     };
 
     // 沙箱里 CONFIG.platform 默认是 'qq' → 主体用例按微信端跑(QQ 端在最后一节单独测)
-    const CONFIG = require(`${SB}/src/config/config`);
+    // ⚠ 要改的是模块内部的 CONFIG 对象(模块导出的是 { CONFIG, ... })
+    const { CONFIG } = require(`${SB}/src/config/config`);
     CONFIG.platform = 'wx';
 
     const adGift = require(`${SB}/src/services/ad-gift`);
@@ -227,6 +238,38 @@ const MALL = 'gamepb.mallpb.MallService.GetMallListBySlotType';
         mall.getMallCatalog = orig;
     }
 
+    section('6b. 1031003(限购次数已用完) → 友好提示"今日已领过"');
+    {
+        const mall = require(`${SB}/src/services/mall`);
+        const orig = mall.getMallCatalog;
+        mall.getMallCatalog = async () => ([{ goodsId: 1052, name: '看广告礼包', source: 'mall', slotType: 1, limitType: 'daily', limitCount: 1, boughtNum: 1, remaining: 0 }]);
+        failRequestAd = true;
+        failRequestAdCode = '1031003';
+        failRequestAdMsg = '限购次数已用完';
+        const r = await adGift.claimDailyAdGift(true).catch(() => null);
+        failRequestAd = false;
+        check('1031003: 判为跳过', !!(r && r.skipped === true), r);
+        check('1031003: 记下 code', r && r.serverCode === '1031003', r && r.serverCode);
+        check('1031003: 文案=今日已领过', /今日已领过/.test((r && r.reason) || ''), r && r.reason);
+        mall.getMallCatalog = orig;
+    }
+
+    section('6c. 1044006(广告未观看完成) → 等满时长 + 重试后跳过并说明原因');
+    {
+        const mall = require(`${SB}/src/services/mall`);
+        const orig = mall.getMallCatalog;
+        mall.getMallCatalog = async () => ([{ goodsId: 1052, name: '看广告礼包', source: 'mall', slotType: 1, limitType: 'daily', limitCount: 1, boughtNum: 0, remaining: 1 }]);
+        failReportAd = true;
+        reportAttempts = 0;
+        const r = await adGift.claimDailyAdGift(true).catch(() => null);
+        failReportAd = false;
+        check('1044006: 判为跳过', !!(r && r.skipped === true), r);
+        check('1044006: 记下 code', r && r.serverCode === '1044006', r && r.serverCode);
+        check('1044006: 文案说明"需要真的看广告"', /广告未观看完成|无法伪造/.test((r && r.reason) || ''), r && r.reason);
+        check('1044006: 确实重试过(1 次原始 + 2 次重试)', reportAttempts === 1 + adGift.AD_REPORT_RETRY, reportAttempts);
+        mall.getMallCatalog = orig;
+    }
+
     section('7. 端差异: QQ 端没有广告能力, 必须跳过');
     {
         CONFIG.platform = 'qq';
@@ -240,16 +283,34 @@ const MALL = 'gamepb.mallpb.MallService.GetMallListBySlotType';
         check('切回微信端: 判定为假', adGift.isQQPlatform() === false);
     }
 
-    section('8. 本端商城没有该礼包 → 跳过, 不硬发广告请求');
+    section('8. 本端商城没有该礼包 → 跳过(force 也跳), 不硬发广告请求');
     {
         const mall = require(`${SB}/src/services/mall`);
         const orig = mall.getMallCatalog;
-        mall.getMallCatalog = async () => ([{ goodsId: 1001, name: '每日福利', source: 'mall', slotType: 1 }]);  // 没有 1052
+        // 商城读到了商品, 但列表里没有 1052 → 该账号/端没有这个玩法
+        mall.getMallCatalog = async () => ([
+            { goodsId: 1001, name: '每日福利', source: 'mall', slotType: 1 },
+            { goodsId: 1050, name: '中级挑战书', source: 'mall', slotType: 1 },
+        ]);
         calls.length = 0;
         const r = await adGift.claimDailyAdGift(false);
         check('跳过', r.skipped === true, r);
         check('原因: 本端商城没有该礼包', /没有「看广告礼包」/.test(r.reason || ''), r.reason);
+        check('原因里带上读到的商品数', /读到 2 个商品/.test(r.reason || ''), r.reason);
         check('不发广告请求', calls.filter(c => /IaaService/.test(c.key)).length === 0, calls.map(c => c.key));
+
+        // force 也一样(这端根本没有该玩法, 硬试只会拿到服务端 1031013)
+        calls.length = 0;
+        const rf = await adGift.claimDailyAdGift(true);
+        check('force 也跳过', rf.skipped === true, rf);
+        check('force 也不发广告请求', calls.filter(c => /IaaService/.test(c.key)).length === 0, calls.map(c => c.key));
+
+        // 但"商城完全读不到(goodsCount=0)"不能据此下结论 → 仍会尝试
+        mall.getMallCatalog = async () => ([]);
+        calls.length = 0;
+        const r0 = await adGift.claimDailyAdGift(false).catch(() => null);
+        check('商城读空时不误判"本端不支持"', !(r0 && /没有「看广告礼包」/.test(r0.reason || '')), r0 && r0.reason);
+        check('读空时确实尝试了广告接口', calls.filter(c => /IaaService\.RequestAd/.test(c.key)).length === 1, calls.map(c => c.key));
         mall.getMallCatalog = orig;
     }
 
