@@ -5,6 +5,7 @@ import { computed, onMounted, ref, watch, watchEffect } from 'vue'
 import { useRouter } from 'vue-router'
 import api from '@/api'
 import AccountModal from '@/components/AccountModal.vue'
+import AutoTaskCard from '@/components/AutoTaskCard.vue'
 import ConfirmModal from '@/components/ConfirmModal.vue'
 import BaseButton from '@/components/ui/BaseButton.vue'
 import BaseInput from '@/components/ui/BaseInput.vue'
@@ -1822,196 +1823,175 @@ async function handleTestOffline() {
             <p>请先选择账号</p>
           </div>
 
-          <div v-else class="space-y-4">
-            <div class="grid grid-cols-2 gap-3 md:grid-cols-3">
-              <BaseSwitch v-model="localAutomationSettings.automation.farm" label="自动种植收获" />
-              <BaseSwitch v-model="localAutomationSettings.automation.task" label="自动做任务" />
-              <div class="space-y-1">
-              <BaseSwitch v-model="localAutomationSettings.automation.sell" label="自动卖果实" />
-              <BaseSwitch
-                v-model="localAutomationSettings.sellGoldenFruit"
-                label="连黄金果实一起卖"
-              />
-              <div class="text-xs text-gray-500 dark:text-gray-400">
-                默认保留黄金果实（黄金果 / 黄金·xx / 带黄金·天工等变异的果实）；勾上后这些也会一起卖出。
+            <div v-else class="space-y-4">
+              <!-- 基础开关: 一行多个, 保持整齐 -->
+              <div class="grid grid-cols-1 gap-x-6 gap-y-1 sm:grid-cols-2 lg:grid-cols-3">
+                <BaseSwitch v-model="localAutomationSettings.automation.farm" label="自动种植收获" />
+                <BaseSwitch v-model="localAutomationSettings.automation.task" label="自动做任务" />
+                <BaseSwitch v-model="localAutomationSettings.automation.sell" label="自动卖果实" />
+                <BaseSwitch v-model="localAutomationSettings.sellGoldenFruit" label="连黄金果实一起卖" />
+                <BaseSwitch v-model="localAutomationSettings.automation.friend" label="自动好友互动" />
+                <BaseSwitch v-model="localAutomationSettings.automation.farm_push" label="推送触发巡田" />
+                <BaseSwitch v-model="localAutomationSettings.automation.land_upgrade" label="自动升级土地" />
+                <BaseSwitch v-model="localAutomationSettings.automation.fertilizer_gift" label="自动填充化肥" />
+                <BaseSwitch v-model="localAutomationSettings.automation.fertilizer_buy_organic" label="自动购买有机化肥" />
+                <BaseSwitch v-model="localAutomationSettings.automation.fertilizer_buy_normal" label="自动购买无机化肥" />
+                <BaseSwitch v-model="localAutomationSettings.automation.mystery_shop" label="自动购买神秘商店" />
+                <BaseSwitch v-model="localAutomationSettings.automation.star_light_up" :label="autoLabel('star_light_up', '千星游记自动点亮领取')" :disabled="isAutomationGated('star_light_up')" />
+                <BaseSwitch v-model="localAutomationSettings.automation.solar_terms" label="节令小礼自动领取" />
+                <BaseSwitch v-model="localAutomationSettings.automation.weather_task" :label="autoLabel('weather_task', '雨落成诗：采集瓶+雷雨瓶')" :disabled="isAutomationGated('weather_task')" />
+                <BaseSwitch v-model="localAutomationSettings.automation.weather_research" :label="autoLabel('weather_research', '雨落成诗：气象研究升级')" :disabled="isAutomationGated('weather_research')" />
+                <BaseSwitch v-model="localAutomationSettings.automation.charity_task" :label="autoLabel('charity_task', '公益小红花：礼包+送爱心+分享')" :disabled="isAutomationGated('charity_task')" />
+                <BaseSwitch v-model="localAutomationSettings.automation.mengchong_task" :label="autoLabel('mengchong_task', '萌宠游记：每日任务(礼包/手记/投喂)')" :disabled="isAutomationGated('mengchong_task')" />
+                <BaseSwitch v-model="localAutomationSettings.automation.mengchong_hunt" :label="autoLabel('mengchong_hunt', '萌宠游记：自动寻宝(元气糕700/次)')" :disabled="isAutomationGated('mengchong_hunt')" />
+                <BaseSwitch v-model="localAutomationSettings.automation.skip_own_weed_bug" label="不除自己草虫" />
               </div>
-            </div>
-              <BaseSwitch v-model="localAutomationSettings.automation.friend" label="自动好友互动" />
-              <BaseSwitch v-model="localAutomationSettings.automation.farm_push" label="推送触发巡田" />
-              <BaseSwitch v-model="localAutomationSettings.automation.land_upgrade" label="自动升级土地" />
-              <BaseSwitch v-model="localAutomationSettings.automation.fertilizer_gift" label="自动填充化肥" />
-            <BaseSwitch v-model="localAutomationSettings.automation.fertilizer_buy_organic" label="自动购买有机化肥" />
-            <BaseSwitch v-model="localAutomationSettings.automation.fertilizer_buy_normal" label="自动购买无机化肥" />
-            <BaseSwitch v-model="localAutomationSettings.automation.mystery_shop" label="自动购买神秘商店" />
-            <BaseSwitch v-model="localAutomationSettings.automation.star_light_up" :label="autoLabel('star_light_up', '千星游记自动点亮领取')" :disabled="isAutomationGated('star_light_up')" />
 
-            <!-- 夺宝(抢宝) -->
-            <div class="space-y-2 rounded border border-amber-200 bg-amber-50 p-3 dark:border-amber-900/40 dark:bg-amber-900/10">
-              <div class="flex flex-wrap items-center justify-between gap-2">
-                <div>
-                  <div class="text-sm text-amber-800 font-medium dark:text-amber-300">
-                    夺宝（抢宝）
+              <!-- 需要参数/手动触发的功能: 统一卡片 -->
+              <div class="space-y-3">
+                <!-- 夺宝(抢宝) -->
+                <AutoTaskCard
+                  title="夺宝（抢宝）"
+                  desc="遍历好友，抢夺正在运送的宝藏"
+                >
+                  <template #switch>
+                    <BaseSwitch v-model="localAutomationSettings.automation.rob_treasure" label="启用" />
+                  </template>
+                  <template #params>
+                    <BaseInput
+                      v-model.number="localAutomationSettings.robTreasureIntervalMinutes"
+                      label="检查间隔 (分钟)"
+                      type="number"
+                      min="1"
+                      max="1440"
+                      class="w-32"
+                    />
+                    <BaseInput
+                      v-model.number="localAutomationSettings.robMaxPerRun"
+                      label="每轮最多抢 (个)"
+                      type="number"
+                      min="1"
+                      max="20"
+                      class="w-32"
+                    />
+                    <BaseInput
+                      v-model.number="localAutomationSettings.robDailyLimit"
+                      label="每日上限 (次, 0=不限)"
+                      type="number"
+                      min="0"
+                      max="200"
+                      class="w-36"
+                    />
+                    <BaseButton variant="secondary" size="sm" :loading="treasureRunning" @click="runTreasureNow">
+                      立即执行一次
+                    </BaseButton>
+                  </template>
+                  <!-- 子任务: 每日购买挑战书 -->
+                  <div class="flex flex-wrap items-center gap-3 rounded border border-gray-200 px-2.5 py-2 dark:border-gray-700">
+                    <BaseSwitch v-model="localAutomationSettings.buyBookEnabled" label="每日购买中级挑战书" />
+                    <BaseInput
+                      v-model.number="localAutomationSettings.buyBookCount"
+                      label="每日数量 (个)"
+                      type="number"
+                      min="0"
+                      max="20"
+                      class="w-28"
+                    />
+                    <BaseButton variant="secondary" size="sm" :loading="buyBookRunning" @click="buyBooksNow">
+                      立即购买一次
+                    </BaseButton>
+                    <span v-if="buyBookResult" class="text-xs text-gray-600 dark:text-gray-300">{{ buyBookResult }}</span>
                   </div>
-                  <div class="mt-0.5 text-xs text-gray-600 dark:text-gray-400">
-                    自动遍历好友，找到正在运送的宝藏并抢夺；挑战书优先用高等级（高级 → 中级 → 初级）。
+                  <template #note>
+                    每次抢夺消耗 1 张挑战书（胜负都算），按对方可博弈资金挑书面值；150 金豆豆/个，游戏每日限购 2 个。
+                    手动夺宝在「萌宠游记 → 夺宝（抢宝）」。
+                  </template>
+                </AutoTaskCard>
+
+                <!-- 秋祈良愿 -->
+                <AutoTaskCard
+                  title="秋祈良愿（9/24 – 10/7）"
+                  desc="每日祈愿领好运奖励（限定种子 / 烟花桶 / 盆栽装扮），可存 5 天，漏领会邮件补发"
+                >
+                  <template #switch>
+                    <BaseSwitch v-model="localAutomationSettings.autumnWishEnabled" label="每日自动祈愿" />
+                  </template>
+                  <template #actions>
+                    <BaseButton variant="secondary" size="sm" :loading="autumnBusy === 'claim'" @click="autumnAction('claim')">
+                      立即祈愿一次
+                    </BaseButton>
+                    <span v-if="autumnResult" class="text-xs text-gray-600 dark:text-gray-300">{{ autumnResult }}</span>
+                  </template>
+                  <!-- 子任务: 放烟花 -->
+                  <div class="flex flex-wrap items-center gap-3 rounded border border-gray-200 px-2.5 py-2 dark:border-gray-700">
+                    <BaseSwitch v-model="localAutomationSettings.fireworkEnabled" label="自动放烟花（每个 +30 经验）" />
+                    <BaseInput
+                      v-model.number="localAutomationSettings.fireworkCount"
+                      label="每日几个"
+                      type="number"
+                      min="0"
+                      max="20"
+                      class="w-24"
+                    />
+                    <select
+                      v-model="localAutomationSettings.fireworkMode"
+                      class="rounded border border-gray-300 bg-white px-2 py-1 text-xs dark:border-gray-600 dark:bg-gray-800"
+                    >
+                      <option value="self">在自己家放</option>
+                      <option value="friend">去好友家放</option>
+                    </select>
+                    <BaseButton variant="secondary" size="sm" :loading="autumnBusy === 'firework'" @click="autumnAction('firework')">
+                      放一个试试
+                    </BaseButton>
                   </div>
-                  <div class="mt-1 text-xs text-gray-500 dark:text-gray-400">
-                    手动夺宝请到「萌宠游记」页面 → 顶部「夺宝（抢宝）」子页面。
-                  </div>
-                </div>
-                <BaseSwitch v-model="localAutomationSettings.automation.rob_treasure" label="启用自动夺宝" />
-              </div>
-              <div v-if="localAutomationSettings.automation.rob_treasure" class="flex flex-wrap items-end gap-3">
-                <BaseInput
-                  v-model.number="localAutomationSettings.robTreasureIntervalMinutes"
-                  label="检查间隔 (分钟)"
-                  type="number"
-                  min="1"
-                  max="1440"
-                />
-                <BaseInput
-                  v-model.number="localAutomationSettings.robMaxPerRun"
-                  label="每轮最多抢 (个)"
-                  type="number"
-                  min="1"
-                  max="20"
-                />
-                <BaseInput
-                  v-model.number="localAutomationSettings.robDailyLimit"
-                  label="每日上限 (次, 0=不限)"
-                  type="number"
-                  min="0"
-                  max="200"
-                />
-                <BaseButton variant="secondary" size="sm" :loading="treasureRunning" @click="runTreasureNow">
-                  立即执行一次
-                </BaseButton>
-              </div>
-              <div class="mt-2 space-y-2 border-t border-amber-200 pt-2 dark:border-amber-900/40">
-                <div class="flex flex-wrap items-center gap-3">
-                  <BaseSwitch v-model="localAutomationSettings.buyBookEnabled" label="每日购买中级挑战书" />
-                  <BaseInput
-                    v-model.number="localAutomationSettings.buyBookCount"
-                    label="每日数量 (个)"
-                    type="number"
-                    min="0"
-                    max="20"
-                    class="w-32"
-                  />
-                </div>
-                <div class="flex flex-wrap items-center gap-3">
-                  <BaseButton variant="secondary" size="sm" :loading="buyBookRunning" @click="buyBooksNow">
-                    立即购买一次
-                  </BaseButton>
-                  <span v-if="buyBookResult" class="text-xs text-gray-600 dark:text-gray-300">{{ buyBookResult }}</span>
-                </div>
-                <div class="text-xs text-gray-500 dark:text-gray-400">
-                  每天自动在商城买中级挑战书，150 金豆豆/个（商城 goodsId 1050，游戏每日限购 2 个）；
-                  金豆豆不足时只买够的部分，进度跨重启累计。登录后 / 跨日 / 改设置后都会自动检查，
-                  另外每 10 分钟自查一次（当天买满就不再发请求）。
-                </div>
-              </div>
-              <div class="text-xs text-gray-500 dark:text-gray-400">
-                修改后自动保存；自动夺宝在后台按上面的间隔巡检。每次抢夺消耗 1 张挑战书（无论胜负），
-                每日最多 20 次；会按对方宝藏的可博弈资金挑挑战书面值，面值超了会被拒绝（白贴书）。
+                  <template #note>
+                    烟花桶来自祈愿奖励，放完会给好友推送社交事件；商城另有「烟花·花好月圆」6 钻石/个。
+                  </template>
+                </AutoTaskCard>
+
+                <!-- 快乐不独享 -->
+                <AutoTaskCard
+                  title="快乐不独享（9/24 – 10/12）"
+                  desc="每日领快乐值 +5，攒够门槛自动领档位奖励"
+                >
+                  <template #switch>
+                    <BaseSwitch v-model="localAutomationSettings.happyShareEnabled" label="启用" />
+                  </template>
+                  <template #actions>
+                    <BaseButton variant="secondary" size="sm" :loading="happyBusy" @click="happyAction">
+                      立即领取一次
+                    </BaseButton>
+                    <span v-if="happyResult" class="text-xs text-gray-600 dark:text-gray-300">{{ happyResult }}</span>
+                  </template>
+                  <template #note>
+                    档位：10 → 化肥4h · 20 → 有机化肥8h · 30 → 点券×50 · 60 → 90042
+                  </template>
+                </AutoTaskCard>
+
+                <!-- 看广告礼包 -->
+                <AutoTaskCard
+                  title="看广告礼包（每日 1 次）"
+                  desc="礼包内容：化肥(1小时)×5。直接走完广告流程领取，不需要真的看广告"
+                >
+                  <template #switch>
+                    <BaseSwitch
+                      v-model="localAutomationSettings.adGiftEnabled"
+                      label="启用"
+                      :disabled="isQQAccount"
+                    />
+                  </template>
+                  <template #actions>
+                    <BaseButton variant="secondary" size="sm" :loading="adGiftBusy" :disabled="isQQAccount" @click="adGiftAction">
+                      {{ adGiftBusy ? '领取中（约 35 秒）…' : '立即领取一次' }}
+                    </BaseButton>
+                    <span v-if="adGiftResult" class="text-xs text-gray-600 dark:text-gray-300">{{ adGiftResult }}</span>
+                  </template>
+                  <template #note>
+                    次数以商城接口为准，领过就不再请求。<template v-if="isQQAccount">⚠ 当前是 QQ 端 —— QQ 小程序没有广告能力，本功能会自动跳过。</template>
+                  </template>
+                </AutoTaskCard>
               </div>
             </div>
-            <!-- 秋祈良愿(2026-09-24 新活动) -->
-            <div class="space-y-2 rounded border border-amber-200 bg-amber-50 p-3 dark:border-amber-900/40 dark:bg-amber-900/10">
-              <div>
-                <div class="text-sm text-amber-800 font-medium dark:text-amber-300">
-                  秋祈良愿（9/24 – 10/7）
-                </div>
-                <div class="mt-0.5 text-xs text-gray-600 dark:text-gray-400">
-                  每日祈愿领好运奖励（限定种子 / 烟花桶 / 盆栽装扮），每日 0 点刷新，可存 5 天；漏领会走邮件补发。
-                </div>
-              </div>
-              <div class="flex flex-wrap items-center gap-3">
-                <BaseSwitch v-model="localAutomationSettings.autumnWishEnabled" label="每日自动祈愿" />
-                <BaseButton variant="secondary" size="sm" :loading="autumnBusy === 'claim'" @click="autumnAction('claim')">
-                  立即祈愿一次
-                </BaseButton>
-              </div>
-              <div class="mt-1 space-y-2 border-t border-amber-200 pt-2 dark:border-amber-900/40">
-                <div class="flex flex-wrap items-center gap-3">
-                  <BaseSwitch v-model="localAutomationSettings.fireworkEnabled" label="自动放烟花（每个 +30 经验）" />
-                  <BaseInput
-                    v-model.number="localAutomationSettings.fireworkCount"
-                    label="每日放几个"
-                    type="number"
-                    min="0"
-                    max="20"
-                    class="w-28"
-                  />
-                  <select
-                    v-model="localAutomationSettings.fireworkMode"
-                    class="rounded border border-gray-300 bg-white px-2 py-1 text-xs dark:border-gray-600 dark:bg-gray-800"
-                  >
-                    <option value="self">在自己家放</option>
-                    <option value="friend">去好友家放</option>
-                  </select>
-                  <BaseButton variant="secondary" size="sm" :loading="autumnBusy === 'firework'" @click="autumnAction('firework')">
-                    放一个试试
-                  </BaseButton>
-                </div>
-                <div v-if="autumnResult" class="text-xs text-gray-600 dark:text-gray-300">{{ autumnResult }}</div>
-                <div class="text-xs text-gray-500 dark:text-gray-400">
-                  烟花桶来自祈愿奖励（商城另有「烟花·花好月圆」6 钻石/个）；放完会给好友推送社交事件。
-                </div>
-              </div>
-            </div>
-            <!-- 看广告礼包(跳过广告直接领) -->
-            <div class="space-y-2 rounded border border-sky-200 bg-sky-50 p-3 dark:border-sky-900/40 dark:bg-sky-900/10">
-              <div>
-                <div class="text-sm text-sky-800 font-medium dark:text-sky-300">
-                  看广告礼包（每日 1 次）
-                </div>
-                <div class="mt-0.5 text-xs text-gray-600 dark:text-gray-400">
-                商城「看广告礼包」= 化肥(1小时)×5。这里直接调广告接口走完流程，<b>不需要真的看广告</b>；
-                次数以商城接口为准，领过就不再请求。
-              </div>
-              <div v-if="isQQAccount" class="text-xs font-medium text-amber-700 dark:text-amber-300">
-                ⚠ 当前账号是 QQ 端 —— QQ 小程序没有广告能力（广告只在微信端），本功能会自动跳过。
-              </div>
-              </div>
-              <div class="flex flex-wrap items-center gap-3">
-                <BaseSwitch
-                  v-model="localAutomationSettings.adGiftEnabled"
-                  label="每日自动领取（跳过广告）"
-                  :disabled="isQQAccount"
-                />
-                <BaseButton variant="secondary" size="sm" :loading="adGiftBusy" :disabled="isQQAccount" @click="adGiftAction">
-                  {{ adGiftBusy ? '领取中（约 35 秒）…' : '立即领取一次' }}
-                </BaseButton>
-              </div>
-              <div v-if="adGiftResult" class="text-xs text-gray-600 dark:text-gray-300">{{ adGiftResult }}</div>
-            </div>
-            <!-- 快乐不独享(2026-09-24 新活动) -->
-            <div class="space-y-2 rounded border border-emerald-200 bg-emerald-50 p-3 dark:border-emerald-900/40 dark:bg-emerald-900/10">
-              <div>
-                <div class="text-sm text-emerald-800 font-medium dark:text-emerald-300">
-                  快乐不独享（9/24 – 10/12）
-                </div>
-                <div class="mt-0.5 text-xs text-gray-600 dark:text-gray-400">
-                  每日领快乐值（+5），攒够门槛自动领档位奖励：10→化肥4h、20→有机化肥8h、30→点券×50、60→90042。
-                </div>
-              </div>
-              <div class="flex flex-wrap items-center gap-3">
-                <BaseSwitch v-model="localAutomationSettings.happyShareEnabled" label="每日自动领快乐值 + 档位奖励" />
-                <BaseButton variant="secondary" size="sm" :loading="happyBusy" @click="happyAction">
-                  立即领取一次
-                </BaseButton>
-              </div>
-              <div v-if="happyResult" class="text-xs text-gray-600 dark:text-gray-300">{{ happyResult }}</div>
-            </div>
-            <BaseSwitch v-model="localAutomationSettings.automation.solar_terms" label="节令小礼自动领取" />
-            <BaseSwitch v-model="localAutomationSettings.automation.weather_task" :label="autoLabel('weather_task', '雨落成诗：每日买采集瓶+对好友使用+雷雨瓶自用')" :disabled="isAutomationGated('weather_task')" />
-            <BaseSwitch v-model="localAutomationSettings.automation.weather_research" :label="autoLabel('weather_research', '雨落成诗：气象研究自动升级（消耗雷电徽章）')" :disabled="isAutomationGated('weather_research')" />
-            <BaseSwitch v-model="localAutomationSettings.automation.charity_task" :label="autoLabel('charity_task', '公益小红花：每日领公益礼包+送爱心+分享')" :disabled="isAutomationGated('charity_task')" />
-            <BaseSwitch v-model="localAutomationSettings.automation.mengchong_task" :label="autoLabel('mengchong_task', '萌宠游记：每日任务(种子礼包/手记/自动投喂)')" :disabled="isAutomationGated('mengchong_task')" />
-            <BaseSwitch v-model="localAutomationSettings.automation.mengchong_hunt" :label="autoLabel('mengchong_hunt', '萌宠游记：自动寻宝(消耗元气糕700/次，已有护送时跳过)')" :disabled="isAutomationGated('mengchong_hunt')" />
-            <BaseSwitch v-model="localAutomationSettings.automation.skip_own_weed_bug" label="不除自己草虫" />
-          </div>
 
           <!-- 防封号(低调)模式 -->
           <div class="space-y-3 rounded border border-amber-200 bg-amber-50 p-3 dark:border-amber-900/40 dark:bg-amber-900/10">
@@ -2248,7 +2228,6 @@ async function handleTestOffline() {
                 保存自动控制
               </BaseButton>
             </div>
-          </div>
         </div>
 
         <!-- 用户管理 -->
