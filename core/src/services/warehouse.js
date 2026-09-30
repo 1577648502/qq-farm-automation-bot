@@ -552,10 +552,10 @@ async function sellAllFruits() {
                                 if (mtName) { var cfg = mtMap[mtName];
                                 if (cfg && (cfg.quality === '天工' || cfg.quality === '珍品' || cfg.quality === '稀有')) {
                                     hasQualityMutant = true;
-                                    log('仓库', `跳过变异物品: ${getFruitName(id)} x${count} (${mtName})`, {
+                                    log('仓库', `品质变异物品: ${getFruitName(id)} x${count} (${mtName}) — 是否出售取决于"连黄金果实一起卖"设置`, {
                                         module: 'warehouse',
-                                        event: 'skip_mutant_item',
-                                        result: 'kept',
+                                        event: 'quality_mutant_item',
+                                        result: 'evaluated',
                                         itemId: id,
                                         count: count,
                                     });
