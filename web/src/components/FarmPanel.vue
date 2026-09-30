@@ -7,7 +7,6 @@ import LandCard from '@/components/LandCard.vue'
 import { useAccountStore } from '@/stores/account'
 import { useFarmStore } from '@/stores/farm'
 import { useStatusStore } from '@/stores/status'
-import api from '@/api'
 import { useToastStore } from '@/stores/toast'
 
 const farmStore = useFarmStore()
@@ -42,21 +41,7 @@ async function handleLandOperate(payload: { op: string, seedId?: number, fertili
     refresh()
   }
 }
-// 变异一览(来自 /api/mutations, 无需账号)
-const mutations = ref<{ list: any[], count: number }>({ list: [], count: 0 })
-async function fetchMutations() {
-  try {
-    const { data } = await api.get('/api/mutations')
-    if (data && data.ok) mutations.value = data.data || { list: [], count: 0 }
-  } catch (e) { /* 拿不到就不显示 */ }
-}
-const qualityClass = (q: string) => {
-  if (q === '天工') return 'bg-orange-100 text-orange-700 dark:bg-orange-900/30 dark:text-orange-400'
-  if (q === '珍品') return 'bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-400'
-  if (q === '稀有') return 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400'
-  if (q === '未知') return 'bg-gray-100 text-gray-500 dark:bg-gray-800 dark:text-gray-400'
-  return 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400'
-}
+
 const confirmVisible = ref(false)
 const confirmConfig = ref({
   title: '',
@@ -136,7 +121,6 @@ const { pause, resume } = useIntervalFn(() => {
 const { pause: pauseRefresh, resume: resumeRefresh } = useIntervalFn(refresh, 60000)
 
 onMounted(() => {
-  fetchMutations()
   if (currentAccountId.value) farmStore.fetchSeeds(currentAccountId.value)
   refresh()
   resume()
@@ -193,35 +177,7 @@ onUnmounted(() => {
         </div>
       </div>
 
-      <!-- 变异一览 -->
-      <div v-if="mutations.count" class="border-b border-gray-100 bg-gray-50/60 p-3 sm:p-4 dark:border-gray-700 dark:bg-gray-900/30">
-        <div class="mb-2 flex flex-wrap items-center gap-2">
-          <div class="i-carbon-catalyst text-base text-purple-500" />
-          <span class="text-sm font-bold">变异一览</span>
-          <span class="rounded-full bg-purple-100 px-2 py-0.5 text-xs text-purple-700 dark:bg-purple-900/30 dark:text-purple-300">
-            共 {{ mutations.count }} 种
-          </span>
-          <span class="text-xs text-gray-500 dark:text-gray-400">
-            地块上的变异会显示在卡片上；带「待确认」的是抓包里见过但还没对上名字的枚举
-          </span>
-        </div>
-        <div class="flex flex-wrap gap-1.5">
-          <span
-            v-for="m in mutations.list"
-            :key="m.name"
-            class="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs"
-            :class="qualityClass(m.quality)"
-            :title="m.effect ? `${m.effect}${m.description ? ' · ' + m.description : ''}` : ''"
-          >
-            <span>{{ m.icon || '●' }}</span>
-            <span class="font-medium">{{ m.name }}</span>
-            <span class="opacity-70">· {{ m.quality }}</span>
-            <span v-if="m.effect" class="opacity-70">· {{ m.effect }}</span>
-          </span>
-        </div>
-      </div>
-
-      <!-- Grid -->
+        <!-- Grid -->
       <div class="p-3 sm:p-4">
         <div v-if="loading || statusLoading" class="flex justify-center py-12">
           <div class="i-svg-spinners-90-ring-with-bg text-4xl text-blue-500" />

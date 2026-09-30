@@ -1289,17 +1289,6 @@ app.use('/api', (req, res, next) => {
     });
 
     // API: 种子列表
-    // 变异一览(农场页展示用): 已知变异类型 + 抓包见过但未命名的枚举
-    app.get('/api/mutations', async (req, res) => {
-        try {
-            const gc = require('../config/gameConfig');
-            const legend = typeof gc.getMutantLegend === 'function' ? gc.getMutantLegend() : { list: [], count: 0 };
-            res.json({ ok: true, data: legend });
-        } catch (e) {
-            res.json({ ok: false, error: e.message });
-        }
-    });
-
     app.get('/api/seeds', async (req, res) => {
         const id = getAccId(req);
         if (!id) return res.status(400).json({ ok: false });

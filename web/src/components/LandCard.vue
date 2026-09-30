@@ -51,7 +51,10 @@ const land = computed(() => props.land)
 const mutationLabel = computed(() => {
   const t = String((land.value as any)?.mutationType || '').trim()
   if (!t) return '变异'
-  return t === '变异' ? '变异(类型待识别)' : `${t}变异`
+  if (t.startsWith('变异')) return t                        // 变异#14 等未识别枚举
+  if (t === '变异') return '变异(类型待识别)'
+  const base = t.includes('_') ? t.split('_')[0] : t        // 黄金_天工 → 黄金 (与游戏显示一致)
+  return `${base}变异`
 })
 const now = ref(Date.now())
 let timer: ReturnType<typeof setInterval> | null = null

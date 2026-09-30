@@ -43,39 +43,19 @@ function getMutantTypesByQuality(quality) {
  * 获取所有变异类型
  */
 /**
- * 变异一览(给界面用): 已知类型 + 抓包出现过但尚未命名的枚举
- * @returns {{ list: Array<{name,quality,qualityRank,effect,description,color,icon,enumIds,unknown?,id?}>, count: number }}
+ * 按枚举 ID 找变异(2026-09-30): plant.mutant_config_ids 与背包 mutant_types 用的是同一套枚举
+ * 已知类型看 enumIds; 抓包见过但未命名的走 unknownEnumIds → 返回 "变异#id"
  */
-function getMutantLegend() {
-    const list = [];
+function getMutantByEnumId(enumId) {
+    const id = Number(enumId) || 0;
+    if (!id) return null;
     for (const [name, cfg] of mutantTypeMap) {
-        list.push({
-            name,
-            quality: cfg.quality || '无',
-            qualityRank: Number(cfg.qualityRank) || 0,
-            effect: cfg.effect || '',
-            description: cfg.description || '',
-            color: cfg.color || '',
-            icon: cfg.icon || '',
-            enumIds: Array.isArray(cfg.enumIds) ? cfg.enumIds : [],
-        });
+        const ids = Array.isArray(cfg.enumIds) ? cfg.enumIds : [];
+        if (ids.includes(id)) return { name, quality: cfg.quality || '无', qualityRank: Number(cfg.qualityRank) || 0, key: name };
     }
     const unknownMap = (mutantTypesData && mutantTypesData.unknownEnumIds) || {};
-    for (const [id, cfg] of Object.entries(unknownMap)) {
-        list.push({
-            name: `变异#${id}`,
-            unknown: true,
-            quality: '未知',
-            qualityRank: 9,
-            effect: (cfg && cfg.note) || '尚未确认的变异类型',
-            description: '',
-            color: '#94a3b8',
-            icon: '❓',
-            enumIds: [Number(id) || 0],
-        });
-    }
-    list.sort((a, b) => (a.qualityRank - b.qualityRank) || String(a.name).localeCompare(String(b.name)));
-    return { list, count: list.length };
+    if (unknownMap[String(id)]) return { name: `变异#${id}`, quality: '未知', qualityRank: 9, key: `UNKNOWN_${id}` };
+    return null;
 }
 
 function getAllMutantTypes() {
@@ -255,6 +235,17 @@ function resolveMutationInfo(plantId, mutantConfigIds) {
         if (!displayType) {
             displayType = confidence[0].mutationType;
             displayQuality = confidence[0].quality;
+        }
+        // 兜底②: 用变异枚举 ID 直接映射(新变异的名字启发式认不出来时, 也能显示准确的类型/品质)
+        if (!displayType) {
+            for (const id of mutantConfigIds) {
+                const m = getMutantByEnumId(id);
+                if (m) {
+                    displayType = m.name;
+                    displayQuality = m.quality;
+                    break;
+                }
+            }
         }
     } else if (selfType) {
         displayType = selfType;
@@ -707,7 +698,7 @@ module.exports = {
     getMutantType,
     getMutantTypesByQuality,
     getAllMutantTypes,
-    getMutantLegend,
+    getMutantByEnumId,
     isGoldenPlant,
     isGoldenFruit,
     getPlantMutantConfig,
