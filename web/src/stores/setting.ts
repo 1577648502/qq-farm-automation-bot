@@ -88,6 +88,7 @@ export interface SettingsState {
   fireworkMode: 'self' | 'friend'
   fireworkCount: number
   happyShareEnabled: boolean
+  sellGoldenFruit: boolean
   adGiftEnabled: boolean
 }
 
@@ -135,6 +136,7 @@ export const useSettingStore = defineStore('setting', () => {
   fireworkMode: 'self',
   fireworkCount: 1,
   happyShareEnabled: true,
+  sellGoldenFruit: false,
   adGiftEnabled: true,
   })
   const loading = ref(false)
@@ -191,6 +193,7 @@ export const useSettingStore = defineStore('setting', () => {
   settings.value.fireworkMode = d.fireworkMode === 'friend' ? 'friend' : 'self'
   settings.value.fireworkCount = d.fireworkCount ?? 1
   settings.value.happyShareEnabled = d.happyShareEnabled ?? true
+  settings.value.sellGoldenFruit = d.sellGoldenFruit ?? false
   settings.value.adGiftEnabled = d.adGiftEnabled ?? true
       }
     }
@@ -239,6 +242,7 @@ export const useSettingStore = defineStore('setting', () => {
         fireworkMode: newSettings.fireworkMode,
         fireworkCount: newSettings.fireworkCount,
         happyShareEnabled: newSettings.happyShareEnabled,
+        sellGoldenFruit: newSettings.sellGoldenFruit,
         adGiftEnabled: newSettings.adGiftEnabled,
       }
 

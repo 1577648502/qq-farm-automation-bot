@@ -230,6 +230,7 @@ const DEFAULT_ACCOUNT_CONFIG = {
     fireworkCount: 1,                 // 每日放几个(每个 经验+30)
     // ===== 快乐不独享(2026-09-24 新活动) =====
     happyShareEnabled: true,          // 每日自动领快乐值 + 领可领的档位奖励
+    sellGoldenFruit: false,           // 自动卖果实时是否连黄金果实一起卖(默认保留)
     adGiftEnabled: true,              // 每日自动领「看广告礼包」(跳过广告直接领, 化肥×5)
     // 背包种子优先顺序（seedId 数组）
     bagSeedPriority: [],
@@ -537,6 +538,9 @@ function normalizeAccountConfig(input, fallback = accountFallbackConfig) {
     if (src.happyShareEnabled !== undefined && src.happyShareEnabled !== null) {
         cfg.happyShareEnabled = !!src.happyShareEnabled;
     }
+    if (src.sellGoldenFruit !== undefined && src.sellGoldenFruit !== null) {
+        cfg.sellGoldenFruit = !!src.sellGoldenFruit;
+    }
     if (src.adGiftEnabled !== undefined && src.adGiftEnabled !== null) {
         cfg.adGiftEnabled = !!src.adGiftEnabled;
     }
@@ -814,6 +818,7 @@ function getConfigSnapshot(accountId) {
         fireworkMode: cfg.fireworkMode === 'friend' ? 'friend' : 'self',
         fireworkCount: Math.max(0, Math.min(20, Number(cfg.fireworkCount) || 0)),
         happyShareEnabled: cfg.happyShareEnabled === undefined ? true : !!cfg.happyShareEnabled,
+        sellGoldenFruit: !!cfg.sellGoldenFruit,
         adGiftEnabled: cfg.adGiftEnabled === undefined ? true : !!cfg.adGiftEnabled,
         stealDelaySeconds: Math.max(0, Math.min(300, Number(cfg.stealDelaySeconds) || 0)),
         plantOrderRandom: !!cfg.plantOrderRandom,
@@ -970,6 +975,9 @@ function applyConfigSnapshot(snapshot, options = {}) {
     }
     if (cfg.happyShareEnabled !== undefined && cfg.happyShareEnabled !== null) {
         next.happyShareEnabled = !!cfg.happyShareEnabled;
+    }
+    if (cfg.sellGoldenFruit !== undefined && cfg.sellGoldenFruit !== null) {
+        next.sellGoldenFruit = !!cfg.sellGoldenFruit;
     }
     if (cfg.adGiftEnabled !== undefined && cfg.adGiftEnabled !== null) {
         next.adGiftEnabled = !!cfg.adGiftEnabled;
@@ -1517,6 +1525,11 @@ function getAutumnWishConfig(accountId) {
     };
 }
 
+function getSellGoldenFruit(accountId) {
+    const cfg = (typeof getConfigSnapshot === 'function' ? getConfigSnapshot(accountId) : (globalConfig.accountConfig || {})) || {};
+    return !!cfg.sellGoldenFruit;
+}
+
 function getHappyShareEnabled(accountId) {
     const cfg = (typeof getConfigSnapshot === 'function' ? getConfigSnapshot(accountId) : (globalConfig.accountConfig || {})) || {};
     return cfg.happyShareEnabled === undefined ? true : !!cfg.happyShareEnabled;
@@ -1589,6 +1602,7 @@ module.exports = {
     getBuyBookConfig,
     getAutumnWishConfig,
     getHappyShareEnabled,
+    getSellGoldenFruit,
     getAdGiftEnabled,
     getBagSeedPriority,
     getBagSeedFallbackStrategy,

@@ -19,6 +19,7 @@ const fruitToPlant = new Map();  // fruit_id -> plant (果实ID -> 植物)
 let itemInfoConfig = null;
 let mutantTypesConfig = null;
 const mutantTypeMap = new Map();
+let mutantTypesData = null;
 
 /**
  * 获取变异类型配置
@@ -41,6 +42,42 @@ function getMutantTypesByQuality(quality) {
 /**
  * 获取所有变异类型
  */
+/**
+ * 变异一览(给界面用): 已知类型 + 抓包出现过但尚未命名的枚举
+ * @returns {{ list: Array<{name,quality,qualityRank,effect,description,color,icon,enumIds,unknown?,id?}>, count: number }}
+ */
+function getMutantLegend() {
+    const list = [];
+    for (const [name, cfg] of mutantTypeMap) {
+        list.push({
+            name,
+            quality: cfg.quality || '无',
+            qualityRank: Number(cfg.qualityRank) || 0,
+            effect: cfg.effect || '',
+            description: cfg.description || '',
+            color: cfg.color || '',
+            icon: cfg.icon || '',
+            enumIds: Array.isArray(cfg.enumIds) ? cfg.enumIds : [],
+        });
+    }
+    const unknownMap = (mutantTypesData && mutantTypesData.unknownEnumIds) || {};
+    for (const [id, cfg] of Object.entries(unknownMap)) {
+        list.push({
+            name: `变异#${id}`,
+            unknown: true,
+            quality: '未知',
+            qualityRank: 9,
+            effect: (cfg && cfg.note) || '尚未确认的变异类型',
+            description: '',
+            color: '#94a3b8',
+            icon: '❓',
+            enumIds: [Number(id) || 0],
+        });
+    }
+    list.sort((a, b) => (a.qualityRank - b.qualityRank) || String(a.name).localeCompare(String(b.name)));
+    return { list, count: list.length };
+}
+
 function getAllMutantTypes() {
     const result = {};
     for (const [name, cfg] of mutantTypeMap) {
@@ -289,7 +326,7 @@ function loadConfigs() {
     try {
         const mutantTypesPath = path.join(configDir, 'MutantTypes.json');
         if (fs.existsSync(mutantTypesPath)) {
-            const mutantTypesData = JSON.parse(fs.readFileSync(mutantTypesPath, 'utf8'));
+            mutantTypesData = JSON.parse(fs.readFileSync(mutantTypesPath, 'utf8'));
             const types = mutantTypesData && mutantTypesData.mutationTypes;
             if (types) {
                 mutantTypeMap.clear();
@@ -670,6 +707,7 @@ module.exports = {
     getMutantType,
     getMutantTypesByQuality,
     getAllMutantTypes,
+    getMutantLegend,
     isGoldenPlant,
     isGoldenFruit,
     getPlantMutantConfig,

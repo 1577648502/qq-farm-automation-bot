@@ -1289,6 +1289,17 @@ app.use('/api', (req, res, next) => {
     });
 
     // API: 种子列表
+    // 变异一览(农场页展示用): 已知变异类型 + 抓包见过但未命名的枚举
+    app.get('/api/mutations', async (req, res) => {
+        try {
+            const gc = require('../config/gameConfig');
+            const legend = typeof gc.getMutantLegend === 'function' ? gc.getMutantLegend() : { list: [], count: 0 };
+            res.json({ ok: true, data: legend });
+        } catch (e) {
+            res.json({ ok: false, error: e.message });
+        }
+    });
+
     app.get('/api/seeds', async (req, res) => {
         const id = getAccId(req);
         if (!id) return res.status(400).json({ ok: false });
@@ -1918,6 +1929,19 @@ app.use('/api', (req, res, next) => {
         }
     });
 
+    // 单地块操作(每块地单独操作: 浇水/除草/除虫/收获/铲除/施肥/种植/升级/解锁)
+    app.post('/api/land/operate', async (req, res) => {
+        const id = getAccId(req);
+        if (!id) return res.status(400).json({ ok: false, error: '缺少账号 ID' });
+        if (!checkAccountAccess(req, id)) return res.status(403).json({ ok: false, error: '无权访问此账号' });
+        const { landId, op, seedId, fertilizerId } = req.body || {};
+        if (!landId || !op) return res.status(400).json({ ok: false, error: '缺少 landId 或 op' });
+        try {
+            const data = await provider.operateLand(id, { landId, op, seedId, fertilizerId });
+            res.json({ ok: true, data });
+        } catch (e) { res.json({ ok: false, error: e.message }); }
+    });
+
     app.post('/api/farm/operate', async (req, res) => {
         const id = getAccId(req);
         if (!id) return res.status(400).json({ ok: false });
@@ -2151,6 +2175,8 @@ app.use('/api', (req, res, next) => {
                     happyShareEnabled,
                     // 看广告礼包(跳过广告直接领)
                     adGiftEnabled,
+                    // 自动卖果实时是否连黄金果实一起卖
+                    sellGoldenFruit: (id && typeof store.getSellGoldenFruit === 'function') ? store.getSellGoldenFruit(id) : false,
                     ui,
                     offlineReminder,
                 },

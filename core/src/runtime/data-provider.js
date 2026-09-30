@@ -272,6 +272,7 @@ function createDataProvider(options) {
 
 
         doFarmOp: (accountRef, opType) => callWorkerApi(resolveAccountRefId(accountRef), 'doFarmOp', opType),
+        operateLand: (accountRef, opts) => callWorkerApi(resolveAccountRefId(accountRef), 'operateLand', opts || {}),
 
         doAnalytics: (accountRef, sortBy) => callWorkerApi(resolveAccountRefId(accountRef), 'getAnalytics', sortBy),
 
@@ -348,7 +349,8 @@ function createDataProvider(options) {
                 fireworkMode: body.fireworkMode,
                 fireworkCount: body.fireworkCount,
                 happyShareEnabled: body.happyShareEnabled,
-                adGiftEnabled: body.adGiftEnabled
+                adGiftEnabled: body.adGiftEnabled,
+                sellGoldenFruit: body.sellGoldenFruit
 
             };
 

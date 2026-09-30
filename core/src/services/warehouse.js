@@ -5,7 +5,7 @@
 
 const protobuf = require('protobufjs');
 const { getFruitName, getPlantByFruitId, getPlantBySeedId, getItemById, getItemImageById, getSeedImageBySeedId, getAllMutantTypes, getMutationTypeByFruitId } = require('../config/gameConfig');
-const { isAutomationOn } = require('../models/store');
+const { isAutomationOn, getSellGoldenFruit } = require('../models/store');
 const { sendMsgAsync, networkEvents, getUserState } = require('../utils/network');
 const { types } = require('../utils/proto');
 const { toLong, toNum, log, logWarn, sleep } = require('../utils/utils');
@@ -27,6 +27,9 @@ const QQ_MUTANT_ENUM_MAP = Object.freeze({
     10: "月华",
     11: "塔塔",
 });
+
+// 黄金果实相关的变异枚举(5/6/7 = 黄金_天工/珍品/稀有); 物品名含"黄金"的也算
+const GOLDEN_MUTANT_ENUM_IDS = new Set([5, 6, 7]);
 
 const SELL_BATCH_SIZE = 15;
 const FERTILIZER_RELATED_IDS = new Set([
@@ -498,11 +501,31 @@ async function getBagDetail() {
 /**
  * 检查并出售所有果实
  */
+/**
+ * 是不是"黄金果实": 物品名含"黄金"(如 黄金果 / 黄金·爱心果),
+ * 或带黄金变异(黄金_天工/珍品/稀有, 枚举 5/6/7)
+ */
+function isGoldenFruitItem(item, id) {
+    const info = getItemById(id) || {};
+    if (/黄金/.test(String(info.name || ''))) return true;
+    const mts = (item && item.mutant_types) || [];
+    for (let i = 0; i < mts.length; i++) {
+        const mid = Number(mts[i]);
+        if (mid > 0 && GOLDEN_MUTANT_ENUM_IDS.has(mid)) return true;
+        const mName = QQ_MUTANT_ENUM_MAP[mid];
+        if (mName && /黄金/.test(String(mName))) return true;
+    }
+    return false;
+}
+
 async function sellAllFruits() {
     const sellEnabled = isAutomationOn('sell');
     if (!sellEnabled) {
         return;
     }
+    // 设置里的"连黄金果实一起卖"(默认关): 关着就把黄金果实留在背包
+    const sellGolden = getSellGoldenFruit();
+    let goldenSoldCount = 0;
     try {
         const bagReply = await getBag();
         const items = getBagItems(bagReply);
@@ -543,16 +566,31 @@ async function sellAllFruits() {
                     }
                 } catch (e) {}
             }
-            if (!hasQualityMutant && isSellableItem(item) && count > 0) {
+            // 黄金果实: 默认保留(含普通"黄金果"与黄金_天工等变异果实),
+            // 只有设置里勾了"连黄金果实一起卖"才会进入出售流程
+            const goldenItem = isGoldenFruitItem(item, id);
+            if (goldenItem && !sellGolden) {
+                continue;
+            }
+            // 勾了"连黄金果实一起卖"时, 黄金果实自身的品质变异(黄金_天工/珍品/稀有)不再拦它
+            const allowGolden = goldenItem && sellGolden;
+            if ((!hasQualityMutant || allowGolden) && isSellableItem(item) && count > 0) {
                 toSell.push(item);
                 var suffix = (item.mutant_types && item.mutant_types.length > 0) ? '(变异)' : '';
-                names.push(`${getFruitName(id)}x${count}${suffix}`);
+                names.push(`${getFruitName(id)}x${count}${suffix}${goldenItem ? '[黄金]' : ''}`);
+                if (goldenItem) goldenSoldCount += count;
             }
         }
 
         if (toSell.length === 0) {
             log('仓库', '无果实可出售');
             return;
+        }
+
+        if (goldenSoldCount > 0) {
+            log('仓库', `连黄金果实一起出售(设置已开启): 共 ${goldenSoldCount} 个`, {
+                module: 'warehouse', event: 'sell_golden_fruit', result: 'ok', count: goldenSoldCount,
+            });
         }
 
         const totalsBefore = getCurrentTotals();
@@ -695,6 +733,7 @@ module.exports = {
         lastOpenAt: fertilizerGiftLastOpenAt,
     }),
     sellAllFruits,
+    isGoldenFruitItem,
     isSellableItem,
     getSellBlockReason,
     getBagItems,

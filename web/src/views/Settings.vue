@@ -626,6 +626,7 @@ const localAutomationSettings = ref({
   fireworkMode: 'self',
   fireworkCount: 1,
   happyShareEnabled: true,
+  sellGoldenFruit: false,
   adGiftEnabled: true,
   // 防封号(低调)模式
   stealthEnabled: false,
@@ -920,6 +921,7 @@ function syncLocalAutomationSettings() {
   localAutomationSettings.value.fireworkMode = settings.value.fireworkMode === 'friend' ? 'friend' : 'self'
   localAutomationSettings.value.fireworkCount = settings.value.fireworkCount ?? 1
   localAutomationSettings.value.happyShareEnabled = settings.value.happyShareEnabled ?? true
+  localAutomationSettings.value.sellGoldenFruit = settings.value.sellGoldenFruit ?? false
   localAutomationSettings.value.adGiftEnabled = settings.value.adGiftEnabled ?? true
     localAutomationSettings.value.fertilizerBuyOrganicCount = settings.value.fertilizerBuyOrganicCount ?? 10
     localAutomationSettings.value.fertilizerBuyOrganicThresholdHours = settings.value.fertilizerBuyOrganicThresholdHours ?? 10
@@ -1110,6 +1112,7 @@ async function saveAutomationSettings() {
       fireworkMode: localAutomationSettings.value.fireworkMode,
       fireworkCount: localAutomationSettings.value.fireworkCount,
       happyShareEnabled: localAutomationSettings.value.happyShareEnabled,
+      sellGoldenFruit: localAutomationSettings.value.sellGoldenFruit,
       adGiftEnabled: localAutomationSettings.value.adGiftEnabled,
       fertilizerBuyOrganicCount: localAutomationSettings.value.fertilizerBuyOrganicCount,
       fertilizerBuyOrganicThresholdHours: localAutomationSettings.value.fertilizerBuyOrganicThresholdHours,
@@ -1823,7 +1826,16 @@ async function handleTestOffline() {
             <div class="grid grid-cols-2 gap-3 md:grid-cols-3">
               <BaseSwitch v-model="localAutomationSettings.automation.farm" label="自动种植收获" />
               <BaseSwitch v-model="localAutomationSettings.automation.task" label="自动做任务" />
+              <div class="space-y-1">
               <BaseSwitch v-model="localAutomationSettings.automation.sell" label="自动卖果实" />
+              <BaseSwitch
+                v-model="localAutomationSettings.sellGoldenFruit"
+                label="连黄金果实一起卖"
+              />
+              <div class="text-xs text-gray-500 dark:text-gray-400">
+                默认保留黄金果实（黄金果 / 黄金·xx / 带黄金·天工等变异的果实）；勾上后这些也会一起卖出。
+              </div>
+            </div>
               <BaseSwitch v-model="localAutomationSettings.automation.friend" label="自动好友互动" />
               <BaseSwitch v-model="localAutomationSettings.automation.farm_push" label="推送触发巡田" />
               <BaseSwitch v-model="localAutomationSettings.automation.land_upgrade" label="自动升级土地" />

@@ -1223,6 +1223,19 @@ async function handleApiCall(msg) {
                 result = getAutomation();
                 break;
             }
+            case 'operateLand': {
+                const lo = args[0] || {};
+                result = await farm.operateSingleLand({
+                    landId: lo.landId,
+                    op: lo.op,
+                    seedId: lo.seedId,
+                    fertilizerId: lo.fertilizerId,
+                });
+                log('农场', `单地块操作: ${result.action} #${result.landId}${result.detail ? ` (${result.detail})` : ''}`, {
+                    module: 'farm', event: '单地块操作', result: 'ok', landId: result.landId, op: lo.op,
+                });
+                break;
+            }
             case 'doFarmOp':
                 result = await runFarmOperation(args[0]); // opType
                 break;

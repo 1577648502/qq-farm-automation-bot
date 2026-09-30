@@ -1085,6 +1085,14 @@ async function getLandsDetail() {
                 mutationQuality = mutationInfo.mutationQuality;
                 mutationKey = mutationInfo.mutationKey;
             }
+            // 服务端明确给了变异配置ID 但名字没解析出来(新变异/基础效果类, 如冰冻/爱心) →
+            // 也要在地块上标出来, 不能因为"名字未识别"就当成没变异
+            if (!mutationType && mutantConfigIds.length > 0) {
+                isMutant = true;
+                mutationType = '变异';
+                mutationQuality = '未知';
+                mutationKey = `UNKNOWN_${mutantConfigIds.join('_')}`;
+            }
 
             // Also check for phase-level mutations (阶段级变异)
             if (!mutationType && mutantConfigIds.length === 0 && Array.isArray(plant.phases)) {
@@ -1594,6 +1602,59 @@ async function checkFarm() {
  * 手动/自动执行农场操作
  * @param {string} opType - 'all', 'harvest', 'clear', 'plant', 'upgrade'
  */
+/**
+ * 单地块操作(我的农场里每块地单独操作)
+ * @param opts.landId 地块 ID
+ * @param opts.op water|weed|bug|harvest|clear|fertilize|plant|upgrade|unlock
+ * @param opts.seedId 种植时用的种子ID(不传则报错)
+ * @param opts.fertilizerId 施肥用的化肥ID(默认普通化肥)
+ * @returns {Promise<{ok:boolean, action:string, landId:number, detail?:string}>}
+ */
+async function operateSingleLand(opts = {}) {
+    const landId = toNum(opts.landId);
+    const op = String(opts.op || '').trim();
+    if (!landId) throw new Error('缺少地块 ID');
+    if (!op) throw new Error('缺少操作类型');
+
+    switch (op) {
+        case 'water':
+            await waterLand([landId]);
+            return { ok: true, action: '浇水', landId };
+        case 'weed':
+            await weedOut([landId]);
+            return { ok: true, action: '除草', landId };
+        case 'bug':
+            await insecticide([landId]);
+            return { ok: true, action: '除虫', landId };
+        case 'harvest':
+            await harvest([landId]);
+            return { ok: true, action: '收获', landId };
+        case 'clear':
+            await removePlant([landId]);
+            return { ok: true, action: '铲除', landId };
+        case 'upgrade':
+            await upgradeLand(landId);
+            return { ok: true, action: '升级土地', landId };
+        case 'unlock':
+            await unlockLand(landId);
+            return { ok: true, action: '解锁土地', landId };
+        case 'plant': {
+            const seedId = toNum(opts.seedId);
+            if (!seedId) throw new Error('请先选择要种的种子');
+            await plantSeeds(seedId, [landId]);
+            return { ok: true, action: '种植', landId, detail: `seedId=${seedId}` };
+        }
+        case 'fertilize': {
+            const fertilizerId = toNum(opts.fertilizerId) || NORMAL_FERTILIZER_ID;
+            const n = await fertilize([landId], fertilizerId);
+            if (n <= 0) throw new Error('施肥失败(可能化肥不足或该地块不支持)');
+            return { ok: true, action: '施肥', landId, detail: `fertilizerId=${fertilizerId}` };
+        }
+        default:
+            throw new Error('不支持的操作: ' + op);
+    }
+}
+
 async function runFarmOperation(opType) {
     const landsReply = await getAllLands();
     if (!landsReply.lands || landsReply.lands.length === 0) {
@@ -2039,6 +2100,7 @@ module.exports = {
     getAvailableSeeds,
     buySeed,
     runFarmOperation,
+    operateSingleLand,
     runFertilizerByConfig,
     buildLandMap,
     buildSlaveToMasterMap,

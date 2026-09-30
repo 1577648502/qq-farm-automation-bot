@@ -55,6 +55,18 @@ export const useFarmStore = defineStore('farm', () => {
       seeds.value = data.data || []
   }
 
+  /** 单地块操作: 浇水/除草/除虫/收获/铲除/施肥/种植/升级/解锁 */
+  async function operateLand(accountId: string, payload: { landId: number; op: string; seedId?: number; fertilizerId?: number }) {
+    if (!accountId)
+      return
+    const { data } = await api.post('/api/land/operate', payload, {
+      headers: { 'x-account-id': accountId },
+    })
+    if (!data || !data.ok)
+      throw new Error(data?.error || '操作失败')
+    return data.data
+  }
+
   async function operate(accountId: string, opType: string) {
     if (!accountId)
       return
@@ -64,5 +76,5 @@ export const useFarmStore = defineStore('farm', () => {
     await fetchLands(accountId)
   }
 
-  return { lands, summary, seeds, loading, fetchLands, fetchSeeds, operate }
+  return { lands, summary, seeds, loading, fetchLands, fetchSeeds, operate, operateLand }
 })
