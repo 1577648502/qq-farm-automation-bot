@@ -123,7 +123,9 @@ const VISIT_LEAVE = 'gamepb.visitpb.VisitService.Leave';
         check('领取成功', r.ok === true, r);
         check('发了 2 次 Operate(51/52)', calls.filter(c => c.key === OPERATE).length === 2, calls.map(c => c.key));
         check('解析出烟花桶×20', r.rewards.some(x => x.id === 6001 && x.count === 20), r.rewards);
-        check('奖励带名称', String(r.rewards[0] && r.rewards[0].name || '').includes('烟花桶'), r.rewards);
+        // 名字从配置里取, 不写死(游戏改过名: 烟花桶 → 烟花·玉兔望月)
+        const rewardName = String((r.rewards[0] && r.rewards[0].name) || '');
+        check('奖励带名称(不是"物品#6001")', rewardName.includes('×20') && !rewardName.startsWith('物品#'), r.rewards);
     }
 
     section('4. 完整流程 + 幂等');
