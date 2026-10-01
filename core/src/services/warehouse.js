@@ -307,6 +307,24 @@ function getGoldFromItems(items) {
     return 0;
 }
 
+/**
+ * 从出售回包 get_items 里按**币种**解析收益
+ * 实测币种物品ID: 1001 = 金币 · 1005 = 金豆豆 · 1002 = 点券
+ * (普通果实卖得金币, 黄金果实卖得金豆豆 —— 2026-10-01 用户确认)
+ */
+function getCurrencyGains(items) {
+    const out = { gold: 0, bean: 0, coupon: 0 };
+    for (const item of (items || [])) {
+        const id = toNum(item.id);
+        const count = toNum(item.count);
+        if (count <= 0) continue;
+        if (id === 1 || id === 1001) out.gold += count;
+        else if (id === 1005) out.bean += count;
+        else if (id === 1002) out.coupon += count;
+    }
+    return out;
+}
+
 function deriveGoldGainFromSellReply(reply, lastKnownGold) {
     const gainFromGetItems = getGoldFromItems((reply && reply.get_items) || []);
     if (gainFromGetItems > 0) {
@@ -532,6 +550,9 @@ async function sellAllFruits() {
 
         const toSell = [];
         const names = [];
+        // 分两组: 普通果实(卖得金币) / 黄金果实(卖得金豆豆) —— 分开卖才能分别统计收益
+        const normalToSell = [];
+        const goldenToSell = [];
         for (const item of items) {
             const id = toNum(item.id);
             const count = toNum(item.count);
@@ -578,7 +599,12 @@ async function sellAllFruits() {
                 toSell.push(item);
                 var suffix = (item.mutant_types && item.mutant_types.length > 0) ? '(变异)' : '';
                 names.push(`${getFruitName(id)}x${count}${suffix}${goldenItem ? '[黄金]' : ''}`);
-                if (goldenItem) goldenSoldCount += count;
+                if (goldenItem) {
+                    goldenSoldCount += count;
+                    goldenToSell.push(item);
+                } else {
+                    normalToSell.push(item);
+                }
             }
         }
 
@@ -595,40 +621,65 @@ async function sellAllFruits() {
 
         const totalsBefore = getCurrentTotals();
         const goldBefore = totalsBefore.gold;
-        let serverGoldTotal = 0;
+        let serverGoldTotal = 0;      // 金币(普通果实)
+        let serverBeanTotal = 0;      // 金豆豆(黄金果实)
         let knownGold = goldBefore;
-        for (let i = 0; i < toSell.length; i += SELL_BATCH_SIZE) {
-            const batch = toSell.slice(i, i + SELL_BATCH_SIZE);
-            try {
-                const reply = await sellItems(batch);
-                const inferred = deriveGoldGainFromSellReply(reply, knownGold);
-                const gained = Math.max(0, toNum(inferred.gain));
-                knownGold = inferred.nextKnownGold;
-                if (gained > 0) serverGoldTotal += gained;
-            } catch (batchErr) {
-                // 某个条目可能参数非法，降级为逐个出售，跳过错误条目
-                logWarn('仓库', `批量出售失败，改为逐个重试: ${batchErr.message}`);
-                for (const it of batch) {
-                    try {
-                        const singleReply = await sellItems([it]);
-                        const inferred = deriveGoldGainFromSellReply(singleReply, knownGold);
-                        const gained = Math.max(0, toNum(inferred.gain));
+        const sellGroups = [
+            { label: '普通果实', unit: '金币', list: normalToSell },
+            { label: '黄金果实', unit: '金豆豆', list: goldenToSell },
+        ].filter((g) => g.list.length > 0);
+
+        const groupStats = [];
+        for (const group of sellGroups) {
+            let goldGain = 0;
+            let beanGain = 0;
+            for (let i = 0; i < group.list.length; i += SELL_BATCH_SIZE) {
+                const batch = group.list.slice(i, i + SELL_BATCH_SIZE);
+                try {
+                    const reply = await sellItems(batch);
+                    const gains = getCurrencyGains((reply && reply.get_items) || []);
+                    if (gains.gold <= 0 && gains.bean <= 0 && gains.coupon <= 0) {
+                        // 回包没给币种时退回旧的金币推断逻辑
+                        const inferred = deriveGoldGainFromSellReply(reply, knownGold);
                         knownGold = inferred.nextKnownGold;
-                        if (gained > 0) serverGoldTotal += gained;
-                    } catch (singleErr) {
-                        const sid = toNum(it.id);
-                        const sc = toNum(it.count);
-                        logWarn('仓库', `跳过不可售物品: ID=${sid} x${sc} (${singleErr.message})`, {
-                            module: 'warehouse',
-                            event: '跳过不可售物品',
-                            result: 'skip',
-                            itemId: sid,
-                            count: sc,
-                        });
+                        goldGain += Math.max(0, toNum(inferred.gain));
+                    } else {
+                        goldGain += gains.gold;
+                        beanGain += gains.bean;
+                    }
+                } catch (batchErr) {
+                    // 某个条目可能参数非法，降级为逐个出售，跳过错误条目
+                    logWarn('仓库', `批量出售失败，改为逐个重试: ${batchErr.message}`);
+                    for (const it of batch) {
+                        try {
+                            const singleReply = await sellItems([it]);
+                            const gains = getCurrencyGains((singleReply && singleReply.get_items) || []);
+                            if (gains.gold <= 0 && gains.bean <= 0 && gains.coupon <= 0) {
+                                const inferred = deriveGoldGainFromSellReply(singleReply, knownGold);
+                                knownGold = inferred.nextKnownGold;
+                                goldGain += Math.max(0, toNum(inferred.gain));
+                            } else {
+                                goldGain += gains.gold;
+                                beanGain += gains.bean;
+                            }
+                        } catch (singleErr) {
+                            const sid = toNum(it.id);
+                            const sc = toNum(it.count);
+                            logWarn('仓库', `跳过不可售物品: ID=${sid} x${sc} (${singleErr.message})`, {
+                                module: 'warehouse',
+                                event: '跳过不可售物品',
+                                result: 'skip',
+                                itemId: sid,
+                                count: sc,
+                            });
+                        }
                     }
                 }
+                if (i + SELL_BATCH_SIZE < group.list.length) await sleep(300);
             }
-            if (i + SELL_BATCH_SIZE < toSell.length) await sleep(300);
+            serverGoldTotal += goldGain;
+            serverBeanTotal += beanGain;
+            groupStats.push({ label: group.label, unit: group.unit, count: group.list.length, gold: goldGain, bean: beanGain });
         }
         // 等待金币通知更新（最多 2s）
         let goldAfter = goldBefore;
@@ -665,12 +716,27 @@ async function sellAllFruits() {
                 updateStatusGold(state.gold);
             }
         }
-        log('仓库', `出售 ${names.join(', ')}${totalGoldEarned > 0 ? `，获得 ${totalGoldEarned} 金币` : ''}`, {
+        // 收益文案: 普通果实 → 金币, 黄金果实 → 金豆豆(用户要求分开显示)
+        const gainText = [];
+        if (serverGoldTotal > 0) gainText.push(`金币 +${serverGoldTotal}`);
+        if (serverBeanTotal > 0) gainText.push(`金豆豆 +${serverBeanTotal}`);
+        const groupText = groupStats.map((g) => {
+            const gain = [];
+            if (g.gold > 0) gain.push(`金币+${g.gold}`);
+            if (g.bean > 0) gain.push(`金豆豆+${g.bean}`);
+            return `${g.label} ${g.count} 种${gain.length ? ` → ${gain.join('/')}` : ''}`;
+        }).join('；');
+        const shownGold = Math.max(serverGoldTotal, totalGoldEarned);
+        const noGain = shownGold <= 0 && serverBeanTotal <= 0;
+        log('仓库', `出售 ${names.join(', ')}${gainText.length ? ` → ${gainText.join('，')}` : ''}`
+            + `${groupText ? `（${groupText}）` : ''}${noGain ? ' ⚠ 未收到收益回包' : ''}`, {
             module: 'warehouse',
-            event: totalGoldEarned > 0 ? 'sell_success' : 'sell_done',
-            result: totalGoldEarned > 0 ? 'ok' : 'unknown_gain',
+            event: noGain ? 'sell_done' : 'sell_success',
+            result: noGain ? 'unknown_gain' : 'ok',
             count: toSell.length,
-            gold: totalGoldEarned,
+            gold: serverGoldTotal || totalGoldEarned,
+            goldBean: serverBeanTotal,
+            groups: groupStats,
             totalsBefore,
             totalsAfter,
             totalsDeltaGold,
