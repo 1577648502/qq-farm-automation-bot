@@ -30,7 +30,7 @@
  * 任务(0103): cmd=7 列表(活动体 #122) = {#2: 累计奖励?, #3(repeated): {#1: 序号, #2: 条件, #3(repeated): {物品,数量}, #4: 状态}}
  */
 const { log, toNum, toInt, sleep } = require('../utils/utils');
-const { getItemById, getItemImageById } = require('../config/gameConfig');
+const { getItemById, getItemImageById, getPlantBySeedId } = require('../config/gameConfig');
 const { operateRaw, parseTop, findField } = require('./mengchong');
 
 const GROUP_MAIN = 2026110101;
@@ -60,8 +60,32 @@ const FIELD_SHOP_BUY = 101;
 
 const STATE_FIELD = 121;    // 主活动状态容器
 const MILK_COUPON_ID = 1041; // 奶茶券(活动货币)
-/** 活动果实 id: 森野系列种子(20525…)对应果实 40525…; 奶茶工坊就是"果实 → 高级奶茶" */
-const MILK_FRUIT_IDS = [40525, 40526, 40527, 40528, 40529, 40021, 41435, 49005];
+/** 奶茶活动可加工的种子(商店 301~310): 森野 8 种 + 金币果 + 经验蘑菇 */
+const MILK_TEA_SEED_IDS = [20522, 20523, 20525, 20526, 20527, 20528, 20529, 20021, 21435, 29005];
+
+/**
+ * 动态推导"可制作的果实 id"——不要写死列表(会漏):
+ *  · 优先用官方 Plant.json 的 fruit.id / fruit_alter.id / special_fruit.id(含变异果实)
+ *  · 官方表缺(如森野系列)时按实测规律兜底: **果实 id = 种子 id + 20000**(20525→40525, 29005→49005)
+ */
+function getCraftableFruitIds() {
+    const ids = new Set();
+    for (const seed of MILK_TEA_SEED_IDS) {
+        const plant = getPlantBySeedId(seed) || getFallbackPlantBySeedId(seed);
+        const add = (o) => {
+            const id = toNum(o && o.id);
+            if (id > 0) ids.add(id);
+        };
+        if (plant) {
+            add(plant.fruit);
+            add(plant.fruit_alter);
+            add(plant.special_fruit);
+        }
+        // 兜底: 无论官方有没有, 都按规律补一个(幂等, 重复无害)
+        ids.add(seed + 20000);
+    }
+    return [...ids];
+}
 const CMD_CRAFT_REAL = 62;   // 制作奶茶(工坊加工): 请求 #167 = {#1: 果实 uid 列表(packed varint)}
 const SHOP_BODY_FIELD = 102;// 商店列表所在字段
 const TASK_BODY_FIELD = 122;// 任务列表所在字段
@@ -431,10 +455,14 @@ async function craftMilkTea(limit = 10) {
     } catch (e) {
         return { ok: false, reason: `读取背包失败: ${e.message}` };
     }
+    const fruitIds = getCraftableFruitIds();
     const picked = [];
+    const usedIds = new Set();
     for (const it of items) {
         if (picked.length >= limit) break;
-        if (!MILK_FRUIT_IDS.includes(toNum(it && it.id))) continue;
+        const iid = toNum(it && it.id);
+        if (!fruitIds.includes(iid)) continue;
+        usedIds.add(iid);
         const uid = toNum(it && it.uid);
         if (uid > 0) picked.push(uid);
     }
@@ -459,7 +487,7 @@ async function craftMilkTea(limit = 10) {
     log('活动', `奶茶热销中: 已制作奶茶(投入 ${picked.length} 个果实)${made.length ? ` → ${made.map((m) => m.name).join('、')}` : ''}`, {
         module: 'activity', event: '奶茶热销中', result: 'ok', fruits: picked.length,
     });
-    return { ok: true, used: picked.length, made, state: parseMainState(r.activity) };
+    return { ok: true, used: picked.length, usedFruits: [...usedIds], made, state: parseMainState(r.activity) };
 }
 
 /**
@@ -652,6 +680,7 @@ module.exports = {
     claimCashier,
     craft,
     craftMilkTea,
+    getCraftableFruitIds,
     useSpeaker,
     openStore,
     hireFriend,

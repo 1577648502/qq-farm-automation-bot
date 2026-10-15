@@ -689,14 +689,17 @@ const ACTIVITY_ITEM_FALLBACK = new Map([
  * 仅做兜底: 官方收录后自动被真实数据覆盖。缺生长时间等字段(官方未下发), 界面会显示 '-'
  */
 const ACTIVITY_PLANT_FALLBACK = new Map([
-    [1020525, { id: 1020525, seed_id: 20525, name: '森野甜莓' }],
-    [1020526, { id: 1020526, seed_id: 20526, name: '森野白桃' }],
-    [1020527, { id: 1020527, seed_id: 20527, name: '森野甜橙' }],
-    [1020528, { id: 1020528, seed_id: 20528, name: '森野红柚' }],
-    [1020021, { id: 1020021, seed_id: 20021, name: '森野可可豆' }],
-    [1021435, { id: 1021435, seed_id: 21435, name: '森野柿子' }],
-    [1020529, { id: 1020529, seed_id: 20529, name: '森野芭乐' }],
-    [1029005, { id: 1029005, seed_id: 29005, name: '森野黄金芽' }],
+    // 金币果/经验蘑菇官方表已有, 但补进兜底表可保证 fruit 字段(制作奶茶用)始终可读
+    [1020522, { id: 1020522, seed_id: 20522, name: '金币果', fruit: { id: 40522, count: 48 } }],
+    [1020523, { id: 1020523, seed_id: 20523, name: '经验蘑菇', fruit: { id: 40523, count: 48 } }],
+    [1020525, { id: 1020525, seed_id: 20525, name: '森野甜莓', fruit: { id: 40525, count: 1 } }],
+    [1020526, { id: 1020526, seed_id: 20526, name: '森野白桃', fruit: { id: 40526, count: 1 } }],
+    [1020527, { id: 1020527, seed_id: 20527, name: '森野甜橙', fruit: { id: 40527, count: 1 } }],
+    [1020528, { id: 1020528, seed_id: 20528, name: '森野红柚', fruit: { id: 40528, count: 1 } }],
+    [1020021, { id: 1020021, seed_id: 20021, name: '森野可可豆', fruit: { id: 40021, count: 1 } }],
+    [1021435, { id: 1021435, seed_id: 21435, name: '森野柿子', fruit: { id: 41435, count: 1 } }],
+    [1020529, { id: 1020529, seed_id: 20529, name: '森野芭乐', fruit: { id: 40529, count: 1 } }],
+    [1029005, { id: 1029005, seed_id: 29005, name: '森野黄金芽', fruit: { id: 49005, count: 1 } }],
 ]);
 /** 按种子 id(20525) 找兜底植物 */
 function getFallbackPlantBySeedId(seedId) {

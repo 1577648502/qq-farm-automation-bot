@@ -252,6 +252,13 @@ const byIdx = (i) => FRAMES.find(f => f.idx === i);
         const packed = enc([54158, 54178, 54177, 54179, 54157, 54159]).toString('hex');
         check('packed uid 编码与抓包一致', packed === '8ea703a2a703a1a703a3a7038da7038fa703', packed);
 
+        // 可制作果实 = 活动 10 种种子对应的果实(不是只抓包里的那两种!)
+        const fruits = milkTea.getCraftableFruitIds().sort((a, b) => a - b);
+        check('可制作果实覆盖 10 种(含金币果40522/经验蘑菇40523)',
+            fruits.length === 10 && fruits.includes(40522) && fruits.includes(40523) && fruits.includes(40525) && fruits.includes(49005),
+            fruits);
+        check('果实 id 规律: 种子 id + 20000', fruits.every((f) => [40522, 40523, 40525, 40526, 40527, 40528, 40529, 40021, 41435, 49005].includes(f)), fruits);
+
         const uids = enc([54158]);
         const payload = Buffer.concat([Buffer.from([0x0a, uids.length]), uids]);
         check('#167 值 = 0a038ea703', payload.toString('hex') === '0a038ea703', payload.toString('hex'));
