@@ -979,6 +979,17 @@ async function adGiftAction() {
 /** 快乐不独享: 立即跑一次(领快乐值 + 领档位) */
 const happyBusy = ref(false)
 const happyResult = ref('')
+/** 奶茶热销中: 停止(中断前端等待 + 通知后台跳过剩余步骤) */
+async function milkTeaStop() {
+  milkTeaBusy.value = ''
+  milkTeaResult.value = '已请求停止'
+  try {
+    await api.post('/api/activity/milk-tea/cancel', { reason: '设置页手动停止' }, { headers: { 'x-account-id': String(currentAccountId.value || '') } })
+  } catch (e: any) {
+    milkTeaResult.value = '已中断本地等待(后台可能未运行)'
+  }
+}
+
 /** 奶茶热销中: 手动立即执行(领收益/加工/喇叭/互动) */
 const milkTeaBusy = ref('')
 const milkTeaResult = ref('')
@@ -2035,6 +2046,9 @@ async function handleTestOffline() {
                     </BaseButton>
                     <BaseButton variant="secondary" size="sm" :loading="milkTeaBusy === 'interact'" @click="milkTeaAction('interact')">
                       店铺排行
+                    </BaseButton>
+                    <BaseButton variant="secondary" size="sm" @click="milkTeaStop">
+                      停止
                     </BaseButton>
                     <span v-if="milkTeaResult" class="text-xs text-gray-600 dark:text-gray-300">{{ milkTeaResult }}</span>
                   </template>

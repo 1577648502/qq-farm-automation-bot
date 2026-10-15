@@ -1420,6 +1420,9 @@ async function handleApiCall(msg) {
             case 'interactMilkTea':
                 result = await milkTea.interact();
                 break;
+            case 'cancelMilkTea':
+                result = milkTea.requestCancel((args[0] && args[0].reason) || '用户手动停止');
+                break;
             case 'getMilkTeaCashier':
                 result = await milkTea.getCashierStatus();
                 break;

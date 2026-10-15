@@ -23,6 +23,8 @@ const status = ref<any>(null)
 const statusBusy = ref(false)
 const actionResult = ref('')
 const busy = ref('')
+/** 当前正在进行的请求(用于"停止"时中断前端等待) */
+let abortCtrl: AbortController | null = null
 
 const shop = ref<any[]>([])
 const shopBusy = ref(false)
@@ -164,7 +166,8 @@ async function buy(g: any) {
   busy.value = `buy-${g.goodsId}`
   actionResult.value = ''
   try {
-    const res = await api.post('/api/activity/milk-tea/buy', { goodsId: g.goodsId, count })
+    abortCtrl = new AbortController()
+    const res = await api.post('/api/activity/milk-tea/buy', { goodsId: g.goodsId, count }, { signal: abortCtrl.signal })
     const d = res.data?.data || {}
     const err = apiError(res, d)
     if (err) { reportError(`兑换「${g.name}」`, err); return }
@@ -214,7 +217,8 @@ async function saveHireConfig() {
 async function hireNow() {
   busy.value = 'hire-auto'
   try {
-    const res = await api.post('/api/activity/milk-tea/hire-auto', { hireGids: hireGids.value })
+    abortCtrl = new AbortController()
+    const res = await api.post('/api/activity/milk-tea/hire-auto', { hireGids: hireGids.value }, { signal: abortCtrl.signal })
     const d = res.data?.data || {}
     const err = apiError(res, d)
     if (err) { reportError('雇佣好友', err); return }
@@ -230,7 +234,23 @@ async function hireNow() {
 
 
 /** 串行 + 错开加载: 避免一次性并发多个游戏请求把队列打满(队列已满→心跳异常掉线) */
-async function refreshAll() {
+async /** 停止: 中断前端等待 + 通知后台不再执行剩余步骤(长操作卡住时用) */
+async function stopAll() {
+  abortCtrl?.abort()
+  abortCtrl = null
+  busy.value = ''
+  statusBusy.value = false
+  actionResult.value = '已请求停止(后台会跳过剩余步骤)'
+  toast.warning(actionResult.value)
+  try {
+    await api.post('/api/activity/milk-tea/cancel', { reason: '页面手动停止' })
+  } catch (e: any) {
+    // 后台没跑到也无所谓, 前端已经不再等了
+    actionResult.value = '已中断前端等待(后台可能未运行)'
+  }
+}
+
+function refreshAll() {
   await loadStatus()
   await new Promise((r) => setTimeout(r, 400))
   await loadShop()
@@ -266,9 +286,19 @@ onMounted(() => {
           营业 10/15–11/14 · 结算 11/15–11/16
         </span>
       </h2>
-      <BaseButton variant="secondary" size="sm" :loading="statusBusy" @click="refreshAll">
-        刷新
-      </BaseButton>
+      <div class="flex items-center gap-2">
+        <BaseButton variant="secondary" size="sm" :loading="statusBusy" @click="refreshAll">
+          刷新
+        </BaseButton>
+        <BaseButton
+          variant="secondary"
+          size="sm"
+          :disabled="!busy && !statusBusy"
+          @click="stopAll"
+        >
+          停止
+        </BaseButton>
+      </div>
     </div>
 
     <!-- 结算期提醒 -->
