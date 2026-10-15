@@ -97,7 +97,13 @@ const byIdx = (i) => FRAMES.find(f => f.idx === i);
         if (String(f.key) !== OPERATE) continue;
         try { FRAME_INDEX.push({ ...parseReq(bodyOf(f.hex)), frame: f }); } catch { /* 跳过 */ }
     }
-    const idxFor = (req) => (FRAME_INDEX.find(x => x.group === req.group && x.cmd === req.cmd) || {}).frame || null;
+    // 注意: 主活动 cmd=63 有多帧, 最早的帧里还没有店铺状态(没有 #4 等级);
+    //   等级拦截用例需要"已开业"的那一帧 → 取最后一个匹配帧
+    const idxFor = (req) => {
+        const hits = FRAME_INDEX.filter(x => x.group === req.group && x.cmd === req.cmd);
+        if (!hits.length) return null;
+        return (req.group === 2026110101 && req.cmd === 63) ? hits[hits.length - 1].frame : hits[0].frame;
+    };
     sendStub = stub(idxFor);
 
     const milkTea = require(`${SB}/src/services/milk-tea`);
