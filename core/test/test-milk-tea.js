@@ -121,6 +121,9 @@ const byIdx = (i) => FRAMES.find(f => f.idx === i);
             check('营业额为正数(抓包各帧为 263~266)', st.value > 0 && st.value < 100000, st.value);
             check('当前配方 = 10401', st.recipeId === 10401, st.recipeId);
             check('店铺等级 = 1(抓包时刚开业)', st.storeLevel === 1, st.storeLevel);
+            check('活动结束时间 = 11/16 23:59(1794844799)', st.endAt === 1794844799, st.endAt);
+            check('结算期开始 = 结束前 48h(1794671999)', st.settleAt === 1794671999, st.settleAt);
+            check('非结算期(抓包时 10/15)', milkTea.isSettling(st) === false, st.settleAt);
         }
     }
 

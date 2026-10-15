@@ -271,6 +271,15 @@ onMounted(() => {
       </BaseButton>
     </div>
 
+    <!-- 结算期提醒 -->
+    <div
+      v-if="status && status.settleAt && Date.now() / 1000 >= status.settleAt"
+      class="rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-800 dark:border-amber-800 dark:bg-amber-900/20 dark:text-amber-300"
+    >
+      已进入**结算期**（11/15–11/16）：自动营业、宣传、雇佣、互动、购买专属种子都会停止；
+      未领收益会通过邮件补发，请在结算期结束前完成兑换。
+    </div>
+
     <!-- ① 顶部信息 -->
     <div class="rounded-lg border border-gray-200 bg-white p-4 shadow-sm dark:border-gray-700 dark:bg-gray-800">
       <div v-if="status" class="grid grid-cols-2 gap-4 md:grid-cols-3 xl:grid-cols-6">
@@ -309,6 +318,10 @@ onMounted(() => {
         <div>
           <div class="text-xs text-gray-500 dark:text-gray-400">最近更新</div>
           <div class="text-sm text-gray-900 font-medium dark:text-gray-100">{{ fmtTime(status.at) }}</div>
+        </div>
+        <div>
+          <div class="text-xs text-gray-500 dark:text-gray-400">结算期开始</div>
+          <div class="text-sm text-gray-900 font-medium dark:text-gray-100">{{ fmtTime(status.settleAt) }}</div>
         </div>
       </div>
       <div v-else class="text-xs text-gray-500 dark:text-gray-400">

@@ -96,13 +96,17 @@ function encodeVarint(v) {
 
 /** 解析主活动状态容器 #121.#1 */
 function parseMainState(activityBuf) {
-    const out = { ok: false, storeName: '', value: 0, recipeId: 0, at: 0, nextAt: 0, storeLevel: 0 };
+    const out = { ok: false, storeName: '', value: 0, recipeId: 0, at: 0, nextAt: 0, storeLevel: 0, startAt: 0, endAt: 0, settleAt: 0 };
     if (!activityBuf || !activityBuf.length) return out;
     try {
         const act = parseTop(activityBuf);
         const head = findField(act, 1);
         const hf = head && head.w === 2 ? parseTop(head.v) : [];
         if (toInt((findField(hf, 1) || {}).v) !== GROUP_MAIN) return out;
+        // 活动头时间(实测): #6 开始 / #7 结束 / #24 结算期开始(= #7 - 48h)
+        out.startAt = toInt((findField(hf, 6) || {}).v);
+        out.endAt = toInt((findField(hf, 7) || {}).v);
+        out.settleAt = toInt((findField(hf, 24) || {}).v);
         const box = findField(act, STATE_FIELD);
         const inner = box && box.w === 2 ? findField(parseTop(box.v), 1) : null;
         if (!inner || inner.w !== 2) { out.ok = true; return out; }
@@ -278,6 +282,8 @@ const shopBought = new Map();
 
 /** 兑换/购买商品(数量必填) —— 实测 {#101: {#1: 商品ID, #2: 数量}} */
 async function buyShopGoods(goodsId, count = 1) {
+    const st0 = await getMainStatus().catch(() => null);
+    if (st0 && isSettling(st0)) return { ok: false, reason: '活动已进入结算期(11/15–11/16), 不能兑换活动种子' };
     const id = toNum(goodsId);
     const n = Math.max(1, Math.min(9999, toInt(count) || 1));
     if (!id) return { ok: false, reason: '缺少商品 ID' };
@@ -392,6 +398,17 @@ async function autoHire(hireGids) {
 }
 
 /**
+ * 是否处于结算期(11/15–11/16, 规则: 停止自动营业/喇叭/雇佣/互动/买专属种子)
+ * 依据活动头 #24(结算期开始, 实测 = 结束时间 - 48h)
+ */
+function isSettling(st) {
+    const settleAt = toNum(st && st.settleAt) || 0;
+    if (!settleAt) return false;
+    const nowSec = Math.floor(Date.now() / 1000);
+    return nowSec >= settleAt;
+}
+
+/**
  * 收银台查询(cmd=60): 返回待领取收益等。规则说"满载会暂停营业且不补发", 所以顶部要显示待领。
  * 实测结果 #1 = {#1: 容量(40), #2: 当前待领(253), #3: 累计杯数(164312)}
  */
@@ -500,6 +517,10 @@ async function runMilkTea(opts = {}) {
     let st = await getMainStatus();
     if (!st.ok) return { ok: false, reason: st.reason };
     out.state = st;
+    if (isSettling(st)) {
+        log('活动', '奶茶热销中: 已进入结算期(11/15–11/16), 跳过自动经营', { module: 'activity', event: '奶茶热销中', result: 'skip' });
+        return { ok: true, skipped: true, reason: '结算期, 已停止经营', state: st };
+    }
 
     if (!st.opened && opts.openStore !== false) {
         const r = await openStore(opts.storeName);
@@ -575,5 +596,6 @@ module.exports = {
     getCashierStatus,
     getMilkCouponBalance,
     MILK_COUPON_ID,
+    isSettling,
     runMilkTea,
 };
