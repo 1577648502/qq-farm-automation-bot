@@ -32,10 +32,29 @@ const GROUP_S4 = 2026110104;   // S4 版(2026-10-15 上线, 机制相同)
 /** 当前活动组: 优先 S4, 不在则回退 S3(实测 2026-10-15 换期后 group 变了) */
 let activeGroup = GROUP_S4;
 const SUB_ID = 2026092500;
-const CMD_OPEN = 69;        // 打开活动(拿分享信息/快乐包id + 状态)
-const CMD_CLAIM_HAPPY = 73; // 领取快乐值(每日)
-const CMD_CLAIM_TIER = 70;  // 领取档位奖励
-const CMD_PACK_LOG = 71;    // 快乐包互动记录
+/**
+ * ⚠ 换期时 **命令号会轮换**(结果字段号是稳定的, 所以按字段号对齐来认):
+ *   语义         字段    S3 cmd   S4 cmd
+ *   打开/查询    #153     69       70
+ *   领快乐值     #157     73       74
+ *   领档位       #154     70       71
+ *   快乐包记录   #155     71       72
+ * S4 实测(2026-10-15 抓包): cmd=74 返回 #157={#2:5}(快乐值 5)、cmd=71 把档位1 置为"已领"。
+ * 拿 S3 的 cmd 去打 S4 会报 **1034004 活动参数错误** → 必须按活动期传命令号。
+ */
+const SEASONS = [
+    { group: 2026110104, open: 70, claimHappy: 74, claimTier: 71, pack: 72 },   // S4 版
+    { group: 2026092501, open: 69, claimHappy: 73, claimTier: 70, pack: 71 },   // S3 版(上期)
+];
+let activeSeason = SEASONS[0];
+/** 指定活动期(测试/兜底用) */
+function setSeason(group) {
+    const hit = SEASONS.find((x) => x.group === toNum(group));
+    if (!hit) return false;
+    activeSeason = hit;
+    activeGroup = hit.group;
+    return true;
+}
 const FIELD_OPEN = 153;
 const FIELD_HAPPY = 157;
 const FIELD_TIER = 154;
@@ -105,13 +124,14 @@ function parseRewardResult(resultHex) {
 
 /** 读活动状态(打开活动 cmd=69, 顺带拿快乐包id) */
 async function getHappyStatus() {
-    let r = await operateRaw(activeGroup, CMD_OPEN, FIELD_OPEN, Buffer.alloc(0));
+    let r = await operateRaw(activeGroup, activeSeason.open, FIELD_OPEN, Buffer.alloc(0));
     if (r.errorCode !== 0) {
         // 换期时 group 会变: 失败就换另一个组再试一次
         const other = activeGroup === GROUP_S4 ? GROUP_S3 : GROUP_S4;
-        const r2 = await operateRaw(other, CMD_OPEN, FIELD_OPEN, Buffer.alloc(0)).catch(() => null);
+        const otherSeason = SEASONS.find((x) => x.group === other) || activeSeason;
+        const r2 = await operateRaw(other, otherSeason.open, FIELD_OPEN, Buffer.alloc(0)).catch(() => null);
         if (r2 && r2.errorCode === 0) {
-            activeGroup = other;
+            setSeason(other);   // 组与命令号一起切换
             log('活动', `快乐不独享: 活动组已切换为 ${activeGroup}`, { module: 'activity', event: '快乐不独享', result: 'ok' });
             r = r2;
         } else {
@@ -137,7 +157,7 @@ async function getHappyStatus() {
 async function claimDailyHappy() {
     const before = await getHappyStatus();
     if (!before.ok) return { ok: false, reason: before.reason };
-    const r = await operateRaw(activeGroup, CMD_CLAIM_HAPPY, FIELD_HAPPY, Buffer.alloc(0));
+    const r = await operateRaw(activeGroup, activeSeason.claimHappy, FIELD_HAPPY, Buffer.alloc(0));
     if (r.errorCode !== 0) return { ok: false, reason: `领取快乐值失败 code=${r.errorCode}` };
     const gained = r.resultHex ? toInt((findField(parseTop(Buffer.from(r.resultHex, 'hex')), 2) || {}).v) : 0;
     await sleep(1200);
@@ -153,7 +173,7 @@ async function claimDailyHappy() {
         const { reportShare } = require('./share');
         await reportShare();
         await sleep(1500);
-        const r2 = await operateRaw(activeGroup, CMD_CLAIM_HAPPY, FIELD_HAPPY, Buffer.alloc(0));
+        const r2 = await operateRaw(activeGroup, activeSeason.claimHappy, FIELD_HAPPY, Buffer.alloc(0));
         if (r2.errorCode === 0) {
             await sleep(1200);
             after = await getHappyStatus().catch(() => null);
@@ -180,7 +200,7 @@ async function claimTierRewards() {
     if (!targets.length) return { ok: true, claimed: [], skipped: true, reason: '没有达到门槛的档位', happy: st.happy, tiers: st.tiers };
     const claimed = [];
     for (const t of targets) {
-        const r = await operateRaw(activeGroup, CMD_CLAIM_TIER, FIELD_TIER, Buffer.alloc(0));
+        const r = await operateRaw(activeGroup, activeSeason.claimTier, FIELD_TIER, Buffer.alloc(0));
         if (r.errorCode !== 0) {
             log('活动', `快乐不独享: 档位${t.tier} 领取失败 code=${r.errorCode}`, { module: 'activity', event: '快乐不独享', result: 'error' });
             break;
@@ -225,10 +245,9 @@ module.exports = {
     GROUP_S4,
     getActiveGroup: () => activeGroup,
     SUB_ID,
-    CMD_OPEN,
-    CMD_CLAIM_HAPPY,
-    CMD_CLAIM_TIER,
-    CMD_PACK_LOG,
+    SEASONS,
+    setSeason,
+    getActiveSeason: () => ({ ...activeSeason }),
     TIER_CLAIMABLE,
     TIER_CLAIMED,
     __testing: { parseHappyState, parseRewardResult },

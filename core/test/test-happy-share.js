@@ -1,7 +1,9 @@
 /**
  * 快乐不独享（新活动）回归测试 —— 回放真实抓包
  *
- * 抓包: 20260924-203415_快乐不独享.jsonl
+ * 抓包1(S3): 20260924-203415_快乐不独享.jsonl   命令 69/73/70
+ * 抓包2(S4): 20261015-154340_奶茶新活动.jsonl   命令 70/74/71(换期后命令号轮换了!)
+ *   → 服务内按活动期配置命令号(SEASONS), 本测试两期都回放
  *   快乐值 5(--cmd69) → 10(--cmd73 领每日快乐值) → 档位1 状态 1→2→3(--cmd70 领档位奖励)
  *
  * 覆盖:
@@ -42,7 +44,17 @@ const F_SHARE = FRAMES.find(f => f.idx === 114);
 const F_TIER = FRAMES.find(f => f.idx === 125);
 const F_PACK = FRAMES.find(f => f.idx === 130);
 
-let phase = 0;                    // 0:未领 1:已领快乐值 2:档位也领了
+// S4 期(2026110104)抓包: 命令号轮换成 70(打开)/74(领快乐值)/71(领档位)
+const CAP4 = path.join(__dirname, '..', '..', 'wx-code-grabber', 'captures', '20261015-154340_奶茶新活动.jsonl');
+const FRAMES4 = loadFrames(CAP4);
+const F4 = {
+    OPEN: FRAMES4.find(f => f.idx === 175),    // 快乐值 5, 档位未达成
+    HAPPY: FRAMES4.find(f => f.idx === 177),   // 快乐值 10, 档位1 可领
+    TIER: FRAMES4.find(f => f.idx === 262),    // 档位1 已领
+};
+
+let phase = 0;                    // S3: 0:未领 1:已领快乐值 2:档位也领了
+let phase4 = 0;                   // S4: 同上
 const calls = [];
 
 /** 装网络桩: 必须在 require 服务模块之前调用 */
@@ -53,9 +65,19 @@ function installStub() {
     net.sendMsgAsync = async (service, method, body) => {
         const key = `${service}.${method}`;
         const mg0 = require(`${SB}/src/services/mengchong`);
-        const cmd = Number((mg0.parseTop(Buffer.from(body)).find(f => f.f === 2) || {}).v) || 0;
-        calls.push({ key, cmd });
+        const fsx = mg0.parseTop(Buffer.from(body));
+        const group = Number((fsx.find(f => f.f === 1) || {}).v) || 0;
+        const cmd = Number((fsx.find(f => f.f === 2) || {}).v) || 0;
+        calls.push({ key, group, cmd });
         if (key === OPERATE) {
+            // ===== S4 期(2026110104): 命令号 70/74/71 =====
+            if (group === 2026110104) {
+                if (cmd === 70) return { body: bodyOfHex([F4.OPEN, F4.HAPPY, F4.TIER][phase4].hex) };
+                if (cmd === 74) { phase4 = 1; return { body: bodyOfHex(F4.HAPPY.hex) }; }
+                if (cmd === 71) { phase4 = 2; return { body: bodyOfHex(F4.TIER.hex) }; }
+                throw new Error('S4 未 stub 的 cmd: ' + cmd);
+            }
+            // ===== S3 期(2026092501): 命令号 69/73/70/71 =====
             if (cmd === 69) return { body: bodyOfHex([F_OPEN, F_SHARE, F_TIER][phase].hex) };
             if (cmd === 73) { phase = 1; return { body: bodyOfHex(F_SHARE.hex) }; }
             if (cmd === 70) { phase = 2; return { body: bodyOfHex(F_TIER.hex) }; }
@@ -76,6 +98,9 @@ function installStub() {
     installStub();
     const mg = require(`${SB}/src/services/mengchong`);
     const happy = require(`${SB}/src/services/happy-share`);
+    // ⚠ 必须在打桩之后 require 服务, 否则 mengchong 会拿到真实 sendMsgAsync
+    // 默认活动期是 S4; 前 8 节回放的是 S3 抓包 → 显式指定 S3
+    happy.setSeason(2026092501);
     const bodyOf = (hex) => Buffer.from(types.GateMessage.decode(Buffer.from(hex, 'hex')).body || []);
     const activityOf = (frame) => {
         const fs = mg.parseTop(bodyOf(frame.hex));
@@ -158,6 +183,37 @@ function installStub() {
         check('领到档位奖励', !!(r.tiers && r.tiers.claimed && r.tiers.claimed.length), r.tiers);
         const cmds = calls.map(c => c.cmd);
         check('用到 69/73/70', cmds.includes(69) && cmds.includes(73) && cmds.includes(70), cmds);
+    }
+
+    section('9. S4 期(2026110104) 命令号轮换回放 —— 修 1034004 活动参数错误');
+    {
+        check('抓到 S4 三个关键帧', !!F4.OPEN && !!F4.HAPPY && !!F4.TIER);
+
+        happy.setSeason(2026110104);
+        check('活动期切到 S4', happy.getActiveSeason().group === 2026110104, happy.getActiveSeason());
+        check('S4 命令号 = 打开70/领快乐值74/领档位71',
+            happy.getActiveSeason().open === 70 && happy.getActiveSeason().claimHappy === 74 && happy.getActiveSeason().claimTier === 71,
+            happy.getActiveSeason());
+
+        phase4 = 0;
+        calls.length = 0;
+        const st4 = await happy.getHappyStatus();
+        check('S4 读状态用 cmd=70(不是 S3 的 69)', calls.some(c => c.group === 2026110104 && c.cmd === 70), calls.map(c => `${c.group}:${c.cmd}`));
+        check('S4 快乐值 = 5', st4.happy === 5, st4.happy);
+        check('S4 档位数 = 4(门槛 10/20/30/60)',
+            st4.tiers.length === 4 && st4.tiers[3].need === 60, st4.tiers.map(t => t.need));
+
+        const daily4 = await happy.claimDailyHappy();
+        check('S4 领快乐值用 cmd=74', calls.some(c => c.cmd === 74), calls.map(c => c.cmd));
+        check('S4 快乐值 5 → 10', daily4.ok === true && daily4.gained === 5, daily4);
+
+        const tier4 = await happy.claimTierRewards();
+        check('S4 领档位用 cmd=71', calls.some(c => c.cmd === 71), calls.map(c => c.cmd));
+        check('S4 领到档位1(化肥4小时×1)',
+            tier4.ok === true && tier4.claimed.length === 1 && tier4.claimed[0].reward && tier4.claimed[0].reward.id === 80002,
+            tier4.claimed);
+
+        happy.setSeason(2026092501);   // 还原
     }
 
     finish();
