@@ -1867,7 +1867,8 @@ async function handleTestOffline() {
               <!-- 需要参数/手动触发的功能: 统一卡片 -->
               <div class="space-y-3">
                 <!-- 夺宝(抢宝) -->
-                <AutoTaskCard
+                <!-- 已按需求隐藏(2026-10-15): 连同其子模块一起不显示; 恢复时删掉 v-if="false" -->
+                <AutoTaskCard v-if="false"
                   title="夺宝（抢宝）"
                   desc="遍历好友，抢夺正在运送的宝藏"
                 >
@@ -1926,7 +1927,8 @@ async function handleTestOffline() {
                 </AutoTaskCard>
 
                 <!-- 秋祈良愿 -->
-                <AutoTaskCard
+                <!-- 已按需求隐藏(2026-10-15): 连同其子模块一起不显示; 恢复时删掉 v-if="false" -->
+                <AutoTaskCard v-if="false"
                   title="秋祈良愿（9/24 – 10/7）"
                   desc="每日祈愿领好运奖励（限定种子 / 烟花桶 / 盆栽装扮），可存 5 天，漏领会邮件补发"
                 >
@@ -1986,7 +1988,8 @@ async function handleTestOffline() {
                 </AutoTaskCard>
 
                 <!-- 看广告礼包 -->
-                <AutoTaskCard
+                <!-- 已按需求隐藏(2026-10-15): 连同其子模块一起不显示; 恢复时删掉 v-if="false" -->
+                <AutoTaskCard v-if="false"
                   title="看广告礼包（每日 1 次）"
                   desc="礼包内容：化肥(1小时)×5。直接走完广告流程领取，不需要真的看广告"
                 >
