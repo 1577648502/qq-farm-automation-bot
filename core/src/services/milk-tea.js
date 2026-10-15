@@ -49,6 +49,8 @@ const CMD_SETTLE = 59;      // 结算(返回 {奶茶券+10} / {金币+8648})
 const CMD_CASHIER_INFO = 60;// **收银台查询**: {#1: 容量, #2: 当前待领, #3: 杯数}
 const CMD_REFRESH = 63;     // 刷新/查询
 const CMD_INTERACT = 66;    // ⚠ 实际返回「好友店铺排行(店名+热度)」→ 排行查询(非"互动")
+const CMD_WORK_INTERACT = 65;// **互动(我的工作)**: 请求 #170 = {#1: 好友gid, #2: 互动类型}; 实测类型 5
+const WORK_INTERACT_TYPE = 5;// 互动类型(实测只有 5; 有多档时按最优排序执行)
 const CMD_SHIFT = 67;       // 班次(带时间戳)
 const CMD_RECIPE = 69;      // 查询配方
 const FIELD_OFFSET = 105;   // 主活动 payload 字段 = cmd + 105
@@ -566,6 +568,39 @@ async function craftMilkTea(limit = 10) {
 }
 
 /**
+ * 互动(我的工作, cmd=65) —— 被雇佣后每班可互动一次, 影响工资
+ * 实测(20261015-211043_互动.jsonl idx=130): 请求 #170 = {#1: 1244632861(好友gid), #2: 5}
+ * 响应 = {#1: 5, #2: 1, #4: 90005(称号), #8: {#1: 10000, #3: 40}(工资相关)}
+ * 待补: 互动类型(#2)的可选值与各自收益 —— 拿到后按"最优"排序执行
+ */
+async function interactWithFriend(friendGid, type = WORK_INTERACT_TYPE) {
+    const gid = toNum(friendGid);
+    if (!gid) return { ok: false, reason: '缺少好友 gid(先在页面勾选并保存雇佣好友)' };
+    const inner = Buffer.concat([encodeVarintField(1, gid), encodeVarintField(2, toInt(type) || WORK_INTERACT_TYPE)]);
+    const payload = Buffer.concat([Buffer.from([0x0a, inner.length]), inner]);
+    const r = await mainOperate(CMD_WORK_INTERACT, 170, payload);
+    if (r.errorCode !== 0) return { ok: false, reason: `互动失败 code=${r.errorCode}` };
+    let result = null;
+    if (r.resultHex) {
+        try {
+            const rf = parseTop(Buffer.from(r.resultHex, 'hex'));
+            const wage = findField(rf, 8);
+            result = {
+                type: toInt((findField(rf, 1) || {}).v),
+                titleId: toInt((findField(rf, 4) || {}).v),
+                wage: wage && wage.w === 2
+                    ? { base: toInt((findField(parseTop(wage.v), 1) || {}).v), extra: toInt((findField(parseTop(wage.v), 3) || {}).v) }
+                    : null,
+            };
+        } catch (e) { /* 忽略 */ }
+    }
+    log('活动', `奶茶热销中: 已与好友 ${gid} 互动(type=${toInt(type) || WORK_INTERACT_TYPE})`, {
+        module: 'activity', event: '奶茶热销中', result: 'ok', friendGid: gid, type: toInt(type) || WORK_INTERACT_TYPE,
+    });
+    return { ok: true, friendGid: gid, interact: result };
+}
+
+/**
  * 收银台查询(cmd=60): 返回待领取收益等。规则说"满载会暂停营业且不补发", 所以顶部要显示待领。
  * 实测结果 #1 = {#1: 容量(40), #2: 当前待领(253), #3: 累计杯数(164312)}
  */
@@ -756,6 +791,8 @@ module.exports = {
     craft,
     craftMilkTea,
     craftAllFruits,
+    interactWithFriend,
+    WORK_INTERACT_TYPE,
     getCraftableFruitIds,
     useSpeaker,
     openStore,

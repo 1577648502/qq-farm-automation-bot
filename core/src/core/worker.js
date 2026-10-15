@@ -1421,9 +1421,12 @@ async function handleApiCall(msg) {
             case 'hireMilkTea':
                 result = await milkTea.hireFriend(args[0] && args[0].friendGid);
                 break;
-            case 'interactMilkTea':
-                result = await milkTea.interact();
+            case 'interactMilkTea': {
+                // 互动(我的工作): cmd=65, 需要好友 gid + 互动类型
+                const io2 = args[0] || {};
+                result = await milkTea.interactWithFriend(io2.friendGid, io2.type);
                 break;
+            }
             case 'getMilkTeaCashier':
                 result = await milkTea.getCashierStatus();
                 break;

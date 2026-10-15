@@ -35,6 +35,9 @@ const autoHire = ref(false)
 const hireOpen = ref(false)
 const hireSaving = ref(false)
 const newGid = ref('')
+/** 互动(我的工作): 目标好友 + 互动类型(实测 5) */
+const interactGid = ref('')
+const interactType = ref(5)
 
 const KIND_LABEL: Record<string, string> = { seed: '种子', exchange: '装扮兑换' }
 const kindLabel = (g: any) => KIND_LABEL[g.kind] || '道具'
@@ -194,6 +197,26 @@ function invertFriends() {
 }
 
 /** 批量雇佣: 逐个雇(后台带节流, 单次最多 10 个) */
+/** 互动(我的工作, cmd=65): 每班一次, 影响工资 */
+async function interactNow() {
+  const gid = String(interactGid.value || hireGids.value[0] || '').trim()
+  if (!gid) { toast.warning('请先勾选好友（或填 GID）'); return }
+  busy.value = 'interact'
+  try {
+    const res = await api.post('/api/activity/milk-tea/interact', { friendGid: gid, type: Number(interactType.value) || 5 })
+    const d = res.data?.data || {}
+    const err = apiError(res, d)
+    if (err) { reportError('互动', err); return }
+    const wage = d.interact && d.interact.wage ? `（底薪 ${d.interact.wage.base} / 加成 ${d.interact.wage.extra}）` : ''
+    actionResult.value = `已与好友 ${d.friendGid || gid} 互动${wage}`
+    toast.success(actionResult.value)
+  } catch (e: any) {
+    reportError('互动', apiError(null, null, e))
+  } finally {
+    busy.value = ''
+  }
+}
+
 async function hireAllNow() {
   if (!hireGids.value.length) { toast.warning('请先勾选好友（或点全选）'); return }
   busy.value = 'hire-all'
@@ -480,6 +503,22 @@ onMounted(() => {
             @click="hireAllNow"
           >
             全部雇佣（最多 10 个/次）
+          </BaseButton>
+          <input
+            v-model="interactGid"
+            type="text"
+            :placeholder="hireGids[0] || '好友 GID'"
+            class="w-36 rounded border border-gray-300 bg-white px-2 py-1 text-xs dark:border-gray-600 dark:bg-gray-900"
+          >
+          <input
+            v-model.number="interactType"
+            type="number"
+            min="1"
+            class="w-14 rounded border border-gray-300 bg-white px-2 py-1 text-xs dark:border-gray-600 dark:bg-gray-900"
+            title="互动类型"
+          >
+          <BaseButton variant="secondary" size="sm" :loading="busy === 'interact'" @click="interactNow">
+            互动一次
           </BaseButton>
           <BaseButton variant="secondary" size="sm" :loading="friendsBusy" @click="loadFriends">
             刷新好友
