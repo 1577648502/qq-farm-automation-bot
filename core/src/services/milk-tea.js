@@ -443,6 +443,78 @@ function encodePackedVarints(values) {
     return Buffer.concat((Array.isArray(values) ? values : []).map((v) => encodeVarint(v)));
 }
 
+/** 收集背包里所有可加工的果实 uid(只读一次背包) */
+async function collectFruitUids() {
+    const { getBag, getBagItems } = require('./warehouse');
+    const items = getBagItems(await getBag());
+    const fruitIds = getCraftableFruitIds();
+    const uids = [];
+    for (const it of items) {
+        if (!fruitIds.includes(toNum(it && it.id))) continue;
+        const uid = toNum(it && it.uid);
+        if (uid > 0) uids.push(uid);
+    }
+    return { uids, fruitIds };
+}
+
+/**
+ * 把背包里**所有**活动果实都做成高级奶茶(分批发, 每批 20 个, 批间隔 700ms 防队列打满)
+ * @param perBatch 每批提交几个果实 uid
+ * @param maxBatches 最多几批(防跑飞)
+ */
+async function craftAllFruits(perBatch = 20, maxBatches = 20) {
+    let all = { uids: [], fruitIds: [] };
+    try {
+        all = await collectFruitUids();
+    } catch (e) {
+        return { ok: false, reason: `读取背包失败: ${e.message}` };
+    }
+    if (!all.uids.length) return { ok: false, reason: '背包里没有活动果实(森野系列)，先种再收' };
+
+    const made = [];
+    let used = 0;
+    let batches = 0;
+    for (let i = 0; i < all.uids.length; i += perBatch) {
+        if (batches >= maxBatches) break;
+        const slice = all.uids.slice(i, i + perBatch);
+        const r = await mainOperateCraft(slice);
+        batches += 1;
+        if (!r.ok) {
+            if (batches === 1) return r;            // 第一批就失败 → 直接报错
+            break;                                   // 后续批次失败 → 停手, 但保留已完成的
+        }
+        used += slice.length;
+        made.push(...(r.made || []));
+        if (i + perBatch < all.uids.length) await sleep(700);
+    }
+    log('活动', `奶茶热销中: 已把 ${used} 个果实做成高级奶茶${made.length ? `(${made.map((m) => m.name).join('、')})` : ''}`, {
+        module: 'activity', event: '奶茶热销中', result: 'ok', fruits: used, batches,
+    });
+    return { ok: true, used, batches, made, state: null };
+}
+
+/** 提交一批果实 uid 去制作(内部用) */
+async function mainOperateCraft(uids) {
+    const packed = encodePackedVarints(uids);
+    const payload = Buffer.concat([Buffer.from([0x0a, packed.length]), packed]);
+    const r = await operateRaw(GROUP_MAIN, CMD_CRAFT_REAL, 167, payload);
+    if (r.errorCode !== 0) return { ok: false, reason: `制作失败 code=${r.errorCode}` };
+    const made = [];
+    if (r.resultHex) {
+        try {
+            const rf = parseTop(Buffer.from(r.resultHex, 'hex'));
+            for (const x of rf) {
+                if (x.f !== 3 || x.w !== 2) continue;
+                const xf = parseTop(x.v);
+                const id = toInt((findField(xf, 1) || {}).v);
+                const count = toInt((findField(xf, 2) || {}).v);
+                if (id) made.push({ id, count, name: itemLabel(id, count) });
+            }
+        } catch (e) { /* 忽略 */ }
+    }
+    return { ok: true, made };
+}
+
 /**
  * 制作奶茶(cmd=62, 实测 2026-10-15 新抓包):
  *   请求 #167 = {#1: [果实 uid...](packed)} → 响应回产出的高级奶茶 {#1: 物品id, #2: 数量}
@@ -639,7 +711,7 @@ async function runMilkTea(opts = {}) {
         await sleep(1200);
     }
     if (doCraft) {
-        const r = await craftMilkTea();
+        const r = await craftAllFruits();   // 自动 = 把背包里所有活动果实都做掉
         out.steps.push({ step: 'craft', ...r });
         await sleep(1200);
     }
@@ -683,6 +755,7 @@ module.exports = {
     claimCashier,
     craft,
     craftMilkTea,
+    craftAllFruits,
     getCraftableFruitIds,
     useSpeaker,
     openStore,

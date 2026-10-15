@@ -982,21 +982,19 @@ const happyResult = ref('')
 /** 奶茶热销中: 手动立即执行(领收益/加工/喇叭/互动) */
 const milkTeaBusy = ref('')
 const milkTeaResult = ref('')
-async function milkTeaAction(kind: 'cashier' | 'craft' | 'speaker' | 'interact') {
+async function milkTeaAction(kind: 'cashier' | 'craft' | 'speaker' | 'interact', body: any = {}) {
   const accountId = String(currentAccountId.value || '')
   if (!accountId) { showAlert('请先选择账号', 'danger'); return }
   milkTeaBusy.value = kind
   milkTeaResult.value = ''
   try {
-    const res = await api.post(`/api/activity/milk-tea/${kind}`, {}, { headers: { 'x-account-id': accountId } })
+    const res = await api.post(`/api/activity/milk-tea/${kind}`, body, { headers: { 'x-account-id': accountId } })
     const d = res.data?.data || {}
     const err = apiError(res, d)
     if (err) { milkTeaResult.value = err; showAlert(`奶茶热销中：${err}`, 'danger'); return }
     const label: Record<string, string> = {
       cashier: '已领取收银台收益',
-      craft: '已提交工坊加工',
-      speaker: '已使用宣传喇叭',
-      interact: '已完成一次互动',
+      craft: d.used ? `已制作奶茶(投入 ${d.used} 个果实)` : '制作奶茶完成',
     }
     milkTeaResult.value = label[kind] || '完成'
   } catch (e: any) {
@@ -2021,26 +2019,27 @@ async function handleTestOffline() {
                 <AutoTaskCard
                   v-if="localAutomationSettings.milkTeaEnabled"
                   title="奶茶热销中（10/15 – 11/16）"
-                  desc="自动领收银台收益（满载会暂停营业且不补发）+ 工坊加工 + 宣传喇叭；详细经营数据在左侧栏「奶茶热销中」"
+                  desc="自动领收银台收益（满载会暂停营业且不补发）+ 自动制作奶茶（把背包里所有活动果实做成高级奶茶）；详细经营数据在左侧栏「奶茶热销中」"
                 >
                   <template #actions>
                     <BaseButton variant="secondary" size="sm" :loading="milkTeaBusy === 'cashier'" @click="milkTeaAction('cashier')">
                       领收银台收益
                     </BaseButton>
-                    <BaseButton variant="secondary" size="sm" :loading="milkTeaBusy === 'craft'" @click="milkTeaAction('craft')">
-                      制作奶茶
+                    <BaseButton variant="secondary" size="sm" :loading="milkTeaBusy === 'craft'" @click="milkTeaAction('craft', { all: true })">
+                      制作奶茶（全部果实）
                     </BaseButton>
                     <span v-if="milkTeaResult" class="text-xs text-gray-600 dark:text-gray-300">{{ milkTeaResult }}</span>
                   </template>
                   <div class="flex flex-wrap items-center gap-3 rounded border border-gray-200 px-2.5 py-2 dark:border-gray-700">
                     <BaseSwitch v-model="localAutomationSettings.milkTeaCashier" label="自动领收银台收益（核心）" />
+                    <BaseSwitch v-model="localAutomationSettings.milkTeaCraft" label="自动制作奶茶（全部果实）" />
                     <BaseInput v-model="localAutomationSettings.milkTeaStoreName" label="店名（首次开业用）" type="text" class="w-40" />
                     <span class="text-xs text-gray-500 dark:text-gray-400">
                       雇佣好友 / 自动雇佣 在左侧栏「奶茶热销中」页面设置
                     </span>
                   </div>
                   <template #note>
-                    每 15 分钟自查一次（收银台满载会停业且不补发，所以只自动做"领收益"这一件确定安全的事）。
+                    每 15 分钟自查一次。自动制作奶茶 = 把背包里所有活动果实(森野系列 8 种)分批做成高级奶茶（每批 20 个、批间隔 700ms 防队列打满）；手动按钮同理。
                     制作奶茶 = 工坊加工(cmd 62): 把背包里的活动果实(森野系列)做成高级奶茶, 自动模式每轮做一次。
                   </template>
                 </AutoTaskCard>

@@ -1405,10 +1405,13 @@ async function handleApiCall(msg) {
             case 'claimMilkTeaCashier':
                 result = await milkTea.claimCashier();
                 break;
-            case 'craftMilkTea':
-                // 真正的"制作奶茶"(cmd=62): 果实 uid → 高级奶茶
-                result = await milkTea.craftMilkTea(args[0] && args[0].limit);
+            case 'craftMilkTea': {
+                // 真正的"制作奶茶"(cmd=62): 果实 uid → 高级奶茶; all=true 则把背包里所有果实都做完
+                const co = args[0] || {};
+                result = co.all ? await milkTea.craftAllFruits(co.perBatch, co.maxBatches)
+                    : await milkTea.craftMilkTea(co.limit);
                 break;
+            }
             case 'useMilkTeaSpeaker':
                 result = await milkTea.useSpeaker();
                 break;

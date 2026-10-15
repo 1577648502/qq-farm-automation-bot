@@ -3653,7 +3653,7 @@ app.use('/api', (req, res, next) => {
         catch (e) { res.json({ ok: false, error: e.message }); }
     });
     milkTeaRoute('/api/activity/milk-tea/cashier', (id) => provider.claimMilkTeaCashier(id));
-    milkTeaRoute('/api/activity/milk-tea/craft', (id, body) => provider.craftMilkTea(id, { limit: body.limit }));
+    milkTeaRoute('/api/activity/milk-tea/craft', (id, body) => provider.craftMilkTea(id, { limit: body.limit, all: body.all, perBatch: body.perBatch }));
     milkTeaRoute('/api/activity/milk-tea/speaker', (id) => provider.useMilkTeaSpeaker(id));
     milkTeaRoute('/api/activity/milk-tea/open', (id) => provider.openMilkTeaStore(id));
     milkTeaRoute('/api/activity/milk-tea/hire', (id, body) => provider.hireMilkTea(id, { friendGid: body.friendGid }));
