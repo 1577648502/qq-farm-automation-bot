@@ -5,6 +5,7 @@ import api from '@/api'
 import ConfirmModal from '@/components/ConfirmModal.vue'
 import BaseButton from '@/components/ui/BaseButton.vue'
 import { useAccountStore } from '@/stores/account'
+import { apiError } from '@/utils/api-result'
 import { useStatusStore } from '@/stores/status'
 import { useToastStore } from '@/stores/toast'
 import { formatCompactNumber } from '@/utils/number-format'
@@ -189,8 +190,8 @@ async function fetchCatalog() {
     })
     if (accountId !== String(currentAccountId.value || ''))
       return
-    if (!res.data?.ok)
-      throw new Error(res.data?.error || '获取商城商品失败')
+    if (apiError(res, res.data?.data))
+      throw new Error(apiError(res, res.data?.data) || '获取商城商品失败')
     goods.value = Array.isArray(res.data.data) ? res.data.data : []
     for (const item of goods.value) {
       if (!quantities[goodsKey(item)])
@@ -256,8 +257,8 @@ async function confirmPurchase() {
     }, {
       headers: { 'x-account-id': accountId },
     })
-    if (!res.data?.ok)
-      throw new Error(res.data?.error || '购买失败')
+    if (apiError(res, res.data?.data))
+      throw new Error(apiError(res, res.data?.data) || '购买失败')
     const result = res.data.data || {}
     toast.success(`已购买 ${result.name || item.name} ×${result.count || count}`)
     selectedGoods.value = null

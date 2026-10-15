@@ -5,6 +5,7 @@ import { usePageRefresh } from '@/composables/usePageRefresh'
 import api from '@/api'
 import BaseButton from '@/components/ui/BaseButton.vue'
 import { useAccountStore } from '@/stores/account'
+import { apiError } from '@/utils/api-result'
 import { useStatusStore } from '@/stores/status'
 import { useToastStore } from '@/stores/toast'
 import { formatCompactNumber } from '@/utils/number-format'
@@ -174,8 +175,8 @@ async function fetchOverview() {
     })
     if (accountId !== String(currentAccountId.value || ''))
       return
-    if (!res.data?.ok)
-      throw new Error(res.data?.error || '获取活动数据失败')
+    if (apiError(res, res.data?.data))
+      throw new Error(apiError(res, res.data?.data) || '获取活动数据失败')
     overview.value = res.data.data
     await statusStore.fetchStatus(accountId)
       // 强制通知 Vue 响应式系统重新求值，确保页面立即刷新
@@ -199,8 +200,8 @@ async function runAction(key: string, path: string, payload: Record<string, any>
     const res = await api.post(path, payload, {
       headers: { 'x-account-id': accountId },
     })
-    if (!res.data?.ok)
-      throw new Error(res.data?.error || '操作失败')
+    if (apiError(res, res.data?.data))
+      throw new Error(apiError(res, res.data?.data) || '操作失败')
     responseData = res.data.data
     // 立即更新 overview 响应式对象，在 fetchOverview 之前让页面显示最新金额
     if (responseData?.goldAwarded > 0 && overview.value?.live?.activity?.drawActivity?.qingmei) {

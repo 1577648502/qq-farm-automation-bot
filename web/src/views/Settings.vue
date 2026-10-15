@@ -6,6 +6,7 @@ import { useRouter } from 'vue-router'
 import api from '@/api'
 import AccountModal from '@/components/AccountModal.vue'
 import AutoTaskCard from '@/components/AutoTaskCard.vue'
+import { apiError } from '@/utils/api-result'
 import ConfirmModal from '@/components/ConfirmModal.vue'
 import BaseButton from '@/components/ui/BaseButton.vue'
 import BaseInput from '@/components/ui/BaseInput.vue'
@@ -701,7 +702,7 @@ async function fetchStealthStatus() {
       stealthStatus.value = res.data.data
       stealthStatusError.value = ''
     } else {
-      stealthStatusError.value = `后台未返回防封号状态：${res.data?.error || '未知原因'}`
+      stealthStatusError.value = `后台未返回防封号状态：${apiError(res, res.data?.data) || '未知原因'}`
     }
   } catch (e: any) {
     const code = e?.response?.status
@@ -794,7 +795,7 @@ async function handleForceStealth(action: 'online' | 'offline') {
       showAlert(detail || (action === 'offline' ? '已手动下线' : '已手动上线'), 'primary')
       await fetchStealthStatus()
     } else {
-      showAlert(res.data?.error || '操作失败', 'danger')
+      showAlert(apiError(res, res.data?.data) || '操作失败', 'danger')
     }
   } catch (e: any) {
     showAlert(e?.response?.data?.error || e?.message || '操作失败', 'danger')
@@ -965,7 +966,7 @@ async function adGiftAction() {
     // 该流程要等 30+ 秒(模拟看广告时长), 单独放宽超时
     const res = await api.post('/api/mall/ad-gift/claim', {}, { headers: { 'x-account-id': accountId }, timeout: 65000 })
     const d = res.data?.data || {}
-    if (!res.data?.ok) { adGiftResult.value = res.data?.error || '失败'; return }
+    if (apiError(res, res.data?.data)) { adGiftResult.value = apiError(res, res.data?.data) || '失败'; return }
     if (d.ok) adGiftResult.value = `已跳过广告领取 ${d.itemName || ''}${d.gained ? ` +${d.gained}` : ''}`
     else adGiftResult.value = `未领取：${d.reason || '未知原因'}` + (d.hint ? `（${d.hint}）` : '')
   } catch (e: any) {
@@ -989,7 +990,8 @@ async function milkTeaAction(kind: 'cashier' | 'craft' | 'speaker' | 'interact')
   try {
     const res = await api.post(`/api/activity/milk-tea/${kind}`, {}, { headers: { 'x-account-id': accountId } })
     const d = res.data?.data || {}
-    if (!res.data?.ok || d.ok === false) { milkTeaResult.value = res.data?.error || d.reason || '执行失败'; return }
+    const err = apiError(res, d)
+    if (err) { milkTeaResult.value = err; showAlert(`奶茶热销中：${err}`, 'danger'); return }
     const label: Record<string, string> = {
       cashier: '已领取收银台收益',
       craft: '已提交工坊加工',
@@ -1013,7 +1015,8 @@ async function happyAction() {
   try {
     const res = await api.post('/api/activity/happy-share/run', {}, { headers: { 'x-account-id': accountId } })
     const d = res.data?.data || {}
-    if (!res.data?.ok) { happyResult.value = res.data?.error || '失败'; return }
+    const err = apiError(res, d)
+    if (err) { happyResult.value = err; showAlert(`快乐不独享：${err}`, 'danger'); return }
     const parts: string[] = []
     if (d.daily && d.daily.ok) parts.push(`快乐值 +${d.daily.gained}（现有 ${d.daily.happy}）`)
     else if (d.daily && d.daily.reason) parts.push(`快乐值未领：${d.daily.reason}`)
@@ -1043,7 +1046,8 @@ async function autumnAction(kind: 'claim' | 'firework') {
     const payload = kind === 'claim' ? {} : { mode: localAutomationSettings.value.fireworkMode }
     const res = await api.post(url, payload, { headers: { 'x-account-id': accountId } })
     const d = res.data?.data || {}
-    if (!res.data?.ok) { autumnResult.value = res.data?.error || '失败'; return }
+    const err = apiError(res, d)
+    if (err) { autumnResult.value = err; showAlert(`秋祈良愿：${err}`, 'danger'); return }
     if (kind === 'claim') {
       if (d.skipped) autumnResult.value = `本次未领取：${d.reason || '无可领奖励'}`
       else if (d.ok) autumnResult.value = `已领取 ${(d.rewards || []).map((r: any) => r.name).join('、') || '(无回包)'}`
@@ -1075,8 +1079,8 @@ async function buyBooksNow() {
       count: localAutomationSettings.value.buyBookCount,
     }, { headers: { 'x-account-id': accountId } })
     const d = res.data?.data || {}
-    if (!res.data?.ok) {
-      buyBookResult.value = res.data?.error || '购买失败'
+    if (apiError(res, res.data?.data)) {
+      buyBookResult.value = apiError(res, res.data?.data) || '购买失败'
       return
     }
     const botPart = `机器人今日 ${d.todayBoughtByBot ?? d.bought ?? 0}/${d.target ?? '-'}`
@@ -1115,7 +1119,7 @@ async function runTreasureNow() {
         showAlert(`自动夺宝完成：尝试 ${d.attempted} 次，成功 ${d.success}，未生效 ${d.noEffect}，失败 ${d.failed}`, 'primary')
       }
     } else {
-      showAlert(res.data?.error || '执行失败', 'danger')
+      showAlert(apiError(res, res.data?.data) || '执行失败', 'danger')
     }
   } catch (e: any) {
     showAlert(e?.response?.data?.error || e?.message || '执行失败', 'danger')

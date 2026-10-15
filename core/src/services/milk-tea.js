@@ -83,7 +83,7 @@ function encodeVarint(v) {
 
 /** 解析主活动状态容器 #121.#1 */
 function parseMainState(activityBuf) {
-    const out = { ok: false, storeName: '', value: 0, recipeId: 0, at: 0, nextAt: 0 };
+    const out = { ok: false, storeName: '', value: 0, recipeId: 0, at: 0, nextAt: 0, storeLevel: 0 };
     if (!activityBuf || !activityBuf.length) return out;
     try {
         const act = parseTop(activityBuf);
@@ -96,7 +96,8 @@ function parseMainState(activityBuf) {
         const f = parseTop(inner.v);
         const nameField = findField(f, 2);
         out.storeName = nameField && nameField.w === 2 ? nameField.v.toString('utf8') : '';
-        out.value = toInt((findField(f, 5) || {}).v);
+        out.value = toInt((findField(f, 5) || {}).v);        // 累计营业额
+        out.storeLevel = toInt((findField(f, 4) || {}).v);   // 店铺等级(实测 #4; Lv1 时"需等级≥3"的商品点不了)
         out.nextAt = toInt((findField(f, 1) || {}).v);
         out.at = toInt((findField(f, 16) || {}).v);
         const recipe = findField(f, 15);
@@ -204,11 +205,14 @@ async function getShopGoods() {
                 const currencyId = toInt((findField(priceFields, 1) || {}).v);
                 const unitPrice = toInt((findField(priceFields, 2) || {}).v);
                 let unlockText = '';
+                let requireLevel = 0;      // 需要的奶茶店等级(0 = 无要求)
                 if (unlock && unlock.w === 2) {
                     const uf = parseTop(unlock.v);
                     const cond = findField(uf, 2);
                     const need = toInt((findField(uf, 5) || {}).v);
                     if (cond && cond.w === 2) unlockText = cond.v.toString('utf8') + (need ? ` ≥${need}` : '');
+                    // 实测条件名形如 "2026110101_奶茶店等级_3" + #5=3 → 需要的店铺等级
+                    requireLevel = need;
                 }
                 // 限购(#4) / 类型(#12: seed=种子, exchange=装扮兑换, 空=道具) / 每单限购份数(#11)
                 const limitCount = toInt((findField(f, 4) || {}).v);
@@ -230,6 +234,7 @@ async function getShopGoods() {
                     limitCount,
                     kind,
                     unlockText,
+                    requireLevel,
                 });
             }
         }
@@ -242,8 +247,22 @@ async function buyShopGoods(goodsId, count = 1) {
     const id = toNum(goodsId);
     const n = Math.max(1, Math.min(9999, toInt(count) || 1));
     if (!id) return { ok: false, reason: '缺少商品 ID' };
-    const inner = Buffer.concat([encodeVarintField(1, id), encodeVarintField(2, n)]);
-    const payload = Buffer.concat([Buffer.from([0x0a, inner.length]), inner]);
+    // ⚠ 实测(20261015 抓包): #101 的值**直接**就是 {#1: 商品ID, #2: 数量} = 08 ad02 10 6c,
+    //   不能像 cmd=57 那样再套一层 {#1: ...}, 否则服务端报 1034006「活动商品不存在」(踩过)
+    // 等级没达标就别发请求(服务端会报 1034006, 白跑一趟)
+    try {
+        const goods = await getShopGoods();
+        const target = (goods.goods || []).find((g) => toNum(g.goodsId) === id);
+        if (target && target.requireLevel > 0) {
+            const st = await getMainStatus();
+            const lv = toNum(st.storeLevel) || 0;
+            // 等级读不到时(<=0)不拦, 免得误锁; 交给服务端判断(报错也会原样透出)
+            if (lv > 0 && lv < target.requireLevel) {
+                return { ok: false, reason: `「${target.name}」需要奶茶店等级 ≥${target.requireLevel}（当前 Lv${lv}）` };
+            }
+        }
+    } catch (e) { /* 校验失败就按原样尝试 */ }
+    const payload = Buffer.concat([encodeVarintField(1, id), encodeVarintField(2, n)]);
     const r = await operateRaw(GROUP_SHOP, CMD_SHOP_BUY, FIELD_SHOP_BUY, payload);
     if (r.errorCode !== 0) return { ok: false, reason: `兑换失败 code=${r.errorCode}` };
     // 结果 #101 = {#1: {物品ID, 数量}, #2: {货币ID, 总价}}

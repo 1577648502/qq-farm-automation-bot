@@ -16,8 +16,16 @@ import api from '@/api'
 import BaseButton from '@/components/ui/BaseButton.vue'
 import BaseSwitch from '@/components/ui/BaseSwitch.vue'
 import { useToastStore } from '@/stores/toast'
+import { apiError } from '@/utils/api-result'
 
 const toast = useToastStore()
+
+/** 统一报错: 右下/右上弹 Toast, 同时在页面里留一行文字(避免错过) */
+function reportError(where: string, msg: string) {
+  const text = msg ? `${where}：${msg}` : `${where}失败`
+  actionResult.value = text
+  toast.error(text)
+}
 
 const status = ref<any>(null)
 const statusBusy = ref(false)
@@ -49,6 +57,16 @@ const clampQty = (g: any) => {
   return Math.min(Math.max(1, n), maxQty(g))
 }
 const totalCost = (g: any) => Number(g.unitPrice || 0) * clampQty(g)
+
+/** 店铺等级 */
+const storeLevel = computed(() => Number(status.value?.storeLevel) || 0)
+/** 未达解锁条件(如"需奶茶店等级 ≥3") → 不允许兑换 */
+function isLocked(g: any) {
+  const need = Number(g.requireLevel) || 0
+  if (need <= 0) return false
+  // 等级没读到时(0)不置灰, 免得误锁; 由服务端兜底(报错会提示)
+  return storeLevel.value > 0 && storeLevel.value < need
+}
 
 /** 按货币分组（金币 / 奶茶券 / 钻石 …） */
 const shopGroups = computed(() => {
@@ -85,10 +103,13 @@ async function loadShop() {
   shopBusy.value = true
   try {
     const res = await api.get('/api/activity/milk-tea/shop')
-    shop.value = Array.isArray(res.data?.data?.goods) ? res.data.data.goods : []
+    const d = res.data?.data || {}
+    const err = apiError(res, d)
+    if (err) { reportError('读取商店', err); shop.value = []; return }
+    shop.value = Array.isArray(d.goods) ? d.goods : []
     for (const g of shop.value) if (!shopQty.value[g.goodsId]) shopQty.value[g.goodsId] = 1
   } catch (e: any) {
-    toast.error(e?.response?.data?.error || '读取商店失败')
+    reportError('读取商店', apiError(null, null, e))
   } finally {
     shopBusy.value = false
   }
@@ -101,11 +122,13 @@ async function loadFriends() {
       api.get('/api/activity/milk-tea/friends'),
       api.get('/api/activity/milk-tea/hire-config'),
     ])
+    const fErr = apiError(fr, fr.data?.data) || apiError(cfg, cfg.data?.data)
+    if (fErr) { reportError('读取好友', fErr); friends.value = []; return }
     friends.value = Array.isArray(fr.data?.data?.friends) ? fr.data.data.friends : []
     hireGids.value = ((cfg.data?.data?.hireGids) || []).map((g: any) => String(g))
     autoHire.value = !!cfg.data?.data?.autoHire
   } catch (e: any) {
-    toast.error(e?.response?.data?.error || '读取好友失败')
+    reportError('读取好友', apiError(null, null, e))
   } finally {
     friendsBusy.value = false
   }
@@ -115,26 +138,36 @@ async function loadTasks() {
   tasksBusy.value = true
   try {
     const res = await api.get('/api/activity/milk-tea/tasks')
-    tasks.value = Array.isArray(res.data?.data?.tasks) ? res.data.data.tasks : []
-  } catch { /* 忽略 */ } finally {
+    const d = res.data?.data || {}
+    const err = apiError(res, d)
+    if (err) { reportError('读取任务', err); tasks.value = []; return }
+    tasks.value = Array.isArray(d.tasks) ? d.tasks : []
+  } catch (e: any) {
+    reportError('读取任务', apiError(null, null, e))
+  } finally {
     tasksBusy.value = false
   }
 }
 
 async function buy(g: any) {
+  if (isLocked(g)) {
+    toast.warning(`「${g.name}」需要奶茶店等级 ≥${g.requireLevel}（当前 Lv${storeLevel.value}）`)
+    return
+  }
   const count = clampQty(g)
   busy.value = `buy-${g.goodsId}`
   actionResult.value = ''
   try {
     const res = await api.post('/api/activity/milk-tea/buy', { goodsId: g.goodsId, count })
     const d = res.data?.data || {}
-    if (!res.data?.ok || d.ok === false) { toast.error(res.data?.error || d.reason || '兑换失败'); return }
+    const err = apiError(res, d)
+    if (err) { reportError(`兑换「${g.name}」`, err); return }
     const got = d.got ? `${d.got.count} 个` : `${count} 个`
     const cost = d.cost ? `，花费 ${Number(d.cost.amount).toLocaleString()} ${g.currencyName}` : ''
     actionResult.value = `已兑换「${g.name}」${got}${cost}`
     toast.success(actionResult.value)
   } catch (e: any) {
-    toast.error(e?.response?.data?.error || e.message || '请求失败（账号未运行？）')
+    reportError(`兑换「${g.name}」`, apiError(null, null, e))
   } finally {
     busy.value = ''
   }
@@ -153,10 +186,11 @@ async function saveHireConfig() {
       hireGids: hireGids.value,
       autoHire: autoHire.value,
     })
-    if (res.data?.ok === false) { toast.error(res.data.error || '保存失败'); return }
+    const err = apiError(res, res.data?.data)
+    if (err) { reportError('保存好友设置', err); return }
     toast.success(`已保存：勾选 ${hireGids.value.length} 位好友${autoHire.value ? '，开启自动雇佣' : ''}`)
   } catch (e: any) {
-    toast.error(e?.response?.data?.error || e.message || '保存失败')
+    reportError('保存好友设置', apiError(null, null, e))
   } finally {
     hireSaving.value = false
   }
@@ -167,10 +201,12 @@ async function hireNow() {
   try {
     const res = await api.post('/api/activity/milk-tea/hire-auto', { hireGids: hireGids.value })
     const d = res.data?.data || {}
-    if (!res.data?.ok || d.ok === false) { toast.warning(d.reason || res.data?.error || '雇佣未成功'); return }
-    toast.success(`已雇佣好友 ${d.friendGid}`)
+    const err = apiError(res, d)
+    if (err) { reportError('雇佣好友', err); return }
+    actionResult.value = `已雇佣好友 ${d.friendGid}`
+    toast.success(actionResult.value)
   } catch (e: any) {
-    toast.error(e?.response?.data?.error || e.message || '雇佣失败')
+    reportError('雇佣好友', apiError(null, null, e))
   } finally {
     busy.value = ''
   }
@@ -213,6 +249,10 @@ onMounted(refreshAll)
         <div>
           <div class="text-xs text-gray-500 dark:text-gray-400">店铺</div>
           <div class="text-gray-900 font-medium dark:text-gray-100">{{ status.storeName || '未开业' }}</div>
+        </div>
+        <div>
+          <div class="text-xs text-gray-500 dark:text-gray-400">店铺等级</div>
+          <div class="text-gray-900 font-medium dark:text-gray-100">Lv{{ status.storeLevel || 1 }}</div>
         </div>
         <div>
           <div class="text-xs text-gray-500 dark:text-gray-400">累计营业额</div>
@@ -258,7 +298,10 @@ onMounted(refreshAll)
             <div
               v-for="g in grp.items"
               :key="g.goodsId"
-              class="flex flex-col rounded border border-gray-200 p-3 dark:border-gray-700"
+              class="flex flex-col rounded border p-3"
+              :class="isLocked(g)
+                ? 'border-gray-200 bg-gray-50 dark:border-gray-700 dark:bg-gray-900/40'
+                : 'border-gray-200 dark:border-gray-700'"
             >
               <div class="flex items-start justify-between gap-2">
                 <div class="flex min-w-0 items-center gap-2">
@@ -278,7 +321,11 @@ onMounted(refreshAll)
               <div class="mt-1 flex-1 text-xs text-gray-500 dark:text-gray-400">
                 <template v-if="g.itemNameKnown">内容：{{ g.itemName }}<br></template>
                 <template v-if="g.limitCount">限购 {{ g.limitCount }}</template>
-                <template v-if="g.unlockText"> · 需 {{ g.unlockText }}</template>
+                <template v-if="isLocked(g)">
+                  <span class="text-amber-600 dark:text-amber-400">
+                    · 需奶茶店等级 ≥{{ g.requireLevel }}（当前 Lv{{ storeLevel }}）
+                  </span>
+                </template>
               </div>
               <div class="mt-2 flex items-end justify-between gap-2">
                 <div class="flex flex-col gap-1">
@@ -292,6 +339,7 @@ onMounted(refreshAll)
                     v-model.number="shopQty[g.goodsId]"
                     type="number"
                     min="1"
+                    :disabled="isLocked(g)"
                     :max="maxQty(g)"
                     class="w-16 rounded border border-gray-300 bg-white px-1.5 py-1 text-xs dark:border-gray-600 dark:bg-gray-900"
                     title="兑换数量"
@@ -299,10 +347,11 @@ onMounted(refreshAll)
                   <BaseButton
                     variant="primary"
                     size="sm"
+                    :disabled="isLocked(g)"
                     :loading="busy === `buy-${g.goodsId}`"
                     @click="buy(g)"
                   >
-                    兑换
+                    {{ isLocked(g) ? '未解锁' : '兑换' }}
                   </BaseButton>
                 </div>
               </div>

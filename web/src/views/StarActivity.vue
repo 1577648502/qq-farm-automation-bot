@@ -7,6 +7,7 @@ import api from '@/api'
 import ConfirmModal from '@/components/ConfirmModal.vue'
 import BaseButton from '@/components/ui/BaseButton.vue'
 import { useAccountStore } from '@/stores/account'
+import { apiError } from '@/utils/api-result'
 import { useStatusStore } from '@/stores/status'
 import { useToastStore } from '@/stores/toast'
 
@@ -194,8 +195,8 @@ async function fetchOverview() {
     })
     if (accountId !== String(currentAccountId.value || ''))
       return
-    if (!res.data?.ok)
-      throw new Error(res.data?.error || '获取活动数据失败')
+    if (apiError(res, res.data?.data))
+      throw new Error(apiError(res, res.data?.data) || '获取活动数据失败')
     overview.value = res.data.data
   }
   catch (e: any) {
@@ -234,8 +235,8 @@ async function lightUpStar() {
     const res = await api.post('/api/activity/star/light-up', {}, {
       headers: { 'x-account-id': accountId },
     })
-    if (!res.data?.ok)
-      throw new Error(res.data?.error || '点亮失败')
+    if (apiError(res, res.data?.data))
+      throw new Error(apiError(res, res.data?.data) || '点亮失败')
     const awards = formatRewardList(res.data.data?.awards)
     toast.success(awards ? `点亮成功，今日奖励：${awards}` : '点亮成功')
     await fetchOverview()
@@ -257,8 +258,8 @@ async function claimBattlePass() {
     const res = await api.post('/api/activity/battle-pass/claim', {}, {
       headers: { 'x-account-id': accountId },
     })
-    if (!res.data?.ok)
-      throw new Error(res.data?.error || '领取失败')
+    if (apiError(res, res.data?.data))
+      throw new Error(apiError(res, res.data?.data) || '领取失败')
     const rewards = formatRewardList(res.data.data?.rewards)
     if (res.data.data?.bagOverflow)
       toast.error('背包已满，部分奖励未能领取')
@@ -284,8 +285,8 @@ async function claimSolarTerm(term: SolarTerm) {
     const res = await api.post('/api/solar-terms/claim', { id: term.id }, {
       headers: { 'x-account-id': accountId },
     })
-    if (!res.data?.ok)
-      throw new Error(res.data?.error || '领取失败')
+    if (apiError(res, res.data?.data))
+      throw new Error(apiError(res, res.data?.data) || '领取失败')
     const awards = formatRewardList(res.data.data?.awards)
     toast.success(awards ? `领取成功：${awards}` : `已领取 ${term.name} 节令小礼`)
     await fetchSolarTerms()
@@ -315,8 +316,8 @@ async function confirmExchange() {
     }, {
       headers: { 'x-account-id': accountId },
     })
-    if (!res.data?.ok)
-      throw new Error(res.data?.error || '兑换失败')
+    if (apiError(res, res.data?.data))
+      throw new Error(apiError(res, res.data?.data) || '兑换失败')
     const awards = formatRewardList(res.data.data?.awards)
     toast.success(awards ? `兑换成功：${awards}` : `已兑换 ${goods.name}`)
     exchangeTarget.value = null

@@ -114,6 +114,7 @@ const byIdx = (i) => FRAMES.find(f => f.idx === i);
             check('店名 = 奶茶小铺', st.storeName === '奶茶小铺', st.storeName);
             check('营业额为正数(抓包各帧为 263~266)', st.value > 0 && st.value < 100000, st.value);
             check('当前配方 = 10401', st.recipeId === 10401, st.recipeId);
+            check('店铺等级 = 1(抓包时刚开业)', st.storeLevel === 1, st.storeLevel);
         }
     }
 
@@ -185,13 +186,18 @@ const byIdx = (i) => FRAMES.find(f => f.idx === i);
         check('332 宣传喇叭 = 钻石 ×8', byId(332) && byId(332).currencyId === 1004 && byId(332).unitPrice === 8, byId(332));
         check('种子里程碑: 301-310 共 10 个种子', shop.goods.filter(x => x.kind === 'seed').length === 10, shop.goods.filter(x => x.kind === 'seed').length);
 
+        // 解锁条件(需奶茶店等级): 302 需 ≥3, 301 无要求
+        check('301 无解锁要求(requireLevel=0)', byId(301) && byId(301).requireLevel === 0, byId(301) && byId(301).requireLevel);
+        check('302 需奶茶店等级 ≥3', byId(302) && byId(302).requireLevel === 3, byId(302) && byId(302).requireLevel);
+        check('307 需奶茶店等级 ≥13', byId(307) && byId(307).requireLevel === 13, byId(307) && byId(307).requireLevel);
+
         sent.length = 0;
         const buy = await milkTea.buyShopGoods(301, 108);
         check('兑换成功', buy.ok === true, buy);
         const req = sent.find(x => x.cmd === 1 && x.group === 2026110102);
         check('购买用 cmd=1(group=商店) 字段 #101', !!req && req.fields.some(y => y.f === 101), req && req.fields.map(y => y.f));
         const payload = req && Buffer.from((req.fields.find(y => y.f === 101) || {}).v || []).toString('hex');
-        check('payload = {#101:{#1:301, #2:108}} → 0a0508ad02106c', payload === '0a0508ad02106c', payload);
+        check('payload(#101 的值) = {#1:301, #2:108} → 08ad02106c', payload === '08ad02106c', payload);
         check('解析出到账 20525×108', buy.got && buy.got.id === 20525 && buy.got.count === 108, buy.got);
         check('解析出花费 1080000 金币', buy.cost && buy.cost.currencyId === 1001 && buy.cost.amount === 1080000, buy.cost);
 
@@ -200,7 +206,17 @@ const byIdx = (i) => FRAMES.find(f => f.idx === i);
         await milkTea.buyShopGoods(301, 0);
         const req2 = sent.find(x => x.cmd === 1);
         const p2 = req2 && Buffer.from((req2.fields.find(y => y.f === 101) || {}).v || []).toString('hex');
-        check('数量 0 会被夹成 1 → 0a0508ad021001', p2 === '0a0508ad021001', p2);
+        check('数量 0 会被夹成 1 → 08ad021001', p2 === '08ad021001', p2);
+    }
+
+    section('4b. 等级不足的商品会被拦住');
+    {
+        // 抓包响应里店铺等级 = 1, 302 需要 ≥3 → 不应发出购买请求
+        sent.length = 0;
+        const r = await milkTea.buyShopGoods(302, 1);
+        check('等级不足直接拒绝(不发请求)', r.ok === false, r);
+        check('原因里带所需等级与当前等级', /≥3/.test(String(r.reason)) && /Lv\d+/.test(String(r.reason)), r.reason);
+        check('没有发出 cmd=1 请求', sent.filter(x => x.cmd === 1).length === 0, sent.map(x => x.cmd));
     }
 
     section('5. 任务列表');

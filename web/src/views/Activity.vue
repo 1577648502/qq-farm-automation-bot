@@ -6,6 +6,7 @@ import api from '@/api'
 import ConfirmModal from '@/components/ConfirmModal.vue'
 import BaseButton from '@/components/ui/BaseButton.vue'
 import { useAccountStore } from '@/stores/account'
+import { apiError } from '@/utils/api-result'
 import { useStatusStore } from '@/stores/status'
 import { useToastStore } from '@/stores/toast'
 
@@ -302,8 +303,8 @@ async function fetchOverview() {
     })
     if (accountId !== String(currentAccountId.value || ''))
       return
-    if (!res.data?.ok)
-      throw new Error(res.data?.error || '获取活动数据失败')
+    if (apiError(res, res.data?.data))
+      throw new Error(apiError(res, res.data?.data) || '获取活动数据失败')
     overview.value = res.data.data
     await statusStore.fetchStatus(accountId)
   }
@@ -324,8 +325,8 @@ async function runAction(key: string, path: string, payload: Record<string, any>
     const res = await api.post(path, payload, {
       headers: { 'x-account-id': accountId },
     })
-    if (!res.data?.ok)
-      throw new Error(res.data?.error || '操作失败')
+    if (apiError(res, res.data?.data))
+      throw new Error(apiError(res, res.data?.data) || '操作失败')
     toast.success(success(res.data.data))
     await fetchOverview()
   }
