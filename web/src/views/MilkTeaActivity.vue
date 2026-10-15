@@ -32,14 +32,9 @@ const friends = ref<any[]>([])
 const friendsBusy = ref(false)
 const hireGids = ref<string[]>([])
 const autoHire = ref(false)
-const autoTask = ref(false)
 const hireOpen = ref(false)
 const hireSaving = ref(false)
 const newGid = ref('')
-
-const tasks = ref<any[]>([])
-const tasksBusy = ref(false)
-const taskClaiming = ref<number>(0)
 
 const KIND_LABEL: Record<string, string> = { seed: '种子', exchange: '装扮兑换' }
 const kindLabel = (g: any) => KIND_LABEL[g.kind] || '道具'
@@ -92,8 +87,6 @@ const shopGroups = computed(() => {
   return Array.from(map.values())
 })
 
-const claimableTasks = computed(() => tasks.value.filter((t: any) => t.status === 2))
-
 function fmtTime(sec: number) {
   if (!sec) return '-'
   const d = new Date(sec * 1000)
@@ -140,7 +133,6 @@ async function loadHireConfig() {
     if (err) { reportError('读取雇佣设置', err); return }
     hireGids.value = (d.hireGids || []).map((g: any) => String(g))
     autoHire.value = !!d.autoHire
-    autoTask.value = !!d.autoTask
   } catch (e: any) {
     reportError('读取雇佣设置', apiError(null, null, e))
   }
@@ -161,20 +153,6 @@ async function loadFriends() {
   }
 }
 
-async function loadTasks() {
-  tasksBusy.value = true
-  try {
-    const res = await api.get('/api/activity/milk-tea/tasks')
-    const d = res.data?.data || {}
-    const err = apiError(res, d)
-    if (err) { reportError('读取任务', err); tasks.value = []; return }
-    tasks.value = Array.isArray(d.tasks) ? d.tasks : []
-  } catch (e: any) {
-    reportError('读取任务', apiError(null, null, e))
-  } finally {
-    tasksBusy.value = false
-  }
-}
 
 async function buy(g: any) {
   if (isLocked(g)) {
@@ -222,11 +200,10 @@ async function saveHireConfig() {
     const res = await api.post('/api/activity/milk-tea/hire-config', {
       hireGids: hireGids.value,
       autoHire: autoHire.value,
-      autoTask: autoTask.value,
     })
     const err = apiError(res, res.data?.data)
     if (err) { reportError('保存设置', err); return }
-    toast.success(`已保存：好友 ${hireGids.value.length} 位${autoHire.value ? '，自动雇佣开' : ''}${autoTask.value ? '，自动领任务开' : ''}`)
+    toast.success(`已保存：好友 ${hireGids.value.length} 位${autoHire.value ? '，自动雇佣开' : ''}`)
   } catch (e: any) {
     reportError('保存设置', apiError(null, null, e))
   } finally {
@@ -250,51 +227,33 @@ async function hireNow() {
   }
 }
 
-async function claimTask(t: any) {
-  taskClaiming.value = Number(t.id) || 0
-  try {
-    const res = await api.post('/api/activity/milk-tea/claim-task', { taskId: t.id })
-    const d = res.data?.data || {}
-    const err = apiError(res, d)
-    if (err) { reportError(`领取任务#${t.id}`, err); return }
-    actionResult.value = `任务#${t.id} 已领取`
-    toast.success(actionResult.value)
-    await loadTasks()
-  } catch (e: any) {
-    reportError(`领取任务#${t.id}`, apiError(null, null, e))
-  } finally {
-    taskClaiming.value = 0
+
+
+/** 串行 + 错开加载: 避免一次性并发多个游戏请求把队列打满(队列已满→心跳异常掉线) */
+async function refreshAll() {
+  await loadStatus()
+  await new Promise((r) => setTimeout(r, 400))
+  await loadShop()
+  await new Promise((r) => setTimeout(r, 400))
+  await loadHireConfig()
+  // 好友列表首次会做重同步(约 6 个请求) → 只在展开"雇佣好友"时按需拉
+  if (hireOpen.value) await loadFriends()
+}
+
+/** 展开雇佣好友时才去拉好友(重请求) */
+async function toggleHire() {
+  hireOpen.value = !hireOpen.value
+  if (hireOpen.value && !friends.value.length) {
+    await new Promise((r) => setTimeout(r, 300))
+    await loadFriends()
   }
 }
 
-async function claimAllTasks() {
-  taskClaiming.value = -1
-  try {
-    const res = await api.post('/api/activity/milk-tea/claim-task', {})
-    const d = res.data?.data || {}
-    const err = apiError(res, d)
-    if (err) { reportError('一键领取任务', err); return }
-    if (d.skipped) { actionResult.value = d.reason || '没有可领任务'; toast.warning(actionResult.value); return }
-    const okCount = (d.claimed || []).filter((x: any) => x.ok).length
-    actionResult.value = `已领取 ${okCount}/${(d.claimed || []).length} 个任务`
-    toast.success(actionResult.value)
-    await loadTasks()
-  } catch (e: any) {
-    reportError('一键领取任务', apiError(null, null, e))
-  } finally {
-    taskClaiming.value = 0
-  }
-}
-
-function refreshAll() {
+onMounted(() => {
   loadStatus()
-  loadShop()
-  loadHireConfig()
-  loadFriends()
-  loadTasks()
-}
-
-onMounted(refreshAll)
+  setTimeout(() => loadHireConfig(), 500)
+  setTimeout(() => loadShop(), 1000)
+})
 </script>
 
 <template>
@@ -454,7 +413,7 @@ onMounted(refreshAll)
     <div class="rounded-lg border border-gray-200 bg-white shadow-sm dark:border-gray-700 dark:bg-gray-800">
       <button
         class="flex w-full items-center justify-between px-4 py-3 text-left"
-        @click="hireOpen = !hireOpen"
+        @click="toggleHire"
       >
         <span class="text-sm text-gray-900 font-medium dark:text-white">
           雇佣好友
@@ -514,76 +473,6 @@ onMounted(refreshAll)
           >
             {{ gid }}
           </span>
-        </div>
-      </div>
-    </div>
-
-    <!-- ④ 任务（卡片式 + 领取） -->
-    <div class="rounded-lg border border-gray-200 bg-white p-4 shadow-sm dark:border-gray-700 dark:bg-gray-800">
-      <div class="mb-3 flex flex-wrap items-center justify-between gap-2">
-        <h3 class="text-sm text-gray-900 font-medium dark:text-white">
-          任务
-          <span class="ml-2 text-xs text-gray-500">
-            可领 {{ claimableTasks.length }} 个
-            <template v-if="!claimableTasks.length">；状态：1 未完成 · 2 可领 · 3 已领</template>
-          </span>
-        </h3>
-        <div class="flex flex-wrap items-center gap-2">
-          <BaseSwitch v-model="autoTask" label="自动领取" />
-          <BaseButton
-            variant="primary"
-            size="sm"
-            :disabled="!claimableTasks.length"
-            :loading="taskClaiming === -1"
-            @click="claimAllTasks"
-          >
-            一键领取
-          </BaseButton>
-          <BaseButton variant="secondary" size="sm" :loading="tasksBusy" @click="loadTasks">
-            刷新任务
-          </BaseButton>
-        </div>
-      </div>
-      <div v-if="!tasks.length" class="text-xs text-gray-500 dark:text-gray-400">
-        {{ tasksBusy ? '读取中…' : '暂无任务' }}
-      </div>
-      <div v-else class="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
-        <div
-          v-for="t in tasks"
-          :key="t.id"
-          class="flex flex-col rounded border p-3"
-          :class="t.status === 2
-            ? 'border-emerald-300 dark:border-emerald-800'
-            : 'border-gray-200 dark:border-gray-700'"
-        >
-          <div class="flex items-start justify-between gap-2">
-            <span class="text-sm text-gray-900 font-medium dark:text-white">任务 #{{ t.id }}</span>
-            <span
-              class="shrink-0 rounded px-1.5 py-0.5 text-[10px]"
-              :class="t.status === 2
-                ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300'
-                : t.status === 3
-                  ? 'bg-gray-100 text-gray-500 dark:bg-gray-700 dark:text-gray-300'
-                  : 'bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300'"
-            >
-              {{ t.status === 2 ? '可领' : t.status === 3 ? '已领' : '未完成' }}
-            </span>
-          </div>
-          <div class="mt-1 flex-1 text-xs text-gray-500 dark:text-gray-400">
-            <div v-for="(r, i) in (t.rewards || [])" :key="i">{{ r.name }}</div>
-            <div v-if="!(t.rewards || []).length">（无奖励信息）</div>
-          </div>
-          <div class="mt-2 flex justify-end">
-            <BaseButton
-              variant="primary"
-              size="sm"
-              :disabled="t.status !== 2"
-              :loading="taskClaiming === Number(t.id)"
-              @click="claimTask(t)"
-            >
-              {{ t.status === 2 ? '领取' : (t.status === 3 ? '已领取' : '未完成') }}
-            </BaseButton>
-          </div>
         </div>
       </div>
     </div>

@@ -2042,7 +2042,7 @@ async function handleTestOffline() {
                     <BaseSwitch v-model="localAutomationSettings.milkTeaCashier" label="自动领收银台收益（核心）" />
                     <BaseInput v-model="localAutomationSettings.milkTeaStoreName" label="店名（首次开业用）" type="text" class="w-40" />
                     <span class="text-xs text-gray-500 dark:text-gray-400">
-                      雇佣好友 / 自动雇佣 / 自动领任务 在左侧栏「奶茶热销中」页面设置
+                      雇佣好友 / 自动雇佣 在左侧栏「奶茶热销中」页面设置
                     </span>
                   </div>
                   <template #note>

@@ -68,8 +68,18 @@ function itemLabel(id, count) {
     return `${(it && it.name) || `物品#${id}`}×${count}`;
 }
 
-/** 主活动请求 */
-function mainOperate(cmd, payloadField, payloadBytes) {
+/** 最近一次游戏请求时间: 奶茶活动的请求一律串行 + 至少间隔 300ms,
+ *  避免页面一进来并发打十几个请求把游戏队列打满("队列已满"→心跳异常掉线, 踩过) */
+let lastCallAt = 0;
+async function throttle() {
+    const gap = 300 - (Date.now() - lastCallAt);
+    if (gap > 0) await sleep(gap);
+    lastCallAt = Date.now();
+}
+
+/** 主活动请求(串行节流) */
+async function mainOperate(cmd, payloadField, payloadBytes) {
+    await throttle();
     return operateRaw(GROUP_MAIN, cmd, payloadField === undefined ? cmd + FIELD_OFFSET : payloadField, payloadBytes || Buffer.alloc(0));
 }
 
@@ -199,6 +209,7 @@ async function interact() {
 
 /** 种子商店列表(0102 cmd=7) */
 async function getShopGoods() {
+    await throttle();
     const r = await operateRaw(GROUP_SHOP, CMD_SHOP_LIST, 0, Buffer.alloc(0));
     if (r.errorCode !== 0) return { ok: false, reason: `读取商店失败 code=${r.errorCode}`, goods: [] };
     const goods = [];
@@ -314,6 +325,7 @@ async function buyShopGoods(goodsId, count = 1) {
 
 /** 任务列表(0103 cmd=7) */
 async function getTasks() {
+    await throttle();
     const r = await operateRaw(GROUP_TASK, 7, 0, Buffer.alloc(0));
     if (r.errorCode !== 0) return { ok: false, reason: `读取任务失败 code=${r.errorCode}`, tasks: [] };
     const tasks = [];
@@ -341,7 +353,9 @@ async function getTasks() {
     return { ok: true, tasks };
 }
 
-/** 好友列表(给"可选好友"用): 复用好友服务, 拿 gid + 昵称 */
+/** 好友列表(给"可选好友"用): 复用好友服务(带缓存)。
+ *  ⚠ 首次会做重同步(访客记录+SyncAll+GetAll ≈ 6 个请求) → 页面必须"按需加载",
+ *  不要随页面打开一起拉, 否则和别的请求叠加会把游戏队列打满(队列已满→掉线) */
 async function getFriendList() {
     try {
         const { getFriendsList } = require('./friend');
@@ -396,19 +410,28 @@ async function getCashierStatus() {
     return out;
 }
 
-/** 奶茶券余额(背包里的 1041) */
-async function getMilkCouponBalance() {
+/** 奶茶券余额(背包里的 1041); 加 60s 缓存, 避免每次读状态都打一次背包请求 */
+let couponCache = { at: 0, value: 0 };
+async function getMilkCouponBalance(force = false) {
+    if (!force && couponCache.at && (Date.now() - couponCache.at) < 60000) return couponCache.value;
     try {
         const { getBag, getBagItems } = require('./warehouse');
         const bag = await getBag();
         for (const it of getBagItems(bag)) {
-            if (toNum(it && it.id) === MILK_COUPON_ID) return toNum(it.count) || 0;
+            if (toNum(it && it.id) === MILK_COUPON_ID) {
+                couponCache = { at: Date.now(), value: toNum(it.count) || 0 };
+                return couponCache.value;
+            }
         }
     } catch (e) { /* 读不到就当 0 */ }
+    couponCache = { at: Date.now(), value: 0 };
     return 0;
 }
 
 /**
+ * 任务奖励领取 —— ⚠ 该活动"任务"需充值激活, 界面入口已移除(2026-10-15 用户确认),
+ * 这里保留协议实现但不自动执行; 若以后激活, 直接用 claimAllTasks() 即可。
+ *
  * 领取任务奖励
  * ⚠ 领取命令**没有抓到**(抓包里只有列表 cmd=7) → 用候选命令逐个试, 并用"任务状态变 3"校验;
  *   成功的命令记在内存里, 下次直接用(和秋祈良愿的愿望编号一个思路)

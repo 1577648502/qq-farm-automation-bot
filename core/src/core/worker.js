@@ -314,7 +314,7 @@ async function runMilkTea(reason = 'interval') {
             storeName: cfg.storeName,
             autoHire: cfg.autoHire,
             hireGids: cfg.hireGids,
-            autoTask: cfg.autoTask,
+            autoTask: false,   // 任务需充值激活, 功能已移除(不再自动领取)
             // 注意: 不再自动调 cmd=56/58 —— 实际返回的是"工坊员工/配方菜单"等查询结果,
             // 早期按 UI 顺序误标为"加工/喇叭", 语义未确认前不自动执行
             craft: false,
@@ -1395,11 +1395,10 @@ async function handleApiCall(msg) {
                 break;
             case 'getMilkTeaStatus': {
                 // 页面顶部要展示: 店铺/等级/累计营业额/待领取收益/奶茶券余额
-                const [main, cashier, coupon] = await Promise.all([
-                    milkTea.getMainStatus(),
-                    milkTea.getCashierStatus().catch(() => null),
-                    milkTea.getMilkCouponBalance().catch(() => 0),
-                ]);
+                // ⚠ 串行执行(不并发): 并发会把游戏请求队列打满 → "队列已满" + 心跳异常掉线
+                const main = await milkTea.getMainStatus();
+                const cashier = await milkTea.getCashierStatus().catch(() => null);
+                const coupon = await milkTea.getMilkCouponBalance().catch(() => 0);
                 result = { ...main, cashier, milkCoupon: coupon };
                 break;
             }
