@@ -504,32 +504,11 @@ async function claimAllTasks() {
 }
 
 /**
- * ===== 取消/超时机制(用户要求: 长操作必须能停, 不能一直卡住) =====
- * · 任一步骤之间检查取消标志 → 立即中断剩余步骤
- * · 整轮有硬超时(默认 60s), 超时自动中断并记日志
- * · 单个游戏请求本身有 10s 超时(worker-manager 的 api_timeout), 不会无限等
- */
-let cancelRequested = false;
-const RUN_TIMEOUT_MS = 60000;
-
-/** 请求取消当前这一轮(multi-step)操作; 前端"停止"按钮调用 */
-function requestCancel(reason = '用户手动停止') {
-    cancelRequested = true;
-    log('活动', `奶茶热销中: 收到停止请求(${reason}), 剩余步骤将不再执行`, { module: 'activity', event: '奶茶热销中', result: 'warn' });
-    return { ok: true, cancelled: true };
-}
-function clearCancel() { cancelRequested = false; }
-function isCancelled() { return cancelRequested; }
-
-/**
  * 自动流程(每次调用都幂等):
  *   ① 刷新状态(顺带确认活动还在)  ② 未开业则开业  ③ 领收银台收益  ④ 用工坊加工  ⑤ 用宣传喇叭
  * 开关由调用方(worker)按配置决定是否执行各步。
  */
 async function runMilkTea(opts = {}) {
-    clearCancel();
-    const startedAt = Date.now();
-    const stopped = () => cancelRequested || (Date.now() - startedAt) > RUN_TIMEOUT_MS;
     const doCashier = opts.cashier !== false;
     const doCraft = !!opts.craft;
     const doSpeaker = !!opts.speaker;
@@ -549,55 +528,25 @@ async function runMilkTea(opts = {}) {
         await sleep(1200);
         st = await getMainStatus().catch(() => st);
     }
-    if (stopped()) {
-        out.cancelled = true;
-        out.reason = cancelRequested ? '已按请求停止' : '整轮超时(60s)已中断';
-        log('活动', `奶茶热销中: ${out.reason}, 跳过剩余步骤`, { module: 'activity', event: '奶茶热销中', result: 'warn' });
-        return out;
-    }
     if (opts.autoTask) {
         const r = await claimAllTasks().catch((e) => ({ ok: false, reason: e.message }));
         out.steps.push({ step: 'autoTask', ...r });
         await sleep(800);
-    }
-    if (stopped()) {
-        out.cancelled = true;
-        out.reason = cancelRequested ? '已按请求停止' : '整轮超时(60s)已中断';
-        log('活动', `奶茶热销中: ${out.reason}, 跳过剩余步骤`, { module: 'activity', event: '奶茶热销中', result: 'warn' });
-        return out;
     }
     if (doCashier) {
         const r = await claimCashier();
         out.steps.push({ step: 'cashier', ...r });
         await sleep(1200);
     }
-    if (stopped()) {
-        out.cancelled = true;
-        out.reason = cancelRequested ? '已按请求停止' : '整轮超时(60s)已中断';
-        log('活动', `奶茶热销中: ${out.reason}, 跳过剩余步骤`, { module: 'activity', event: '奶茶热销中', result: 'warn' });
-        return out;
-    }
     if (doCraft) {
         const r = await craft();
         out.steps.push({ step: 'craft', ...r });
         await sleep(1200);
     }
-    if (stopped()) {
-        out.cancelled = true;
-        out.reason = cancelRequested ? '已按请求停止' : '整轮超时(60s)已中断';
-        log('活动', `奶茶热销中: ${out.reason}, 跳过剩余步骤`, { module: 'activity', event: '奶茶热销中', result: 'warn' });
-        return out;
-    }
     if (doSpeaker) {
         const r = await useSpeaker();
         out.steps.push({ step: 'speaker', ...r });
         await sleep(1000);
-    }
-    if (stopped()) {
-        out.cancelled = true;
-        out.reason = cancelRequested ? '已按请求停止' : '整轮超时(60s)已中断';
-        log('活动', `奶茶热销中: ${out.reason}, 跳过剩余步骤`, { module: 'activity', event: '奶茶热销中', result: 'warn' });
-        return out;
     }
     if (opts.autoHire && Array.isArray(opts.hireGids) && opts.hireGids.length) {
         const r = await autoHire(opts.hireGids);
@@ -648,8 +597,5 @@ module.exports = {
     getMilkCouponBalance,
     MILK_COUPON_ID,
     isSettling,
-    requestCancel,
-    clearCancel,
-    isCancelled,
     runMilkTea,
 };

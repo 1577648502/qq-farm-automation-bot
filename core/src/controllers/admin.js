@@ -3658,8 +3658,6 @@ app.use('/api', (req, res, next) => {
     milkTeaRoute('/api/activity/milk-tea/open', (id) => provider.openMilkTeaStore(id));
     milkTeaRoute('/api/activity/milk-tea/hire', (id, body) => provider.hireMilkTea(id, { friendGid: body.friendGid }));
     milkTeaRoute('/api/activity/milk-tea/interact', (id) => provider.interactMilkTea(id));
-    // 停止当前一轮操作(长操作卡住时可中断剩余步骤)
-    milkTeaRoute('/api/activity/milk-tea/cancel', (id, body) => provider.cancelMilkTea(id, { reason: body.reason }));
     milkTeaRoute('/api/activity/milk-tea/hire-auto', (id, body) => provider.hireMilkTeaAuto(id, { hireGids: body.hireGids }));
     milkTeaRoute('/api/activity/milk-tea/claim-task', (id, body) => provider.claimMilkTeaTask(id, { taskId: body.taskId }));
     milkTeaRoute('/api/activity/milk-tea/buy', (id, body) => provider.buyMilkTeaGoods(id, { goodsId: body.goodsId, count: body.count }));
