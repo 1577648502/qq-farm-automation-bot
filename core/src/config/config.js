@@ -15,6 +15,7 @@ const DEFAULT_SYSTEM_CONFIG = {
     activityYuLuoChengShi: true,
     activityGongYiXiaoHongHua: true,
     activityMengChong: true,
+    activityMilkTea: true,      // 奶茶热销中(activityKey: milkTeaEnabled)
 };
 
 const CONFIG = {

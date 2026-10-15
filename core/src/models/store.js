@@ -1510,6 +1510,7 @@ function setSystemConfig(config) {
         activityYuLuoChengShi: config.activityYuLuoChengShi !== false,
         activityGongYiXiaoHongHua: config.activityGongYiXiaoHongHua !== false,
         activityMengChong: config.activityMengChong !== false,
+        activityMilkTea: config.activityMilkTea !== false,
     };
     saveGlobalConfig();
     return { ...globalConfig.systemConfig };
