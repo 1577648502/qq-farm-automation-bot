@@ -561,7 +561,7 @@ function normalizeAccountConfig(input, fallback = accountFallbackConfig) {
     if (src.milkTeaAutoHire !== undefined && src.milkTeaAutoHire !== null) cfg.milkTeaAutoHire = !!src.milkTeaAutoHire;
     if (src.milkTeaAutoTask !== undefined && src.milkTeaAutoTask !== null) cfg.milkTeaAutoTask = !!src.milkTeaAutoTask;
     if (src.milkTeaAutoInteract !== undefined && src.milkTeaAutoInteract !== null) cfg.milkTeaAutoInteract = !!src.milkTeaAutoInteract;
-    if (src.milkTeaInteractType !== undefined && src.milkTeaInteractType !== null) cfg.milkTeaInteractType = Math.max(1, toNum(src.milkTeaInteractType) || 5);
+    if (src.milkTeaInteractType !== undefined && src.milkTeaInteractType !== null) cfg.milkTeaInteractType = Math.max(1, Number(src.milkTeaInteractType) || 5);
     if (typeof src.milkTeaEmployerGid === 'string') cfg.milkTeaEmployerGid = src.milkTeaEmployerGid.trim().slice(0, 32);
     if (src.sellGoldenFruit !== undefined && src.sellGoldenFruit !== null) {
         cfg.sellGoldenFruit = !!src.sellGoldenFruit;
@@ -852,7 +852,7 @@ function getConfigSnapshot(accountId) {
         milkTeaAutoHire: !!cfg.milkTeaAutoHire,
         milkTeaAutoTask: !!cfg.milkTeaAutoTask,
         milkTeaAutoInteract: !!cfg.milkTeaAutoInteract,
-        milkTeaInteractType: Math.max(1, toNum(cfg.milkTeaInteractType) || 5),
+        milkTeaInteractType: Math.max(1, Number(cfg.milkTeaInteractType) || 5),
         milkTeaEmployerGid: cfg.milkTeaEmployerGid || '',
         sellGoldenFruit: !!cfg.sellGoldenFruit,
         adGiftEnabled: cfg.adGiftEnabled === undefined ? true : !!cfg.adGiftEnabled,
@@ -1023,7 +1023,7 @@ function applyConfigSnapshot(snapshot, options = {}) {
     if (cfg.milkTeaAutoHire !== undefined && cfg.milkTeaAutoHire !== null) next.milkTeaAutoHire = !!cfg.milkTeaAutoHire;
     if (cfg.milkTeaAutoTask !== undefined && cfg.milkTeaAutoTask !== null) next.milkTeaAutoTask = !!cfg.milkTeaAutoTask;
     if (cfg.milkTeaAutoInteract !== undefined && cfg.milkTeaAutoInteract !== null) next.milkTeaAutoInteract = !!cfg.milkTeaAutoInteract;
-    if (cfg.milkTeaInteractType !== undefined && cfg.milkTeaInteractType !== null) next.milkTeaInteractType = Math.max(1, toNum(cfg.milkTeaInteractType) || 5);
+    if (cfg.milkTeaInteractType !== undefined && cfg.milkTeaInteractType !== null) next.milkTeaInteractType = Math.max(1, Number(cfg.milkTeaInteractType) || 5);
     if (typeof cfg.milkTeaEmployerGid === 'string') next.milkTeaEmployerGid = cfg.milkTeaEmployerGid.trim().slice(0, 32);
     if (cfg.sellGoldenFruit !== undefined && cfg.sellGoldenFruit !== null) {
         next.sellGoldenFruit = !!cfg.sellGoldenFruit;
@@ -1602,7 +1602,7 @@ function getMilkTeaConfig(accountId) {
         autoHire: !!cfg.milkTeaAutoHire,
         autoTask: !!cfg.milkTeaAutoTask,
         autoInteract: !!cfg.milkTeaAutoInteract,
-        interactType: Math.max(1, toNum(cfg.milkTeaInteractType) || 5),
+        interactType: Math.max(1, Number(cfg.milkTeaInteractType) || 5),
         employerGid: cfg.milkTeaEmployerGid || '',
     };
 }
