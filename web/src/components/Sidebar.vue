@@ -252,6 +252,7 @@ const activityStatus = ref({
   yuLuoChengShiEnabled: true,
   gongYiXiaoHongHuaEnabled: true,
   mengChongEnabled: true,
+  milkTeaEnabled: true,
 })
 
 async function loadActivityStatus() {
@@ -265,6 +266,7 @@ async function loadActivityStatus() {
         yuLuoChengShiEnabled: res.data.yuLuoChengShiEnabled !== false,
         gongYiXiaoHongHuaEnabled: res.data.gongYiXiaoHongHuaEnabled !== false,
         mengChongEnabled: res.data.mengChongEnabled !== false,
+        milkTeaEnabled: res.data.milkTeaEnabled !== false,
       }
     }
   } catch {

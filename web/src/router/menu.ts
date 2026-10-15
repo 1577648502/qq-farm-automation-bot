@@ -131,6 +131,15 @@ export const menuRoutes: MenuItem[] = [
   },
 
   {
+    path: 'milk-tea-activity',
+    name: 'milk-tea-activity',
+    label: '奶茶热销中',
+    icon: 'i-carbon-cafe',
+    activityKey: 'milkTeaEnabled',
+    component: () => import('@/views/MilkTeaActivity.vue'),
+  },
+
+  {
     path: 'pet',
     name: 'pet',
     label: '\u5ba0\u7269',

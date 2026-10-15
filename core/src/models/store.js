@@ -236,6 +236,8 @@ const DEFAULT_ACCOUNT_CONFIG = {
     milkTeaCraft: true,               // 自动工坊加工(活动果实 → 高级奶茶)
     milkTeaSpeaker: false,            // 自动使用宣传喇叭(消耗喇叭道具)
     milkTeaStoreName: '奶茶小铺',       // 首次开业的店名
+    milkTeaHireGids: [],              // 雇佣好友白名单(可选好友, 参考萌宠游记的选择方式)
+    milkTeaAutoHire: false,           // 自动雇佣(从白名单里挑)
     sellGoldenFruit: false,           // 自动卖果实时是否连黄金果实一起卖(默认保留)
     adGiftEnabled: true,              // 每日自动领「看广告礼包」(跳过广告直接领, 化肥×5)
     // 背包种子优先顺序（seedId 数组）
@@ -549,6 +551,10 @@ function normalizeAccountConfig(input, fallback = accountFallbackConfig) {
     if (src.milkTeaCraft !== undefined && src.milkTeaCraft !== null) cfg.milkTeaCraft = !!src.milkTeaCraft;
     if (src.milkTeaSpeaker !== undefined && src.milkTeaSpeaker !== null) cfg.milkTeaSpeaker = !!src.milkTeaSpeaker;
     if (typeof src.milkTeaStoreName === 'string') cfg.milkTeaStoreName = src.milkTeaStoreName.slice(0, 20);
+    if (Array.isArray(src.milkTeaHireGids)) {
+        cfg.milkTeaHireGids = src.milkTeaHireGids.map((g) => String(g).trim()).filter(Boolean).slice(0, 50);
+    }
+    if (src.milkTeaAutoHire !== undefined && src.milkTeaAutoHire !== null) cfg.milkTeaAutoHire = !!src.milkTeaAutoHire;
     if (src.sellGoldenFruit !== undefined && src.sellGoldenFruit !== null) {
         cfg.sellGoldenFruit = !!src.sellGoldenFruit;
     }
@@ -834,6 +840,8 @@ function getConfigSnapshot(accountId) {
         milkTeaCraft: cfg.milkTeaCraft === undefined ? true : !!cfg.milkTeaCraft,
         milkTeaSpeaker: !!cfg.milkTeaSpeaker,
         milkTeaStoreName: cfg.milkTeaStoreName || '奶茶小铺',
+        milkTeaHireGids: [...(cfg.milkTeaHireGids || [])],
+        milkTeaAutoHire: !!cfg.milkTeaAutoHire,
         sellGoldenFruit: !!cfg.sellGoldenFruit,
         adGiftEnabled: cfg.adGiftEnabled === undefined ? true : !!cfg.adGiftEnabled,
         stealDelaySeconds: Math.max(0, Math.min(300, Number(cfg.stealDelaySeconds) || 0)),
@@ -997,6 +1005,10 @@ function applyConfigSnapshot(snapshot, options = {}) {
     if (cfg.milkTeaCraft !== undefined && cfg.milkTeaCraft !== null) next.milkTeaCraft = !!cfg.milkTeaCraft;
     if (cfg.milkTeaSpeaker !== undefined && cfg.milkTeaSpeaker !== null) next.milkTeaSpeaker = !!cfg.milkTeaSpeaker;
     if (typeof cfg.milkTeaStoreName === 'string') next.milkTeaStoreName = cfg.milkTeaStoreName.slice(0, 20);
+    if (Array.isArray(cfg.milkTeaHireGids)) {
+        next.milkTeaHireGids = cfg.milkTeaHireGids.map((g) => String(g).trim()).filter(Boolean).slice(0, 50);
+    }
+    if (cfg.milkTeaAutoHire !== undefined && cfg.milkTeaAutoHire !== null) next.milkTeaAutoHire = !!cfg.milkTeaAutoHire;
     if (cfg.sellGoldenFruit !== undefined && cfg.sellGoldenFruit !== null) {
         next.sellGoldenFruit = !!cfg.sellGoldenFruit;
     }
@@ -1569,6 +1581,8 @@ function getMilkTeaConfig(accountId) {
         craft: cfg.milkTeaCraft === undefined ? true : !!cfg.milkTeaCraft,
         speaker: !!cfg.milkTeaSpeaker,
         storeName: cfg.milkTeaStoreName || '奶茶小铺',
+        hireGids: [...(cfg.milkTeaHireGids || [])],
+        autoHire: !!cfg.milkTeaAutoHire,
     };
 }
 
@@ -1589,6 +1603,7 @@ function getActivityStatus() {
         yuLuoChengShiEnabled: cfg.activityYuLuoChengShi !== false,
         gongYiXiaoHongHuaEnabled: cfg.activityGongYiXiaoHongHua !== false,
         mengChongEnabled: cfg.activityMengChong !== false,
+        milkTeaEnabled: cfg.activityMilkTea !== false,
     };
 }
 

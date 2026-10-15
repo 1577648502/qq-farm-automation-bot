@@ -2105,7 +2105,7 @@ app.use('/api', (req, res, next) => {
                 : true;
             const milkTeaCfg = (id && typeof store.getMilkTeaConfig === 'function')
                 ? store.getMilkTeaConfig(id)
-                : { enabled: true, cashier: true, craft: true, speaker: false, storeName: '奶茶小铺' };
+                : { enabled: true, cashier: true, craft: true, speaker: false, storeName: '奶茶小铺', hireGids: [], autoHire: false };
             const happyShareEnabled = (id && typeof store.getHappyShareEnabled === 'function')
                 ? store.getHappyShareEnabled(id)
                 : true;
@@ -2171,6 +2171,8 @@ app.use('/api', (req, res, next) => {
                     milkTeaCraft: milkTeaCfg.craft,
                     milkTeaSpeaker: milkTeaCfg.speaker,
                     milkTeaStoreName: milkTeaCfg.storeName,
+                    milkTeaHireGids: milkTeaCfg.hireGids || [],
+                    milkTeaAutoHire: !!milkTeaCfg.autoHire,
                     // 看广告礼包(跳过广告直接领)
                     adGiftEnabled,
                     // 自动卖果实时是否连黄金果实一起卖
@@ -3600,6 +3602,40 @@ app.use('/api', (req, res, next) => {
         try { res.json({ ok: true, data: await provider.getMilkTeaStatus(id) }); }
         catch (e) { res.json({ ok: false, error: e.message }); }
     });
+    // 雇佣白名单读写(页面上的"可选好友"): 直接走 store + saveSettings, 不必经 worker
+    app.get('/api/activity/milk-tea/hire-config', (req, res) => {
+        const id = getAccId(req);
+        if (!id) return res.status(400).json({ ok: false, error: '缺少账号 ID' });
+        if (!checkAccountAccess(req, id)) return res.status(403).json({ ok: false, error: '无权访问此账号' });
+        try {
+            const cfg = (typeof store.getMilkTeaConfig === 'function')
+                ? store.getMilkTeaConfig(id)
+                : { hireGids: [], autoHire: false };
+            res.json({ ok: true, data: { hireGids: cfg.hireGids || [], autoHire: !!cfg.autoHire } });
+        } catch (e) { res.json({ ok: false, error: e.message }); }
+    });
+
+    app.post('/api/activity/milk-tea/hire-config', async (req, res) => {
+        const id = getAccId(req);
+        if (!id) return res.status(400).json({ ok: false, error: '缺少账号 ID' });
+        if (!checkAccountAccess(req, id)) return res.status(403).json({ ok: false, error: '无权访问此账号' });
+        const body = req.body || {};
+        try {
+            await provider.saveSettings(id, {
+                milkTeaHireGids: Array.isArray(body.hireGids) ? body.hireGids : undefined,
+                milkTeaAutoHire: typeof body.autoHire === 'boolean' ? body.autoHire : undefined,
+            });
+            res.json({ ok: true, data: { hireGids: body.hireGids || [], autoHire: !!body.autoHire } });
+        } catch (e) { res.json({ ok: false, error: e.message }); }
+    });
+
+    app.get('/api/activity/milk-tea/friends', async (req, res) => {
+        const id = getAccId(req);
+        if (!id) return res.status(400).json({ ok: false, error: '缺少账号 ID' });
+        if (!checkAccountAccess(req, id)) return res.status(403).json({ ok: false, error: '无权访问此账号' });
+        try { res.json({ ok: true, data: await provider.getMilkTeaFriends(id) }); }
+        catch (e) { res.json({ ok: false, error: e.message }); }
+    });
     app.get('/api/activity/milk-tea/shop', async (req, res) => {
         const id = getAccId(req);
         if (!id) return res.status(400).json({ ok: false, error: '缺少账号 ID' });
@@ -3620,6 +3656,7 @@ app.use('/api', (req, res, next) => {
     milkTeaRoute('/api/activity/milk-tea/open', (id) => provider.openMilkTeaStore(id));
     milkTeaRoute('/api/activity/milk-tea/hire', (id, body) => provider.hireMilkTea(id, { friendGid: body.friendGid }));
     milkTeaRoute('/api/activity/milk-tea/interact', (id) => provider.interactMilkTea(id));
+    milkTeaRoute('/api/activity/milk-tea/hire-auto', (id, body) => provider.hireMilkTeaAuto(id, { hireGids: body.hireGids }));
     milkTeaRoute('/api/activity/milk-tea/buy', (id, body) => provider.buyMilkTeaGoods(id, { goodsId: body.goodsId, count: body.count }));
 
     // 快乐不独享: 查状态 / 立即跑一次

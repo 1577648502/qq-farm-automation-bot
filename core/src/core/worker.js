@@ -314,6 +314,8 @@ async function runMilkTea(reason = 'interval') {
             craft: cfg.craft,
             speaker: cfg.speaker,
             storeName: cfg.storeName,
+            autoHire: cfg.autoHire,
+            hireGids: cfg.hireGids,
         });
         if (r.ok === false) {
             log('活动', `奶茶热销中: ${r.reason || '处理失败'}`, { module: 'activity', event: '奶茶热销中', result: 'warn', trigger: reason });
@@ -1408,6 +1410,12 @@ async function handleApiCall(msg) {
                 break;
             case 'interactMilkTea':
                 result = await milkTea.interact();
+                break;
+            case 'getMilkTeaFriends':
+                result = await milkTea.getFriendList();
+                break;
+            case 'hireMilkTeaAuto':
+                result = await milkTea.autoHire((args[0] && args[0].hireGids) || getMilkTeaConfig().hireGids);
                 break;
             case 'getMilkTeaShop':
                 result = await milkTea.getShopGoods();

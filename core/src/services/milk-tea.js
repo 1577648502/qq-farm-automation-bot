@@ -298,6 +298,42 @@ async function getTasks() {
     return { ok: true, tasks };
 }
 
+/** 好友列表(给"可选好友"用): 复用好友服务, 拿 gid + 昵称 */
+async function getFriendList() {
+    try {
+        const { getFriendsList } = require('./friend');
+        const list = await getFriendsList().catch(() => null);
+        const arr = Array.isArray(list) ? list : (list && list.friends) || [];
+        return {
+            ok: true,
+            friends: arr.map((f) => ({
+                gid: toNum(f && (f.gid || f.id)) || 0,
+                name: String((f && (f.name || f.nick || f.remark)) || ''),
+                level: toNum(f && (f.level || f.lv)) || 0,
+            })).filter((f) => f.gid > 0),
+        };
+    } catch (e) {
+        return { ok: false, reason: e.message, friends: [] };
+    }
+}
+
+/**
+ * 自动雇佣: 从白名单里挑一个去雇佣(服务端对已雇佣/不可雇佣会报错, 失败就换下一个)
+ * @param hireGids 白名单(账号配置里的 milkTeaHireGids)
+ */
+async function autoHire(hireGids) {
+    const list = (Array.isArray(hireGids) ? hireGids : []).map((g) => toNum(g)).filter((g) => g > 0);
+    if (!list.length) return { ok: false, reason: '未配置可雇佣好友(先在页面里勾选)' };
+    const errors = [];
+    for (const gid of list) {
+        const r = await hireFriend(gid).catch((e) => ({ ok: false, reason: e.message }));
+        if (r && r.ok) return { ok: true, friendGid: gid };
+        errors.push(`${gid}: ${(r && r.reason) || '失败'}`);
+        await sleep(600);
+    }
+    return { ok: false, reason: `白名单内好友都雇佣失败(${errors.slice(0, 2).join('; ')})` };
+}
+
 /**
  * 自动流程(每次调用都幂等):
  *   ① 刷新状态(顺带确认活动还在)  ② 未开业则开业  ③ 领收银台收益  ④ 用工坊加工  ⑤ 用宣传喇叭
@@ -332,6 +368,16 @@ async function runMilkTea(opts = {}) {
     if (doSpeaker) {
         const r = await useSpeaker();
         out.steps.push({ step: 'speaker', ...r });
+        await sleep(1000);
+    }
+    if (opts.autoHire && Array.isArray(opts.hireGids) && opts.hireGids.length) {
+        const r = await autoHire(opts.hireGids);
+        out.steps.push({ step: 'autoHire', ...r });
+        if (r.ok) {
+            log('活动', `奶茶热销中: 已自动雇佣好友 ${r.friendGid}`, { module: 'activity', event: '奶茶热销中', result: 'ok' });
+        } else {
+            log('活动', `奶茶热销中: 自动雇佣未成功 — ${r.reason}`, { module: 'activity', event: '奶茶热销中', result: 'warn' });
+        }
     }
     out.state = await getMainStatus().catch(() => st);
     return out;
@@ -364,6 +410,8 @@ module.exports = {
     interact,
     getShopGoods,
     buyShopGoods,
+    getFriendList,
+    autoHire,
     getTasks,
     runMilkTea,
 };

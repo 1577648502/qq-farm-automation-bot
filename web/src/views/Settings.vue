@@ -6,7 +6,6 @@ import { useRouter } from 'vue-router'
 import api from '@/api'
 import AccountModal from '@/components/AccountModal.vue'
 import AutoTaskCard from '@/components/AutoTaskCard.vue'
-import MilkTeaPanel from '@/components/MilkTeaPanel.vue'
 import ConfirmModal from '@/components/ConfirmModal.vue'
 import BaseButton from '@/components/ui/BaseButton.vue'
 import BaseInput from '@/components/ui/BaseInput.vue'
@@ -24,7 +23,7 @@ const userStore = useUserStore()
 const settingStore = useSettingStore()
 const farmStore = useFarmStore()
 
-const activeTab = ref<'account' | 'strategy' | 'automation' | 'user' | 'milk-tea'>(
+const activeTab = ref<'account' | 'strategy' | 'automation' | 'user'>(
   (localStorage.getItem('settings-active-tab') as 'account' | 'strategy' | 'automation' | 'user') || 'account'
 )
 
@@ -36,7 +35,6 @@ const tabs = [
   { key: 'account', label: '账号管理', icon: 'i-carbon-user-settings' },
   { key: 'strategy', label: '策略设置', icon: 'i-fas-cogs' },
   { key: 'automation', label: '自动控制', icon: 'i-carbon-toggle-on' },
-  { key: 'milk-tea', label: '奶茶热销中', icon: 'i-carbon-cafe' },
   { key: 'user', label: '用户管理', icon: 'i-carbon-user' },
 ] as const
 
@@ -980,6 +978,33 @@ async function adGiftAction() {
 /** 快乐不独享: 立即跑一次(领快乐值 + 领档位) */
 const happyBusy = ref(false)
 const happyResult = ref('')
+/** 奶茶热销中: 手动立即执行(领收益/加工/喇叭/互动) */
+const milkTeaBusy = ref('')
+const milkTeaResult = ref('')
+async function milkTeaAction(kind: 'cashier' | 'craft' | 'speaker' | 'interact') {
+  const accountId = String(currentAccountId.value || '')
+  if (!accountId) { showAlert('请先选择账号', 'danger'); return }
+  milkTeaBusy.value = kind
+  milkTeaResult.value = ''
+  try {
+    const res = await api.post(`/api/activity/milk-tea/${kind}`, {}, { headers: { 'x-account-id': accountId } })
+    const d = res.data?.data || {}
+    if (!res.data?.ok || d.ok === false) { milkTeaResult.value = res.data?.error || d.reason || '执行失败'; return }
+    const label: Record<string, string> = {
+      cashier: '已领取收银台收益',
+      craft: '已提交工坊加工',
+      speaker: '已使用宣传喇叭',
+      interact: '已完成一次互动',
+    }
+    milkTeaResult.value = label[kind] || '完成'
+  } catch (e: any) {
+    milkTeaResult.value = e?.response?.data?.error || e?.message || '请求失败(账号未运行?)'
+  } finally {
+    milkTeaBusy.value = ''
+  }
+}
+
+
 async function happyAction() {
   const accountId = String(currentAccountId.value || '')
   if (!accountId) { showAlert('请先选择账号', 'danger'); return }
@@ -1861,6 +1886,7 @@ async function handleTestOffline() {
                 <BaseSwitch v-model="localAutomationSettings.automation.charity_task" :label="autoLabel('charity_task', '公益小红花：礼包+送爱心+分享')" :disabled="isAutomationGated('charity_task')" />
                 <BaseSwitch v-model="localAutomationSettings.automation.mengchong_task" :label="autoLabel('mengchong_task', '萌宠游记：每日任务(礼包/手记/投喂)')" :disabled="isAutomationGated('mengchong_task')" />
                 <BaseSwitch v-model="localAutomationSettings.automation.mengchong_hunt" :label="autoLabel('mengchong_hunt', '萌宠游记：自动寻宝(元气糕700/次)')" :disabled="isAutomationGated('mengchong_hunt')" />
+                <BaseSwitch v-model="localAutomationSettings.milkTeaEnabled" label="奶茶热销中自动经营" />
                 <BaseSwitch v-model="localAutomationSettings.automation.skip_own_weed_bug" label="不除自己草虫" />
               </div>
 
@@ -1986,6 +2012,39 @@ async function handleTestOffline() {
                     档位：10 → 化肥4h · 20 → 有机化肥8h · 30 → 点券×50 · 60 → 90042
                   </template>
                 </AutoTaskCard>
+
+                <!-- 奶茶热销中: 独立开关在基础开关区, 这里按开关显隐 -->
+                <AutoTaskCard
+                  v-if="localAutomationSettings.milkTeaEnabled"
+                  title="奶茶热销中（10/15 – 11/16）"
+                  desc="自动领收银台收益（满载会暂停营业且不补发）+ 工坊加工 + 宣传喇叭；详细经营数据在左侧栏「奶茶热销中」"
+                >
+                  <template #actions>
+                    <BaseButton variant="secondary" size="sm" :loading="milkTeaBusy === 'cashier'" @click="milkTeaAction('cashier')">
+                      领收银台收益
+                    </BaseButton>
+                    <BaseButton variant="secondary" size="sm" :loading="milkTeaBusy === 'craft'" @click="milkTeaAction('craft')">
+                      工坊加工
+                    </BaseButton>
+                    <BaseButton variant="secondary" size="sm" :loading="milkTeaBusy === 'speaker'" @click="milkTeaAction('speaker')">
+                      用宣传喇叭
+                    </BaseButton>
+                    <BaseButton variant="secondary" size="sm" :loading="milkTeaBusy === 'interact'" @click="milkTeaAction('interact')">
+                      我的工作互动
+                    </BaseButton>
+                    <span v-if="milkTeaResult" class="text-xs text-gray-600 dark:text-gray-300">{{ milkTeaResult }}</span>
+                  </template>
+                  <div class="flex flex-wrap items-center gap-3 rounded border border-gray-200 px-2.5 py-2 dark:border-gray-700">
+                    <BaseSwitch v-model="localAutomationSettings.milkTeaCashier" label="自动领收银台收益" />
+                    <BaseSwitch v-model="localAutomationSettings.milkTeaCraft" label="自动工坊加工" />
+                    <BaseSwitch v-model="localAutomationSettings.milkTeaSpeaker" label="自动用宣传喇叭" />
+                    <BaseInput v-model="localAutomationSettings.milkTeaStoreName" label="店名（首次开业用）" type="text" class="w-40" />
+                  </div>
+                  <template #note>
+                    每 15 分钟自查一次；雇佣好友（可选好友 + 自动雇佣）在左侧栏「奶茶热销中」页面设置。
+                  </template>
+                </AutoTaskCard>
+
 
                 <!-- 看广告礼包 -->
                 <!-- 已按需求隐藏(2026-10-15): 连同其子模块一起不显示; 恢复时删掉 v-if="false" -->
@@ -2391,16 +2450,6 @@ async function handleTestOffline() {
             </div>
           </div>
         </div>
-
-          <!-- 奶茶热销中(2026-10-15 新活动): 独立菜单 -->
-          <div v-else-if="activeTab === 'milk-tea'" class="space-y-4">
-            <MilkTeaPanel
-              :account-id="String(currentAccountId || '')"
-              :settings="localAutomationSettings"
-              :saving="automationSaving"
-              @save="saveAutomationSettings"
-            />
-          </div>
       </div>
     </div>
 
