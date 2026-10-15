@@ -2105,7 +2105,7 @@ app.use('/api', (req, res, next) => {
                 : true;
             const milkTeaCfg = (id && typeof store.getMilkTeaConfig === 'function')
                 ? store.getMilkTeaConfig(id)
-                : { enabled: true, cashier: true, craft: true, speaker: false, storeName: '奶茶小铺', hireGids: [], autoHire: false };
+                : { enabled: true, cashier: true, craft: true, speaker: false, storeName: '奶茶小铺', hireGids: [], autoHire: false, autoTask: false };
             const happyShareEnabled = (id && typeof store.getHappyShareEnabled === 'function')
                 ? store.getHappyShareEnabled(id)
                 : true;
@@ -2173,6 +2173,7 @@ app.use('/api', (req, res, next) => {
                     milkTeaStoreName: milkTeaCfg.storeName,
                     milkTeaHireGids: milkTeaCfg.hireGids || [],
                     milkTeaAutoHire: !!milkTeaCfg.autoHire,
+                    milkTeaAutoTask: !!milkTeaCfg.autoTask,
                     // 看广告礼包(跳过广告直接领)
                     adGiftEnabled,
                     // 自动卖果实时是否连黄金果实一起卖
@@ -3610,8 +3611,8 @@ app.use('/api', (req, res, next) => {
         try {
             const cfg = (typeof store.getMilkTeaConfig === 'function')
                 ? store.getMilkTeaConfig(id)
-                : { hireGids: [], autoHire: false };
-            res.json({ ok: true, data: { hireGids: cfg.hireGids || [], autoHire: !!cfg.autoHire } });
+                : { hireGids: [], autoHire: false, autoTask: false };
+            res.json({ ok: true, data: { hireGids: cfg.hireGids || [], autoHire: !!cfg.autoHire, autoTask: !!cfg.autoTask } });
         } catch (e) { res.json({ ok: false, error: e.message }); }
     });
 
@@ -3624,8 +3625,9 @@ app.use('/api', (req, res, next) => {
             await provider.saveSettings(id, {
                 milkTeaHireGids: Array.isArray(body.hireGids) ? body.hireGids : undefined,
                 milkTeaAutoHire: typeof body.autoHire === 'boolean' ? body.autoHire : undefined,
+                milkTeaAutoTask: typeof body.autoTask === 'boolean' ? body.autoTask : undefined,
             });
-            res.json({ ok: true, data: { hireGids: body.hireGids || [], autoHire: !!body.autoHire } });
+            res.json({ ok: true, data: { hireGids: body.hireGids || [], autoHire: !!body.autoHire, autoTask: !!body.autoTask } });
         } catch (e) { res.json({ ok: false, error: e.message }); }
     });
 
@@ -3657,6 +3659,7 @@ app.use('/api', (req, res, next) => {
     milkTeaRoute('/api/activity/milk-tea/hire', (id, body) => provider.hireMilkTea(id, { friendGid: body.friendGid }));
     milkTeaRoute('/api/activity/milk-tea/interact', (id) => provider.interactMilkTea(id));
     milkTeaRoute('/api/activity/milk-tea/hire-auto', (id, body) => provider.hireMilkTeaAuto(id, { hireGids: body.hireGids }));
+    milkTeaRoute('/api/activity/milk-tea/claim-task', (id, body) => provider.claimMilkTeaTask(id, { taskId: body.taskId }));
     milkTeaRoute('/api/activity/milk-tea/buy', (id, body) => provider.buyMilkTeaGoods(id, { goodsId: body.goodsId, count: body.count }));
 
     // 快乐不独享: 查状态 / 立即跑一次

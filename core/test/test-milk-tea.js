@@ -225,6 +225,21 @@ const byIdx = (i) => FRAMES.find(f => f.idx === i);
         check('没有发出 cmd=1 请求', sent.filter(x => x.cmd === 1).length === 0, sent.map(x => x.cmd));
     }
 
+    section('4c. 收银台查询(待领取收益) + 限购记录');
+    {
+        const cashier = await milkTea.getCashierStatus();
+        check('收银台查询成功', cashier.ok === true, cashier);
+        check('容量/待领/杯数 = 40/253/164312(抓包实测)', cashier.capacity === 40 && cashier.pending === 253 && cashier.cups === 164312, cashier);
+
+        const shop2 = await milkTea.getShopGoods();
+        // 前面第 4 节已买过 301(108 + 夹取后的 1 = 109) → 本会话计数累计, 应标记"已限购"
+        const g301 = (shop2.goods || []).find((x) => x.goodsId === 301);
+        check('已兑换数累计(109)', g301 && g301.boughtCount === 109, g301 && g301.boughtCount);
+        check('超过限购标记 soldOut', g301 && g301.soldOut === true, g301 && g301.soldOut);
+        const g302 = (shop2.goods || []).find((x) => x.goodsId === 302);
+        check('未买过的商品 boughtCount=0 且未售罄', g302 && g302.boughtCount === 0 && g302.soldOut === false, g302);
+    }
+
     section('5. 任务列表');
     {
         const t = await milkTea.getTasks();

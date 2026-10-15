@@ -2028,24 +2028,27 @@ async function handleTestOffline() {
                       领收银台收益
                     </BaseButton>
                     <BaseButton variant="secondary" size="sm" :loading="milkTeaBusy === 'craft'" @click="milkTeaAction('craft')">
-                      工坊加工
+                      工坊/员工
                     </BaseButton>
                     <BaseButton variant="secondary" size="sm" :loading="milkTeaBusy === 'speaker'" @click="milkTeaAction('speaker')">
-                      用宣传喇叭
+                      配方菜单
                     </BaseButton>
                     <BaseButton variant="secondary" size="sm" :loading="milkTeaBusy === 'interact'" @click="milkTeaAction('interact')">
-                      我的工作互动
+                      店铺排行
                     </BaseButton>
                     <span v-if="milkTeaResult" class="text-xs text-gray-600 dark:text-gray-300">{{ milkTeaResult }}</span>
                   </template>
                   <div class="flex flex-wrap items-center gap-3 rounded border border-gray-200 px-2.5 py-2 dark:border-gray-700">
-                    <BaseSwitch v-model="localAutomationSettings.milkTeaCashier" label="自动领收银台收益" />
-                    <BaseSwitch v-model="localAutomationSettings.milkTeaCraft" label="自动工坊加工" />
-                    <BaseSwitch v-model="localAutomationSettings.milkTeaSpeaker" label="自动用宣传喇叭" />
+                    <BaseSwitch v-model="localAutomationSettings.milkTeaCashier" label="自动领收银台收益（核心）" />
                     <BaseInput v-model="localAutomationSettings.milkTeaStoreName" label="店名（首次开业用）" type="text" class="w-40" />
+                    <span class="text-xs text-gray-500 dark:text-gray-400">
+                      雇佣好友 / 自动雇佣 / 自动领任务 在左侧栏「奶茶热销中」页面设置
+                    </span>
                   </div>
                   <template #note>
-                    每 15 分钟自查一次；雇佣好友（可选好友 + 自动雇佣）在左侧栏「奶茶热销中」页面设置。
+                    每 15 分钟自查一次（收银台满载会停业且不补发，所以只自动做"领收益"这一件确定安全的事）。
+                    按钮说明：工坊/员工(cmd 56)、配方菜单(58)、店铺排行(66) 都是查询类；你原来的"加工/喇叭/互动"
+                    是我早期按 UI 顺序误标的，已按实际返回内容纠正。
                   </template>
                 </AutoTaskCard>
 

@@ -238,6 +238,7 @@ function createDataProvider(options) {
                 milkTeaStoreName: body.milkTeaStoreName,
                 milkTeaHireGids: body.milkTeaHireGids,
                 milkTeaAutoHire: body.milkTeaAutoHire,
+                milkTeaAutoTask: body.milkTeaAutoTask,
                 adGiftEnabled: body.adGiftEnabled,
                 sellGoldenFruit: body.sellGoldenFruit
             };
@@ -504,6 +505,8 @@ function createDataProvider(options) {
         openMilkTeaStore: (accountRef, opts) => callWorkerApi(resolveAccountRefId(accountRef), 'openMilkTeaStore', opts || {}),
         hireMilkTea: (accountRef, opts) => callWorkerApi(resolveAccountRefId(accountRef), 'hireMilkTea', opts || {}),
         interactMilkTea: (accountRef) => callWorkerApi(resolveAccountRefId(accountRef), 'interactMilkTea'),
+        getMilkTeaCashier: (accountRef) => callWorkerApi(resolveAccountRefId(accountRef), 'getMilkTeaCashier'),
+        claimMilkTeaTask: (accountRef, opts) => callWorkerApi(resolveAccountRefId(accountRef), 'claimMilkTeaTask', opts || {}),
         getMilkTeaFriends: (accountRef) => callWorkerApi(resolveAccountRefId(accountRef), 'getMilkTeaFriends'),
         hireMilkTeaAuto: (accountRef, opts) => callWorkerApi(resolveAccountRefId(accountRef), 'hireMilkTeaAuto', opts || {}),
         getMilkTeaShop: (accountRef) => callWorkerApi(resolveAccountRefId(accountRef), 'getMilkTeaShop'),

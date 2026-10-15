@@ -42,11 +42,13 @@ const SUB_ID = 2026110100;
 // 主活动命令
 const CMD_OPEN = 53;        // 确认店名开业
 const CMD_CASHIER = 55;     // 领取收银台收益
-const CMD_CRAFT = 56;       // 工坊加工
-const CMD_HIRE = 57;        // 雇佣好友
-const CMD_SPEAKER = 58;     // 宣传喇叭
+const CMD_CRAFT = 56;       // ⚠ 实际返回「员工列表(好友+NPC店员)」→ 工坊/招募面板(非"加工")
+const CMD_HIRE = 57;        // 雇佣好友(返回班次+特长)
+const CMD_SPEAKER = 58;     // ⚠ 实际返回「9 种配方菜单」→ 菜单查询(非"喇叭")
+const CMD_SETTLE = 59;      // 结算(返回 {奶茶券+10} / {金币+8648})
+const CMD_CASHIER_INFO = 60;// **收银台查询**: {#1: 容量, #2: 当前待领, #3: 杯数}
 const CMD_REFRESH = 63;     // 刷新/查询
-const CMD_INTERACT = 66;    // 互动(我的工作)
+const CMD_INTERACT = 66;    // ⚠ 实际返回「好友店铺排行(店名+热度)」→ 排行查询(非"互动")
 const CMD_SHIFT = 67;       // 班次(带时间戳)
 const CMD_RECIPE = 69;      // 查询配方
 const FIELD_OFFSET = 105;   // 主活动 payload 字段 = cmd + 105
@@ -57,6 +59,7 @@ const CMD_SHOP_BUY = 1;
 const FIELD_SHOP_BUY = 101;
 
 const STATE_FIELD = 121;    // 主活动状态容器
+const MILK_COUPON_ID = 1041; // 奶茶券(活动货币)
 const SHOP_BODY_FIELD = 102;// 商店列表所在字段
 const TASK_BODY_FIELD = 122;// 任务列表所在字段
 
@@ -124,10 +127,24 @@ async function claimCashier() {
         return { ok: false, reason: `领取收益失败 code=${r.errorCode}` };
     }
     const after = parseMainState(r.activity);
-    log('活动', `奶茶热销中: 已领取收银台收益${after.value ? ` (营业额 ${after.value})` : ''}`, {
+    // 结果 #160.#1 = 收银台详情: #23 = 本次到账 {货币/数量}, #25 = 各品类明细
+    let gained = null;
+    if (r.resultHex) {
+        try {
+            const rf = parseTop(Buffer.from(r.resultHex, 'hex'));
+            const boxField = findField(rf, 1);
+            const inner = boxField && boxField.w === 2 ? parseTop(boxField.v) : rf;
+            const gainField = findField(inner, 23);
+            if (gainField && gainField.w === 2) {
+                const gf = parseTop(gainField.v);
+                gained = { id: toInt((findField(gf, 1) || {}).v), count: toInt((findField(gf, 2) || {}).v) };
+            }
+        } catch (e) { /* 忽略 */ }
+    }
+    log('活动', `奶茶热销中: 已领取收银台收益${gained ? ` ${itemLabel(gained.id, gained.count)}` : ''}${after.value ? ` (营业额 ${after.value})` : ''}`, {
         module: 'activity', event: '奶茶热销中', result: 'ok', before: before && before.value, after: after.value,
     });
-    return { ok: true, value: after.value, before: before && before.value, state: after };
+    return { ok: true, value: after.value, before: before && before.value, gained, state: after };
 }
 
 /** 工坊加工(把活动果实加工成高级奶茶) */
@@ -219,8 +236,11 @@ async function getShopGoods() {
                 const kindField = findField(f, 12);
                 const kind = kindField && kindField.w === 2 ? kindField.v.toString('utf8') : '';
                 const itemDef = getItemById(itemId);
+                const bought = toInt(shopBought.get(goodsId) || 0);
                 goods.push({
                     goodsId,
+                    boughtCount: bought,
+                    soldOut: limitCount > 0 && bought >= limitCount,
                     name: nameField && nameField.w === 2 ? nameField.v.toString('utf8') : `商品#${goodsId}`,
                     itemId,
                     itemCount,
@@ -241,6 +261,9 @@ async function getShopGoods() {
     } catch (e) { /* 解析失败返回空 */ }
     return { ok: true, goods };
 }
+
+/** 本次进程内各商品已兑换数量(用于显示"已限购"; 服务端没给已购字段, 只能自己记) */
+const shopBought = new Map();
 
 /** 兑换/购买商品(数量必填) —— 实测 {#101: {#1: 商品ID, #2: 数量}} */
 async function buyShopGoods(goodsId, count = 1) {
@@ -282,6 +305,7 @@ async function buyShopGoods(goodsId, count = 1) {
             }
         } catch (e) { /* 忽略 */ }
     }
+    shopBought.set(id, (shopBought.get(id) || 0) + n);
     log('活动', `奶茶热销中: 兑换 ${n} 个商品#${id}${got ? ` → ${itemLabel(got.id, got.count)}` : ''}${cost ? `, 花费 ${cost.amount} ${(getItemById(cost.currencyId) || {}).name || ''}` : ''}`, {
         module: 'activity', event: '奶茶热销中', result: 'ok', goodsId: id, count: n,
     });
@@ -354,6 +378,92 @@ async function autoHire(hireGids) {
 }
 
 /**
+ * 收银台查询(cmd=60): 返回待领取收益等。规则说"满载会暂停营业且不补发", 所以顶部要显示待领。
+ * 实测结果 #1 = {#1: 容量(40), #2: 当前待领(253), #3: 累计杯数(164312)}
+ */
+async function getCashierStatus() {
+    const r = await mainOperate(CMD_CASHIER_INFO, undefined, Buffer.alloc(0));
+    if (r.errorCode !== 0) return { ok: false, reason: `收银台查询失败 code=${r.errorCode}` };
+    const out = { ok: true, capacity: 0, pending: 0, cups: 0 };
+    if (r.resultHex) {
+        try {
+            const rf = parseTop(Buffer.from(r.resultHex, 'hex'));
+            out.capacity = toInt((findField(rf, 1) || {}).v);
+            out.pending = toInt((findField(rf, 2) || {}).v);
+            out.cups = toInt((findField(rf, 3) || {}).v);
+        } catch (e) { /* 忽略 */ }
+    }
+    return out;
+}
+
+/** 奶茶券余额(背包里的 1041) */
+async function getMilkCouponBalance() {
+    try {
+        const { getBag, getBagItems } = require('./warehouse');
+        const bag = await getBag();
+        for (const it of getBagItems(bag)) {
+            if (toNum(it && it.id) === MILK_COUPON_ID) return toNum(it.count) || 0;
+        }
+    } catch (e) { /* 读不到就当 0 */ }
+    return 0;
+}
+
+/**
+ * 领取任务奖励
+ * ⚠ 领取命令**没有抓到**(抓包里只有列表 cmd=7) → 用候选命令逐个试, 并用"任务状态变 3"校验;
+ *   成功的命令记在内存里, 下次直接用(和秋祈良愿的愿望编号一个思路)
+ */
+let workingTaskClaimCmd = 0;
+const TASK_CLAIM_CANDIDATES = [1, 8, 6, 9];
+
+async function claimTask(taskId) {
+    const id = toInt(taskId);
+    if (!id) return { ok: false, reason: '缺少任务序号' };
+    const candidates = [];
+    if (workingTaskClaimCmd > 0) candidates.push(workingTaskClaimCmd);
+    TASK_CLAIM_CANDIDATES.forEach((c) => { if (!candidates.includes(c)) candidates.push(c); });
+    const errors = [];
+    for (const cmd of candidates) {
+        let r = null;
+        try {
+            r = await operateRaw(GROUP_TASK, cmd, cmd + 100, encodeUint1(id));
+        } catch (e) {
+            errors.push(`cmd=${cmd}: ${e.message}`);
+            continue;
+        }
+        if (r.errorCode !== 0) { errors.push(`cmd=${cmd}: code=${r.errorCode}`); continue; }
+        // 校验: 重新拉任务表看该任务是否变"已领"
+        await sleep(800);
+        const t = await getTasks().catch(() => null);
+        const after = t && (t.tasks || []).find((x) => toNum(x.id) === id);
+        if (after && after.status === 3) {
+            workingTaskClaimCmd = cmd;
+            log('活动', `奶茶热销中: 已领取任务#${id} 奖励(${(after.rewards || []).map((x) => x.name).join('、') || '已发放'})`, {
+                module: 'activity', event: '奶茶热销中', result: 'ok', cmd,
+            });
+            return { ok: true, taskId: id, cmd, rewards: after.rewards || [] };
+        }
+        errors.push(`cmd=${cmd}: 状态未变`);
+    }
+    return { ok: false, reason: `领取失败(${errors.slice(0, 2).join('; ')})`, taskId: id };
+}
+
+/** 领取所有"可领"的任务(status=2) */
+async function claimAllTasks() {
+    const t = await getTasks();
+    if (!t.ok) return { ok: false, reason: t.reason };
+    const todo = (t.tasks || []).filter((x) => x.status === 2);
+    if (!todo.length) return { ok: true, claimed: [], skipped: true, reason: '没有可领任务' };
+    const claimed = [];
+    for (const task of todo) {
+        const r = await claimTask(task.id);
+        claimed.push({ id: task.id, ok: r.ok, reason: r.reason });
+        await sleep(700);
+    }
+    return { ok: true, claimed };
+}
+
+/**
  * 自动流程(每次调用都幂等):
  *   ① 刷新状态(顺带确认活动还在)  ② 未开业则开业  ③ 领收银台收益  ④ 用工坊加工  ⑤ 用宣传喇叭
  * 开关由调用方(worker)按配置决定是否执行各步。
@@ -373,6 +483,11 @@ async function runMilkTea(opts = {}) {
         out.steps.push({ step: 'openStore', ...r });
         await sleep(1200);
         st = await getMainStatus().catch(() => st);
+    }
+    if (opts.autoTask) {
+        const r = await claimAllTasks().catch((e) => ({ ok: false, reason: e.message }));
+        out.steps.push({ step: 'autoTask', ...r });
+        await sleep(800);
     }
     if (doCashier) {
         const r = await claimCashier();
@@ -432,5 +547,10 @@ module.exports = {
     getFriendList,
     autoHire,
     getTasks,
+    claimTask,
+    claimAllTasks,
+    getCashierStatus,
+    getMilkCouponBalance,
+    MILK_COUPON_ID,
     runMilkTea,
 };

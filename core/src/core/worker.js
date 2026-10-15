@@ -311,11 +311,14 @@ async function runMilkTea(reason = 'interval') {
     try {
         const r = await milkTea.runMilkTea({
             cashier: cfg.cashier,
-            craft: cfg.craft,
-            speaker: cfg.speaker,
             storeName: cfg.storeName,
             autoHire: cfg.autoHire,
             hireGids: cfg.hireGids,
+            autoTask: cfg.autoTask,
+            // 注意: 不再自动调 cmd=56/58 —— 实际返回的是"工坊员工/配方菜单"等查询结果,
+            // 早期按 UI 顺序误标为"加工/喇叭", 语义未确认前不自动执行
+            craft: false,
+            speaker: false,
         });
         if (r.ok === false) {
             log('活动', `奶茶热销中: ${r.reason || '处理失败'}`, { module: 'activity', event: '奶茶热销中', result: 'warn', trigger: reason });
@@ -1390,9 +1393,16 @@ async function handleApiCall(msg) {
             case 'claimAdGift':
                 result = await adGift.claimDailyAdGift(!!(args[0] && args[0].force));
                 break;
-            case 'getMilkTeaStatus':
-                result = await milkTea.getMainStatus();
+            case 'getMilkTeaStatus': {
+                // 页面顶部要展示: 店铺/等级/累计营业额/待领取收益/奶茶券余额
+                const [main, cashier, coupon] = await Promise.all([
+                    milkTea.getMainStatus(),
+                    milkTea.getCashierStatus().catch(() => null),
+                    milkTea.getMilkCouponBalance().catch(() => 0),
+                ]);
+                result = { ...main, cashier, milkCoupon: coupon };
                 break;
+            }
             case 'claimMilkTeaCashier':
                 result = await milkTea.claimCashier();
                 break;
@@ -1411,6 +1421,14 @@ async function handleApiCall(msg) {
             case 'interactMilkTea':
                 result = await milkTea.interact();
                 break;
+            case 'getMilkTeaCashier':
+                result = await milkTea.getCashierStatus();
+                break;
+            case 'claimMilkTeaTask': {
+                const to = args[0] || {};
+                result = to.taskId ? await milkTea.claimTask(to.taskId) : await milkTea.claimAllTasks();
+                break;
+            }
             case 'getMilkTeaFriends':
                 result = await milkTea.getFriendList();
                 break;

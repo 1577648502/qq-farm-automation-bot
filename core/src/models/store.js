@@ -238,6 +238,7 @@ const DEFAULT_ACCOUNT_CONFIG = {
     milkTeaStoreName: '奶茶小铺',       // 首次开业的店名
     milkTeaHireGids: [],              // 雇佣好友白名单(可选好友, 参考萌宠游记的选择方式)
     milkTeaAutoHire: false,           // 自动雇佣(从白名单里挑)
+    milkTeaAutoTask: false,           // 自动领取任务奖励(领取命令待确认, 默认关)
     sellGoldenFruit: false,           // 自动卖果实时是否连黄金果实一起卖(默认保留)
     adGiftEnabled: true,              // 每日自动领「看广告礼包」(跳过广告直接领, 化肥×5)
     // 背包种子优先顺序（seedId 数组）
@@ -555,6 +556,7 @@ function normalizeAccountConfig(input, fallback = accountFallbackConfig) {
         cfg.milkTeaHireGids = src.milkTeaHireGids.map((g) => String(g).trim()).filter(Boolean).slice(0, 50);
     }
     if (src.milkTeaAutoHire !== undefined && src.milkTeaAutoHire !== null) cfg.milkTeaAutoHire = !!src.milkTeaAutoHire;
+    if (src.milkTeaAutoTask !== undefined && src.milkTeaAutoTask !== null) cfg.milkTeaAutoTask = !!src.milkTeaAutoTask;
     if (src.sellGoldenFruit !== undefined && src.sellGoldenFruit !== null) {
         cfg.sellGoldenFruit = !!src.sellGoldenFruit;
     }
@@ -842,6 +844,7 @@ function getConfigSnapshot(accountId) {
         milkTeaStoreName: cfg.milkTeaStoreName || '奶茶小铺',
         milkTeaHireGids: [...(cfg.milkTeaHireGids || [])],
         milkTeaAutoHire: !!cfg.milkTeaAutoHire,
+        milkTeaAutoTask: !!cfg.milkTeaAutoTask,
         sellGoldenFruit: !!cfg.sellGoldenFruit,
         adGiftEnabled: cfg.adGiftEnabled === undefined ? true : !!cfg.adGiftEnabled,
         stealDelaySeconds: Math.max(0, Math.min(300, Number(cfg.stealDelaySeconds) || 0)),
@@ -1009,6 +1012,7 @@ function applyConfigSnapshot(snapshot, options = {}) {
         next.milkTeaHireGids = cfg.milkTeaHireGids.map((g) => String(g).trim()).filter(Boolean).slice(0, 50);
     }
     if (cfg.milkTeaAutoHire !== undefined && cfg.milkTeaAutoHire !== null) next.milkTeaAutoHire = !!cfg.milkTeaAutoHire;
+    if (cfg.milkTeaAutoTask !== undefined && cfg.milkTeaAutoTask !== null) next.milkTeaAutoTask = !!cfg.milkTeaAutoTask;
     if (cfg.sellGoldenFruit !== undefined && cfg.sellGoldenFruit !== null) {
         next.sellGoldenFruit = !!cfg.sellGoldenFruit;
     }
@@ -1584,6 +1588,7 @@ function getMilkTeaConfig(accountId) {
         storeName: cfg.milkTeaStoreName || '奶茶小铺',
         hireGids: [...(cfg.milkTeaHireGids || [])],
         autoHire: !!cfg.milkTeaAutoHire,
+        autoTask: !!cfg.milkTeaAutoTask,
     };
 }
 
