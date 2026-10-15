@@ -264,6 +264,43 @@ const byIdx = (i) => FRAMES.find(f => f.idx === i);
         check('#167 值 = 0a038ea703', payload.toString('hex') === '0a038ea703', payload.toString('hex'));
     }
 
+    section('4e. 受雇状态判断(互动前置条件)');
+    {
+        const mg3 = require(`${SB}/src/services/mengchong`);
+        const bodyOf = (hex) => Buffer.from(types.GateMessage.decode(Buffer.from(hex, 'hex')).body || []);
+        // 新抓包(做过互动, 受雇中): #121.#1.#11 = 1
+        const NEW_CAP = path.join(__dirname, '..', '..', 'wx-code-grabber', 'captures', '20261015-211043_互动.jsonl');
+        const FRAMES_NEW = loadFrames(NEW_CAP);
+        check('新抓包已载入', FRAMES_NEW.length > 0, FRAMES_NEW.length);
+        const empFrame = FRAMES_NEW.find((f) => {
+            try {
+                const fsx = mg3.parseTop(bodyOf(f.hex));
+                return Number((fsx.find((x) => x.f === 1) || {}).v) === 2026110101;
+            } catch { return false; }
+        });
+        check('新抓包里有主活动帧', !!empFrame);
+        if (empFrame) {
+            const fsx = mg3.parseTop(bodyOf(empFrame.hex));
+            const act = (fsx.find((x) => x.f === 3) || {}).v;
+            const st = milkTea.__testing.parseMainState(Buffer.from(act));
+            check('受雇标志 workFlag = 1', st.workFlag === 1, st.workFlag);
+            check('判为"已被雇佣"(可互动)', st.employed === true, st.employed);
+        }
+        // 旧抓包(员工玩法之前): 没有 #11 → 未受雇
+        const oldFrame = FRAMES.find((f) => {
+            try {
+                const fsx = mg3.parseTop(bodyOf(f.hex));
+                return Number((fsx.find((x) => x.f === 1) || {}).v) === 2026110101;
+            } catch { return false; }
+        });
+        if (oldFrame) {
+            const fsx = mg3.parseTop(bodyOf(oldFrame.hex));
+            const act = (fsx.find((x) => x.f === 3) || {}).v;
+            const st0 = milkTea.__testing.parseMainState(Buffer.from(act));
+            check('旧抓包 workFlag = 0(未受雇)', st0.workFlag === 0 && st0.employed === false, st0.workFlag);
+        }
+    }
+
     section('5. 任务列表');
     {
         const t = await milkTea.getTasks();

@@ -128,7 +128,7 @@ function encodeVarint(v) {
 
 /** 解析主活动状态容器 #121.#1 */
 function parseMainState(activityBuf) {
-    const out = { ok: false, storeName: '', value: 0, recipeId: 0, at: 0, nextAt: 0, storeLevel: 0, startAt: 0, endAt: 0, settleAt: 0 };
+    const out = { ok: false, storeName: '', value: 0, recipeId: 0, at: 0, nextAt: 0, storeLevel: 0, startAt: 0, endAt: 0, settleAt: 0, workFlag: 0, employed: false };
     if (!activityBuf || !activityBuf.length) return out;
     try {
         const act = parseTop(activityBuf);
@@ -147,6 +147,10 @@ function parseMainState(activityBuf) {
         out.storeName = nameField && nameField.w === 2 ? nameField.v.toString('utf8') : '';
         out.value = toInt((findField(f, 5) || {}).v);        // 累计营业额
         out.storeLevel = toInt((findField(f, 4) || {}).v);   // 店铺等级(实测 #4; Lv1 时"需等级≥3"的商品点不了)
+        // **受雇标志**(实测 #11): 2026-10-15 晚的抓包(做过互动)里 =1, 早先(未参与员工玩法)的抓包里没有该字段
+        // 说明: 规则里"被雇佣后每班可在【我的工作】互动一次" → 用 #11 作为"是否被雇佣"的判据(待更多样本确认)
+        out.workFlag = toInt((findField(f, 11) || {}).v);
+        out.employed = out.workFlag > 0;
         out.nextAt = toInt((findField(f, 1) || {}).v);
         out.at = toInt((findField(f, 16) || {}).v);
         const recipe = findField(f, 15);
@@ -576,6 +580,11 @@ async function craftMilkTea(limit = 10) {
 async function interactWithFriend(friendGid, type = WORK_INTERACT_TYPE) {
     const gid = toNum(friendGid);
     if (!gid) return { ok: false, reason: '缺少好友 gid(先在页面勾选并保存雇佣好友)' };
+    // ⚠ 前置判断: 互动是"**自己被好友雇佣之后**"的操作(在【我的工作】里), 没受雇就不该做
+    const st = await getMainStatus().catch(() => null);
+    if (st && st.ok && !st.employed) {
+        return { ok: false, reason: '当前没有被好友雇佣(【我的工作】为空), 不能互动' };
+    }
     const inner = Buffer.concat([encodeVarintField(1, gid), encodeVarintField(2, toInt(type) || WORK_INTERACT_TYPE)]);
     const payload = Buffer.concat([Buffer.from([0x0a, inner.length]), inner]);
     const r = await mainOperate(CMD_WORK_INTERACT, 170, payload);

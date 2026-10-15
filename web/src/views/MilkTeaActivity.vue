@@ -199,6 +199,10 @@ function invertFriends() {
 /** 批量雇佣: 逐个雇(后台带节流, 单次最多 10 个) */
 /** 互动(我的工作, cmd=65): 每班一次, 影响工资 */
 async function interactNow() {
+  if (status.value && status.value.ok && status.value.employed === false) {
+    toast.warning('当前没有被好友雇佣（【我的工作】为空），不能互动')
+    return
+  }
   const gid = String(interactGid.value || hireGids.value[0] || '').trim()
   if (!gid) { toast.warning('请先勾选好友（或填 GID）'); return }
   busy.value = 'interact'
@@ -375,6 +379,15 @@ onMounted(() => {
         <div>
           <div class="text-xs text-gray-500 dark:text-gray-400">结算期开始</div>
           <div class="text-sm text-gray-900 font-medium dark:text-gray-100">{{ fmtTime(status.settleAt) }}</div>
+        </div>
+        <div>
+          <div class="text-xs text-gray-500 dark:text-gray-400">受雇状态</div>
+          <div
+            class="text-sm font-medium"
+            :class="status.employed ? 'text-emerald-600 dark:text-emerald-400' : 'text-gray-500 dark:text-gray-400'"
+          >
+            {{ status.employed ? '已被雇佣（可互动）' : '未受雇' }}
+          </div>
         </div>
       </div>
       <div v-else class="text-xs text-gray-500 dark:text-gray-400">
