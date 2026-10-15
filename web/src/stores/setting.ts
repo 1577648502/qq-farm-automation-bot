@@ -88,6 +88,11 @@ export interface SettingsState {
   fireworkMode: 'self' | 'friend'
   fireworkCount: number
   happyShareEnabled: boolean
+  milkTeaEnabled: boolean
+  milkTeaCashier: boolean
+  milkTeaCraft: boolean
+  milkTeaSpeaker: boolean
+  milkTeaStoreName: string
   sellGoldenFruit: boolean
   adGiftEnabled: boolean
 }
@@ -136,6 +141,11 @@ export const useSettingStore = defineStore('setting', () => {
   fireworkMode: 'self',
   fireworkCount: 1,
   happyShareEnabled: true,
+  milkTeaEnabled: true,
+  milkTeaCashier: true,
+  milkTeaCraft: true,
+  milkTeaSpeaker: false,
+  milkTeaStoreName: '奶茶小铺',
   sellGoldenFruit: false,
   adGiftEnabled: true,
   })
@@ -193,6 +203,11 @@ export const useSettingStore = defineStore('setting', () => {
   settings.value.fireworkMode = d.fireworkMode === 'friend' ? 'friend' : 'self'
   settings.value.fireworkCount = d.fireworkCount ?? 1
   settings.value.happyShareEnabled = d.happyShareEnabled ?? true
+  settings.value.milkTeaEnabled = d.milkTeaEnabled ?? true
+  settings.value.milkTeaCashier = d.milkTeaCashier ?? true
+  settings.value.milkTeaCraft = d.milkTeaCraft ?? true
+  settings.value.milkTeaSpeaker = d.milkTeaSpeaker ?? false
+  settings.value.milkTeaStoreName = d.milkTeaStoreName ?? '奶茶小铺'
   settings.value.sellGoldenFruit = d.sellGoldenFruit ?? false
   settings.value.adGiftEnabled = d.adGiftEnabled ?? true
       }
@@ -242,6 +257,11 @@ export const useSettingStore = defineStore('setting', () => {
         fireworkMode: newSettings.fireworkMode,
         fireworkCount: newSettings.fireworkCount,
         happyShareEnabled: newSettings.happyShareEnabled,
+        milkTeaEnabled: newSettings.milkTeaEnabled,
+        milkTeaCashier: newSettings.milkTeaCashier,
+        milkTeaCraft: newSettings.milkTeaCraft,
+        milkTeaSpeaker: newSettings.milkTeaSpeaker,
+        milkTeaStoreName: newSettings.milkTeaStoreName,
         sellGoldenFruit: newSettings.sellGoldenFruit,
         adGiftEnabled: newSettings.adGiftEnabled,
       }

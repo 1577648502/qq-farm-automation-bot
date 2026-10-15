@@ -645,8 +645,47 @@ function getItemImageById(itemId) {
     return '';
 }
 
+/**
+ * 官方表暂未收录、但活动里确实在用的物品（只做兜底、不覆盖官方数据）
+ *
+ * 来源：2026-10-15「奶茶热销中」抓包的种子商店列表(名称是服务端下发的, 可信) + 背包核实
+ *   · 货币/道具: 1041 奶茶券(背包 3000, 商店 15 件商品用它计价) / 1042 宣传喇叭
+ *   · 森野系列活动种子(商店 301~308) 与 金币果/经验蘑菇(309/310)
+ *   · 缤纷奶茶系列装扮(商店 311~323) 与 头像框(331)
+ * 等官方 ItemInfo 收录后, 这里的条目会自动被官方数据覆盖(仅作 fallback)。
+ */
+const ACTIVITY_ITEM_FALLBACK = new Map([
+    [1041, { id: 1041, name: '奶茶券', type: 2 }],
+    [1042, { id: 1042, name: '宣传喇叭', type: 2 }],
+    // 森野系列种子(奶茶热销中)
+    [20525, { id: 20525, name: '森野甜莓种子', type: 5 }],
+    [20526, { id: 20526, name: '森野白桃种子', type: 5 }],
+    [20527, { id: 20527, name: '森野甜橙种子', type: 5 }],
+    [20528, { id: 20528, name: '森野红柚种子', type: 5 }],
+    [20021, { id: 20021, name: '森野可可豆种子', type: 5 }],
+    [21435, { id: 21435, name: '森野柿子种子', type: 5 }],
+    [20529, { id: 20529, name: '森野芭乐种子', type: 5 }],
+    [29005, { id: 29005, name: '森野黄金芽种子', type: 5 }],
+    // 缤纷奶茶系列装扮 + 头像框
+    [208012, { id: 208012, name: '缤纷奶茶围栏', type: 4 }],
+    [206011, { id: 206011, name: '缤纷奶茶仓库', type: 4 }],
+    [202011, { id: 202011, name: '缤纷奶茶木牌', type: 4 }],
+    [203012, { id: 203012, name: '缤纷奶茶栅栏', type: 4 }],
+    [205011, { id: 205011, name: '缤纷奶茶狗屋', type: 4 }],
+    [207012, { id: 207012, name: '缤纷奶茶街道', type: 4 }],
+    [210031, { id: 210031, name: '屋顶套装', type: 4 }],
+    [210032, { id: 210032, name: '门套装', type: 4 }],
+    [210033, { id: 210033, name: '窗套装', type: 4 }],
+    [210034, { id: 210034, name: '墙面套装', type: 4 }],
+    [210035, { id: 210035, name: '地板套装', type: 4 }],
+    [210036, { id: 210036, name: '桌椅套装', type: 4 }],
+    [210037, { id: 210037, name: '装饰套装', type: 4 }],
+    [2163, { id: 2163, name: '缤纷奶茶头像框', type: 4 }],
+]);
+
 function getItemById(itemId) {
-    return itemInfoMap.get(Number(itemId) || 0);
+    const id = Number(itemId) || 0;
+    return itemInfoMap.get(id) || ACTIVITY_ITEM_FALLBACK.get(id);
 }
 
 function getSeedPrice(seedId) {

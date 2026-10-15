@@ -9,7 +9,7 @@ if (parentPort && workerData && workerData.startupMode === 'code_refresh') {
     process.env.FARM_STARTUP_MODE = 'code_refresh';
 }
 const { getLevelExpProgress } = require('../config/gameConfig');
-const { getAutomation, getPreferredSeed, getConfigSnapshot, applyConfigSnapshot, getBuyBookConfig, getAutumnWishConfig, getHappyShareEnabled, getAdGiftEnabled } = require('../models/store');
+const { getAutomation, getPreferredSeed, getConfigSnapshot, applyConfigSnapshot, getBuyBookConfig, getAutumnWishConfig, getHappyShareEnabled, getMilkTeaConfig, getAdGiftEnabled } = require('../models/store');
 const { checkAndClaimEmails } = require('../services/email');
 const { getEmailDailyState } = require('../services/email');
 const { checkFarm, startFarmCheckLoop, stopFarmCheckLoop, refreshFarmCheckLoop, getLandsDetail, getAvailableSeeds, buySeed, runFarmOperation, runFertilizerByConfig, operateSingleLand } = require('../services/farm');
@@ -21,6 +21,7 @@ const { getMallCatalog, purchaseCatalogGoods } = require('../services/mall');
 const treasureRob = require('../services/treasure-rob');
 const autumnWish = require('../services/autumn-wish');
 const happyShare = require('../services/happy-share');
+const milkTea = require('../services/milk-tea');
 const adGift = require('../services/ad-gift');
 const { getActivityOverview, drawLottery, drawActivity, claimBattlePassRewards, claimActivityTasks, claimDailySignin, exchangeShopGoods, performQingniangBrew, sellQingniangBrew, shareSellQingniangBrew, getStarActivityOverview, exchangeStarShopGoods, lightUpStarRegister, checkAndLightUpStar } = require('../services/activity');
 const { performDailyMonthCardGift, getMonthCardDailyState } = require('../services/monthcard');
@@ -205,6 +206,8 @@ async function runDailyRoutines(force = false) {
         await runAutumnWish('daily_routine');
         // 快乐不独享: 每日快乐值 + 档位奖励
         await runHappyShare('daily_routine');
+        // 奶茶热销中: 领收银台收益 + 加工 + 喇叭
+        await runMilkTea('daily_routine');
         // 看广告礼包(跳过广告直接领)
         await runAdGift('daily_routine');
     } catch (e) {
@@ -224,6 +227,7 @@ function stopDailyRoutineTimer() {
     workerScheduler.clear('autumn_wish_interval');
     workerScheduler.clear('happy_share_interval');
     workerScheduler.clear('ad_gift_interval');
+    workerScheduler.clear('milk_tea_interval');
 }
 
 /**
@@ -292,6 +296,39 @@ async function runAdGift(reason = 'interval') {
         return r;
     } catch (e) {
         log('商城', `看广告礼包失败: ${e.message}`, { module: 'mall', event: '看广告礼包', result: 'error', trigger: reason });
+        return { ok: false, reason: e.message };
+    }
+}
+
+/**
+ * 奶茶热销中: 自动领收银台收益(核心, 满载会暂停营业且不补发) + 工坊加工 + 宣传喇叭
+ * 协议见 services/milk-tea.js
+ */
+async function runMilkTea(reason = 'interval') {
+    if (!canRunTasks()) return { skipped: true, reason: 'offline' };
+    const cfg = getMilkTeaConfig();
+    if (!cfg.enabled) return { skipped: true, reason: 'disabled' };
+    try {
+        const r = await milkTea.runMilkTea({
+            cashier: cfg.cashier,
+            craft: cfg.craft,
+            speaker: cfg.speaker,
+            storeName: cfg.storeName,
+        });
+        if (r.ok === false) {
+            log('活动', `奶茶热销中: ${r.reason || '处理失败'}`, { module: 'activity', event: '奶茶热销中', result: 'warn', trigger: reason });
+            return r;
+        }
+        const st = r.state || {};
+        const cashierStep = (r.steps || []).find(x => x.step === 'cashier');
+        if (cashierStep && cashierStep.ok) {
+            log('活动', `奶茶热销中: 已领收银台收益(店铺「${st.storeName || '?'}」, 营业额 ${st.value || 0})`, {
+                module: 'activity', event: '奶茶热销中', result: 'ok', trigger: reason,
+            });
+        }
+        return r;
+    } catch (e) {
+        log('活动', `奶茶热销中处理失败: ${e.message}`, { module: 'activity', event: '奶茶热销中', result: 'error', trigger: reason });
         return { ok: false, reason: e.message };
     }
 }
@@ -403,6 +440,10 @@ function startDailyRoutineTimer() {
     // 看广告礼包: 每 20 分钟自查一次(商城接口说已领就不再请求广告接口)
     workerScheduler.setIntervalTask('ad_gift_interval', 20 * 60 * 1000, () => {
         runAdGift('interval').catch(() => null);
+    }, { preventOverlap: true });
+    // 奶茶热销中: 每 15 分钟自查一次(收银台满载会停业, 这是最关键的一步)
+    workerScheduler.setIntervalTask('milk_tea_interval', 15 * 60 * 1000, () => {
+        runMilkTea('interval').catch(() => null);
     }, { preventOverlap: true });
 }
 
@@ -674,6 +715,11 @@ function applyRuntimeConfig(snapshot, syncNow = false) {
             });
 
             // 快乐不独享: 改设置后也立即试一次
+            // 奶茶热销中: 改设置后立即试一次
+            workerScheduler.setTimeoutTask('milk_tea_immediate', 9000, () => {
+                if (canRunTasks()) runMilkTea('config_changed').catch(() => null);
+            });
+
             workerScheduler.setTimeoutTask('happy_share_immediate', 7000, () => {
                 if (canRunTasks()) runHappyShare('config_changed').catch(() => null);
             });
@@ -1341,6 +1387,38 @@ async function handleApiCall(msg) {
                 break;
             case 'claimAdGift':
                 result = await adGift.claimDailyAdGift(!!(args[0] && args[0].force));
+                break;
+            case 'getMilkTeaStatus':
+                result = await milkTea.getMainStatus();
+                break;
+            case 'claimMilkTeaCashier':
+                result = await milkTea.claimCashier();
+                break;
+            case 'craftMilkTea':
+                result = await milkTea.craft();
+                break;
+            case 'useMilkTeaSpeaker':
+                result = await milkTea.useSpeaker();
+                break;
+            case 'openMilkTeaStore':
+                result = await milkTea.openStore(args[0] && args[0].storeName);
+                break;
+            case 'hireMilkTea':
+                result = await milkTea.hireFriend(args[0] && args[0].friendGid);
+                break;
+            case 'interactMilkTea':
+                result = await milkTea.interact();
+                break;
+            case 'getMilkTeaShop':
+                result = await milkTea.getShopGoods();
+                break;
+            case 'buyMilkTeaGoods': {
+                const bo = args[0] || {};
+                result = await milkTea.buyShopGoods(bo.goodsId, bo.count);
+                break;
+            }
+            case 'getMilkTeaTasks':
+                result = await milkTea.getTasks();
                 break;
             case 'getHappyShareStatus':
                 result = await happyShare.getHappyStatus();

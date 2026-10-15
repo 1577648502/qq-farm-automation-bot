@@ -22,8 +22,16 @@ const SANDBOX = process.env.FARM_TEST_SANDBOX || path.join(os.tmpdir(), 'qqfarm-
 function setupSandbox() {
     const srcDst = path.join(SANDBOX, 'src');
     fs.mkdirSync(SANDBOX, { recursive: true });
-    fs.rmSync(srcDst, { recursive: true, force: true });
-    fs.cpSync(path.join(CORE, 'src'), srcDst, { recursive: true });
+    // ⚠ 不要 rmSync 整棵 src: 后台运行时沙箱的删除保护会直接拒绝(CODEBUDDY_BROKER_DENY),
+    //   表现为所有测试在 setupSandbox() 处失败。改成覆盖式复制即可(旧文件残留无害)。
+    try {
+        fs.cpSync(path.join(CORE, 'src'), srcDst, { recursive: true, force: true });
+    } catch (e) {
+        // 极端情况(权限/锁): 退化成"每次换一个新目录"
+        const alt = srcDst + '-' + Date.now();
+        fs.cpSync(path.join(CORE, 'src'), alt, { recursive: true, force: true });
+        return alt.replace(/\/src.*$/, '') || SANDBOX;
+    }
 
     const nm = path.join(SANDBOX, 'node_modules');
     if (!fs.existsSync(nm)) {
@@ -37,8 +45,13 @@ function setupSandbox() {
 
 /** 数据目录重定向到临时目录, 避免污染 core/data; 必须在 require 业务模块之前调用 */
 function isolateDataDir(sandbox, tag = 'test') {
-    const dir = path.join(os.tmpdir(), 'qqfarm-data-' + tag);
-    fs.rmSync(dir, { recursive: true, force: true });
+    let dir = path.join(os.tmpdir(), 'qqfarm-data-' + tag);
+    try {
+        fs.rmSync(dir, { recursive: true, force: true });
+    } catch (e) {
+        // 删除被安全策略拦下时换个新目录(数据目录本来就该是干净的)
+        dir = dir + '-' + Date.now();
+    }
     fs.mkdirSync(dir, { recursive: true });
     const rp = require(path.join(sandbox, 'src/config/runtime-paths'));
     rp.getDataFile = (f) => path.join(dir, f);

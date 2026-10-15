@@ -2103,6 +2103,9 @@ app.use('/api', (req, res, next) => {
             const adGiftEnabled = (id && typeof store.getAdGiftEnabled === 'function')
                 ? store.getAdGiftEnabled(id)
                 : true;
+            const milkTeaCfg = (id && typeof store.getMilkTeaConfig === 'function')
+                ? store.getMilkTeaConfig(id)
+                : { enabled: true, cashier: true, craft: true, speaker: false, storeName: '奶茶小铺' };
             const happyShareEnabled = (id && typeof store.getHappyShareEnabled === 'function')
                 ? store.getHappyShareEnabled(id)
                 : true;
@@ -2162,6 +2165,12 @@ app.use('/api', (req, res, next) => {
                     fireworkCount: autumnWish.fireworkCount,
                     // 快乐不独享
                     happyShareEnabled,
+                    // 奶茶热销中
+                    milkTeaEnabled: milkTeaCfg.enabled,
+                    milkTeaCashier: milkTeaCfg.cashier,
+                    milkTeaCraft: milkTeaCfg.craft,
+                    milkTeaSpeaker: milkTeaCfg.speaker,
+                    milkTeaStoreName: milkTeaCfg.storeName,
                     // 看广告礼包(跳过广告直接领)
                     adGiftEnabled,
                     // 自动卖果实时是否连黄金果实一起卖
@@ -3573,6 +3582,45 @@ app.use('/api', (req, res, next) => {
         try { res.json({ ok: true, data: await provider.claimAdGift(id, { force: true }) }); }
         catch (e) { res.json({ ok: false, error: e.message }); }
     });
+
+    // ===== 奶茶热销中(2026-10-15 新活动) =====
+    const milkTeaRoute = (path, fn) => {
+        app.post(path, async (req, res) => {
+            const id = getAccId(req);
+            if (!id) return res.status(400).json({ ok: false, error: '缺少账号 ID' });
+            if (!checkAccountAccess(req, id)) return res.status(403).json({ ok: false, error: '无权访问此账号' });
+            try { res.json({ ok: true, data: await fn(id, req.body || {}) }); }
+            catch (e) { res.json({ ok: false, error: e.message }); }
+        });
+    };
+    app.get('/api/activity/milk-tea/status', async (req, res) => {
+        const id = getAccId(req);
+        if (!id) return res.status(400).json({ ok: false, error: '缺少账号 ID' });
+        if (!checkAccountAccess(req, id)) return res.status(403).json({ ok: false, error: '无权访问此账号' });
+        try { res.json({ ok: true, data: await provider.getMilkTeaStatus(id) }); }
+        catch (e) { res.json({ ok: false, error: e.message }); }
+    });
+    app.get('/api/activity/milk-tea/shop', async (req, res) => {
+        const id = getAccId(req);
+        if (!id) return res.status(400).json({ ok: false, error: '缺少账号 ID' });
+        if (!checkAccountAccess(req, id)) return res.status(403).json({ ok: false, error: '无权访问此账号' });
+        try { res.json({ ok: true, data: await provider.getMilkTeaShop(id) }); }
+        catch (e) { res.json({ ok: false, error: e.message }); }
+    });
+    app.get('/api/activity/milk-tea/tasks', async (req, res) => {
+        const id = getAccId(req);
+        if (!id) return res.status(400).json({ ok: false, error: '缺少账号 ID' });
+        if (!checkAccountAccess(req, id)) return res.status(403).json({ ok: false, error: '无权访问此账号' });
+        try { res.json({ ok: true, data: await provider.getMilkTeaTasks(id) }); }
+        catch (e) { res.json({ ok: false, error: e.message }); }
+    });
+    milkTeaRoute('/api/activity/milk-tea/cashier', (id) => provider.claimMilkTeaCashier(id));
+    milkTeaRoute('/api/activity/milk-tea/craft', (id) => provider.craftMilkTea(id));
+    milkTeaRoute('/api/activity/milk-tea/speaker', (id) => provider.useMilkTeaSpeaker(id));
+    milkTeaRoute('/api/activity/milk-tea/open', (id) => provider.openMilkTeaStore(id));
+    milkTeaRoute('/api/activity/milk-tea/hire', (id, body) => provider.hireMilkTea(id, { friendGid: body.friendGid }));
+    milkTeaRoute('/api/activity/milk-tea/interact', (id) => provider.interactMilkTea(id));
+    milkTeaRoute('/api/activity/milk-tea/buy', (id, body) => provider.buyMilkTeaGoods(id, { goodsId: body.goodsId, count: body.count }));
 
     // 快乐不独享: 查状态 / 立即跑一次
     app.get('/api/activity/happy-share/status', async (req, res) => {

@@ -230,6 +230,12 @@ function createDataProvider(options) {
                 fireworkMode: body.fireworkMode,
                 fireworkCount: body.fireworkCount,
                 happyShareEnabled: body.happyShareEnabled,
+                // 奶茶热销中
+                milkTeaEnabled: body.milkTeaEnabled,
+                milkTeaCashier: body.milkTeaCashier,
+                milkTeaCraft: body.milkTeaCraft,
+                milkTeaSpeaker: body.milkTeaSpeaker,
+                milkTeaStoreName: body.milkTeaStoreName,
                 adGiftEnabled: body.adGiftEnabled,
                 sellGoldenFruit: body.sellGoldenFruit
             };
@@ -488,6 +494,17 @@ function createDataProvider(options) {
         robTreasure: (accountRef, options) => callWorkerApi(resolveAccountRefId(accountRef), 'robTreasure', options || {}),
         getAdGiftQuota: (accountRef) => callWorkerApi(resolveAccountRefId(accountRef), 'getAdGiftQuota'),
         claimAdGift: (accountRef, opts) => callWorkerApi(resolveAccountRefId(accountRef), 'claimAdGift', opts || {}),
+        // 奶茶热销中
+        getMilkTeaStatus: (accountRef) => callWorkerApi(resolveAccountRefId(accountRef), 'getMilkTeaStatus'),
+        claimMilkTeaCashier: (accountRef) => callWorkerApi(resolveAccountRefId(accountRef), 'claimMilkTeaCashier'),
+        craftMilkTea: (accountRef) => callWorkerApi(resolveAccountRefId(accountRef), 'craftMilkTea'),
+        useMilkTeaSpeaker: (accountRef) => callWorkerApi(resolveAccountRefId(accountRef), 'useMilkTeaSpeaker'),
+        openMilkTeaStore: (accountRef, opts) => callWorkerApi(resolveAccountRefId(accountRef), 'openMilkTeaStore', opts || {}),
+        hireMilkTea: (accountRef, opts) => callWorkerApi(resolveAccountRefId(accountRef), 'hireMilkTea', opts || {}),
+        interactMilkTea: (accountRef) => callWorkerApi(resolveAccountRefId(accountRef), 'interactMilkTea'),
+        getMilkTeaShop: (accountRef) => callWorkerApi(resolveAccountRefId(accountRef), 'getMilkTeaShop'),
+        buyMilkTeaGoods: (accountRef, opts) => callWorkerApi(resolveAccountRefId(accountRef), 'buyMilkTeaGoods', opts || {}),
+        getMilkTeaTasks: (accountRef) => callWorkerApi(resolveAccountRefId(accountRef), 'getMilkTeaTasks'),
         getHappyShareStatus: (accountRef) => callWorkerApi(resolveAccountRefId(accountRef), 'getHappyShareStatus'),
         runHappyShare: (accountRef, opts) => callWorkerApi(resolveAccountRefId(accountRef), 'runHappyShare', opts || {}),
         getAutumnWishStatus: (accountRef) => callWorkerApi(resolveAccountRefId(accountRef), 'getAutumnWishStatus'),

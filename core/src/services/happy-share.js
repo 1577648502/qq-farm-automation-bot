@@ -27,7 +27,10 @@ const { log, toNum, toInt, sleep } = require('../utils/utils');
 const { getItemById, getItemImageById } = require('../config/gameConfig');
 const { operateRaw, getGroupRaw, parseTop, findField } = require('./mengchong');
 
-const GROUP = 2026092501;
+const GROUP_S3 = 2026092501;   // 上一期(9/24-10/12)
+const GROUP_S4 = 2026110104;   // S4 版(2026-10-15 上线, 机制相同)
+/** 当前活动组: 优先 S4, 不在则回退 S3(实测 2026-10-15 换期后 group 变了) */
+let activeGroup = GROUP_S4;
 const SUB_ID = 2026092500;
 const CMD_OPEN = 69;        // 打开活动(拿分享信息/快乐包id + 状态)
 const CMD_CLAIM_HAPPY = 73; // 领取快乐值(每日)
@@ -56,7 +59,8 @@ function parseHappyState(activityBuf) {
     const headFields = head && head.w === 2 ? parseTop(head.v) : [];
     out.headFlag = toInt((findField(headFields, 23) || {}).v);
     const gid = toInt((findField(headFields, 1) || {}).v);
-    if (gid !== GROUP) return out;                       // 不是这个活动(可能换组了)
+    // 换期时 group 会变(S3 2026092501 / S4 2026110104): 两个都认, 只排除别的活动
+    if (gid !== GROUP_S3 && gid !== GROUP_S4) return out;
 
     const box = findField(act, STATE_FIELD);
     const inner = box && box.w === 2 ? findField(parseTop(box.v), 1) : null;
@@ -101,8 +105,19 @@ function parseRewardResult(resultHex) {
 
 /** 读活动状态(打开活动 cmd=69, 顺带拿快乐包id) */
 async function getHappyStatus() {
-    const r = await operateRaw(GROUP, CMD_OPEN, FIELD_OPEN, Buffer.alloc(0));
-    if (r.errorCode !== 0) return { ok: false, reason: `打开活动失败 code=${r.errorCode}` };
+    let r = await operateRaw(activeGroup, CMD_OPEN, FIELD_OPEN, Buffer.alloc(0));
+    if (r.errorCode !== 0) {
+        // 换期时 group 会变: 失败就换另一个组再试一次
+        const other = activeGroup === GROUP_S4 ? GROUP_S3 : GROUP_S4;
+        const r2 = await operateRaw(other, CMD_OPEN, FIELD_OPEN, Buffer.alloc(0)).catch(() => null);
+        if (r2 && r2.errorCode === 0) {
+            activeGroup = other;
+            log('活动', `快乐不独享: 活动组已切换为 ${activeGroup}`, { module: 'activity', event: '快乐不独享', result: 'ok' });
+            r = r2;
+        } else {
+            return { ok: false, reason: `打开活动失败 code=${r.errorCode}` };
+        }
+    }
     const st = parseHappyState(r.activity);
     // #153 里的快乐包 id(分享用)
     if (r.resultHex) {
@@ -122,7 +137,7 @@ async function getHappyStatus() {
 async function claimDailyHappy() {
     const before = await getHappyStatus();
     if (!before.ok) return { ok: false, reason: before.reason };
-    const r = await operateRaw(GROUP, CMD_CLAIM_HAPPY, FIELD_HAPPY, Buffer.alloc(0));
+    const r = await operateRaw(activeGroup, CMD_CLAIM_HAPPY, FIELD_HAPPY, Buffer.alloc(0));
     if (r.errorCode !== 0) return { ok: false, reason: `领取快乐值失败 code=${r.errorCode}` };
     const gained = r.resultHex ? toInt((findField(parseTop(Buffer.from(r.resultHex, 'hex')), 2) || {}).v) : 0;
     await sleep(1200);
@@ -138,7 +153,7 @@ async function claimDailyHappy() {
         const { reportShare } = require('./share');
         await reportShare();
         await sleep(1500);
-        const r2 = await operateRaw(GROUP, CMD_CLAIM_HAPPY, FIELD_HAPPY, Buffer.alloc(0));
+        const r2 = await operateRaw(activeGroup, CMD_CLAIM_HAPPY, FIELD_HAPPY, Buffer.alloc(0));
         if (r2.errorCode === 0) {
             await sleep(1200);
             after = await getHappyStatus().catch(() => null);
@@ -165,7 +180,7 @@ async function claimTierRewards() {
     if (!targets.length) return { ok: true, claimed: [], skipped: true, reason: '没有达到门槛的档位', happy: st.happy, tiers: st.tiers };
     const claimed = [];
     for (const t of targets) {
-        const r = await operateRaw(GROUP, CMD_CLAIM_TIER, FIELD_TIER, Buffer.alloc(0));
+        const r = await operateRaw(activeGroup, CMD_CLAIM_TIER, FIELD_TIER, Buffer.alloc(0));
         if (r.errorCode !== 0) {
             log('活动', `快乐不独享: 档位${t.tier} 领取失败 code=${r.errorCode}`, { module: 'activity', event: '快乐不独享', result: 'error' });
             break;
@@ -205,7 +220,10 @@ async function checkAndRunHappyShare(force = false) {
 }
 
 module.exports = {
-    GROUP,
+    GROUP: GROUP_S4,
+    GROUP_S3,
+    GROUP_S4,
+    getActiveGroup: () => activeGroup,
     SUB_ID,
     CMD_OPEN,
     CMD_CLAIM_HAPPY,

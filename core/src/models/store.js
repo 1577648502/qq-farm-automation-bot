@@ -230,6 +230,12 @@ const DEFAULT_ACCOUNT_CONFIG = {
     fireworkCount: 1,                 // 每日放几个(每个 经验+30)
     // ===== 快乐不独享(2026-09-24 新活动) =====
     happyShareEnabled: true,          // 每日自动领快乐值 + 领可领的档位奖励
+    // ===== 奶茶热销中(2026-10-15 新活动) =====
+    milkTeaEnabled: true,             // 自动经营总开关
+    milkTeaCashier: true,             // 自动领收银台收益(满载会暂停营业, 必须定时领)
+    milkTeaCraft: true,               // 自动工坊加工(活动果实 → 高级奶茶)
+    milkTeaSpeaker: false,            // 自动使用宣传喇叭(消耗喇叭道具)
+    milkTeaStoreName: '奶茶小铺',       // 首次开业的店名
     sellGoldenFruit: false,           // 自动卖果实时是否连黄金果实一起卖(默认保留)
     adGiftEnabled: true,              // 每日自动领「看广告礼包」(跳过广告直接领, 化肥×5)
     // 背包种子优先顺序（seedId 数组）
@@ -538,6 +544,11 @@ function normalizeAccountConfig(input, fallback = accountFallbackConfig) {
     if (src.happyShareEnabled !== undefined && src.happyShareEnabled !== null) {
         cfg.happyShareEnabled = !!src.happyShareEnabled;
     }
+    if (src.milkTeaEnabled !== undefined && src.milkTeaEnabled !== null) cfg.milkTeaEnabled = !!src.milkTeaEnabled;
+    if (src.milkTeaCashier !== undefined && src.milkTeaCashier !== null) cfg.milkTeaCashier = !!src.milkTeaCashier;
+    if (src.milkTeaCraft !== undefined && src.milkTeaCraft !== null) cfg.milkTeaCraft = !!src.milkTeaCraft;
+    if (src.milkTeaSpeaker !== undefined && src.milkTeaSpeaker !== null) cfg.milkTeaSpeaker = !!src.milkTeaSpeaker;
+    if (typeof src.milkTeaStoreName === 'string') cfg.milkTeaStoreName = src.milkTeaStoreName.slice(0, 20);
     if (src.sellGoldenFruit !== undefined && src.sellGoldenFruit !== null) {
         cfg.sellGoldenFruit = !!src.sellGoldenFruit;
     }
@@ -818,6 +829,11 @@ function getConfigSnapshot(accountId) {
         fireworkMode: cfg.fireworkMode === 'friend' ? 'friend' : 'self',
         fireworkCount: Math.max(0, Math.min(20, Number(cfg.fireworkCount) || 0)),
         happyShareEnabled: cfg.happyShareEnabled === undefined ? true : !!cfg.happyShareEnabled,
+        milkTeaEnabled: cfg.milkTeaEnabled === undefined ? true : !!cfg.milkTeaEnabled,
+        milkTeaCashier: cfg.milkTeaCashier === undefined ? true : !!cfg.milkTeaCashier,
+        milkTeaCraft: cfg.milkTeaCraft === undefined ? true : !!cfg.milkTeaCraft,
+        milkTeaSpeaker: !!cfg.milkTeaSpeaker,
+        milkTeaStoreName: cfg.milkTeaStoreName || '奶茶小铺',
         sellGoldenFruit: !!cfg.sellGoldenFruit,
         adGiftEnabled: cfg.adGiftEnabled === undefined ? true : !!cfg.adGiftEnabled,
         stealDelaySeconds: Math.max(0, Math.min(300, Number(cfg.stealDelaySeconds) || 0)),
@@ -976,6 +992,11 @@ function applyConfigSnapshot(snapshot, options = {}) {
     if (cfg.happyShareEnabled !== undefined && cfg.happyShareEnabled !== null) {
         next.happyShareEnabled = !!cfg.happyShareEnabled;
     }
+    if (cfg.milkTeaEnabled !== undefined && cfg.milkTeaEnabled !== null) next.milkTeaEnabled = !!cfg.milkTeaEnabled;
+    if (cfg.milkTeaCashier !== undefined && cfg.milkTeaCashier !== null) next.milkTeaCashier = !!cfg.milkTeaCashier;
+    if (cfg.milkTeaCraft !== undefined && cfg.milkTeaCraft !== null) next.milkTeaCraft = !!cfg.milkTeaCraft;
+    if (cfg.milkTeaSpeaker !== undefined && cfg.milkTeaSpeaker !== null) next.milkTeaSpeaker = !!cfg.milkTeaSpeaker;
+    if (typeof cfg.milkTeaStoreName === 'string') next.milkTeaStoreName = cfg.milkTeaStoreName.slice(0, 20);
     if (cfg.sellGoldenFruit !== undefined && cfg.sellGoldenFruit !== null) {
         next.sellGoldenFruit = !!cfg.sellGoldenFruit;
     }
@@ -1540,6 +1561,17 @@ function getAdGiftEnabled(accountId) {
     return cfg.adGiftEnabled === undefined ? true : !!cfg.adGiftEnabled;
 }
 
+function getMilkTeaConfig(accountId) {
+    const cfg = (typeof getConfigSnapshot === 'function' ? getConfigSnapshot(accountId) : (globalConfig.accountConfig || {})) || {};
+    return {
+        enabled: cfg.milkTeaEnabled === undefined ? true : !!cfg.milkTeaEnabled,
+        cashier: cfg.milkTeaCashier === undefined ? true : !!cfg.milkTeaCashier,
+        craft: cfg.milkTeaCraft === undefined ? true : !!cfg.milkTeaCraft,
+        speaker: !!cfg.milkTeaSpeaker,
+        storeName: cfg.milkTeaStoreName || '奶茶小铺',
+    };
+}
+
 function getRobThrottleConfig(accountId) {
     const cfg = (typeof getConfigSnapshot === 'function' ? getConfigSnapshot(accountId) : (globalConfig.accountConfig || {})) || {};
     return {
@@ -1602,6 +1634,7 @@ module.exports = {
     getBuyBookConfig,
     getAutumnWishConfig,
     getHappyShareEnabled,
+    getMilkTeaConfig,
     getSellGoldenFruit,
     getAdGiftEnabled,
     getBagSeedPriority,

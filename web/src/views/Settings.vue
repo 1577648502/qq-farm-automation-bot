@@ -6,6 +6,7 @@ import { useRouter } from 'vue-router'
 import api from '@/api'
 import AccountModal from '@/components/AccountModal.vue'
 import AutoTaskCard from '@/components/AutoTaskCard.vue'
+import MilkTeaPanel from '@/components/MilkTeaPanel.vue'
 import ConfirmModal from '@/components/ConfirmModal.vue'
 import BaseButton from '@/components/ui/BaseButton.vue'
 import BaseInput from '@/components/ui/BaseInput.vue'
@@ -23,7 +24,7 @@ const userStore = useUserStore()
 const settingStore = useSettingStore()
 const farmStore = useFarmStore()
 
-const activeTab = ref<'account' | 'strategy' | 'automation' | 'user'>(
+const activeTab = ref<'account' | 'strategy' | 'automation' | 'user' | 'milk-tea'>(
   (localStorage.getItem('settings-active-tab') as 'account' | 'strategy' | 'automation' | 'user') || 'account'
 )
 
@@ -35,6 +36,7 @@ const tabs = [
   { key: 'account', label: '账号管理', icon: 'i-carbon-user-settings' },
   { key: 'strategy', label: '策略设置', icon: 'i-fas-cogs' },
   { key: 'automation', label: '自动控制', icon: 'i-carbon-toggle-on' },
+  { key: 'milk-tea', label: '奶茶热销中', icon: 'i-carbon-cafe' },
   { key: 'user', label: '用户管理', icon: 'i-carbon-user' },
 ] as const
 
@@ -627,6 +629,11 @@ const localAutomationSettings = ref({
   fireworkMode: 'self',
   fireworkCount: 1,
   happyShareEnabled: true,
+  milkTeaEnabled: true,
+  milkTeaCashier: true,
+  milkTeaCraft: true,
+  milkTeaSpeaker: false,
+  milkTeaStoreName: '奶茶小铺',
   sellGoldenFruit: false,
   adGiftEnabled: true,
   // 防封号(低调)模式
@@ -922,6 +929,11 @@ function syncLocalAutomationSettings() {
   localAutomationSettings.value.fireworkMode = settings.value.fireworkMode === 'friend' ? 'friend' : 'self'
   localAutomationSettings.value.fireworkCount = settings.value.fireworkCount ?? 1
   localAutomationSettings.value.happyShareEnabled = settings.value.happyShareEnabled ?? true
+  localAutomationSettings.value.milkTeaEnabled = settings.value.milkTeaEnabled ?? true
+  localAutomationSettings.value.milkTeaCashier = settings.value.milkTeaCashier ?? true
+  localAutomationSettings.value.milkTeaCraft = settings.value.milkTeaCraft ?? true
+  localAutomationSettings.value.milkTeaSpeaker = settings.value.milkTeaSpeaker ?? false
+  localAutomationSettings.value.milkTeaStoreName = settings.value.milkTeaStoreName ?? '奶茶小铺'
   localAutomationSettings.value.sellGoldenFruit = settings.value.sellGoldenFruit ?? false
   localAutomationSettings.value.adGiftEnabled = settings.value.adGiftEnabled ?? true
     localAutomationSettings.value.fertilizerBuyOrganicCount = settings.value.fertilizerBuyOrganicCount ?? 10
@@ -1113,6 +1125,11 @@ async function saveAutomationSettings() {
       fireworkMode: localAutomationSettings.value.fireworkMode,
       fireworkCount: localAutomationSettings.value.fireworkCount,
       happyShareEnabled: localAutomationSettings.value.happyShareEnabled,
+      milkTeaEnabled: localAutomationSettings.value.milkTeaEnabled,
+      milkTeaCashier: localAutomationSettings.value.milkTeaCashier,
+      milkTeaCraft: localAutomationSettings.value.milkTeaCraft,
+      milkTeaSpeaker: localAutomationSettings.value.milkTeaSpeaker,
+      milkTeaStoreName: localAutomationSettings.value.milkTeaStoreName,
       sellGoldenFruit: localAutomationSettings.value.sellGoldenFruit,
       adGiftEnabled: localAutomationSettings.value.adGiftEnabled,
       fertilizerBuyOrganicCount: localAutomationSettings.value.fertilizerBuyOrganicCount,
@@ -2371,6 +2388,16 @@ async function handleTestOffline() {
             </div>
           </div>
         </div>
+
+          <!-- 奶茶热销中(2026-10-15 新活动): 独立菜单 -->
+          <div v-else-if="activeTab === 'milk-tea'" class="space-y-4">
+            <MilkTeaPanel
+              :account-id="String(currentAccountId || '')"
+              :settings="localAutomationSettings"
+              :saving="automationSaving"
+              @save="saveAutomationSettings"
+            />
+          </div>
       </div>
     </div>
 
