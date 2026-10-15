@@ -689,9 +689,6 @@ const ACTIVITY_ITEM_FALLBACK = new Map([
  * 仅做兜底: 官方收录后自动被真实数据覆盖。缺生长时间等字段(官方未下发), 界面会显示 '-'
  */
 const ACTIVITY_PLANT_FALLBACK = new Map([
-    // 金币果/经验蘑菇官方表已有, 但补进兜底表可保证 fruit 字段(制作奶茶用)始终可读
-    [1020522, { id: 1020522, seed_id: 20522, name: '金币果', fruit: { id: 40522, count: 48 } }],
-    [1020523, { id: 1020523, seed_id: 20523, name: '经验蘑菇', fruit: { id: 40523, count: 48 } }],
     [1020525, { id: 1020525, seed_id: 20525, name: '森野甜莓', fruit: { id: 40525, count: 1 } }],
     [1020526, { id: 1020526, seed_id: 20526, name: '森野白桃', fruit: { id: 40526, count: 1 } }],
     [1020527, { id: 1020527, seed_id: 20527, name: '森野甜橙', fruit: { id: 40527, count: 1 } }],

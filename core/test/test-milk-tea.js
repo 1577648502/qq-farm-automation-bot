@@ -254,10 +254,10 @@ const byIdx = (i) => FRAMES.find(f => f.idx === i);
 
         // 可制作果实 = 活动 10 种种子对应的果实(不是只抓包里的那两种!)
         const fruits = milkTea.getCraftableFruitIds().sort((a, b) => a - b);
-        check('可制作果实覆盖 10 种(含金币果40522/经验蘑菇40523)',
-            fruits.length === 10 && fruits.includes(40522) && fruits.includes(40523) && fruits.includes(40525) && fruits.includes(49005),
-            fruits);
-        check('果实 id 规律: 种子 id + 20000', fruits.every((f) => [40522, 40523, 40525, 40526, 40527, 40528, 40529, 40021, 41435, 49005].includes(f)), fruits);
+        const EXPECT = [40021, 40525, 40526, 40527, 40528, 40529, 41435, 49005];
+        check('可制作果实 = 森野系列 8 种', fruits.length === 8 && EXPECT.every((x) => fruits.includes(x)), fruits);
+        check('不含非本活动的金币果(40522)/经验蘑菇(40523)',
+            !fruits.includes(40522) && !fruits.includes(40523), fruits);
 
         const uids = enc([54158]);
         const payload = Buffer.concat([Buffer.from([0x0a, uids.length]), uids]);
