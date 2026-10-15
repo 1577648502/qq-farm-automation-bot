@@ -484,7 +484,7 @@ function getLevelExpProgress(level, totalExp) {
  * @param {number} plantId - 植物ID
  */
 function getPlantById(plantId) {
-    return plantMap.get(plantId);
+    return plantMap.get(plantId) || ACTIVITY_PLANT_FALLBACK.get(Number(plantId) || 0);
 }
 
 /**
@@ -492,7 +492,7 @@ function getPlantById(plantId) {
  * @param {number} seedId - 种子ID
  */
 function getPlantBySeedId(seedId) {
-    return seedToPlant.get(seedId);
+    return seedToPlant.get(seedId) || getFallbackPlantBySeedId(seedId);
 }
 
 /**
@@ -500,7 +500,7 @@ function getPlantBySeedId(seedId) {
  * @param {number} plantId - 植物ID
  */
 function getPlantName(plantId) {
-    const plant = plantMap.get(plantId);
+    const plant = plantMap.get(plantId) || ACTIVITY_PLANT_FALLBACK.get(Number(plantId) || 0);
     return plant ? plant.name : `植物${plantId}`;
 }
 
@@ -510,7 +510,7 @@ function getPlantName(plantId) {
  */
 function getPlantNameBySeedId(seedId) {
     const id = Number(seedId) || 0;
-    const plant = seedToPlant.get(id);
+    const plant = seedToPlant.get(id) || getFallbackPlantBySeedId(id);
     if (plant && plant.name) return plant.name;
     // 图鉴用的是果实id(4xxxx)，按果实id反查植物名
     const byFruit = fruitToPlant.get(id);
@@ -682,6 +682,28 @@ const ACTIVITY_ITEM_FALLBACK = new Map([
     [210037, { id: 210037, name: '装饰套装', type: 4 }],
     [2163, { id: 2163, name: '缤纷奶茶头像框', type: 4 }],
 ]);
+
+/**
+ * 官方 Plant.json 暂未收录的活动植物（奶茶热销中 森野系列，名称取自商店下发）
+ * id 规则: 植物 id 带 10 前缀(1020525), 种子 id = 去掉前缀(20525)
+ * 仅做兜底: 官方收录后自动被真实数据覆盖。缺生长时间等字段(官方未下发), 界面会显示 '-'
+ */
+const ACTIVITY_PLANT_FALLBACK = new Map([
+    [1020525, { id: 1020525, seed_id: 20525, name: '森野甜莓' }],
+    [1020526, { id: 1020526, seed_id: 20526, name: '森野白桃' }],
+    [1020527, { id: 1020527, seed_id: 20527, name: '森野甜橙' }],
+    [1020528, { id: 1020528, seed_id: 20528, name: '森野红柚' }],
+    [1020021, { id: 1020021, seed_id: 20021, name: '森野可可豆' }],
+    [1021435, { id: 1021435, seed_id: 21435, name: '森野柿子' }],
+    [1020529, { id: 1020529, seed_id: 20529, name: '森野芭乐' }],
+    [1029005, { id: 1029005, seed_id: 29005, name: '森野黄金芽' }],
+]);
+/** 按种子 id(20525) 找兜底植物 */
+function getFallbackPlantBySeedId(seedId) {
+    const id = Number(seedId) || 0;
+    if (!id) return undefined;
+    return ACTIVITY_PLANT_FALLBACK.get(id + 1000000);
+}
 
 function getItemById(itemId) {
     const id = Number(itemId) || 0;
