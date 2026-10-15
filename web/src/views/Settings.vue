@@ -633,6 +633,9 @@ const localAutomationSettings = ref({
   milkTeaCraft: true,
   milkTeaSpeaker: false,
   milkTeaStoreName: '奶茶小铺',
+  milkTeaAutoInteract: false,
+  milkTeaInteractType: 5,
+  milkTeaEmployerGid: '',
   sellGoldenFruit: false,
   adGiftEnabled: true,
   // 防封号(低调)模式
@@ -933,6 +936,9 @@ function syncLocalAutomationSettings() {
   localAutomationSettings.value.milkTeaCraft = settings.value.milkTeaCraft ?? true
   localAutomationSettings.value.milkTeaSpeaker = settings.value.milkTeaSpeaker ?? false
   localAutomationSettings.value.milkTeaStoreName = settings.value.milkTeaStoreName ?? '奶茶小铺'
+  localAutomationSettings.value.milkTeaAutoInteract = settings.value.milkTeaAutoInteract ?? false
+  localAutomationSettings.value.milkTeaInteractType = settings.value.milkTeaInteractType ?? 5
+  localAutomationSettings.value.milkTeaEmployerGid = settings.value.milkTeaEmployerGid ?? ''
   localAutomationSettings.value.sellGoldenFruit = settings.value.sellGoldenFruit ?? false
   localAutomationSettings.value.adGiftEnabled = settings.value.adGiftEnabled ?? true
     localAutomationSettings.value.fertilizerBuyOrganicCount = settings.value.fertilizerBuyOrganicCount ?? 10
@@ -1157,6 +1163,9 @@ async function saveAutomationSettings() {
       milkTeaCraft: localAutomationSettings.value.milkTeaCraft,
       milkTeaSpeaker: localAutomationSettings.value.milkTeaSpeaker,
       milkTeaStoreName: localAutomationSettings.value.milkTeaStoreName,
+      milkTeaAutoInteract: localAutomationSettings.value.milkTeaAutoInteract,
+      milkTeaInteractType: localAutomationSettings.value.milkTeaInteractType,
+      milkTeaEmployerGid: localAutomationSettings.value.milkTeaEmployerGid,
       sellGoldenFruit: localAutomationSettings.value.sellGoldenFruit,
       adGiftEnabled: localAutomationSettings.value.adGiftEnabled,
       fertilizerBuyOrganicCount: localAutomationSettings.value.fertilizerBuyOrganicCount,

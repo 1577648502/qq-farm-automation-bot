@@ -93,6 +93,9 @@ export interface SettingsState {
   milkTeaCraft: boolean
   milkTeaSpeaker: boolean
   milkTeaStoreName: string
+  milkTeaAutoInteract: boolean
+  milkTeaInteractType: number
+  milkTeaEmployerGid: string
   sellGoldenFruit: boolean
   adGiftEnabled: boolean
 }
@@ -146,6 +149,9 @@ export const useSettingStore = defineStore('setting', () => {
   milkTeaCraft: true,
   milkTeaSpeaker: false,
   milkTeaStoreName: '奶茶小铺',
+  milkTeaAutoInteract: false,
+  milkTeaInteractType: 5,
+  milkTeaEmployerGid: '',
   sellGoldenFruit: false,
   adGiftEnabled: true,
   })
@@ -208,6 +214,9 @@ export const useSettingStore = defineStore('setting', () => {
   settings.value.milkTeaCraft = d.milkTeaCraft ?? true
   settings.value.milkTeaSpeaker = d.milkTeaSpeaker ?? false
   settings.value.milkTeaStoreName = d.milkTeaStoreName ?? '奶茶小铺'
+  settings.value.milkTeaAutoInteract = d.milkTeaAutoInteract ?? false
+  settings.value.milkTeaInteractType = Number(d.milkTeaInteractType) || 5
+  settings.value.milkTeaEmployerGid = d.milkTeaEmployerGid ?? ''
   settings.value.sellGoldenFruit = d.sellGoldenFruit ?? false
   settings.value.adGiftEnabled = d.adGiftEnabled ?? true
       }
@@ -262,6 +271,9 @@ export const useSettingStore = defineStore('setting', () => {
         milkTeaCraft: newSettings.milkTeaCraft,
         milkTeaSpeaker: newSettings.milkTeaSpeaker,
         milkTeaStoreName: newSettings.milkTeaStoreName,
+        milkTeaAutoInteract: newSettings.milkTeaAutoInteract,
+        milkTeaInteractType: newSettings.milkTeaInteractType,
+        milkTeaEmployerGid: newSettings.milkTeaEmployerGid,
         sellGoldenFruit: newSettings.sellGoldenFruit,
         adGiftEnabled: newSettings.adGiftEnabled,
       }
