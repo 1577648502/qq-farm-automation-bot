@@ -12,35 +12,54 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const ROOT = path.join(__dirname, '..', 'src');
-const SKIP_DIRS = new Set(['node_modules', '.git']);
-// 这些模块 require 时会去连网络/起进程，跳过（只做静态加载检查没有意义）
-const SKIP_FILES = new Set([
-    'core/worker.js',              // worker 入口，需要 master 环境
-    'runtime/worker-manager.js',   // 起子进程
-    'services/mitm-proxy.js',      // 起代理服务
-    'services/desktop-farm-capture.js',
-]);
 
-function walk(dir, out = []) {
-    for (const name of fs.readdirSync(dir)) {
-        const p = path.join(dir, name);
-        const st = fs.statSync(p);
-        if (st.isDirectory()) {
-            if (SKIP_DIRS.has(name)) continue;
-            walk(p, out);
-        } else if (name.endsWith('.js')) {
-            out.push(p);
-        }
-    }
-    return out;
-}
+/**
+ * 固定清单: 覆盖"启动即加载"和我经常改动的模块
+ * (不做成扫描全部文件 —— 全量 require 会把内存吃满被 OOM 杀掉)
+ */
+const MODULES = [
+    'config/config',
+    'config/gameConfig',
+    'config/runtime-paths',
+    'models/store',
+    'models/user-store',
+    'services/milk-tea',
+    'services/happy-share',
+    'services/autumn-wish',
+    'services/friend',
+    'services/warehouse',
+    'services/mengchong',
+    'services/game-config-sync',
+    'services/json-db',
+    'services/ad-gift',
+    'services/interact',
+    'services/treasure-rob',
+    'services/mall',
+    'controllers/admin',
+    'runtime/data-provider',
+    'runtime/runtime-state',
+];
 
-const files = walk(ROOT);
 let ok = 0;
 const failed = [];
-for (const f of files) {
-    const rel = path.relative(ROOT, f).split(path.sep).join('/');
-    if (SKIP_FILES.has(rel)) continue;
+let current = '';
+process.on('uncaughtException', (e) => {
+    failed.push({ rel: current, err: `(异步) ${e.message}` });
+});
+// 有些模块加载时会自己 process.exit —— 拦下来记为失败, 免得检查静默中断
+const origExit = process.exit;
+process.exit = function (code) {
+    if (current) failed.push({ rel: current, err: `模块加载时调用了 process.exit(${code})` });
+    return undefined;
+};
+
+for (const rel of MODULES) {
+    const f = path.join(ROOT, rel + '.js');
+    if (!fs.existsSync(f)) {
+        failed.push({ rel, err: '文件不存在' });
+        continue;
+    }
+    current = rel;
     try {
         require(f);
         ok += 1;
@@ -49,7 +68,8 @@ for (const f of files) {
     }
 }
 
-console.log(`[冒烟] require 成功 ${ok} / 失败 ${failed.length}（共扫描 ${files.length} 个文件）`);
+process.exit = origExit;
+console.log(`[冒烟] 核心模块 require 成功 ${ok} / 失败 ${failed.length}（共 ${MODULES.length} 个）`);
 for (const x of failed) {
     console.log(`  ✗ ${x.rel}: ${x.err}`);
 }
