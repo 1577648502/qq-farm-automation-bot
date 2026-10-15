@@ -233,8 +233,7 @@ async function hireNow() {
 
 
 
-/** 串行 + 错开加载: 避免一次性并发多个游戏请求把队列打满(队列已满→心跳异常掉线) */
-async /** 停止: 中断前端等待 + 通知后台不再执行剩余步骤(长操作卡住时用) */
+/** 停止: 中断前端等待 + 通知后台不再执行剩余步骤(长操作卡住时用) */
 async function stopAll() {
   abortCtrl?.abort()
   abortCtrl = null
@@ -250,7 +249,8 @@ async function stopAll() {
   }
 }
 
-function refreshAll() {
+/** 串行 + 错开加载: 避免一次性并发多个游戏请求把队列打满(队列已满→心跳异常掉线) */
+async function refreshAll() {
   await loadStatus()
   await new Promise((r) => setTimeout(r, 400))
   await loadShop()
