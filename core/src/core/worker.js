@@ -315,6 +315,9 @@ async function runMilkTea(reason = 'interval') {
             autoHire: cfg.autoHire,
             hireGids: cfg.hireGids,
             autoTask: false,   // 任务需充值激活, 功能已移除(不再自动领取)
+            autoInteract: cfg.autoInteract,
+            interactType: cfg.interactType,
+            employerGid: cfg.employerGid,
             // 注意: 不再自动调 cmd=56/58 —— 实际返回的是"工坊员工/配方菜单"等查询结果,
             // 早期按 UI 顺序误标为"加工/喇叭", 语义未确认前不自动执行
             craft: false,

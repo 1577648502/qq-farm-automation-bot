@@ -2105,7 +2105,7 @@ app.use('/api', (req, res, next) => {
                 : true;
             const milkTeaCfg = (id && typeof store.getMilkTeaConfig === 'function')
                 ? store.getMilkTeaConfig(id)
-                : { enabled: true, cashier: true, craft: true, speaker: false, storeName: '奶茶小铺', hireGids: [], autoHire: false, autoTask: false };
+                : { enabled: true, cashier: true, craft: true, speaker: false, storeName: '奶茶小铺', hireGids: [], autoHire: false, autoTask: false, autoInteract: false, interactType: 5, employerGid: '' };
             const happyShareEnabled = (id && typeof store.getHappyShareEnabled === 'function')
                 ? store.getHappyShareEnabled(id)
                 : true;
@@ -2174,6 +2174,9 @@ app.use('/api', (req, res, next) => {
                     milkTeaHireGids: milkTeaCfg.hireGids || [],
                     milkTeaAutoHire: !!milkTeaCfg.autoHire,
                     milkTeaAutoTask: !!milkTeaCfg.autoTask,
+                    milkTeaAutoInteract: !!milkTeaCfg.autoInteract,
+                    milkTeaInteractType: milkTeaCfg.interactType || 5,
+                    milkTeaEmployerGid: milkTeaCfg.employerGid || '',
                     // 看广告礼包(跳过广告直接领)
                     adGiftEnabled,
                     // 自动卖果实时是否连黄金果实一起卖
@@ -3612,7 +3615,14 @@ app.use('/api', (req, res, next) => {
             const cfg = (typeof store.getMilkTeaConfig === 'function')
                 ? store.getMilkTeaConfig(id)
                 : { hireGids: [], autoHire: false, autoTask: false };
-            res.json({ ok: true, data: { hireGids: cfg.hireGids || [], autoHire: !!cfg.autoHire, autoTask: !!cfg.autoTask } });
+            res.json({ ok: true, data: {
+                hireGids: cfg.hireGids || [],
+                autoHire: !!cfg.autoHire,
+                autoTask: !!cfg.autoTask,
+                autoInteract: !!cfg.autoInteract,
+                interactType: cfg.interactType || 5,
+                employerGid: cfg.employerGid || '',
+            } });
         } catch (e) { res.json({ ok: false, error: e.message }); }
     });
 
@@ -3626,8 +3636,18 @@ app.use('/api', (req, res, next) => {
                 milkTeaHireGids: Array.isArray(body.hireGids) ? body.hireGids : undefined,
                 milkTeaAutoHire: typeof body.autoHire === 'boolean' ? body.autoHire : undefined,
                 milkTeaAutoTask: typeof body.autoTask === 'boolean' ? body.autoTask : undefined,
+                milkTeaAutoInteract: typeof body.autoInteract === 'boolean' ? body.autoInteract : undefined,
+                milkTeaInteractType: body.interactType !== undefined ? body.interactType : undefined,
+                milkTeaEmployerGid: typeof body.employerGid === 'string' ? body.employerGid : undefined,
             });
-            res.json({ ok: true, data: { hireGids: body.hireGids || [], autoHire: !!body.autoHire, autoTask: !!body.autoTask } });
+            res.json({ ok: true, data: {
+                hireGids: body.hireGids || [],
+                autoHire: !!body.autoHire,
+                autoTask: !!body.autoTask,
+                autoInteract: !!body.autoInteract,
+                interactType: body.interactType || 5,
+                employerGid: body.employerGid || '',
+            } });
         } catch (e) { res.json({ ok: false, error: e.message }); }
     });
 

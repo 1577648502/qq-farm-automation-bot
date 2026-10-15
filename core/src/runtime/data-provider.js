@@ -239,6 +239,9 @@ function createDataProvider(options) {
                 milkTeaHireGids: body.milkTeaHireGids,
                 milkTeaAutoHire: body.milkTeaAutoHire,
                 milkTeaAutoTask: body.milkTeaAutoTask,
+                milkTeaAutoInteract: body.milkTeaAutoInteract,
+                milkTeaInteractType: body.milkTeaInteractType,
+                milkTeaEmployerGid: body.milkTeaEmployerGid,
                 adGiftEnabled: body.adGiftEnabled,
                 sellGoldenFruit: body.sellGoldenFruit
             };

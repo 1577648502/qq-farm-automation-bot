@@ -764,6 +764,17 @@ async function runMilkTea(opts = {}) {
         out.steps.push({ step: 'speaker', ...r });
         await sleep(1000);
     }
+    if (opts.autoInteract && opts.employerGid) {
+        if (stopped()) { out.cancelled = true; return out; }
+        const r = await interactWithFriend(opts.employerGid, opts.interactType).catch((e) => ({ ok: false, reason: e.message }));
+        out.steps.push({ step: 'autoInteract', ...r });
+        if (r.ok) {
+            log('活动', `奶茶热销中: 已自动互动(雇主 ${opts.employerGid}, 类型 ${opts.interactType || 5})`, { module: 'activity', event: '奶茶热销中', result: 'ok' });
+        } else {
+            log('活动', `奶茶热销中: 自动互动未执行 — ${r.reason}`, { module: 'activity', event: '奶茶热销中', result: 'warn' });
+        }
+        await sleep(700);
+    }
     if (opts.autoHire && Array.isArray(opts.hireGids) && opts.hireGids.length) {
         const r = await autoHire(opts.hireGids);
         out.steps.push({ step: 'autoHire', ...r });

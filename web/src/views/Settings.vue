@@ -2033,6 +2033,9 @@ async function handleTestOffline() {
                   <div class="flex flex-wrap items-center gap-3 rounded border border-gray-200 px-2.5 py-2 dark:border-gray-700">
                     <BaseSwitch v-model="localAutomationSettings.milkTeaCashier" label="自动领收银台收益（核心）" />
                     <BaseSwitch v-model="localAutomationSettings.milkTeaCraft" label="自动制作奶茶（全部果实）" />
+                    <BaseSwitch v-model="localAutomationSettings.milkTeaAutoInteract" label="自动互动（被雇佣后每轮一次）" />
+                    <BaseInput v-model.number="localAutomationSettings.milkTeaInteractType" label="互动类型" type="number" class="w-24" />
+                    <BaseInput v-model="localAutomationSettings.milkTeaEmployerGid" label="雇主 GID（互动对象）" type="text" class="w-44" />
                     <BaseInput v-model="localAutomationSettings.milkTeaStoreName" label="店名（首次开业用）" type="text" class="w-40" />
                     <span class="text-xs text-gray-500 dark:text-gray-400">
                       雇佣好友 / 自动雇佣 在左侧栏「奶茶热销中」页面设置

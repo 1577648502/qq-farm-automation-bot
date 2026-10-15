@@ -32,6 +32,7 @@ const friends = ref<any[]>([])
 const friendsBusy = ref(false)
 const hireGids = ref<string[]>([])
 const autoHire = ref(false)
+const autoInteract = ref(false)
 const hireOpen = ref(false)
 const hireSaving = ref(false)
 const newGid = ref('')
@@ -136,6 +137,9 @@ async function loadHireConfig() {
     if (err) { reportError('读取雇佣设置', err); return }
     hireGids.value = (d.hireGids || []).map((g: any) => String(g))
     autoHire.value = !!d.autoHire
+    autoInteract.value = !!d.autoInteract
+    if (d.interactType) interactType.value = Number(d.interactType)
+    if (d.employerGid) interactGid.value = String(d.employerGid)
   } catch (e: any) {
     reportError('读取雇佣设置', apiError(null, null, e))
   }
@@ -257,6 +261,9 @@ async function saveHireConfig() {
     const res = await api.post('/api/activity/milk-tea/hire-config', {
       hireGids: hireGids.value,
       autoHire: autoHire.value,
+      autoInteract: autoInteract.value,
+      interactType: Number(interactType.value) || 5,
+      employerGid: String(interactGid.value || ''),
     })
     const err = apiError(res, res.data?.data)
     if (err) { reportError('保存设置', err); return }
@@ -505,6 +512,7 @@ onMounted(() => {
       <div v-show="hireOpen" class="border-t border-gray-100 px-4 py-3 dark:border-gray-700/60">
         <div class="mb-2 flex flex-wrap items-center gap-3">
           <BaseSwitch v-model="autoHire" label="自动雇佣（按白名单依次尝试）" />
+          <BaseSwitch v-model="autoInteract" label="自动互动（被雇佣后每轮一次）" />
           <BaseButton variant="secondary" size="sm" :loading="busy === 'hire-auto'" @click="hireNow">
             立即雇佣一个
           </BaseButton>
