@@ -181,6 +181,36 @@ async function buy(g: any) {
   }
 }
 
+/** 全选好友(列表里的全部) */
+function selectAllFriends() {
+  hireGids.value = friends.value.map((f: any) => String(f.gid))
+}
+/** 清空选择 */
+function clearAllFriends() { hireGids.value = [] }
+/** 反选 */
+function invertFriends() {
+  const cur = new Set(hireGids.value)
+  hireGids.value = friends.value.map((f: any) => String(f.gid)).filter((g: string) => !cur.has(g))
+}
+
+/** 批量雇佣: 逐个雇(后台带节流, 单次最多 10 个) */
+async function hireAllNow() {
+  if (!hireGids.value.length) { toast.warning('请先勾选好友（或点全选）'); return }
+  busy.value = 'hire-all'
+  try {
+    const res = await api.post('/api/activity/milk-tea/hire-all', { hireGids: hireGids.value, limit: 10 })
+    const d = res.data?.data || {}
+    const err = apiError(res, d)
+    if (err) { reportError('批量雇佣', err); return }
+    actionResult.value = `批量雇佣完成：${d.hired}/${d.total} 成功`
+    toast.success(actionResult.value)
+  } catch (e: any) {
+    reportError('批量雇佣', apiError(null, null, e))
+  } finally {
+    busy.value = ''
+  }
+}
+
 function toggleGid(gid: string) {
   const i = hireGids.value.indexOf(gid)
   if (i >= 0) hireGids.value.splice(i, 1)
@@ -442,6 +472,15 @@ onMounted(() => {
           <BaseButton variant="secondary" size="sm" :loading="busy === 'hire-auto'" @click="hireNow">
             立即雇佣一个
           </BaseButton>
+          <BaseButton
+            variant="secondary"
+            size="sm"
+            :disabled="!hireGids.length"
+            :loading="busy === 'hire-all'"
+            @click="hireAllNow"
+          >
+            全部雇佣（最多 10 个/次）
+          </BaseButton>
           <BaseButton variant="secondary" size="sm" :loading="friendsBusy" @click="loadFriends">
             刷新好友
           </BaseButton>
@@ -458,6 +497,14 @@ onMounted(() => {
           >
           <BaseButton variant="secondary" size="sm" @click="addGid">添加</BaseButton>
           <span class="text-xs text-gray-400">GID 可在「好友」页面查看</span>
+        </div>
+        <div v-if="friends.length" class="mb-2 flex flex-wrap items-center gap-2">
+          <BaseButton variant="secondary" size="sm" @click="selectAllFriends">全选</BaseButton>
+          <BaseButton variant="secondary" size="sm" @click="clearAllFriends">清空</BaseButton>
+          <BaseButton variant="secondary" size="sm" @click="invertFriends">反选</BaseButton>
+          <span class="text-xs text-gray-500 dark:text-gray-400">
+            共 {{ friends.length }} 位好友，已勾选 {{ hireGids.length }} 位（改完记得点「保存设置」）
+          </span>
         </div>
         <div v-if="!friends.length" class="text-xs text-gray-500 dark:text-gray-400">
           {{ friendsBusy ? '读取中…' : '未读到好友列表（账号需在线；QQ 端可用上面的输入框手动添加 GID）' }}

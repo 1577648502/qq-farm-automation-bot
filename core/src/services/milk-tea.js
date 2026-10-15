@@ -503,6 +503,21 @@ async function claimAllTasks() {
     return { ok: true, claimed };
 }
 
+/** 批量雇佣: 逐个尝试(带节流, 默认最多 10 个); 已雇过的会失败并跳过 */
+async function hireAll(hireGids, limit = 10) {
+    const list = (Array.isArray(hireGids) ? hireGids : []).map((g) => toNum(g)).filter((g) => g > 0).slice(0, Math.max(1, limit));
+    if (!list.length) return { ok: false, reason: '未选择好友' };
+    const results = [];
+    for (const gid of list) {
+        const r = await hireFriend(gid).catch((e) => ({ ok: false, reason: e.message }));
+        results.push({ gid, ok: !!(r && r.ok), reason: (r && r.reason) || '' });
+        await sleep(700);   // 节流: 避免把游戏请求队列打满(满了会心跳异常掉线)
+    }
+    const okCount = results.filter((x) => x.ok).length;
+    log('活动', `奶茶热销中: 批量雇佣 ${okCount}/${results.length} 成功`, { module: 'activity', event: '奶茶热销中', result: okCount ? 'ok' : 'warn' });
+    return { ok: okCount > 0, hired: okCount, total: results.length, results };
+}
+
 /**
  * 自动流程(每次调用都幂等):
  *   ① 刷新状态(顺带确认活动还在)  ② 未开业则开业  ③ 领收银台收益  ④ 用工坊加工  ⑤ 用宣传喇叭
@@ -590,6 +605,7 @@ module.exports = {
     buyShopGoods,
     getFriendList,
     autoHire,
+    hireAll,
     getTasks,
     claimTask,
     claimAllTasks,

@@ -1428,6 +1428,11 @@ async function handleApiCall(msg) {
                 result = to.taskId ? await milkTea.claimTask(to.taskId) : await milkTea.claimAllTasks();
                 break;
             }
+            case 'hireMilkTeaAll': {
+                const ho = args[0] || {};
+                result = await milkTea.hireAll(ho.hireGids, ho.limit);
+                break;
+            }
             case 'getMilkTeaFriends':
                 result = await milkTea.getFriendList();
                 break;
