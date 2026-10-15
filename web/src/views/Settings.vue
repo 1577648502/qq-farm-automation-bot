@@ -2028,13 +2028,7 @@ async function handleTestOffline() {
                       领收银台收益
                     </BaseButton>
                     <BaseButton variant="secondary" size="sm" :loading="milkTeaBusy === 'craft'" @click="milkTeaAction('craft')">
-                      工坊/员工
-                    </BaseButton>
-                    <BaseButton variant="secondary" size="sm" :loading="milkTeaBusy === 'speaker'" @click="milkTeaAction('speaker')">
-                      配方菜单
-                    </BaseButton>
-                    <BaseButton variant="secondary" size="sm" :loading="milkTeaBusy === 'interact'" @click="milkTeaAction('interact')">
-                      店铺排行
+                      制作奶茶
                     </BaseButton>
                     <span v-if="milkTeaResult" class="text-xs text-gray-600 dark:text-gray-300">{{ milkTeaResult }}</span>
                   </template>
@@ -2047,8 +2041,7 @@ async function handleTestOffline() {
                   </div>
                   <template #note>
                     每 15 分钟自查一次（收银台满载会停业且不补发，所以只自动做"领收益"这一件确定安全的事）。
-                    按钮说明：工坊/员工(cmd 56)、配方菜单(58)、店铺排行(66) 都是查询类；你原来的"加工/喇叭/互动"
-                    是我早期按 UI 顺序误标的，已按实际返回内容纠正。
+                    制作奶茶 = 工坊加工(cmd 62): 把背包里的活动果实(森野系列)做成高级奶茶, 自动模式每轮做一次。
                   </template>
                 </AutoTaskCard>
 

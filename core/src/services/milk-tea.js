@@ -60,6 +60,9 @@ const FIELD_SHOP_BUY = 101;
 
 const STATE_FIELD = 121;    // 主活动状态容器
 const MILK_COUPON_ID = 1041; // 奶茶券(活动货币)
+/** 活动果实 id: 森野系列种子(20525…)对应果实 40525…; 奶茶工坊就是"果实 → 高级奶茶" */
+const MILK_FRUIT_IDS = [40525, 40526, 40527, 40528, 40529, 40021, 41435, 49005];
+const CMD_CRAFT_REAL = 62;   // 制作奶茶(工坊加工): 请求 #167 = {#1: 果实 uid 列表(packed varint)}
 const SHOP_BODY_FIELD = 102;// 商店列表所在字段
 const TASK_BODY_FIELD = 122;// 任务列表所在字段
 
@@ -408,6 +411,57 @@ function isSettling(st) {
     return nowSec >= settleAt;
 }
 
+/** 打包 varint(protobuf packed repeated) */
+function encodePackedVarints(values) {
+    return Buffer.concat((Array.isArray(values) ? values : []).map((v) => encodeVarint(v)));
+}
+
+/**
+ * 制作奶茶(cmd=62, 实测 2026-10-15 新抓包):
+ *   请求 #167 = {#1: [果实 uid...](packed)} → 响应回产出的高级奶茶 {#1: 物品id, #2: 数量}
+ * 果实来源: 背包里 40525/40526/… 这些活动果实(每个实例有独立 uid)
+ * @param limit 单次最多提交几个果实(抓包里一次 6 个)
+ */
+async function craftMilkTea(limit = 10) {
+    await throttle();
+    let items = [];
+    try {
+        const { getBag, getBagItems } = require('./warehouse');
+        items = getBagItems(await getBag());
+    } catch (e) {
+        return { ok: false, reason: `读取背包失败: ${e.message}` };
+    }
+    const picked = [];
+    for (const it of items) {
+        if (picked.length >= limit) break;
+        if (!MILK_FRUIT_IDS.includes(toNum(it && it.id))) continue;
+        const uid = toNum(it && it.uid);
+        if (uid > 0) picked.push(uid);
+    }
+    if (!picked.length) return { ok: false, reason: '背包里没有活动果实(森野系列)，先种再收' };
+    const packed = encodePackedVarints(picked);
+    const payload = Buffer.concat([Buffer.from([0x0a, packed.length]), packed]);   // {#1: packed uids}
+    const r = await operateRaw(GROUP_MAIN, CMD_CRAFT_REAL, 167, payload);
+    if (r.errorCode !== 0) return { ok: false, reason: `制作失败 code=${r.errorCode}` };
+    const made = [];
+    if (r.resultHex) {
+        try {
+            const rf = parseTop(Buffer.from(r.resultHex, 'hex'));
+            for (const x of rf) {
+                if (x.f !== 3 || x.w !== 2) continue;
+                const xf = parseTop(x.v);
+                const id = toInt((findField(xf, 1) || {}).v);
+                const count = toInt((findField(xf, 2) || {}).v);
+                if (id) made.push({ id, count, name: itemLabel(id, count) });
+            }
+        } catch (e) { /* 忽略 */ }
+    }
+    log('活动', `奶茶热销中: 已制作奶茶(投入 ${picked.length} 个果实)${made.length ? ` → ${made.map((m) => m.name).join('、')}` : ''}`, {
+        module: 'activity', event: '奶茶热销中', result: 'ok', fruits: picked.length,
+    });
+    return { ok: true, used: picked.length, made, state: parseMainState(r.activity) };
+}
+
 /**
  * 收银台查询(cmd=60): 返回待领取收益等。规则说"满载会暂停营业且不补发", 所以顶部要显示待领。
  * 实测结果 #1 = {#1: 容量(40), #2: 当前待领(253), #3: 累计杯数(164312)}
@@ -554,7 +608,7 @@ async function runMilkTea(opts = {}) {
         await sleep(1200);
     }
     if (doCraft) {
-        const r = await craft();
+        const r = await craftMilkTea();
         out.steps.push({ step: 'craft', ...r });
         await sleep(1200);
     }
@@ -593,10 +647,11 @@ module.exports = {
     CMD_RECIPE,
     CMD_SHOP_LIST,
     CMD_SHOP_BUY,
-    __testing: { parseMainState, encodeUint1, encodeVarint },
+    __testing: { parseMainState, encodeUint1, encodeVarint, encodePackedVarints },
     getMainStatus,
     claimCashier,
     craft,
+    craftMilkTea,
     useSpeaker,
     openStore,
     hireFriend,

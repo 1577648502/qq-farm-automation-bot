@@ -1406,7 +1406,8 @@ async function handleApiCall(msg) {
                 result = await milkTea.claimCashier();
                 break;
             case 'craftMilkTea':
-                result = await milkTea.craft();
+                // 真正的"制作奶茶"(cmd=62): 果实 uid → 高级奶茶
+                result = await milkTea.craftMilkTea(args[0] && args[0].limit);
                 break;
             case 'useMilkTeaSpeaker':
                 result = await milkTea.useSpeaker();

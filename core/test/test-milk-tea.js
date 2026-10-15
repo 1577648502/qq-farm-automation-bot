@@ -243,6 +243,20 @@ const byIdx = (i) => FRAMES.find(f => f.idx === i);
         check('未买过的商品 boughtCount=0 且未售罄', g302 && g302.boughtCount === 0 && g302.soldOut === false, g302);
     }
 
+    section('4d. 制作奶茶(cmd=62) payload 与抓包逐字节对齐');
+    {
+        // 抓包(20261015-211043_互动.jsonl, idx=110)请求体:
+        //   08 95f98fc607 10 3e ba0a 14 0a12 <18B packed uids>
+        //   packed uids = 54158,54178,54177,54179,54157,54159 → 8ea703 a2a703 a1a703 a3a703 8da703 8fa703
+        const enc = milkTea.__testing.encodePackedVarints;
+        const packed = enc([54158, 54178, 54177, 54179, 54157, 54159]).toString('hex');
+        check('packed uid 编码与抓包一致', packed === '8ea703a2a703a1a703a3a7038da7038fa703', packed);
+
+        const uids = enc([54158]);
+        const payload = Buffer.concat([Buffer.from([0x0a, uids.length]), uids]);
+        check('#167 值 = 0a038ea703', payload.toString('hex') === '0a038ea703', payload.toString('hex'));
+    }
+
     section('5. 任务列表');
     {
         const t = await milkTea.getTasks();

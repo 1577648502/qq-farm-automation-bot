@@ -500,7 +500,7 @@ function createDataProvider(options) {
         // 奶茶热销中
         getMilkTeaStatus: (accountRef) => callWorkerApi(resolveAccountRefId(accountRef), 'getMilkTeaStatus'),
         claimMilkTeaCashier: (accountRef) => callWorkerApi(resolveAccountRefId(accountRef), 'claimMilkTeaCashier'),
-        craftMilkTea: (accountRef) => callWorkerApi(resolveAccountRefId(accountRef), 'craftMilkTea'),
+        craftMilkTea: (accountRef, opts) => callWorkerApi(resolveAccountRefId(accountRef), 'craftMilkTea', opts || {}),
         useMilkTeaSpeaker: (accountRef) => callWorkerApi(resolveAccountRefId(accountRef), 'useMilkTeaSpeaker'),
         openMilkTeaStore: (accountRef, opts) => callWorkerApi(resolveAccountRefId(accountRef), 'openMilkTeaStore', opts || {}),
         hireMilkTea: (accountRef, opts) => callWorkerApi(resolveAccountRefId(accountRef), 'hireMilkTea', opts || {}),
