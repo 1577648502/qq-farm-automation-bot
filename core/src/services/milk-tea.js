@@ -629,13 +629,13 @@ async function interactWithFriend(friendGid, type = WORK_INTERACT_TYPE) {
     {
         const w = st.work || {};
         if (!w.employer || !w.employer.gid) {
-            return { ok: false, reason: '当前没有进行中的兼职(未被雇佣), 不能互动' };
+            return { ok: false, skipped: true, reason: '当前没有进行中的兼职(未被雇佣), 不能互动', diag: workDiag(w, gid) };
         }
         if (w.endAt && Math.floor(Date.now() / 1000) >= w.endAt) {
-            return { ok: false, reason: '本班工作已结束(班次已过), 不能再互动' };
+            return { ok: false, skipped: true, reason: '本班工作已结束(班次已过), 不能再互动', diag: workDiag(w, gid) };
         }
         if (w.interactTotal > 0 && w.interactUsed >= w.interactTotal) {
-            return { ok: false, reason: `本班互动次数已用完(${w.interactUsed}/${w.interactTotal}), 等下一班` };
+            return { ok: false, skipped: true, reason: `本班互动次数已用完(${w.interactUsed}/${w.interactTotal}), 等下一班`, diag: workDiag(w, gid) };
         }
         const liveGid = toInt(w.employer.gid);
         if (gid !== liveGid) {
@@ -671,16 +671,15 @@ async function interactWithFriend(friendGid, type = WORK_INTERACT_TYPE) {
     if (r.errorCode === 1034147) {
         if (shiftKey) blockedInteractShifts.add(shiftKey);
         if (blockedInteractShifts.size > 20) blockedInteractShifts.clear();
-        return { ok: false, skipped: true, reason: `本班不能互动(${r.reason || 'code=1034147'}), 本班内不再尝试` };
-    }
-    if (r.errorCode !== 0) {
-        const w0 = (st && st.work) || {};
-        const emp = (w0.employer && w0.employer.gid) || 0;
         return {
             ok: false,
-            reason: `互动失败 code=${r.errorCode}`,
-            diag: `老板${gid}(当前${emp}) 班次${w0.startAt || 0}-${w0.endAt || 0} 次数${w0.interactUsed || 0}/${w0.interactTotal || 0}`,
+            skipped: true,
+            reason: `本班不能互动(${r.reason || 'code=1034147'}), 本班内不再尝试`,
+            diag: workDiag((st && st.work) || {}, gid),
         };
+    }
+    if (r.errorCode !== 0) {
+        return { ok: false, reason: `互动失败 code=${r.errorCode}`, diag: workDiag((st && st.work) || {}, gid) };
     }
     let result = null;
     if (r.resultHex) {
@@ -970,6 +969,12 @@ let hireBackoffUntil = 0;
 const SERVICE_TAG = 'milk-tea v2 (次数门槛/班次门槛/失败关闭/1034147记忆)';
 let tagLogged = false;
 
+/** 互动判定用的诊断串(短), 用于日志里一眼看清各判据的实际取值 */
+function workDiag(w, gid) {
+    const nowSec = Math.floor(Date.now() / 1000);
+    return `老板${gid}/当前${(w && w.employer && w.employer.gid) || 0} 班次${(w && w.startAt) || 0}-${(w && w.endAt) || 0} now${nowSec} 次数${(w && w.interactUsed) || 0}/${(w && w.interactTotal) || 0}`;
+}
+
 /** 已被服务端判定"本班不能互动"的班次(按班次开始时间记, 本班内不再重试) */
 const blockedInteractShifts = new Set();
 /** 最近一次探测到的雇主(兼职记录里的老板) */
@@ -1071,7 +1076,7 @@ async function runMilkTea(opts = {}) {
             log('活动', `奶茶热销中: 已自动互动(雇主 ${employerGid}, 类型 ${opts.interactType || WORK_INTERACT_TYPE})`, { module: 'activity', event: '奶茶热销中', result: 'ok' });
         } else if (r.skipped) {
             // 正常情况(本班次数已用完/没有班次/服务端已拒绝): 记一条 skip, 不当失败
-            log('活动', `奶茶热销中: 本班互动跳过(${r.reason})`, { module: 'activity', event: '奶茶热销中', result: 'skip' });
+            log('活动', `奶茶热销中: 本班互动跳过(${r.reason})${r.diag ? ` [${r.diag}]` : ''}`, { module: 'activity', event: '奶茶热销中', result: 'skip' });
         } else {
             log('活动', `奶茶热销中: 自动互动未执行 — ${r.reason}${r.diag ? ` (${r.diag})` : ''}`, { module: 'activity', event: '奶茶热销中', result: 'warn' });
         }
