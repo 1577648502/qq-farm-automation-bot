@@ -266,7 +266,16 @@ function encodeVarintField(field, value) {
 /** 我的工作: 每班一次互动 */
 async function interact() {
     const r = await mainOperate(CMD_INTERACT, undefined, encodeUint1(1));
-    if (r.errorCode !== 0) return { ok: false, reason: `互动失败 ${r.reason || `code=${r.errorCode}`}` };
+    if (r.errorCode !== 0) {
+        // 一行诊断(短): 失败时带上判定依据, 下次直接能看出是"没班次/次数用完/gid不对"哪一种
+        const w0 = (st && st.work) || {};
+        const emp = (w0.employer && w0.employer.gid) || 0;
+        return {
+            ok: false,
+            reason: `互动失败 ${r.reason || `code=${r.errorCode}`}`,
+            diag: `老板${gid}(当前${emp}) 班次${w0.startAt || 0}-${w0.endAt || 0} 次数${w0.interactUsed || 0}/${w0.interactTotal || 0}`,
+        };
+    }
     log('活动', '奶茶热销中: 已完成一次互动', { module: 'activity', event: '奶茶热销中', result: 'ok' });
     return { ok: true, state: parseMainState(r.activity) };
 }
@@ -1045,7 +1054,7 @@ async function runMilkTea(opts = {}) {
         if (r.ok) {
             log('活动', `奶茶热销中: 已自动互动(雇主 ${employerGid}, 类型 ${opts.interactType || WORK_INTERACT_TYPE})`, { module: 'activity', event: '奶茶热销中', result: 'ok' });
         } else {
-            log('活动', `奶茶热销中: 自动互动未执行 — ${r.reason}`, { module: 'activity', event: '奶茶热销中', result: 'warn' });
+            log('活动', `奶茶热销中: 自动互动未执行 — ${r.reason}${r.diag ? ` (${r.diag})` : ''}`, { module: 'activity', event: '奶茶热销中', result: 'warn' });
         }
         await sleep(700);
     }
