@@ -618,7 +618,10 @@ async function interactWithFriend(friendGid, type = WORK_INTERACT_TYPE) {
             return { ok: false, reason: '当前没有进行中的兼职(未被雇佣), 不能互动' };
         }
         if (w.endAt && Math.floor(Date.now() / 1000) >= w.endAt) {
-            return { ok: false, reason: '本班工作已结束, 互动次数已用完' };
+            return { ok: false, reason: '本班工作已结束(班次已过), 不能再互动' };
+        }
+        if (w.interactTotal > 0 && w.interactUsed >= w.interactTotal) {
+            return { ok: false, reason: `本班互动次数已用完(${w.interactUsed}/${w.interactTotal}), 等下一班` };
         }
         if (gid !== toNum(w.employer.gid)) {
             // 传的 gid 不是当前老板 → 直接纠正为当前老板(避免 1034147)
@@ -716,7 +719,7 @@ function parseEmployerFromCashier(resultHex) {
  * ⚠ 互动(cmd=65)要传的 gid = 这里 #1.#1.#1(当前老板); 别从收银台详情(55)的历史记录取(踩过, 取到旧班次)
  */
 function parseWorkFromRefresh(resultHex) {
-    const out = { ok: false, employer: null, storeName: '', startAt: 0, endAt: 0, wage: 0, bonus: 0, titleId: 0, titleName: '', records: [], active: false };
+    const out = { ok: false, employer: null, storeName: '', startAt: 0, endAt: 0, wage: 0, bonus: 0, titleId: 0, titleName: '', records: [], active: false, interactUsed: 0, interactTotal: 0, canInteract: false };
     if (!resultHex) return out;
     try {
         const rf = parseTop(Buffer.from(resultHex, 'hex'));
@@ -735,12 +738,21 @@ function parseWorkFromRefresh(resultHex) {
             out.startAt = toInt((findField(c, 6) || {}).v);
             out.endAt = toInt((findField(c, 7) || {}).v);
             out.wage = toInt((findField(c, 11) || {}).v);
+            // 本班"工作事项"次数: #12 = {#1 已用, #2 总数} —— 实测互动后才会出现(08:04 无 → 09:04 有 {1,1})
+            const t12 = findField(c, 12);
+            if (t12 && t12.w === 2) {
+                const f12 = parseTop(t12.v);
+                out.interactUsed = toInt((findField(f12, 1) || {}).v);
+                out.interactTotal = toInt((findField(f12, 2) || {}).v);
+            }
             const t13 = findField(c, 13);
             if (t13 && t13.w === 2) out.bonus = toInt((findField(parseTop(t13.v), 2) || {}).v);
             out.ok = !!out.employer;
             // "进行中的班次" = 有本次兼职 && (没给结束时间 或 现在还没到结束时间)
             const nowSec = Math.floor(Date.now() / 1000);
             out.active = !!out.employer && (!out.endAt || nowSec < out.endAt);
+            // 还能不能互动: 在进行中的班次里 且 次数没用完(实测用完再发会 1034147「本班工作已结束」)
+            out.canInteract = out.active && (out.interactTotal <= 0 || out.interactUsed < out.interactTotal);
         }
         const t = findField(rf, 3);
         if (t && t.w === 0) out.titleId = toInt(t.v);
@@ -926,7 +938,8 @@ let lastEmployer = null;
 const HIRE_BACKOFF_MS = 30 * 60 * 1000;
 function isHireAlreadyError(msg) {
     const t = String(msg || '');
-    return /已存在|已有|上限|已满|只能|重复/.test(t);
+    // 关键词 或 错误码(1034140 = 该雇佣位已有员工在工作; 压短后中文可能丢失, 所以必须匹配码)
+    return /已存在|已有|上限|已满|只能|重复|1034140/.test(t);
 }
 
 /**
@@ -992,6 +1005,9 @@ async function runMilkTea(opts = {}) {
         });
     }
     const inShift = !!employerGid && (!curWork.endAt || Math.floor(Date.now() / 1000) < curWork.endAt);
+    if (opts.autoInteract && inShift && curWork.canInteract === false) {
+        out.steps.push({ step: 'autoInteract', ok: false, skipped: true, reason: `本班互动次数已用完(${curWork.interactUsed}/${curWork.interactTotal})` });
+    }
     // 自动领兼职工资: 独立开关(opts.autoWage) + 必须处于"被雇佣"状态
     if (opts.autoWage !== false) {
         if (!inShift) {
@@ -1005,7 +1021,7 @@ async function runMilkTea(opts = {}) {
             await sleep(600);
         }
     }
-    if (opts.autoInteract && inShift) {
+    if (opts.autoInteract && inShift && curWork.canInteract !== false) {
         const r = await interactWithFriend(employerGid, opts.interactType).catch((e) => ({ ok: false, reason: e.message }));
         out.steps.push({ step: 'autoInteract', ...r });
         if (r.ok) {

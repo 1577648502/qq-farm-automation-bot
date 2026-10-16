@@ -470,6 +470,9 @@ onMounted(() => {
               {{ status.work && status.work.employer ? status.work.employer.gid : status.employer.gid }}
               <template v-if="status.work && status.work.wage"> · 工资 {{ status.work.wage }}</template>
               <template v-if="status.work && status.work.titleName"> · 特长 {{ status.work.titleName }}</template>
+              <template v-if="status.work && status.work.interactTotal > 0">
+                · 互动 {{ status.work.interactUsed }}/{{ status.work.interactTotal }}{{ status.work.canInteract ? '（可互动）' : '（已用完）' }}
+              </template>
             </span>
           </div>
         </div>
