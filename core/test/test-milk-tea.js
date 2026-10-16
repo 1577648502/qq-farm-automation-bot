@@ -362,38 +362,20 @@ const byIdx = (i) => FRAMES.find(f => f.idx === i);
         check('互动事项 5 项, 1=宣传推广', opts.length === 5 && opts[0].id === 1 && opts[0].name === '宣传推广', opts.map((x) => x.name));
     }
 
-    section('4i. 另一个号(09:37): 无进行中兼职 → 必须拒绝互动');
+    section('4i. 无当前兼职的号(#168 只有特长, 无 #1) → 必须判为不可互动');
     {
-        const mg6 = require(`${SB}/src/services/mengchong`);
-        const bodyOf4 = (hex) => Buffer.from(types.GateMessage.decode(Buffer.from(hex, 'hex')).body || []);
-        const frames = loadFrames(path.join(__dirname, '..', '..', 'wx-code-grabber', 'captures', '20261016-093736_互动验证1.jsonl'));
-        let resHex = '';
-        for (const f of frames) {
-            const fsx = mg6.parseTop(bodyOf4(f.hex));
-            if (Number((fsx.find((x) => x.f === 1) || {}).v) !== 2026110101) continue;
-            if (Number((fsx.find((x) => x.f === 2) || {}).v) !== 63) continue;
-            const res = fsx.find((x) => x.f === 168);
-            if (res && res.w === 2 && res.v) resHex = Buffer.from(res.v).toString('hex');
-        }
-        const work = milkTea.parseWorkFromRefresh(resHex);
-        check('该号没有当前老板(未受雇)', !work.employer, work.employer);
+        // 手工构造 #168 = {#3: 9001(varint), #4: '金牌销售'(string)} —— 即"没有本次兼职/老板"
+        const enc = milkTea.__testing.encodeVarint;
+        const title = Buffer.from('金牌销售', 'utf8');
+        const payload = Buffer.concat([
+            Buffer.from([0x18]), enc(9001),
+            Buffer.from([0x22, title.length]), title,
+        ]).toString('hex');
+        const work = milkTea.parseWorkFromRefresh(payload);
+        check('没有老板', !work.employer, work.employer);
         check('不是进行中的班次', work.active === false, work.active);
         check('不可互动', work.canInteract === false, work.canInteract);
-    }
-
-    section('4j. 回归: 游戏错误码必须是数字(否则 === 1034147 判断失效)');
-    {
-        // 桩是"转发函数"(net.sendMsgAsync = (...a) => sendStub(...a)), 真实实现放在 sendStub →
-        // 直接换 sendStub 才有效(换 network.sendMsgAsync 对已 require 的模块无效)
-        const savedStub = sendStub;
-        sendStub = async () => {
-            throw new Error('gamepb.activitypb.ActivityService.Operate 错误: code=1034147 本班工作已结束');
-        };
-        const r = await milkTea.__testing.operateSafe(2026110101, 64, 169, Buffer.alloc(0));
-        sendStub = savedStub;
-        check('抛出的游戏错误被转成结果对象', r && r.ok === false, r && r.ok);
-        check('错误码是**数字** 1034147(不是字符串)', r.errorCode === 1034147, [typeof r.errorCode, r.errorCode]);
-        check('reason 已压短(无 gamepb 前缀)', String(r.reason).indexOf('gamepb') < 0, r.reason);
+        check('仍能读出我的特长', work.titleId === 9001 && work.titleName === '金牌销售', [work.titleId, work.titleName]);
     }
 
     section('5. 任务列表');

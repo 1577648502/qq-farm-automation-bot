@@ -48,6 +48,9 @@ const INTERACT_OPTIONS = [
 /** 互动(我的工作): 目标好友 + 互动类型(默认 2 花式摇杯) */
 const interactGid = ref('')
 const storeName = ref('奶茶小铺')
+/** 我的员工(cmd=56): 展示 + 在好友列表里标"已雇佣"(避免 1034140) */
+const employees = ref<any[]>([])
+const employeesLoading = ref(false)
 const interactType = ref(2)
 
 const KIND_LABEL: Record<string, string> = { seed: '种子', exchange: '装扮兑换' }
@@ -137,6 +140,22 @@ async function loadShop() {
   } finally {
     shopBusy.value = false
   }
+}
+
+/** 拉取"我的员工"列表(cmd=56) */
+async function loadEmployees() {
+  employeesLoading.value = true
+  try {
+    const res = await api.get('/api/activity/milk-tea/employees')
+    const d = res.data?.data || {}
+    if (!apiError(res, d)) employees.value = d.friends || []
+  } catch (e: any) { /* 静默: 不影响主流程 */ } finally {
+    employeesLoading.value = false
+  }
+}
+/** 该 gid 是否已是我的员工 */
+function isMyEmployee(gid: any) {
+  return employees.value.some((e: any) => String(e.gid) === String(gid))
 }
 
 async function loadHireConfig() {
@@ -392,6 +411,7 @@ async function toggleHire() {
 onMounted(() => {
   loadStatus()
   setTimeout(() => loadHireConfig(), 500)
+  setTimeout(() => loadEmployees(), 900)
   setTimeout(() => loadShop(), 1000)
 })
 </script>
@@ -665,6 +685,14 @@ onMounted(() => {
           <BaseButton variant="secondary" size="sm" @click="addGid">添加</BaseButton>
           <span class="text-xs text-gray-400">GID 可在「好友」页面查看</span>
         </div>
+        <div class="mb-2 flex flex-wrap items-center gap-2">
+          <BaseButton variant="secondary" size="sm" :loading="employeesLoading" @click="loadEmployees">刷新员工</BaseButton>
+          <span class="text-xs text-gray-500 dark:text-gray-400">
+            我的员工 {{ employees.length }} 位
+            <template v-if="employees.length">：{{ employees.map((e: any) => `${e.name}(${e.titleName || '—'})`).join('、') }}</template>
+            <template v-else>（暂无好友员工）</template>
+          </span>
+        </div>
         <div v-if="friends.length" class="mb-2 flex flex-wrap items-center gap-2">
           <BaseButton variant="secondary" size="sm" @click="selectAllFriends">全选</BaseButton>
           <BaseButton variant="secondary" size="sm" @click="clearAllFriends">清空</BaseButton>
@@ -688,7 +716,13 @@ onMounted(() => {
               :checked="hireGids.includes(String(f.gid))"
               @change="toggleGid(String(f.gid))"
             >
-            <span class="truncate">{{ f.name || `好友 ${f.gid}` }}</span>
+            <span class="truncate">
+              {{ f.name || `好友 ${f.gid}` }}
+              <span
+                v-if="isMyEmployee(f.gid)"
+                class="ml-1 rounded bg-emerald-100 px-1 text-[10px] text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300"
+              >已雇佣</span>
+            </span>
             <span v-if="f.level" class="ml-auto shrink-0 text-[10px] text-gray-400">Lv{{ f.level }}</span>
           </label>
         </div>

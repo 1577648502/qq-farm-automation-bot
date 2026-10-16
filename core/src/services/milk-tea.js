@@ -454,8 +454,18 @@ async function getFriendList() {
  * @param hireGids 白名单(账号配置里的 milkTeaHireGids)
  */
 async function autoHire(hireGids) {
-    const list = (Array.isArray(hireGids) ? hireGids : []).map((g) => toNum(g)).filter((g) => g > 0);
+    const list = (Array.isArray(hireGids) ? hireGids : []).map((g) => toInt(g)).filter((g) => g > 0);
     if (!list.length) return { ok: false, reason: '未配置可雇佣好友(先在页面里勾选)' };
+    // 先在岗好友跳过(否则必报 1034140 该雇佣位已有员工在工作)
+    const emp = await getEmployees().catch(() => null);
+    const working = new Set(((emp && emp.friends) || []).map((x) => toInt(x.gid)));
+    const todo = list.filter((g) => !working.has(g));
+    if (!todo.length) return { ok: true, skipped: true, reason: '白名单好友都已在岗' };
+    return autoHireInner(todo);
+}
+
+/** autoHire 实际执行体 */
+async function autoHireInner(list) {
     const errors = [];
     for (const gid of list) {
         const r = await hireFriend(gid).catch((e) => ({ ok: false, reason: e.message }));
@@ -805,6 +815,59 @@ function parseWorkFromRefresh(resultHex) {
 }
 
 /**
+ * 员工/雇佣面板(cmd=56) —— 结果 #161:
+ *   #1 状态, #2 时薪(40), #3 = 600
+ *   #4 = **好友员工列表**(repeated): #1 = {gid, 昵称, 等级}, #3/#4 = 该员工特长(9001 金牌销售…),
+ *        #5 状态(1=在岗), #6 换班/下班时间, #7 上一班次
+ *   #5 = NPC 店员(101 实习员工 / 102 …)
+ * 用途: ①页面展示"我的员工" ②雇佣好友时标出"已雇佣"(避免 1034140 该雇佣位已有员工在工作)
+ */
+async function getEmployees() {
+    const r = await mainOperate(CMD_CRAFT, 161, Buffer.alloc(0));
+    if (!r.ok && r.errorCode !== 0) return { ok: false, reason: r.reason || `员工列表失败 code=${r.errorCode}` };
+    const friends = [];
+    const npcs = [];
+    if (r.resultHex) {
+        try {
+            const rf = parseTop(Buffer.from(r.resultHex, 'hex'));
+            const wage = toInt((findField(rf, 2) || {}).v);
+            for (const x of rf) {
+                if (x.w !== 2) continue;
+                if (x.f === 4) {
+                    const e = parseTop(x.v);
+                    const info = findField(e, 1);
+                    const fi = info && info.w === 2 ? parseTop(info.v) : [];
+                    const gid = toInt((findField(fi, 1) || {}).v);
+                    const nm = (findField(fi, 2) || {}).v;
+                    friends.push({
+                        gid,
+                        name: nm ? String(nm) : `GID:${gid}`,
+                        level: toInt((findField(fi, 4) || {}).v),
+                        titleId: toInt((findField(e, 3) || {}).v),
+                        titleName: String((findField(e, 4) || {}).v || ''),
+                        state: toInt((findField(e, 5) || {}).v),
+                        offAt: toInt((findField(e, 6) || {}).v),
+                    });
+                } else if (x.f === 5) {
+                    const e = parseTop(x.v);
+                    const info = findField(e, 1);
+                    const fi = info && info.w === 2 ? parseTop(info.v) : [];
+                    npcs.push({
+                        id: toInt((findField(fi, 1) || {}).v),
+                        name: String((findField(fi, 2) || {}).v || ''),
+                        titleName: String((findField(e, 4) || {}).v || ''),
+                    });
+                }
+            }
+            return { ok: true, wage, friends, npcs };
+        } catch (e) {
+            return { ok: false, reason: `解析员工列表失败: ${e.message}` };
+        }
+    }
+    return { ok: true, wage: 0, friends, npcs };
+}
+
+/**
  * 收银台详情(cmd=55) —— **查询**用: 结果 #160 内含可领取与**兼职雇主**(#1.#9.#11 = {gid, 名字})
  * 注意: 实测它不会发放任何东西(别当领取用, 踩过)
  */
@@ -1137,6 +1200,7 @@ module.exports = {
     interactWithFriend,
     WORK_INTERACT_TYPE,
     getCraftableFruitIds,
+    getEmployees,
     getLastEmployer: () => lastEmployer,
     useSpeaker,
     openStore,

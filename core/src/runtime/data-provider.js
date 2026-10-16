@@ -512,6 +512,7 @@ function createDataProvider(options) {
         claimMilkTeaWage: (accountRef) => callWorkerApi(resolveAccountRefId(accountRef), 'claimMilkTeaWage'),
         getMilkTeaCashier: (accountRef) => callWorkerApi(resolveAccountRefId(accountRef), 'getMilkTeaCashier'),
         claimMilkTeaTask: (accountRef, opts) => callWorkerApi(resolveAccountRefId(accountRef), 'claimMilkTeaTask', opts || {}),
+        getMilkTeaEmployees: (accountRef) => callWorkerApi(resolveAccountRefId(accountRef), 'getMilkTeaEmployees'),
         hireMilkTeaAll: (accountRef, opts) => callWorkerApi(resolveAccountRefId(accountRef), 'hireMilkTeaAll', opts || {}),
         getMilkTeaFriends: (accountRef) => callWorkerApi(resolveAccountRefId(accountRef), 'getMilkTeaFriends'),
         hireMilkTeaAuto: (accountRef, opts) => callWorkerApi(resolveAccountRefId(accountRef), 'hireMilkTeaAuto', opts || {}),
