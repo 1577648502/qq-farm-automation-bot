@@ -958,6 +958,10 @@ function shortErr(msg, maxLen = 40) {
 
 /** 自动雇佣的退避: 遇到"位置已存在/已达上限"这类错误, 冷却一段时间不再尝试(避免一直刷报错) */
 let hireBackoffUntil = 0;
+/** 服务版本标记: 每个进程首次执行自动流程时打印一行, 用于确认"运行中的进程确实是新代码" */
+const SERVICE_TAG = 'milk-tea v2 (次数门槛/班次门槛/失败关闭/1034147记忆)';
+let tagLogged = false;
+
 /** 已被服务端判定"本班不能互动"的班次(按班次开始时间记, 本班内不再重试) */
 const blockedInteractShifts = new Set();
 /** 最近一次探测到的雇主(兼职记录里的老板) */
@@ -975,6 +979,10 @@ function isHireAlreadyError(msg) {
  * 开关由调用方(worker)按配置决定是否执行各步。
  */
 async function runMilkTea(opts = {}) {
+    if (!tagLogged) {
+        tagLogged = true;
+        log('活动', `奶茶热销中: 自动流程已加载 ${SERVICE_TAG}`, { module: 'activity', event: '奶茶热销中', result: 'ok' });
+    }
     const doCashier = opts.cashier !== false;
     const doCraft = !!opts.craft;
     const doSpeaker = !!opts.speaker;
