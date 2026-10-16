@@ -3688,6 +3688,7 @@ app.use('/api', (req, res, next) => {
     milkTeaRoute('/api/activity/milk-tea/open', (id) => provider.openMilkTeaStore(id));
     milkTeaRoute('/api/activity/milk-tea/hire', (id, body) => provider.hireMilkTea(id, { friendGid: body.friendGid }));
     milkTeaRoute('/api/activity/milk-tea/interact', (id, body) => provider.interactMilkTea(id, { friendGid: body.friendGid, type: body.type }));
+    milkTeaRoute('/api/activity/milk-tea/sales-record', (id, body) => provider.getMilkTeaSalesRecord(id, { day: body && body.day }));
     milkTeaRoute('/api/activity/milk-tea/upgrade-store', (id) => provider.upgradeMilkTeaStore(id));
     milkTeaRoute('/api/activity/milk-tea/upgrade-info', (id) => provider.getMilkTeaUpgrade(id));
     milkTeaRoute('/api/activity/milk-tea/sales', (id) => provider.getMilkTeaSales(id));

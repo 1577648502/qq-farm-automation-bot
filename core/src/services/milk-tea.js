@@ -46,6 +46,7 @@ const CMD_CRAFT = 56;       // ⚠ 实际返回「员工列表(好友+NPC店员)
 const CMD_HIRE = 57;        // 雇佣好友(返回班次+特长)
 const CMD_SPEAKER = 58;     // ⚠ 实际返回「9 种配方菜单」→ 菜单查询(非"喇叭")
 const CMD_CASHIER_DETAIL = 55;// **收银台详情**(结果 #160: 可领取/明细) —— ⚠ 它**不是领取**, 只是查询
+const CMD_SALES_RECORD = 67;   // **营业记录(按天)**(实测: 字段 #172 = {#1 日期})
 const CMD_UPGRADE_STORE = 61;  // **店铺升级**(实测: 字段 #166, 空 payload)
 const CMD_CLAIM_CASHIER = 59; // **领取收银台收益**(执行) → 响应 #164 = 到账物品(实测 奶茶券×10 + 金币×8648)
 const CMD_CASHIER_INFO = 60;// **收银台查询**: {#1: 容量, #2: 当前待领, #3: 杯数}
@@ -369,6 +370,67 @@ const shopBought = new Map();
  *   #1 = 当前等级   #2 = 累计营业额   #3 = 下一级所需营业额(实测升级后 14000 → 33000)
  * 条件: 营业额(#2) >= 所需(#3) 时可升级
  */
+/**
+ * 营业记录(按天) —— **cmd=67, 字段 #172** (实测 20261017-070514, 与游戏面板逐项吻合)
+ *   请求: #172 = {#1: 该日 00:00 时间戳(北京时间)}
+ *   响应 #172:
+ *     #1 日期(时间戳)   #2 奶茶券收益   #3 金币收益   #4 当日总杯数
+ *     #5 = repeated {#1 品类, #2 杯数}(今日售卖)     ← 面板"普通奶茶254杯/甜莓750杯…"
+ *     #6 = repeated {#1 品类, #2 ?}(产量相关, 暂不懂)
+ *     #7 = repeated 雇员记录 { #1 老板{gid,名}, #2 开始时间, #3 时长(秒), #6 班次id,
+ *            #8 特长id, #9 特长名, #10 {#1 支付工资, #2 互动售出杯数} }
+ *     #8 = repeated 收益物品 {#1 物品id, #2 数量}
+ */
+function beijingDayStart(tsSec) {
+    const SHIFT = 8 * 3600;
+    return Math.floor((toInt(tsSec) + SHIFT) / 86400) * 86400 - SHIFT;
+}
+
+async function getSalesRecord(dayTs) {
+    const st = await getMainStatus().catch(() => null);
+    const base = toInt(dayTs) > 0 ? toInt(dayTs) : beijingDayStart(toInt(st && st.at) || Math.floor(Date.now() / 1000));
+    const payload = Buffer.concat([encodeVarintField(1, base)]);
+    const r = await mainOperate(CMD_SALES_RECORD, 172, payload);
+    if (r.errorCode !== 0) return { ok: false, reason: `读取营业记录失败 ${r.reason || `code=${r.errorCode}`}` };
+    const out = { ok: true, day: base, coupon: 0, gold: 0, cups: 0, items: [], rewards: [], records: [] };
+    try {
+        const rf = parseTop(Buffer.from(r.resultHex || '', 'hex'));
+        out.day = toInt((findField(rf, 1) || {}).v) || base;
+        out.coupon = toInt((findField(rf, 2) || {}).v);
+        out.gold = toInt((findField(rf, 3) || {}).v);
+        out.cups = toInt((findField(rf, 4) || {}).v);
+        const names = await getMenuNames();
+        for (const x of rf) {
+            if (x.w !== 2) continue;
+            const e = parseTop(x.v);
+            if (x.f === 5) out.items.push({ id: toInt((findField(e, 1) || {}).v), cups: toInt((findField(e, 2) || {}).v) });
+            else if (x.f === 8) out.rewards.push({ id: toInt((findField(e, 1) || {}).v), count: toInt((findField(e, 2) || {}).v) });
+            else if (x.f === 7) {
+                const info = findField(e, 1);
+                const fi = info && info.w === 2 ? parseTop(info.v) : [];
+                const w10 = findField(e, 10);
+                const w10f = w10 && w10.w === 2 ? parseTop(w10.v) : [];
+                out.records.push({
+                    gid: toInt((findField(fi, 1) || {}).v),
+                    name: String((findField(fi, 2) || {}).v || ''),
+                    startAt: toInt((findField(e, 2) || {}).v),
+                    hours: Math.round((toInt((findField(e, 3) || {}).v) || 0) / 3600),
+                    titleId: toInt((findField(e, 8) || {}).v),
+                    titleName: String((findField(e, 9) || {}).v || ''),
+                    wage: toInt((findField(w10f, 1) || {}).v),
+                    soldCups: toInt((findField(w10f, 2) || {}).v),
+                });
+            }
+        }
+        for (const it of out.items) it.name = names.get(it.id) || `品类${it.id}`;
+        out.items.sort((a, b) => b.cups - a.cups);
+        for (const rw of out.rewards) rw.name = itemLabel(rw.id, rw.count);
+    } catch (e) {
+        return { ok: false, reason: `解析营业记录失败: ${e.message}` };
+    }
+    return out;
+}
+
 async function getUpgradeInfo() {
     const r = await mainOperate(CMD_CASHIER_DETAIL, 160, Buffer.alloc(0));
     if (!r.ok) return { ok: false, reason: r.reason || `读取店铺信息失败 code=${r.errorCode}` };
@@ -1508,6 +1570,7 @@ module.exports = {
     getCraftableFruitIds,
     getEmployees,
     getSalesRecords,
+    getSalesRecord,
     getUpgradeInfo,
     upgradeStore,
     buyDailySeeds,

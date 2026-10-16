@@ -50,9 +50,10 @@ const interactGid = ref('')
 const storeName = ref('奶茶小铺')
 /** 好友列表(cmd=56 的 #161.#4): 含在岗状态/特长/下班时间 —— 用于标记可雇佣性(不是"我雇的人") */
 const employees = ref<any[]>([])
-/** 营业记录(cmd=55): 累计营业额/杯数/余额/各品类收益 */
+/** 营业记录(cmd=67, 按天): 日期/售卖杯数/收益/奖励物品/雇员记录 */
 const sales = ref<any>(null)
 const salesLoading = ref(false)
+const salesDay = ref<number>(0)   // 0 = 今天(由服务端算)
 const employeesLoading = ref(false)
 /** 我的员工数 —— 取服务端 #161.#1(权威); 列表(#4)含非本人雇佣的好友, 不用于展示员工 */
 const employeeCount = ref(0)
@@ -164,23 +165,36 @@ async function loadEmployees() {
     employeesLoading.value = false
   }
 }
-/** 营业记录(cmd=55 + 菜单名 cmd=58) */
-async function loadSales() {
+/** 营业记录(cmd=67, 按天; day 省略=今天) */
+async function loadSales(day?: number) {
   salesLoading.value = true
   try {
-    const res = await api.post('/api/activity/milk-tea/sales', {})
+    const res = await api.post('/api/activity/milk-tea/sales-record', day ? { day } : {})
     const d = res.data?.data || {}
-    if (!apiError(res, d)) sales.value = d
-  } catch (e: any) { /* 静默 */ } finally {
-    salesLoading.value = false
-  }
+    if (!apiError(res, d)) {
+      sales.value = d
+      salesDay.value = Number(d.day) || 0
+    }
+  } catch (e: any) { /* 静默 */ } finally { salesLoading.value = false }
+}
+/** 前一天 / 后一天 */
+function shiftSalesDay(delta: number) {
+  const cur = salesDay.value || Math.floor(Date.now() / 1000)
+  return loadSales(cur + delta * 86400)
+}
+/** 日期戳 → YYYY-MM-DD(北京时间) */
+function fmtDay(ts: number) {
+  if (!ts) return '—'
+  const d = new Date((Number(ts) + 8 * 3600) * 1000)
+  return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}-${String(d.getUTCDate()).padStart(2, '0')}`
+}
+/** 时刻 → HH点MM分(北京时间) */
+function fmtClock(ts: number) {
+  if (!ts) return ''
+  const d = new Date((Number(ts) + 8 * 3600) * 1000)
+  return `${d.getUTCHours()}点${String(d.getUTCMinutes()).padStart(2, '0')}分`
 }
 
-/** 互动类型名(与后端 WORK_INTERACT_OPTIONS 一致) */
-function interactName(type: number) {
-  const hit = INTERACT_OPTIONS.find((o: any) => o.id === Number(type))
-  return hit ? hit.name : `互动#${type}`
-}
 
 
 
@@ -571,73 +585,53 @@ onMounted(() => {
       </div>
     </div>
 
-    <!-- ①c 营业记录(对齐游戏面板: 今日售卖 + 营业收益 + 雇员记录) -->
+    <!-- ①c 营业记录(cmd=67 按天: 今日售卖 + 营业收益 + 雇员记录) -->
     <div class="rounded-lg border border-gray-200 bg-white p-4 shadow-sm dark:border-gray-700 dark:bg-gray-800">
-      <div class="mb-3 flex flex-wrap items-center justify-between gap-2">
+      <div class="mb-2 flex items-center justify-between">
         <h3 class="text-sm text-gray-900 font-medium dark:text-white">营业记录</h3>
-        <BaseButton variant="secondary" size="sm" :loading="salesLoading" @click="loadSales">刷新</BaseButton>
+        <div class="flex items-center gap-1">
+          <BaseButton variant="secondary" size="sm" @click="shiftSalesDay(-1)">◀ 前一天</BaseButton>
+          <span class="px-1 text-xs text-gray-600 dark:text-gray-300">{{ fmtDay(salesDay) }}</span>
+          <BaseButton variant="secondary" size="sm" @click="shiftSalesDay(1)">后一天 ▶</BaseButton>
+          <BaseButton variant="secondary" size="sm" :loading="salesLoading" @click="loadSales()">刷新</BaseButton>
+        </div>
       </div>
       <template v-if="sales && sales.ok">
-        <!-- 今日售卖(各饮品杯数) -->
+        <!-- 今日售卖(按品类杯数) -->
         <div class="mb-3">
-          <div class="mb-1 text-xs text-gray-500 dark:text-gray-400">今日售卖（杯数）</div>
-          <div v-if="sales.cupsByItem && sales.cupsByItem.length" class="flex flex-wrap gap-2">
-            <span
-              v-for="c in sales.cupsByItem"
-              :key="c.id"
-              class="rounded bg-amber-50 px-2 py-1 text-xs text-amber-800 dark:bg-amber-900/20 dark:text-amber-300"
-            >{{ c.name }} {{ c.cups }}杯</span>
+          <div class="mb-1 text-xs text-gray-500 dark:text-gray-400">今日售卖（共 {{ sales.cups }} 杯）</div>
+          <div v-if="sales.items && sales.items.length" class="flex flex-wrap gap-2">
+            <span v-for="c in sales.items" :key="c.id" class="rounded bg-amber-50 px-2 py-1 text-xs text-amber-800 dark:bg-amber-900/20 dark:text-amber-300">
+              {{ c.name }} {{ c.cups }}杯
+            </span>
           </div>
-          <div v-else class="text-xs text-gray-500 dark:text-gray-400">暂无售卖数据</div>
+          <div v-else class="text-xs text-gray-500 dark:text-gray-400">当日无售卖</div>
         </div>
-
         <!-- 营业收益 -->
         <div class="mb-3">
           <div class="mb-1 text-xs text-gray-500 dark:text-gray-400">营业收益</div>
           <div class="flex flex-wrap gap-2">
-            <span
-              v-for="b in (sales.balances || [])"
-              :key="b.id"
-              class="rounded bg-emerald-50 px-2 py-1 text-xs text-emerald-800 dark:bg-emerald-900/20 dark:text-emerald-300"
-            >{{ b.name }}</span>
-            <span v-if="!(sales.balances || []).length" class="text-xs text-gray-500 dark:text-gray-400">—</span>
-            <span v-if="sales.pending && sales.pending.count" class="rounded bg-rose-50 px-2 py-1 text-xs text-rose-700 dark:bg-rose-900/20 dark:text-rose-300">
-              待领取 {{ sales.pending.name }}
+            <span class="rounded bg-yellow-50 px-2 py-1 text-xs text-yellow-800 dark:bg-yellow-900/20 dark:text-yellow-300">金币 {{ sales.gold }}</span>
+            <span class="rounded bg-emerald-50 px-2 py-1 text-xs text-emerald-800 dark:bg-emerald-900/20 dark:text-emerald-300">奶茶券 {{ sales.coupon }}</span>
+            <span v-for="rw in (sales.rewards || [])" :key="rw.id" class="rounded bg-rose-50 px-2 py-1 text-xs text-rose-700 dark:bg-rose-900/20 dark:text-rose-300">
+              {{ rw.name }}
             </span>
           </div>
         </div>
-
         <!-- 雇员记录 -->
         <div>
-          <div class="mb-1 text-xs text-gray-500 dark:text-gray-400">雇员记录（本店员工/兼职）</div>
-          <div v-if="sales.records && sales.records.length" class="overflow-hidden rounded border border-gray-200 dark:border-gray-700">
-            <table class="w-full text-xs">
-              <thead class="bg-gray-50 text-gray-500 dark:bg-gray-900/40 dark:text-gray-400">
-                <tr>
-                  <th class="px-2 py-1 text-left">员工</th>
-                  <th class="px-2 py-1 text-right">工作时长</th>
-                  <th class="px-2 py-1 text-right">支付工资</th>
-                  <th class="px-2 py-1 text-left">互动</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr
-                  v-for="r in sales.records"
-                  :key="`${r.gid}-${r.startAt}`"
-                  class="border-t border-gray-100 text-gray-700 dark:border-gray-700 dark:text-gray-200"
-                >
-                  <td class="px-2 py-1">{{ r.name }}<span class="ml-1 text-gray-400">{{ r.storeName }}</span></td>
-                  <td class="px-2 py-1 text-right">{{ r.hours ? r.hours + '小时' : '—' }}</td>
-                  <td class="px-2 py-1 text-right">{{ r.wage ? '+' + r.wage : '—' }}</td>
-                  <td class="px-2 py-1">
-                    <template v-if="r.interactType">{{ interactName(r.interactType) }}{{ r.interactBonus ? ` (+${r.interactBonus})` : '' }}</template>
-                    <span v-else class="text-gray-400">无互动</span>
-                  </td>
-                </tr>
-              </tbody>
-            </table>
+          <div class="mb-1 text-xs text-gray-500 dark:text-gray-400">雇员记录</div>
+          <div v-if="sales.records && sales.records.length" class="space-y-1">
+            <div v-for="r in sales.records" :key="`${r.gid}-${r.startAt}`" class="flex flex-wrap items-center gap-2 rounded border border-gray-100 px-2 py-1 text-xs dark:border-gray-700">
+              <span class="text-gray-400">{{ fmtClock(r.startAt) }}</span>
+              <span class="rounded bg-sky-50 px-1 text-sky-700 dark:bg-sky-900/30 dark:text-sky-300">{{ r.titleName }}</span>
+              <span class="text-gray-900 font-medium dark:text-gray-100">{{ r.name }}</span>
+              <span class="text-gray-500">工作时长 {{ r.hours }}小时</span>
+              <span class="text-gray-500">支付工资 +{{ r.wage }}</span>
+              <span v-if="r.soldCups" class="text-gray-500">互动售出 {{ r.soldCups }} 杯</span>
+            </div>
           </div>
-          <div v-else class="text-xs text-gray-500 dark:text-gray-400">暂无雇员记录</div>
+          <div v-else class="text-xs text-gray-500 dark:text-gray-400">暂无记录</div>
         </div>
       </template>
       <div v-else class="text-xs text-gray-500 dark:text-gray-400">
