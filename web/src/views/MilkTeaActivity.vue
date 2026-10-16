@@ -47,6 +47,7 @@ const INTERACT_OPTIONS = [
 
 /** 互动(我的工作): 目标好友 + 互动类型(默认 2 花式摇杯) */
 const interactGid = ref('')
+const storeName = ref('奶茶小铺')
 const interactType = ref(2)
 
 const KIND_LABEL: Record<string, string> = { seed: '种子', exchange: '装扮兑换' }
@@ -149,6 +150,7 @@ async function loadHireConfig() {
     autoInteract.value = !!d.autoInteract
     if (d.interactType) interactType.value = Number(d.interactType)
     if (d.employerGid) interactGid.value = String(d.employerGid)
+    if (d.storeName) storeName.value = String(d.storeName)
   } catch (e: any) {
     reportError('读取雇佣设置', apiError(null, null, e))
   }
@@ -210,6 +212,39 @@ function invertFriends() {
 }
 
 /** 批量雇佣: 逐个雇(后台带节流, 单次最多 10 个) */
+/** 领收银台收益(cmd=59, 真正的领取) */
+async function claimCashierNow() {
+  busy.value = 'cashier'
+  try {
+    const res = await api.post('/api/activity/milk-tea/cashier', {})
+    const d = res.data?.data || {}
+    const err = apiError(res, d)
+    if (err) { reportError('领收银台收益', err); return }
+    if (d.skipped) { actionResult.value = d.reason || '暂无收益'; toast.warning(actionResult.value); return }
+    const got = (d.gainedList || []).map((x: any) => x.name).join('、')
+    actionResult.value = got ? `已领收银台收益 → ${got}` : '已领收银台收益'
+    toast.success(actionResult.value)
+    await loadStatus()
+  } catch (e: any) {
+    reportError('领收银台收益', apiError(null, null, e))
+  } finally { busy.value = '' }
+}
+
+/** 制作奶茶(cmd=62): 把背包里所有活动果实都做掉 */
+async function craftNow() {
+  busy.value = 'craft'
+  try {
+    const res = await api.post('/api/activity/milk-tea/craft', { all: true })
+    const d = res.data?.data || {}
+    const err = apiError(res, d)
+    if (err) { reportError('制作奶茶', err); return }
+    actionResult.value = d.used ? `已制作奶茶（投入 ${d.used} 个果实）` : '制作奶茶完成'
+    toast.success(actionResult.value)
+  } catch (e: any) {
+    reportError('制作奶茶', apiError(null, null, e))
+  } finally { busy.value = '' }
+}
+
 /** 领工资(cmd=64): 实测 奶茶券×120 */
 async function claimWageNow() {
   busy.value = 'wage'
@@ -290,6 +325,7 @@ async function saveHireConfig() {
       autoInteract: autoInteract.value,
       interactType: Number(interactType.value) || 5,
       employerGid: String(interactGid.value || ''),
+      storeName: String(storeName.value || ''),
     })
     const err = apiError(res, res.data?.data)
     if (err) { reportError('保存设置', err); return }
@@ -434,6 +470,40 @@ onMounted(() => {
       </div>
     </div>
 
+    <!-- ①b 操作(手动按钮 + 参数) —— 设置页只留开关, 操作都在这 -->
+    <div class="rounded-lg border border-gray-200 bg-white p-4 shadow-sm dark:border-gray-700 dark:bg-gray-800">
+      <div class="mb-3 flex flex-wrap items-center justify-between gap-2">
+        <h3 class="text-sm text-gray-900 font-medium dark:text-white">
+          操作
+          <span class="ml-2 text-xs text-gray-500">自动化开关在 设置 → 自动控制</span>
+        </h3>
+        <span v-if="actionResult" class="text-xs text-gray-600 dark:text-gray-300">{{ actionResult }}</span>
+      </div>
+      <div class="mb-2 flex flex-wrap items-center gap-2">
+        <BaseButton variant="secondary" size="sm" :loading="busy === 'cashier'" @click="claimCashierNow">领收银台收益</BaseButton>
+        <BaseButton variant="secondary" size="sm" :loading="busy === 'craft'" @click="craftNow">制作奶茶（全部果实）</BaseButton>
+        <BaseButton variant="secondary" size="sm" :loading="busy === 'wage'" @click="claimWageNow">领工资</BaseButton>
+        <BaseButton variant="secondary" size="sm" :loading="busy === 'interact'" @click="interactNow">互动一次</BaseButton>
+      </div>
+      <div class="flex flex-wrap items-center gap-2 rounded border border-gray-200 px-2.5 py-2 dark:border-gray-700">
+        <label class="flex items-center gap-1 text-xs text-gray-600 dark:text-gray-300">
+          店名
+          <input v-model="storeName" type="text" class="w-32 rounded border border-gray-300 bg-white px-2 py-1 text-xs dark:border-gray-600 dark:bg-gray-900">
+        </label>
+        <label class="flex items-center gap-1 text-xs text-gray-600 dark:text-gray-300">
+          互动事项
+          <select v-model.number="interactType" class="rounded border border-gray-300 bg-white px-1.5 py-1 text-xs dark:border-gray-600 dark:bg-gray-900">
+            <option v-for="op in INTERACT_OPTIONS" :key="op.id" :value="op.id">{{ op.name }}{{ op.recommended ? '（推荐）' : '' }}</option>
+          </select>
+        </label>
+        <label class="flex items-center gap-1 text-xs text-gray-600 dark:text-gray-300">
+          雇主 GID
+          <input v-model="interactGid" type="text" :placeholder="status && status.employer ? String(status.employer.gid) : '可留空自动探测'" class="w-36 rounded border border-gray-300 bg-white px-2 py-1 text-xs dark:border-gray-600 dark:bg-gray-900">
+        </label>
+        <BaseButton variant="primary" size="sm" :loading="hireSaving" @click="saveHireConfig">保存参数</BaseButton>
+      </div>
+    </div>
+
     <!-- ② 活动种子商店 -->
     <div class="rounded-lg border border-gray-200 bg-white p-4 shadow-sm dark:border-gray-700 dark:bg-gray-800">
       <div class="mb-3 flex flex-wrap items-center justify-between gap-2">
@@ -554,27 +624,7 @@ onMounted(() => {
           >
             全部雇佣（最多 10 个/次）
           </BaseButton>
-          <input
-            v-model="interactGid"
-            type="text"
-            :placeholder="hireGids[0] || '好友 GID'"
-            class="w-36 rounded border border-gray-300 bg-white px-2 py-1 text-xs dark:border-gray-600 dark:bg-gray-900"
-          >
-          <select
-            v-model.number="interactType"
-            class="rounded border border-gray-300 bg-white px-1.5 py-1 text-xs dark:border-gray-600 dark:bg-gray-900"
-            title="互动事项"
-          >
-            <option v-for="op in INTERACT_OPTIONS" :key="op.id" :value="op.id">
-              {{ op.name }}{{ op.recommended ? '（推荐）' : '' }}
-            </option>
-          </select>
-          <BaseButton variant="secondary" size="sm" :loading="busy === 'wage'" @click="claimWageNow">
-            领工资
-          </BaseButton>
-          <BaseButton variant="secondary" size="sm" :loading="busy === 'interact'" @click="interactNow">
-            互动一次
-          </BaseButton>
+
           <BaseButton variant="secondary" size="sm" :loading="friendsBusy" @click="loadFriends">
             刷新好友
           </BaseButton>

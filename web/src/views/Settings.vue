@@ -985,40 +985,7 @@ async function adGiftAction() {
 /** 快乐不独享: 立即跑一次(领快乐值 + 领档位) */
 const happyBusy = ref(false)
 const happyResult = ref('')
-/** 互动(工作事项)5 选 1 —— 与后端 WORK_INTERACT_OPTIONS 一致 */
-const MILK_TEA_INTERACT_OPTIONS = [
-  { id: 1, name: '宣传推广 — 工资+20%' },
-  { id: 2, name: '花式摇杯 — 工资+30%', recommended: true },
-  { id: 3, name: '招牌试饮 — 老板收益+20% & 4杯高级奶茶' },
-  { id: 4, name: '划水摸鱼 — 喇叭x1 / 工资减半（风险）' },
-  { id: 5, name: '申请涨薪 — 60%翻倍 / 40%减半（风险）' },
-];
 
-/** 奶茶热销中: 手动立即执行(领收益/加工/喇叭/互动) */
-const milkTeaBusy = ref('')
-const milkTeaResult = ref('')
-async function milkTeaAction(kind: 'cashier' | 'craft' | 'speaker' | 'interact' | 'wage', body: any = {}) {
-  const accountId = String(currentAccountId.value || '')
-  if (!accountId) { showAlert('请先选择账号', 'danger'); return }
-  milkTeaBusy.value = kind
-  milkTeaResult.value = ''
-  try {
-    const res = await api.post(`/api/activity/milk-tea/${kind}`, body, { headers: { 'x-account-id': accountId } })
-    const d = res.data?.data || {}
-    const err = apiError(res, d)
-    if (err) { milkTeaResult.value = err; showAlert(`奶茶热销中：${err}`, 'danger'); return }
-    const label: Record<string, string> = {
-      cashier: '已领取收银台收益',
-      craft: d.used ? `已制作奶茶(投入 ${d.used} 个果实)` : '制作奶茶完成',
-      wage: d.gained ? `已领工资 ${d.gained.count} 奶茶券` : '领工资完成',
-    }
-    milkTeaResult.value = label[kind] || '完成'
-  } catch (e: any) {
-    milkTeaResult.value = e?.response?.data?.error || e?.message || '请求失败(账号未运行?)'
-  } finally {
-    milkTeaBusy.value = ''
-  }
-}
 
 
 async function happyAction() {
@@ -2034,48 +2001,19 @@ async function handleTestOffline() {
                   </template>
                 </AutoTaskCard>
 
-                <!-- 奶茶热销中: 独立开关在基础开关区, 这里按开关显隐 -->
+                <!-- 奶茶热销中: 这里只放开关; 操作按钮/参数在左侧栏「奶茶热销中」页面 -->
                 <AutoTaskCard
                   v-if="localAutomationSettings.milkTeaEnabled"
                   title="奶茶热销中（10/15 – 11/16）"
-                  desc="自动领收银台收益（满载会暂停营业且不补发）+ 自动制作奶茶（把背包里所有活动果实做成高级奶茶）；详细经营数据在左侧栏「奶茶热销中」"
+                  desc="自动领收银台收益（满载会暂停营业且不补发）+ 自动制作奶茶（全部果实）+ 自动互动（被雇佣后）"
                 >
-                  <template #actions>
-                    <BaseButton variant="secondary" size="sm" :loading="milkTeaBusy === 'wage'" @click="milkTeaAction('wage')">
-                      领工资
-                    </BaseButton>
-                    <BaseButton variant="secondary" size="sm" :loading="milkTeaBusy === 'cashier'" @click="milkTeaAction('cashier')">
-                      领收银台收益
-                    </BaseButton>
-                    <BaseButton variant="secondary" size="sm" :loading="milkTeaBusy === 'craft'" @click="milkTeaAction('craft', { all: true })">
-                      制作奶茶（全部果实）
-                    </BaseButton>
-                    <span v-if="milkTeaResult" class="text-xs text-gray-600 dark:text-gray-300">{{ milkTeaResult }}</span>
-                  </template>
                   <div class="flex flex-wrap items-center gap-3 rounded border border-gray-200 px-2.5 py-2 dark:border-gray-700">
                     <BaseSwitch v-model="localAutomationSettings.milkTeaCashier" label="自动领收银台收益（核心）" />
                     <BaseSwitch v-model="localAutomationSettings.milkTeaCraft" label="自动制作奶茶（全部果实）" />
                     <BaseSwitch v-model="localAutomationSettings.milkTeaAutoInteract" label="自动互动（被雇佣后每轮一次）" />
-                    <label class="flex items-center gap-1 text-xs text-gray-600 dark:text-gray-300">
-                      互动事项
-                      <select
-                        v-model.number="localAutomationSettings.milkTeaInteractType"
-                        class="rounded border border-gray-300 bg-white px-1.5 py-1 text-xs dark:border-gray-600 dark:bg-gray-900"
-                      >
-                        <option v-for="op in MILK_TEA_INTERACT_OPTIONS" :key="op.id" :value="op.id">
-                          {{ op.name }}{{ op.recommended ? '（推荐）' : '' }}
-                        </option>
-                      </select>
-                    </label>
-                    <BaseInput v-model="localAutomationSettings.milkTeaEmployerGid" label="雇主 GID（互动对象）" type="text" class="w-44" />
-                    <BaseInput v-model="localAutomationSettings.milkTeaStoreName" label="店名（首次开业用）" type="text" class="w-40" />
-                    <span class="text-xs text-gray-500 dark:text-gray-400">
-                      雇佣好友 / 自动雇佣 在左侧栏「奶茶热销中」页面设置
-                    </span>
                   </div>
                   <template #note>
-                    每 15 分钟自查一次。自动制作奶茶 = 把背包里所有活动果实(森野系列 8 种)分批做成高级奶茶（每批 20 个、批间隔 700ms 防队列打满）；手动按钮同理。
-                    制作奶茶 = 工坊加工(cmd 62): 把背包里的活动果实(森野系列)做成高级奶茶, 自动模式每轮做一次。
+                    手动操作（领收益 / 制作奶茶 / 领工资 / 互动一次）和参数（店名、互动事项、雇主 GID）都在左侧栏「奶茶热销中」页面。
                   </template>
                 </AutoTaskCard>
 
