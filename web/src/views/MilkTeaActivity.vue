@@ -694,7 +694,7 @@ onMounted(() => {
               <div class="mt-1 flex-1 text-xs text-gray-500 dark:text-gray-400">
                 <template v-if="g.itemNameKnown">内容：{{ g.itemName }}<br></template>
                 <template v-if="g.limitCount">
-                  限购 {{ g.limitCount }}<span v-if="g.boughtCount"> · 已兑 {{ g.boughtCount }}</span>
+                  限购 {{ g.limitCount }}
                 </template>
                 <span v-if="isLocked(g)" class="text-amber-600 dark:text-amber-400">
                   · 需奶茶店等级 ≥{{ g.requireLevel }}（当前 Lv{{ storeLevel }}）

@@ -330,11 +330,13 @@ async function getShopGoods() {
                 const kindField = findField(f, 12);
                 const kind = kindField && kindField.w === 2 ? kindField.v.toString('utf8') : '';
                 const itemDef = getItemById(itemId);
-                const bought = toInt(shopBought.get(goodsId) || 0);
+                // ⚠ 不用本地计数判断"已限购"(服务器只下发上限 #4, 不下发已购数) ——
+                //    "已限购"一律以**服务端在购买时的应答**为准
+                const bought = 0;
                 goods.push({
                     goodsId,
                     boughtCount: bought,
-                    soldOut: limitCount > 0 && bought >= limitCount,
+                    soldOut: shopSoldOut.has(goodsId),   // 仅由服务端应答(限购/已购类错误)置位
                     name: nameField && nameField.w === 2 ? nameField.v.toString('utf8') : `商品#${goodsId}`,
                     itemId,
                     itemCount,
@@ -355,6 +357,13 @@ async function getShopGoods() {
     } catch (e) { /* 解析失败返回空 */ }
     return { ok: true, goods };
 }
+
+/**
+ * 已被**服务端明确拒绝**为"限购/已购"的商品(内存态; 页面刷新后重置, 再次点击时由服务端重新确认)
+ * ⚠ 服务器只下发限购上限(#4), 不下发已购买数 → "已限购"只能以服务端应答为准
+ */
+const shopSoldOut = new Set();
+function markShopGoodsSoldOut(goodsId) { if (goodsId) shopSoldOut.add(toInt(goodsId)); }
 
 /** 本次进程内各商品已兑换数量(用于显示"已限购"; 服务端没给已购字段, 只能自己记) */
 const shopBought = new Map();
@@ -537,7 +546,12 @@ async function buyShopGoods(goodsId, count = 1) {
     } catch (e) { /* 校验失败就按原样尝试 */ }
     const payload = Buffer.concat([encodeVarintField(1, id), encodeVarintField(2, n)]);
     const r = await operateSafe(GROUP_SHOP, CMD_SHOP_BUY, FIELD_SHOP_BUY, payload);
-    if (r.errorCode !== 0) return { ok: false, reason: `兑换失败 code=${r.errorCode}` };
+    if (r.errorCode !== 0) {
+        const why = String(r.reason || `code=${r.errorCode}`);
+        // 服务端明确说"限购/已购" → 记为已限购(界面显示"已限购")
+        if (/限购|已满|上限|已售|已购|已兑换|已领|1034007/.test(why)) markShopGoodsSoldOut(id);
+        return { ok: false, reason: `兑换失败 ${why}` };
+    }
     // 结果 #101 = {#1: {物品ID, 数量}, #2: {货币ID, 总价}}
     let got = null; let cost = null;
     if (r.resultHex) {
@@ -1587,6 +1601,7 @@ module.exports = {
     getEmployees,
     getSalesRecords,
     getSalesRecord,
+    markShopGoodsSoldOut,
     getUpgradeInfo,
     upgradeStore,
     buyDailySeeds,

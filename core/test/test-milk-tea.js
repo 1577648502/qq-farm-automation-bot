@@ -235,12 +235,16 @@ const byIdx = (i) => FRAMES.find(f => f.idx === i);
         check('容量/待领/杯数 = 40/253/164312(抓包实测)', cashier.capacity === 40 && cashier.pending === 253 && cashier.cups === 164312, cashier);
 
         const shop2 = await milkTea.getShopGoods();
-        // 前面第 4 节已买过 301(108 + 夹取后的 1 = 109) → 本会话计数累计, 应标记"已限购"
+        // ⚠ 已限购改为"以服务端应答为准"(服务器只下发上限 #4, 不下发已购数) → 本地不再推断
         const g301 = (shop2.goods || []).find((x) => x.goodsId === 301);
-        check('已兑换数累计(109)', g301 && g301.boughtCount === 109, g301 && g301.boughtCount);
-        check('超过限购标记 soldOut', g301 && g301.soldOut === true, g301 && g301.soldOut);
+        check('不再用本地计数判断已限购(soldOut=false)', g301 && g301.soldOut === false, g301 && g301.soldOut);
         const g302 = (shop2.goods || []).find((x) => x.goodsId === 302);
-        check('未买过的商品 boughtCount=0 且未售罄', g302 && g302.boughtCount === 0 && g302.soldOut === false, g302);
+        check('未买过的商品 soldOut=false', g302 && g302.soldOut === false, g302 && g302.soldOut);
+        // 服务端明确回"限购/已购"时才标记(模拟已购应答后调用)
+        milkTea.markShopGoodsSoldOut(301);
+        const shop3 = await milkTea.getShopGoods();
+        const g301b = (shop3.goods || []).find((x) => x.goodsId === 301);
+        check('服务端判限购后 → 显示已限购', g301b && g301b.soldOut === true, g301b && g301b.soldOut);
     }
 
     section('4d. 制作奶茶(cmd=62) payload 与抓包逐字节对齐');
