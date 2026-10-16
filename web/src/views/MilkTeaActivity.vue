@@ -177,18 +177,6 @@ function interactName(type: number) {
   return hit ? hit.name : `互动#${type}`
 }
 
-/** 我雇佣的人 —— 来自刷新(63)结果 #168.#2(雇佣记录: 老板位=我雇的那位; 支付工资=我付的) */
-const myEmployees = computed(() => {
-  const seen = new Map<string, any>()
-  const recs = (status.value && status.value.work && status.value.work.records) || []
-  for (const r of recs) {
-    const k = String(r.gid)
-    if (!seen.has(k)) seen.set(k, { ...r, times: 1 })
-    else seen.get(k).times += 1
-  }
-  return Array.from(seen.values())
-})
-
 /** 是否在岗(state=1 或下班时间未到) —— 用真实时间判定 */
 function isOnDuty(e: any) {
   const now = Math.floor(Date.now() / 1000)
