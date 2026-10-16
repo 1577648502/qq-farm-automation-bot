@@ -505,6 +505,29 @@ onMounted(() => {
           <div class="text-xs text-gray-500 dark:text-gray-400">结算期开始</div>
           <div class="text-sm text-gray-900 font-medium dark:text-gray-100">{{ fmtTime(status.settleAt) }}</div>
         </div>
+        <!-- 我的员工(可能多位: 支持扩张, 逐个列出名字/特长/下班时间) -->
+        <div class="col-span-2 md:col-span-2">
+          <div class="text-xs text-gray-500 dark:text-gray-400">
+            我的员工
+            <span class="ml-1">{{ employees.length }} 位</span>
+            <button class="ml-1 text-[10px] text-blue-600 hover:underline dark:text-blue-400" :disabled="employeesLoading" @click="loadEmployees">
+              刷新
+            </button>
+          </div>
+          <div class="mt-1 flex flex-wrap gap-1">
+            <span
+              v-for="e in employees"
+              :key="e.gid"
+              class="rounded bg-sky-50 px-1.5 py-0.5 text-xs text-sky-800 dark:bg-sky-900/30 dark:text-sky-300"
+            >
+              {{ e.name }}<template v-if="e.titleName"> · {{ e.titleName }}</template>
+              <template v-if="e.offAt"> · 下班 {{ fmtTime(e.offAt) }}</template>
+            </span>
+            <span v-if="!employees.length" class="text-xs text-gray-500 dark:text-gray-400">
+              {{ employeesLoading ? '读取中…' : '暂无好友员工' }}
+            </span>
+          </div>
+        </div>
         <div>
           <div class="text-xs text-gray-500 dark:text-gray-400">受雇状态</div>
           <div
