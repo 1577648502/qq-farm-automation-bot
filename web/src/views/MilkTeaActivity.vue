@@ -268,14 +268,22 @@ async function interactNow() {
     toast.warning('当前没有被好友雇佣（【我的工作】为空），不能互动')
     return
   }
-  const w = status.value && status.value.work
-  // 互动目标: 手填 > 当前班次老板(权威); 没有进行中的班次就提示, 不再回退旧记录
-  const gid = String(interactGid.value || (w && w.employer && w.employer.gid) || '').trim()
-  if (w && w.employer && w.employer.gid && w.endAt && Math.floor(Date.now() / 1000) >= w.endAt) {
+  const w = (status.value && status.value.work) || {}
+  // ⚠ 互动的前提是"当前有进行中的班次"(被好友雇佣): 手填 GID 也不能绕过 —— 否则服务端会回 1034147
+  if (!w.employer || !w.employer.gid) {
+    toast.warning('当前没有进行中的兼职（未被好友雇佣），不能互动')
+    return
+  }
+  if (w.endAt && Math.floor(Date.now() / 1000) >= w.endAt) {
     toast.warning('本班工作已结束, 请等新的班次开始后再互动')
     return
   }
-  if (!gid) { toast.warning('当前没有进行中的兼职（未被雇佣），且未手填 GID'); return }
+  if (w.interactTotal > 0 && w.interactUsed >= w.interactTotal) {
+    toast.warning(`本班互动次数已用完（${w.interactUsed}/${w.interactTotal}），等下一班`)
+    return
+  }
+  // 目标: 手填优先, 否则当前老板(权威)
+  const gid = String(interactGid.value || w.employer.gid).trim()
   busy.value = 'interact'
   try {
     const res = await api.post('/api/activity/milk-tea/interact', { friendGid: gid, type: Number(interactType.value) || 5 })

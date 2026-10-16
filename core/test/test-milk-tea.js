@@ -362,6 +362,25 @@ const byIdx = (i) => FRAMES.find(f => f.idx === i);
         check('互动事项 5 项, 1=宣传推广', opts.length === 5 && opts[0].id === 1 && opts[0].name === '宣传推广', opts.map((x) => x.name));
     }
 
+    section('4i. 另一个号(09:37): 无进行中兼职 → 必须拒绝互动');
+    {
+        const mg6 = require(`${SB}/src/services/mengchong`);
+        const bodyOf4 = (hex) => Buffer.from(types.GateMessage.decode(Buffer.from(hex, 'hex')).body || []);
+        const frames = loadFrames(path.join(__dirname, '..', '..', 'wx-code-grabber', 'captures', '20261016-093736_互动验证1.jsonl'));
+        let resHex = '';
+        for (const f of frames) {
+            const fsx = mg6.parseTop(bodyOf4(f.hex));
+            if (Number((fsx.find((x) => x.f === 1) || {}).v) !== 2026110101) continue;
+            if (Number((fsx.find((x) => x.f === 2) || {}).v) !== 63) continue;
+            const res = fsx.find((x) => x.f === 168);
+            if (res && res.w === 2 && res.v) resHex = Buffer.from(res.v).toString('hex');
+        }
+        const work = milkTea.parseWorkFromRefresh(resHex);
+        check('该号没有当前老板(未受雇)', !work.employer, work.employer);
+        check('不是进行中的班次', work.active === false, work.active);
+        check('不可互动', work.canInteract === false, work.canInteract);
+    }
+
     section('5. 任务列表');
     {
         const t = await milkTea.getTasks();

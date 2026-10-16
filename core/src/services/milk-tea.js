@@ -613,7 +613,11 @@ async function interactWithFriend(friendGid, type = WORK_INTERACT_TYPE) {
     //   —— 判据用刷新(63)结果的 work.active(有当前老板且未到结束时间),
     //   不要用 #11(它只表示"参与过兼职", 班次结束后仍为 1 → 会误判), 更不能回退到历史记录(会报 本班工作已结束)
     const st = await getMainStatus().catch(() => null);
-    if (st && st.ok) {
+    if (!st || !st.ok) {
+        // 拿不到状态 → 无法确认"是否在被雇佣的班次里" → 不发请求(失败关闭, 别用旧 GID 乱发)
+        return { ok: false, skipped: true, reason: '无法确认当前兼职状态(刷新失败), 跳过互动' };
+    }
+    {
         const w = st.work || {};
         if (!w.employer || !w.employer.gid) {
             return { ok: false, reason: '当前没有进行中的兼职(未被雇佣), 不能互动' };
