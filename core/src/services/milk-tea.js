@@ -602,12 +602,27 @@ async function craftMilkTea(limit = 10) {
  * 待补: 互动类型(#2)的可选值与各自收益 —— 拿到后按"最优"排序执行
  */
 async function interactWithFriend(friendGid, type = WORK_INTERACT_TYPE) {
-    const gid = toNum(friendGid);
+    let gid = toNum(friendGid);   // 可能会被纠正为"当前老板"(见下方), 所以用 let
     if (!gid) return { ok: false, reason: '缺少好友 gid(先在页面勾选并保存雇佣好友)' };
-    // ⚠ 前置判断: 互动是"**自己被好友雇佣之后**"的操作(在【我的工作】里), 没受雇就不该做
+    // ⚠ 前置判断: 互动只属于"**正在进行中的班次**"(【我的工作】的本次兼职)
+    //   —— 判据用刷新(63)结果的 work.active(有当前老板且未到结束时间),
+    //   不要用 #11(它只表示"参与过兼职", 班次结束后仍为 1 → 会误判), 更不能回退到历史记录(会报 本班工作已结束)
     const st = await getMainStatus().catch(() => null);
-    if (st && st.ok && !st.employed) {
-        return { ok: false, reason: '当前没有被好友雇佣(【我的工作】为空), 不能互动' };
+    if (st && st.ok) {
+        const w = st.work || {};
+        if (!w.employer || !w.employer.gid) {
+            return { ok: false, reason: '当前没有进行中的兼职(未被雇佣), 不能互动' };
+        }
+        if (w.endAt && Math.floor(Date.now() / 1000) >= w.endAt) {
+            return { ok: false, reason: '本班工作已结束, 互动次数已用完' };
+        }
+        if (gid !== toNum(w.employer.gid)) {
+            // 传的 gid 不是当前老板 → 直接纠正为当前老板(避免 1034147)
+            log('活动', `奶茶热销中: 互动目标 gid ${gid} 与当前老板 ${w.employer.gid} 不一致, 已按当前老板执行`, {
+                module: 'activity', event: '奶茶热销中', result: 'warn',
+            });
+            gid = toNum(w.employer.gid);
+        }
     }
     const inner = Buffer.concat([encodeVarintField(1, gid), encodeVarintField(2, toInt(type) || WORK_INTERACT_TYPE)]);
     const payload = Buffer.concat([Buffer.from([0x0a, inner.length]), inner]);
@@ -683,7 +698,7 @@ function parseEmployerFromCashier(resultHex) {
  * ⚠ 互动(cmd=65)要传的 gid = 这里 #1.#1.#1(当前老板); 别从收银台详情(55)的历史记录取(踩过, 取到旧班次)
  */
 function parseWorkFromRefresh(resultHex) {
-    const out = { ok: false, employer: null, storeName: '', startAt: 0, endAt: 0, wage: 0, bonus: 0, titleId: 0, titleName: '', records: [] };
+    const out = { ok: false, employer: null, storeName: '', startAt: 0, endAt: 0, wage: 0, bonus: 0, titleId: 0, titleName: '', records: [], active: false };
     if (!resultHex) return out;
     try {
         const rf = parseTop(Buffer.from(resultHex, 'hex'));
@@ -705,6 +720,9 @@ function parseWorkFromRefresh(resultHex) {
             const t13 = findField(c, 13);
             if (t13 && t13.w === 2) out.bonus = toInt((findField(parseTop(t13.v), 2) || {}).v);
             out.ok = !!out.employer;
+            // "进行中的班次" = 有本次兼职 && (没给结束时间 或 现在还没到结束时间)
+            const nowSec = Math.floor(Date.now() / 1000);
+            out.active = !!out.employer && (!out.endAt || nowSec < out.endAt);
         }
         const t = findField(rf, 3);
         if (t && t.w === 0) out.titleId = toInt(t.v);
@@ -919,15 +937,15 @@ async function runMilkTea(opts = {}) {
         await sleep(1000);
     }
     // 互动/领工资都需要"被雇佣": 雇主 GID 优先用配置, 没配就用收银台结果里探测到的(兼职记录里的老板)
-    const employerGid = opts.employerGid
-        || (st && st.work && st.work.employer && st.work.employer.gid)   // 权威: 刷新(63)结果
-        || (out.steps.find((x) => x.step === 'cashier' && x.employer) || {}).employer?.gid
-        || (lastEmployer && lastEmployer.gid)
-        || '';
+    // ⚠ 雇主只认"当前进行中的班次"(刷新 63 结果的 work.employer) ——
+    //   不回退到收银台历史记录/缓存(那会拿到旧老板 → 服务端报 1034147 本班工作已结束)
+    const curWork = (st && st.work) || {};
+    const employerGid = opts.employerGid || (curWork.employer && curWork.employer.gid) || '';
+    const inShift = !!employerGid && (!curWork.endAt || Math.floor(Date.now() / 1000) < curWork.endAt);
     // 自动领兼职工资: 独立开关(opts.autoWage) + 必须处于"被雇佣"状态
     if (opts.autoWage !== false) {
-        if (!st || !st.employed) {
-            out.steps.push({ step: 'claimWage', ok: false, skipped: true, reason: '未受雇, 跳过领工资' });
+        if (!inShift) {
+            out.steps.push({ step: 'claimWage', ok: false, skipped: true, reason: '当前没有进行中的班次, 跳过领工资' });
         } else {
             const r = await claimWage().catch((e) => ({ ok: false, reason: e.message }));
             out.steps.push({ step: 'claimWage', ...r });
@@ -937,7 +955,7 @@ async function runMilkTea(opts = {}) {
             await sleep(600);
         }
     }
-    if (opts.autoInteract && employerGid) {
+    if (opts.autoInteract && inShift) {
         const r = await interactWithFriend(employerGid, opts.interactType).catch((e) => ({ ok: false, reason: e.message }));
         out.steps.push({ step: 'autoInteract', ...r });
         if (r.ok) {

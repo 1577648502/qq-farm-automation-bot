@@ -322,6 +322,10 @@ const byIdx = (i) => FRAMES.find(f => f.idx === i);
         check('本班工资 = 40', work.wage === 40, work.wage);
         check('含兼职历史记录(哈哈)', work.records.some((r) => r.name === '哈哈'), work.records.slice(0, 3));
         check('互动目标 gid 与 cmd=65 传参一致(1244632861)', work.employer.gid === 1244632861, work.employer.gid);
+        check('班次起止时间已解析(#6 开始 < #7 结束)', work.startAt > 0 && work.endAt > work.startAt, [work.startAt, work.endAt]);
+        // 这份抓包是 08:04 的班次(剩余 31 分钟) → 现在早已结束 → active 必须为 false
+        // (这正是"本班工作已结束"误报的防线: 无进行中班次时不得回退历史记录去互动)
+        check('班次已过期 → active = false(不再拿旧老板去互动)', work.active === false, { endAt: work.endAt, active: work.active });
     }
 
     section('5. 任务列表');

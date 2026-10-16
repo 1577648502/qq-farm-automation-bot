@@ -269,14 +269,13 @@ async function interactNow() {
     return
   }
   const w = status.value && status.value.work
-  const gid = String(
-    interactGid.value
-    || (w && w.employer && w.employer.gid)
-    || (status.value && status.value.employer && status.value.employer.gid)
-    || hireGids.value[0]
-    || '',
-  ).trim()
-  if (!gid) { toast.warning('请先勾选好友（或填 GID）'); return }
+  // 互动目标: 手填 > 当前班次老板(权威); 没有进行中的班次就提示, 不再回退旧记录
+  const gid = String(interactGid.value || (w && w.employer && w.employer.gid) || '').trim()
+  if (w && w.employer && w.employer.gid && w.endAt && Math.floor(Date.now() / 1000) >= w.endAt) {
+    toast.warning('本班工作已结束, 请等新的班次开始后再互动')
+    return
+  }
+  if (!gid) { toast.warning('当前没有进行中的兼职（未被雇佣），且未手填 GID'); return }
   busy.value = 'interact'
   try {
     const res = await api.post('/api/activity/milk-tea/interact', { friendGid: gid, type: Number(interactType.value) || 5 })
