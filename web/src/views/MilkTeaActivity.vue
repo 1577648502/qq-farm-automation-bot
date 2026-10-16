@@ -48,7 +48,7 @@ const INTERACT_OPTIONS = [
 /** 互动(我的工作): 目标好友 + 互动类型(默认 2 花式摇杯) */
 const interactGid = ref('')
 const storeName = ref('奶茶小铺')
-/** 我的员工(cmd=56): 展示 + 在好友列表里标"已雇佣"(避免 1034140) */
+/** 好友列表(cmd=56 的 #161.#4): 含在岗状态/特长/下班时间 —— 用于标记可雇佣性(不是"我雇的人") */
 const employees = ref<any[]>([])
 /** 营业记录(cmd=55): 累计营业额/杯数/余额/各品类收益 */
 const sales = ref<any>(null)
@@ -145,7 +145,7 @@ async function loadShop() {
   }
 }
 
-/** 拉取"我的员工"列表(cmd=56) */
+/** 拉取好友列表(cmd=56) */
 async function loadEmployees() {
   employeesLoading.value = true
   try {
@@ -174,9 +174,15 @@ function interactName(type: number) {
   return hit ? hit.name : `互动#${type}`
 }
 
-/** 该 gid 是否已是我的员工 */
+/** 是否在岗(state=1 或下班时间未到) —— 用真实时间判定 */
+function isOnDuty(e: any) {
+  const now = Math.floor(Date.now() / 1000)
+  return Number(e.state) === 1 || Number(e.offAt) > now
+}
+
+/** 该 gid 是否已在岗 */
 function isMyEmployee(gid: any) {
-  return employees.value.some((e: any) => String(e.gid) === String(gid))
+  return employees.value.some((e: any) => String(e.gid) === String(gid) && isOnDuty(e))
 }
 
 async function loadHireConfig() {
@@ -505,23 +511,26 @@ onMounted(() => {
           <div class="text-xs text-gray-500 dark:text-gray-400">结算期开始</div>
           <div class="text-sm text-gray-900 font-medium dark:text-gray-100">{{ fmtTime(status.settleAt) }}</div>
         </div>
-        <!-- 我的员工(可能多位: 支持扩张, 逐个列出名字/特长/下班时间) -->
+        <!-- 好友列表(可雇佣; 标在岗=已被某位老板雇佣中) -->
         <div class="col-span-2 md:col-span-2">
           <div class="text-xs text-gray-500 dark:text-gray-400">
-            好友（在岗状态）
+            好友（可雇佣 · 含在岗状态）
             <span class="ml-1">{{ employees.length }} 位</span>
             <button class="ml-1 text-[10px] text-blue-600 hover:underline dark:text-blue-400" :disabled="employeesLoading" @click="loadEmployees">
               刷新
             </button>
           </div>
+          <div class="mt-1 text-[10px] text-gray-400">标「在岗」= 已被某位老板雇佣中（不可雇佣，需等其下班）</div>
           <div class="mt-1 flex flex-wrap gap-1">
             <span
               v-for="e in employees"
               :key="e.gid"
-              class="rounded bg-sky-50 px-1.5 py-0.5 text-xs text-sky-800 dark:bg-sky-900/30 dark:text-sky-300"
+              class="rounded px-1.5 py-0.5 text-xs"
+              :class="isOnDuty(e) ? 'bg-sky-50 text-sky-800 dark:bg-sky-900/30 dark:text-sky-300' : 'bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-300'"
             >
               {{ e.name }}<template v-if="e.titleName"> · {{ e.titleName }}</template>
               <template v-if="e.offAt"> · 下班 {{ fmtTime(e.offAt) }}</template>
+              <template v-if="isOnDuty(e)"> · 在岗</template>
             </span>
             <span v-if="!employees.length" class="text-xs text-gray-500 dark:text-gray-400">
               {{ employeesLoading ? '读取中…' : '暂无数据' }}
@@ -805,9 +814,9 @@ onMounted(() => {
           <span class="text-xs text-gray-400">GID 可在「好友」页面查看</span>
         </div>
         <div class="mb-2 flex flex-wrap items-center gap-2">
-          <BaseButton variant="secondary" size="sm" :loading="employeesLoading" @click="loadEmployees">刷新员工</BaseButton>
+          <BaseButton variant="secondary" size="sm" :loading="employeesLoading" @click="loadEmployees">刷新好友</BaseButton>
           <span class="text-xs text-gray-500 dark:text-gray-400">
-            好友（在岗）{{ employees.length }} 位
+            好友（可雇佣）{{ employees.length }} 位
             <template v-if="employees.length">：{{ employees.map((e: any) => `${e.name}(${e.titleName || '—'})`).join('、') }}</template>
             <template v-else>（暂无好友员工）</template>
           </span>
@@ -840,7 +849,7 @@ onMounted(() => {
               <span
                 v-if="isMyEmployee(f.gid)"
                 class="ml-1 rounded bg-emerald-100 px-1 text-[10px] text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300"
-              >在岗</span>
+              >在岗中</span>
             </span>
             <span v-if="f.level" class="ml-auto shrink-0 text-[10px] text-gray-400">Lv{{ f.level }}</span>
           </label>
