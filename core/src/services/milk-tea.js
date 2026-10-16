@@ -1241,9 +1241,12 @@ function workDiag(w, gid) {
 const EMPLOYEE_SKILLS = { 9001: '金牌销售', 9002: '金牌宣传', 9003: '金牌服务', 9004: '默默搬砖' };
 const DEFAULT_HIRE_SKILL_ORDER = [9001, 9002, 9003];
 
-let lastSeedBuyDay = '';    // 每日兑换种子的日期标记(服务器日期)
+let lastSeedBuyDay = '';
+let interactSkipLoggedShift = 0;   // 已记录过"本班暂不可互动"的班次(避免每 10 分钟刷一条)    // 每日兑换种子的日期标记(服务器日期)
 const interactCooldown = new Map();   // 班次key → 下次可尝试时间(30 分钟, 班次资格可能中途变化)
-const INTERACT_COOLDOWN_MS = 30 * 60 * 1000;
+// 实测(2026-10-16 23:05): 同一班次同一 payload, 距班次开始 5 分钟被拒(1034147)、17 分钟成功
+// → 互动需等班次开始一段时间后才解锁(阈值协议里没有字段), 因此用"班次内定期重试"代替猜阈值
+const INTERACT_COOLDOWN_MS = 10 * 60 * 1000;
 /** 最近一次探测到的雇主(兼职记录里的老板) */
 let lastEmployer = null;
 const HIRE_BACKOFF_MS = 30 * 60 * 1000;
@@ -1345,8 +1348,12 @@ async function runMilkTea(opts = {}) {
         if (r.ok) {
             log('活动', `奶茶热销中: 已自动互动(雇主 ${employerGid}, 类型 ${opts.interactType || WORK_INTERACT_TYPE})`, { module: 'activity', event: '奶茶热销中', result: 'ok' });
         } else if (r.skipped) {
-            // 正常情况(本班次数已用完/没有班次/服务端已拒绝): 记一条 skip, 不当失败
-            log('活动', `奶茶热销中: 本班互动跳过(${r.reason})${r.diag ? ` [${r.diag}]` : ''}`, { module: 'activity', event: '奶茶热销中', result: 'skip' });
+            // 每个班次只记一条(之后安静重试), 避免每 10 分钟刷一条
+            const sk = toInt(curWork.startAt) || 0;
+            if (sk !== interactSkipLoggedShift) {
+                interactSkipLoggedShift = sk;
+                log('活动', `奶茶热销中: 本班互动暂不可用(将每 10 分钟重试, 班次内只提示这一次)${r.diag ? ` [${r.diag}]` : ''}`, { module: 'activity', event: '奶茶热销中', result: 'skip' });
+            }
         } else {
             log('活动', `奶茶热销中: 自动互动未执行 — ${r.reason}${r.diag ? ` (${r.diag})` : ''}`, { module: 'activity', event: '奶茶热销中', result: 'warn' });
         }
