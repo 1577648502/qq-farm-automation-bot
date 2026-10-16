@@ -784,7 +784,7 @@ function parseEmployerFromCashier(resultHex) {
  * ⚠ 互动(cmd=65)要传的 gid = 这里 #1.#1.#1(当前老板); 别从收银台详情(55)的历史记录取(踩过, 取到旧班次)
  */
 function parseWorkFromRefresh(resultHex) {
-    const out = { ok: false, employer: null, firstEmployee: null, storeName: '', startAt: 0, endAt: 0, wage: 0, bonus: 0, titleId: 0, titleName: '', records: [], active: false, interactUsed: 0, interactTotal: 0, canInteract: false };
+    const out = { ok: false, employer: null, storeName: '', startAt: 0, endAt: 0, wage: 0, bonus: 0, titleId: 0, titleName: '', records: [], active: false, interactUsed: 0, interactTotal: 0, canInteract: false };
     if (!resultHex) return out;
     try {
         const rf = parseTop(Buffer.from(resultHex, 'hex'));
@@ -796,8 +796,11 @@ function parseWorkFromRefresh(resultHex) {
                 const e = parseTop(emp.v);
                 const gid = toInt((findField(e, 1) || {}).v);
                 const nm = (findField(e, 2) || {}).v;
-                // ⚠ #168.#1 = **我在自己店里雇的员工**(我付他工资), 不是"我的老板"(见下方 #2 记录)
-                if (gid > 0) out.firstEmployee = { gid, name: nm ? String(nm) : '' };
+                // ⚠ #168.#1 = **我的老板(雇佣我的人)** = 互动目标
+                //    确证(2026-10-16 13:07 原账号抓包): 互动请求的 #170.#1 = 1226530474,
+                //    而该 gid 在 #168 里**只**出现在 #1#1(= '你玩得像蔡徐坤一样', 用户确认"被他雇佣"),
+                //    #2 记录里是南桉(历史班次)。⇒ 互动目标 = #168.#1, 不是 #2[0]
+                if (gid > 0) out.employer = { gid, name: nm ? String(nm) : '' };
             }
             const store = (findField(c, 2) || {}).v;
             out.storeName = store ? String(store) : '';
@@ -856,15 +859,7 @@ function parseWorkFromRefresh(resultHex) {
             }
         }
     } catch (e) { /* 忽略 */ }
-    // ⚠ 当前雇主 = 兼职记录(#2)第一条(老板付我工资) —— 这是**互动目标**
-    //    (实测: 09:04 成功那次的 #2[0] = 南桉, 与发送的互动 gid 一致; 而 #1 是另一位(我的员工))
-    if (out.records.length) {
-        const r0 = out.records[0];
-        out.employer = { gid: r0.gid, name: r0.name };
-        if (r0.storeName) out.storeName = r0.storeName;
-        if (r0.startAt) out.startAt = r0.startAt;
-        if (r0.endAt) out.endAt = r0.endAt;
-    }
+    // #2 = 兼职历史记录(老板/时长/工资/互动), 仅用于展示"雇员记录", **不覆盖** employer
     return out;
 }
 

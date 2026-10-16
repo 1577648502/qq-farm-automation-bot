@@ -356,9 +356,9 @@ const byIdx = (i) => FRAMES.find(f => f.idx === i);
         }
         check('取到带兼职记录的刷新帧', !!resHex);
         const work = milkTea.parseWorkFromRefresh(resHex);
-        // ⚠ 语义修正: #168.#1 是"我在自己店里雇的员工"(哈哈), 互动目标(我的老板)应取 #2 第一条
-        check('我的员工(#168.#1) = 1253397809 哈哈', work.firstEmployee && work.firstEmployee.gid === 1253397809 && work.firstEmployee.name === '哈哈', work.firstEmployee);
-        check('互动目标(当前雇主, #2 第一条) = 1244632861 南桉', work.employer && work.employer.gid === 1244632861 && work.employer.name === '南桉', work.employer);
+        // ⚠ 语义(最终确证): #168.#1 = 我的老板(互动目标); #2 = 兼职历史记录(仅展示)
+        // 最终确证(13:07 原账号抓包): 互动目标 = #168.#1(我的老板) —— 该包里互动 gid 只出现在 #1#1
+        check('互动目标 = #168.#1(我的老板) = 1253397809 哈哈', work.employer && work.employer.gid === 1253397809 && work.employer.name === '哈哈', work.employer);
         check('可互动性与次数一致(无次数数据时按可互动处理)',
             work.interactTotal === 0 ? work.canInteract === work.active : work.canInteract === (work.interactUsed < work.interactTotal),
             { used: work.interactUsed, total: work.interactTotal, can: work.canInteract, active: work.active });

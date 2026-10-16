@@ -508,7 +508,7 @@ onMounted(() => {
         <!-- 我的员工(可能多位: 支持扩张, 逐个列出名字/特长/下班时间) -->
         <div class="col-span-2 md:col-span-2">
           <div class="text-xs text-gray-500 dark:text-gray-400">
-            我的员工
+            好友（在岗状态）
             <span class="ml-1">{{ employees.length }} 位</span>
             <button class="ml-1 text-[10px] text-blue-600 hover:underline dark:text-blue-400" :disabled="employeesLoading" @click="loadEmployees">
               刷新
@@ -524,7 +524,7 @@ onMounted(() => {
               <template v-if="e.offAt"> · 下班 {{ fmtTime(e.offAt) }}</template>
             </span>
             <span v-if="!employees.length" class="text-xs text-gray-500 dark:text-gray-400">
-              {{ employeesLoading ? '读取中…' : '暂无好友员工' }}
+              {{ employeesLoading ? '读取中…' : '暂无数据' }}
             </span>
           </div>
         </div>
@@ -807,7 +807,7 @@ onMounted(() => {
         <div class="mb-2 flex flex-wrap items-center gap-2">
           <BaseButton variant="secondary" size="sm" :loading="employeesLoading" @click="loadEmployees">刷新员工</BaseButton>
           <span class="text-xs text-gray-500 dark:text-gray-400">
-            我的员工 {{ employees.length }} 位
+            好友（在岗）{{ employees.length }} 位
             <template v-if="employees.length">：{{ employees.map((e: any) => `${e.name}(${e.titleName || '—'})`).join('、') }}</template>
             <template v-else>（暂无好友员工）</template>
           </span>
@@ -840,7 +840,7 @@ onMounted(() => {
               <span
                 v-if="isMyEmployee(f.gid)"
                 class="ml-1 rounded bg-emerald-100 px-1 text-[10px] text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300"
-              >已雇佣</span>
+              >在岗</span>
             </span>
             <span v-if="f.level" class="ml-auto shrink-0 text-[10px] text-gray-400">Lv{{ f.level }}</span>
           </label>
