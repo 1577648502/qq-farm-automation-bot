@@ -476,7 +476,14 @@ async function autoHireInner(list) {
     // 日志别太长: 只给"尝试了几个 + 第一条原因"
     const first = errors[0] || '未知错误';
     const same = errors.every((x) => x === first);
-    return { ok: false, reason: `${list.length} 位好友均雇佣失败: ${first}${same ? '' : ' 等'}` };
+    // ⚠ 真实时间: 雇佣位何时空出 = 现有员工里最晚的下班时间(#6), 用它做退避结束点(而不是本地硬记 30 分钟)
+    let nextAt = 0;
+    try {
+        const emp2 = await getEmployees();
+        const offs = (emp2.friends || []).map((f) => toInt(f.offAt)).filter((x) => x > 0);
+        if (offs.length) nextAt = Math.max.apply(null, offs);
+    } catch (e) { /* 拿不到就退回本地冷却 */ }
+    return { ok: false, reason: `${list.length} 位好友均雇佣失败: ${first}${same ? '' : ' 等'}`, nextAt };
 }
 
 /**
@@ -660,7 +667,7 @@ async function interactWithFriend(friendGid, type = WORK_INTERACT_TYPE) {
     const shiftKey = toInt((st && st.work && st.work.startAt) || 0);
     const nextTryAt = shiftKey ? (interactCooldown.get(shiftKey) || 0) : 0;
     if (nextTryAt > Date.now()) {
-        return { ok: false, skipped: true, reason: `本班暂不可互动, ${Math.ceil((nextTryAt - Date.now()) / 60000)} 分钟后再试` };
+        return { ok: false, skipped: true, reason: `本班暂不可互动(本地冷却中), ${Math.ceil((nextTryAt - Date.now()) / 60000)} 分钟后重试` };
     }
     let r = await mainOperate(CMD_WORK_INTERACT, 170, payload);
     // 自愈: 1034147(本班工作已结束) 通常是"老板/班次在这期间换了" —— 刷新拿新老板重试一次
@@ -683,7 +690,7 @@ async function interactWithFriend(friendGid, type = WORK_INTERACT_TYPE) {
         return {
             ok: false,
             skipped: true,
-            reason: `本班暂不可互动(${r.reason || 'code=1034147'}), 30 分钟后再试`,
+            reason: `本班暂不可互动(${r.reason || 'code=1034147'}), 本地冷却 30 分钟后重试`,
             diag: workDiag((st && st.work) || {}, gid),
         };
     }
@@ -1257,10 +1264,21 @@ async function runMilkTea(opts = {}) {
         const r = await autoHire(opts.hireGids);
         out.steps.push({ step: 'autoHire', ...r });
         if (!r.ok && isHireAlreadyError(r.reason)) {
-            hireBackoffUntil = Date.now() + HIRE_BACKOFF_MS;
-            log('活动', `奶茶热销中: 雇佣位已有员工/已满, 30 分钟内不再自动雇佣`, {
-                module: 'activity', event: '奶茶热销中', result: 'skip',
-            });
+            const nowSec = Math.floor(Date.now() / 1000);
+            if (r.nextAt && r.nextAt > nowSec) {
+                // 真实时间: 按"现有员工最晚下班时间"退避
+                hireBackoffUntil = r.nextAt * 1000 + 60000;
+                const mins = Math.ceil((r.nextAt - nowSec) / 60);
+                const hhmm = new Date(r.nextAt * 1000).toTimeString().slice(0, 5);
+                log('活动', `奶茶热销中: 雇佣位被占(最近 ${hhmm} 空出, 约 ${mins} 分钟), 到点后自动重试`, {
+                    module: 'activity', event: '奶茶热销中', result: 'skip',
+                });
+            } else {
+                hireBackoffUntil = Date.now() + HIRE_BACKOFF_MS;
+                log('活动', `奶茶热销中: 雇佣位已有员工/已满(未取到空出时间, 本地暂缓 30 分钟)`, {
+                    module: 'activity', event: '奶茶热销中', result: 'skip',
+                });
+            }
             return out;
         }
         if (r.ok && !r.skipped && r.friendGid) {
