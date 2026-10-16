@@ -381,6 +381,21 @@ const byIdx = (i) => FRAMES.find(f => f.idx === i);
         check('不可互动', work.canInteract === false, work.canInteract);
     }
 
+    section('4j. 回归: 游戏错误码必须是数字(否则 === 1034147 判断失效)');
+    {
+        // 桩是"转发函数"(net.sendMsgAsync = (...a) => sendStub(...a)), 真实实现放在 sendStub →
+        // 直接换 sendStub 才有效(换 network.sendMsgAsync 对已 require 的模块无效)
+        const savedStub = sendStub;
+        sendStub = async () => {
+            throw new Error('gamepb.activitypb.ActivityService.Operate 错误: code=1034147 本班工作已结束');
+        };
+        const r = await milkTea.__testing.operateSafe(2026110101, 64, 169, Buffer.alloc(0));
+        sendStub = savedStub;
+        check('抛出的游戏错误被转成结果对象', r && r.ok === false, r && r.ok);
+        check('错误码是**数字** 1034147(不是字符串)', r.errorCode === 1034147, [typeof r.errorCode, r.errorCode]);
+        check('reason 已压短(无 gamepb 前缀)', String(r.reason).indexOf('gamepb') < 0, r.reason);
+    }
+
     section('5. 任务列表');
     {
         const t = await milkTea.getTasks();

@@ -673,7 +673,15 @@ async function interactWithFriend(friendGid, type = WORK_INTERACT_TYPE) {
         if (blockedInteractShifts.size > 20) blockedInteractShifts.clear();
         return { ok: false, skipped: true, reason: `本班不能互动(${r.reason || 'code=1034147'}), 本班内不再尝试` };
     }
-    if (r.errorCode !== 0) return { ok: false, reason: `互动失败 code=${r.errorCode}` };
+    if (r.errorCode !== 0) {
+        const w0 = (st && st.work) || {};
+        const emp = (w0.employer && w0.employer.gid) || 0;
+        return {
+            ok: false,
+            reason: `互动失败 code=${r.errorCode}`,
+            diag: `老板${gid}(当前${emp}) 班次${w0.startAt || 0}-${w0.endAt || 0} 次数${w0.interactUsed || 0}/${w0.interactTotal || 0}`,
+        };
+    }
     let result = null;
     if (r.resultHex) {
         try {
@@ -940,12 +948,12 @@ async function hireAll(hireGids, limit = 10) {
 async function operateSafe(groupId, cmd, payloadField, payloadBytes) {
     try {
         const r = await operateRaw(groupId, cmd, payloadField, payloadBytes);
-        const code = toNum(r.errorCode) || 0;
+        const code = toInt(r.errorCode);          // ⚠ 必须 toInt: toNum 对字符串会原样返回 → 数字比较失效
         return { ...r, errorCode: code, ok: code === 0, reason: code === 0 ? '' : `code=${code}` };
     } catch (e) {
         const m = String((e && e.message) || '');
-        const code = toNum((m.match(/code=(\d+)/) || [])[1]) || 0;
-        return { errorCode: code, resultFieldNo: 0, resultHex: '', activity: null, ok: false, reason: shortErr(m) };
+        const code = toInt((m.match(/code=(\d+)/) || [])[1]);   // ⚠ 必须 toInt(踩过: toNum 返回字符串)
+        return { errorCode: code, resultFieldNo: 0, resultHex: '', activity: null, ok: false, reason: shortErr(m), thrown: true };
     }
 }
 
@@ -1107,7 +1115,7 @@ module.exports = {
     CMD_RECIPE,
     CMD_SHOP_LIST,
     CMD_SHOP_BUY,
-    __testing: { parseMainState, encodeUint1, encodeVarint, encodePackedVarints, shortErr },
+    __testing: { parseMainState, encodeUint1, encodeVarint, encodePackedVarints, shortErr, operateSafe },
     getMainStatus,
     claimCashier,
     craft,
