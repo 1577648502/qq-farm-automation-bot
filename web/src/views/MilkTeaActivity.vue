@@ -314,7 +314,7 @@ async function upgradeNow() {
   try {
     const res = await api.post('/api/activity/milk-tea/upgrade-store', {})
     const d = res.data?.data || {}
-    if (apiError(res, d)) return
+    if (apiError(res, d)) { actionResult.value = `升级店铺接口返回异常：${JSON.stringify(res.data).slice(0, 120)}`; return }
     if (d.ok) {
       actionResult.value = `店铺已升级到 Lv${d.level}${d.got && d.got.length ? `，奖励 ${d.got.join('、')}` : ''}`
       toast.success('店铺升级成功')
@@ -324,7 +324,10 @@ async function upgradeNow() {
       toast.warning(d.reason || '升级未成功')
     }
   } catch (e: any) {
-    toast.error(e.response?.data?.error || e.message)
+    const st = e.response?.status ? `HTTP ${e.response.status}` : ''
+    const msg = e.response?.data?.error || e.message || '未知错误'
+    actionResult.value = `升级店铺请求失败：${st} ${msg}`
+    toast.error(actionResult.value)
   } finally {
     busy.value = ''
   }
@@ -785,6 +788,7 @@ onMounted(() => {
         <BaseButton variant="secondary" size="sm" :loading="busy === 'interact'" @click="interactNow">互动一次</BaseButton>
           <BaseButton variant="secondary" size="sm" :loading="busy === 'upgrade'" @click="upgradeNow">升级店铺</BaseButton>
       </div>
+      <div v-if="actionResult" class="mb-2 rounded bg-gray-50 px-2 py-1 text-xs text-gray-700 dark:bg-gray-900/40 dark:text-gray-200">{{ actionResult }}</div>
         <!-- 参数: 互动事项 / 店名(雇主 GID 已改为自动探测, 不再手填) -->
         <div class="mb-2 flex flex-wrap items-center gap-2 rounded border border-gray-200 px-2.5 py-2 dark:border-gray-700">
           <label class="flex items-center gap-1 text-xs text-gray-600 dark:text-gray-300">
