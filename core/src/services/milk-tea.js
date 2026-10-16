@@ -1358,6 +1358,14 @@ function workDiag(w, gid) {
 const EMPLOYEE_SKILLS = { 9001: '金牌销售', 9002: '金牌宣传', 9003: '金牌服务', 9004: '默默搬砖' };
 const DEFAULT_HIRE_SKILL_ORDER = [9001, 9002, 9003];
 
+/** 步骤之间的固定间隔(实测: 客户端每个动作之间都有明显间隔; 统一 1.2~1.8s 抖动) */
+const STEP_GAP_MIN_MS = 1200;
+const STEP_GAP_MAX_MS = 1800;
+function stepGap() {
+    const ms = STEP_GAP_MIN_MS + Math.floor(Math.random() * (STEP_GAP_MAX_MS - STEP_GAP_MIN_MS));
+    return sleep(ms);
+}
+
 let lastSeedBuyDay = '';
 let interactSkipLoggedShift = 0;   // 已记录过"本班暂不可互动"的班次(避免每 10 分钟刷一条)    // 每日兑换种子的日期标记(服务器日期)
 const interactCooldown = new Map();   // 班次key → 下次可尝试时间(30 分钟, 班次资格可能中途变化)
@@ -1414,17 +1422,17 @@ async function runMilkTea(opts = {}) {
     if (doCashier) {
         const r = await claimCashier();
         out.steps.push({ step: 'cashier', ...r });
-        await sleep(1200);
+        await stepGap();
     }
     if (doCraft) {
         const r = await craftAllFruits();   // 自动 = 把背包里所有活动果实都做掉
         out.steps.push({ step: 'craft', ...r });
-        await sleep(1200);
+        await stepGap();
     }
     if (doSpeaker) {
         const r = await useSpeaker();
         out.steps.push({ step: 'speaker', ...r });
-        await sleep(1000);
+        await stepGap();
     }
     // 互动/领工资都需要"被雇佣": 雇主 GID 优先用配置, 没配就用收银台结果里探测到的(兼职记录里的老板)
     // ⚠ 雇主只认"当前进行中的班次"(刷新 63 结果的 work.employer) ——
@@ -1454,20 +1462,13 @@ async function runMilkTea(opts = {}) {
             const r = await buyDailySeeds(opts.seedBuyCount || 1);
             out.steps.push({ step: 'buyDailySeeds', ...r });
             if (r.ok) lastSeedBuyDay = dayKey;
-            await sleep(800);
+            await stepGap();
         } else {
             out.steps.push({ step: 'buyDailySeeds', ok: false, skipped: true, reason: `今天(${dayKey})已兑换过` });
         }
     }
-    // 自动升级店铺(条件来自服务端: 营业额 >= 下一级所需)
-    if (opts.autoUpgrade) {
-        const r = await upgradeStore().catch((e) => ({ ok: false, reason: e.message }));
-        out.steps.push({ step: 'upgradeStore', ...r });
-        if (!r.ok && !r.skipped) {
-            log('活动', `奶茶热销中: 店铺升级未成功 — ${shortErr(r.reason)}`, { module: 'activity', event: '奶茶热销中', result: 'warn' });
-        }
-        await sleep(900);
-    }
+
+
     if (opts.autoInteract && inShift && curWork.canInteract !== false) {
         const r = await interactWithFriend(employerGid, opts.interactType).catch((e) => ({ ok: false, reason: e.message }));
         out.steps.push({ step: 'autoInteract', ...r });
@@ -1484,6 +1485,15 @@ async function runMilkTea(opts = {}) {
             log('活动', `奶茶热销中: 自动互动未执行 — ${r.reason}${r.diag ? ` (${r.diag})` : ''}`, { module: 'activity', event: '奶茶热销中', result: 'warn' });
         }
         await sleep(700);
+    }
+    // 自动升级店铺(条件来自服务端: 营业额 >= 下一级所需)
+    if (opts.autoUpgrade) {
+        const r = await upgradeStore().catch((e) => ({ ok: false, reason: e.message }));
+        out.steps.push({ step: 'upgradeStore', ...r });
+        if (!r.ok && !r.skipped) {
+            log('活动', `奶茶热销中: 店铺升级未成功 — ${shortErr(r.reason)}`, { module: 'activity', event: '奶茶热销中', result: 'warn' });
+        }
+        await sleep(900);
     }
     // 自动领兼职工资: 独立开关(opts.autoWage) + 必须处于"被雇佣"状态
     if (opts.autoWage !== false) {
@@ -1505,6 +1515,7 @@ async function runMilkTea(opts = {}) {
         }
         const r = await autoHire(opts.hireGids, opts);
         out.steps.push({ step: 'autoHire', ...r });
+        await stepGap();
         if (!r.ok && isHireAlreadyError(r.reason)) {
             const nowSec = Math.floor(Date.now() / 1000);
             if (r.nextAt && r.nextAt > nowSec) {
