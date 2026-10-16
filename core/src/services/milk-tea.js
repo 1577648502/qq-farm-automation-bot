@@ -488,20 +488,26 @@ async function buyDailySeeds(perSeed = 1) {
     if (!seeds.length) return { ok: false, skipped: true, reason: '商店里没有森野黄金芽种子' };
     const bought = [];
     let spent = 0;
+    let done = false;   // 是否"今天确实已经买过"(含限购)
     for (const g of seeds) {
         const n = Math.max(1, toInt(perSeed) || 1);
         const r = await buyShopGoods(g.goodsId, n);
         if (r && r.ok) {
             bought.push(`${g.name}×${n}`);
             spent += toInt(r.cost && r.cost.amount) || 0;
-        } else if (r && /限购|已满|上限|已售/.test(String(r.reason))) {
-            // 已到限购: 正常现象, 不记为失败
+        } else if (r && /限购|已满|上限|已售|已购|已兑换|已领|1034007/.test(String(r.reason))) {
+            // 今天已经买过/限购: 视为"当日已完成"(实测: 手动买过之后再自动买 → code=1034007)
+            done = true;
         } else if (r) {
             log('活动', `奶茶热销中: 兑换「${g.name}」失败 — ${shortErr(r.reason)}`, { module: 'activity', event: '奶茶热销中', result: 'warn' });
         }
         await sleep(700);
     }
-    if (!bought.length) return { ok: false, skipped: true, reason: '森野黄金芽种子已限购/未解锁' };
+    if (!bought.length) {
+        return done
+            ? { ok: false, skipped: true, alreadyDone: true, reason: '今天已经买过森野黄金芽种子' }
+            : { ok: false, reason: '森野黄金芽种子兑换未成功(下一轮重试)' };
+    }
     log('活动', `奶茶热销中: 每日兑换种子 → ${bought.join('、')}${spent ? ` (花费 ${spent})` : ''}`, {
         module: 'activity', event: '奶茶热销中', result: 'ok',
     });
@@ -1453,12 +1459,13 @@ async function runMilkTea(opts = {}) {
         if (lastSeedBuyDay !== dayKey) {
             const r = await buyDailySeeds(opts.seedBuyCount || 1);
             out.steps.push({ step: 'buyDailySeeds', ...r });
-            // 每日任务: 无论成功/失败/限购, 当天只做一次(用户要求"报异常一次后不要再跑, 明天再跑")
-            lastSeedBuyDay = dayKey;
-            if (!r.ok && !r.skipped) {
-                log('活动', `奶茶热销中: 每日兑换今天不再尝试(明天再跑) — ${shortErr(r.reason)}`, {
-                    module: 'activity', event: '奶茶热销中', result: 'skip',
-                });
+            // 只有"确实买到"或"服务端说今天已买过"才标记当天完成;
+            // 其它失败**不标记**, 下一轮继续试(用户要求: 第一次失败不能标记)
+            if (r.ok || r.alreadyDone) {
+                lastSeedBuyDay = dayKey;
+                if (r.alreadyDone) {
+                    log('活动', `奶茶热销中: 今天已买过森野黄金芽种子, 当天不再尝试`, { module: 'activity', event: '奶茶热销中', result: 'skip' });
+                }
             }
             await stepGap();
         } else {
