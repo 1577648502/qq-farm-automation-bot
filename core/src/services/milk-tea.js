@@ -450,10 +450,13 @@ async function autoHire(hireGids) {
     for (const gid of list) {
         const r = await hireFriend(gid).catch((e) => ({ ok: false, reason: e.message }));
         if (r && r.ok) return { ok: true, friendGid: gid };
-        errors.push(`${gid}: ${(r && r.reason) || '失败'}`);
+        errors.push(shortErr((r && r.reason) || '失败'));
         await sleep(600);
     }
-    return { ok: false, reason: `白名单内好友都雇佣失败(${errors.slice(0, 2).join('; ')})` };
+    // 日志别太长: 只给"尝试了几个 + 第一条原因"
+    const first = errors[0] || '未知错误';
+    const same = errors.every((x) => x === first);
+    return { ok: false, reason: `${list.length} 位好友均雇佣失败: ${first}${same ? '' : ' 等'}` };
 }
 
 /**
@@ -877,6 +880,13 @@ async function hireAll(hireGids, limit = 10) {
     return { ok: okCount > 0, hired: okCount, total: results.length, results };
 }
 
+/** 把服务端长错误压短(去掉 gamepb.xxx.Service.Method 错误: 前缀, 只留 code + 短因) */
+function shortErr(msg, maxLen = 40) {
+    let t = String(msg || '');
+    t = t.replace(/^gamepb\.[\w.]+\s*错误:\s*/, '').replace(/\s+/g, ' ').trim();
+    return t.length > maxLen ? `${t.slice(0, maxLen)}…` : t;
+}
+
 /** 自动雇佣的退避: 遇到"位置已存在/已达上限"这类错误, 冷却一段时间不再尝试(避免一直刷报错) */
 let hireBackoffUntil = 0;
 /** 最近一次探测到的雇主(兼职记录里的老板) */
@@ -974,7 +984,7 @@ async function runMilkTea(opts = {}) {
         out.steps.push({ step: 'autoHire', ...r });
         if (!r.ok && isHireAlreadyError(r.reason)) {
             hireBackoffUntil = Date.now() + HIRE_BACKOFF_MS;
-            log('活动', `奶茶热销中: 雇佣位置已存在/已满, 30 分钟内不再自动雇佣(${r.reason})`, {
+            log('活动', `奶茶热销中: 雇佣位已有员工/已满, 30 分钟内不再自动雇佣`, {
                 module: 'activity', event: '奶茶热销中', result: 'skip',
             });
             return out;
@@ -1006,7 +1016,7 @@ module.exports = {
     CMD_RECIPE,
     CMD_SHOP_LIST,
     CMD_SHOP_BUY,
-    __testing: { parseMainState, encodeUint1, encodeVarint, encodePackedVarints },
+    __testing: { parseMainState, encodeUint1, encodeVarint, encodePackedVarints, shortErr },
     getMainStatus,
     claimCashier,
     craft,

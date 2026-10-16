@@ -328,6 +328,16 @@ const byIdx = (i) => FRAMES.find(f => f.idx === i);
         check('班次已过期 → active = false(不再拿旧老板去互动)', work.active === false, { endAt: work.endAt, active: work.active });
     }
 
+    section('4g. 日志文案要短(雇佣报错不再刷一长串)');
+    {
+        const se = milkTea.__testing.shortErr;
+        const raw = 'gamepb.activitypb.ActivityService.Operate 错误: code=1034140 该雇佣位已有员工在工作';
+        const short = se(raw);
+        check('去掉 gamepb 前缀, 保留 code 与原因', short === 'code=1034140 该雇佣位已有员工在工作', short);
+        check('长度受控(<=40)', short.length <= 40, short.length);
+        check('超长会截断加省略号', se('x'.repeat(80)).endsWith('…'), se('x'.repeat(80)).slice(-6));
+    }
+
     section('5. 任务列表');
     {
         const t = await milkTea.getTasks();
