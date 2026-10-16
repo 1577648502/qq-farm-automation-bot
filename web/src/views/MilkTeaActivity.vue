@@ -36,9 +36,18 @@ const autoInteract = ref(false)
 const hireOpen = ref(false)
 const hireSaving = ref(false)
 const newGid = ref('')
-/** 互动(我的工作): 目标好友 + 互动类型(实测 5) */
+/** 互动事项(与后端一致) */
+const INTERACT_OPTIONS = [
+  { id: 1, name: '宣传推广', recommended: false },
+  { id: 2, name: '花式摇杯', recommended: true },
+  { id: 3, name: '招牌试饮', recommended: false },
+  { id: 4, name: '划水摸鱼', recommended: false },
+  { id: 5, name: '申请涨薪', recommended: false },
+]
+
+/** 互动(我的工作): 目标好友 + 互动类型(默认 2 花式摇杯) */
 const interactGid = ref('')
-const interactType = ref(5)
+const interactType = ref(2)
 
 const KIND_LABEL: Record<string, string> = { seed: '种子', exchange: '装扮兑换' }
 const kindLabel = (g: any) => KIND_LABEL[g.kind] || '道具'
@@ -201,13 +210,30 @@ function invertFriends() {
 }
 
 /** 批量雇佣: 逐个雇(后台带节流, 单次最多 10 个) */
+/** 领工资(cmd=64): 实测 奶茶券×120 */
+async function claimWageNow() {
+  busy.value = 'wage'
+  try {
+    const res = await api.post('/api/activity/milk-tea/wage', {})
+    const d = res.data?.data || {}
+    const err = apiError(res, d)
+    if (err) { reportError('领工资', err); return }
+    actionResult.value = d.gained ? `已领工资 ${d.gained.count} 奶茶券` : '领工资完成'
+    toast.success(actionResult.value)
+  } catch (e: any) {
+    reportError('领工资', apiError(null, null, e))
+  } finally {
+    busy.value = ''
+  }
+}
+
 /** 互动(我的工作, cmd=65): 每班一次, 影响工资 */
 async function interactNow() {
   if (status.value && status.value.ok && status.value.employed === false) {
     toast.warning('当前没有被好友雇佣（【我的工作】为空），不能互动')
     return
   }
-  const gid = String(interactGid.value || hireGids.value[0] || '').trim()
+  const gid = String(interactGid.value || (status.value && status.value.employer && status.value.employer.gid) || hireGids.value[0] || '').trim()
   if (!gid) { toast.warning('请先勾选好友（或填 GID）'); return }
   busy.value = 'interact'
   try {
@@ -394,6 +420,9 @@ onMounted(() => {
             :class="status.employed ? 'text-emerald-600 dark:text-emerald-400' : 'text-gray-500 dark:text-gray-400'"
           >
             {{ status.employed ? '已被雇佣（可互动）' : '未受雇' }}
+            <span v-if="status.employer && status.employer.gid" class="ml-1 text-xs text-gray-500 font-normal">
+              雇主 {{ status.employer.name || '' }} {{ status.employer.gid }}
+            </span>
           </div>
         </div>
       </div>
@@ -531,13 +560,18 @@ onMounted(() => {
             :placeholder="hireGids[0] || '好友 GID'"
             class="w-36 rounded border border-gray-300 bg-white px-2 py-1 text-xs dark:border-gray-600 dark:bg-gray-900"
           >
-          <input
+          <select
             v-model.number="interactType"
-            type="number"
-            min="1"
-            class="w-14 rounded border border-gray-300 bg-white px-2 py-1 text-xs dark:border-gray-600 dark:bg-gray-900"
-            title="互动类型"
+            class="rounded border border-gray-300 bg-white px-1.5 py-1 text-xs dark:border-gray-600 dark:bg-gray-900"
+            title="互动事项"
           >
+            <option v-for="op in INTERACT_OPTIONS" :key="op.id" :value="op.id">
+              {{ op.name }}{{ op.recommended ? '（推荐）' : '' }}
+            </option>
+          </select>
+          <BaseButton variant="secondary" size="sm" :loading="busy === 'wage'" @click="claimWageNow">
+            领工资
+          </BaseButton>
           <BaseButton variant="secondary" size="sm" :loading="busy === 'interact'" @click="interactNow">
             互动一次
           </BaseButton>

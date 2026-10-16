@@ -316,11 +316,11 @@ async function runMilkTea(reason = 'interval') {
             hireGids: cfg.hireGids,
             autoTask: false,   // 任务需充值激活, 功能已移除(不再自动领取)
             autoInteract: cfg.autoInteract,
+            claimWage: true,
             interactType: cfg.interactType,
             employerGid: cfg.employerGid,
-            // 注意: 不再自动调 cmd=56/58 —— 实际返回的是"工坊员工/配方菜单"等查询结果,
-            // 早期按 UI 顺序误标为"加工/喇叭", 语义未确认前不自动执行
-            craft: false,
+            // 制作奶茶已确认 = cmd 62(果实→高级奶茶), 由 cfg.craft 开关控制(原来误写成 false 导致自动化不生效)
+            craft: cfg.craft,
             speaker: false,
         });
         if (r.ok === false) {
@@ -1402,7 +1402,7 @@ async function handleApiCall(msg) {
                 const main = await milkTea.getMainStatus();
                 const cashier = await milkTea.getCashierStatus().catch(() => null);
                 const coupon = await milkTea.getMilkCouponBalance().catch(() => 0);
-                result = { ...main, cashier, milkCoupon: coupon };
+                result = { ...main, cashier, milkCoupon: coupon, employer: milkTea.getLastEmployer ? milkTea.getLastEmployer() : null };
                 break;
             }
             case 'claimMilkTeaCashier':
@@ -1430,6 +1430,9 @@ async function handleApiCall(msg) {
                 result = await milkTea.interactWithFriend(io2.friendGid, io2.type);
                 break;
             }
+            case 'claimMilkTeaWage':
+                result = await milkTea.claimWage();
+                break;
             case 'getMilkTeaCashier':
                 result = await milkTea.getCashierStatus();
                 break;

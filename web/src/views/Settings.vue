@@ -985,10 +985,19 @@ async function adGiftAction() {
 /** 快乐不独享: 立即跑一次(领快乐值 + 领档位) */
 const happyBusy = ref(false)
 const happyResult = ref('')
+/** 互动(工作事项)5 选 1 —— 与后端 WORK_INTERACT_OPTIONS 一致 */
+const MILK_TEA_INTERACT_OPTIONS = [
+  { id: 1, name: '宣传推广 — 工资+20%' },
+  { id: 2, name: '花式摇杯 — 工资+30%', recommended: true },
+  { id: 3, name: '招牌试饮 — 老板收益+20% & 4杯高级奶茶' },
+  { id: 4, name: '划水摸鱼 — 喇叭x1 / 工资减半（风险）' },
+  { id: 5, name: '申请涨薪 — 60%翻倍 / 40%减半（风险）' },
+];
+
 /** 奶茶热销中: 手动立即执行(领收益/加工/喇叭/互动) */
 const milkTeaBusy = ref('')
 const milkTeaResult = ref('')
-async function milkTeaAction(kind: 'cashier' | 'craft' | 'speaker' | 'interact', body: any = {}) {
+async function milkTeaAction(kind: 'cashier' | 'craft' | 'speaker' | 'interact' | 'wage', body: any = {}) {
   const accountId = String(currentAccountId.value || '')
   if (!accountId) { showAlert('请先选择账号', 'danger'); return }
   milkTeaBusy.value = kind
@@ -1001,6 +1010,7 @@ async function milkTeaAction(kind: 'cashier' | 'craft' | 'speaker' | 'interact',
     const label: Record<string, string> = {
       cashier: '已领取收银台收益',
       craft: d.used ? `已制作奶茶(投入 ${d.used} 个果实)` : '制作奶茶完成',
+      wage: d.gained ? `已领工资 ${d.gained.count} 奶茶券` : '领工资完成',
     }
     milkTeaResult.value = label[kind] || '完成'
   } catch (e: any) {
@@ -2031,6 +2041,9 @@ async function handleTestOffline() {
                   desc="自动领收银台收益（满载会暂停营业且不补发）+ 自动制作奶茶（把背包里所有活动果实做成高级奶茶）；详细经营数据在左侧栏「奶茶热销中」"
                 >
                   <template #actions>
+                    <BaseButton variant="secondary" size="sm" :loading="milkTeaBusy === 'wage'" @click="milkTeaAction('wage')">
+                      领工资
+                    </BaseButton>
                     <BaseButton variant="secondary" size="sm" :loading="milkTeaBusy === 'cashier'" @click="milkTeaAction('cashier')">
                       领收银台收益
                     </BaseButton>
@@ -2043,7 +2056,17 @@ async function handleTestOffline() {
                     <BaseSwitch v-model="localAutomationSettings.milkTeaCashier" label="自动领收银台收益（核心）" />
                     <BaseSwitch v-model="localAutomationSettings.milkTeaCraft" label="自动制作奶茶（全部果实）" />
                     <BaseSwitch v-model="localAutomationSettings.milkTeaAutoInteract" label="自动互动（被雇佣后每轮一次）" />
-                    <BaseInput v-model.number="localAutomationSettings.milkTeaInteractType" label="互动类型" type="number" class="w-24" />
+                    <label class="flex items-center gap-1 text-xs text-gray-600 dark:text-gray-300">
+                      互动事项
+                      <select
+                        v-model.number="localAutomationSettings.milkTeaInteractType"
+                        class="rounded border border-gray-300 bg-white px-1.5 py-1 text-xs dark:border-gray-600 dark:bg-gray-900"
+                      >
+                        <option v-for="op in MILK_TEA_INTERACT_OPTIONS" :key="op.id" :value="op.id">
+                          {{ op.name }}{{ op.recommended ? '（推荐）' : '' }}
+                        </option>
+                      </select>
+                    </label>
                     <BaseInput v-model="localAutomationSettings.milkTeaEmployerGid" label="雇主 GID（互动对象）" type="text" class="w-44" />
                     <BaseInput v-model="localAutomationSettings.milkTeaStoreName" label="店名（首次开业用）" type="text" class="w-40" />
                     <span class="text-xs text-gray-500 dark:text-gray-400">

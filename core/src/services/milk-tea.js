@@ -49,8 +49,20 @@ const CMD_SETTLE = 59;      // 结算(返回 {奶茶券+10} / {金币+8648})
 const CMD_CASHIER_INFO = 60;// **收银台查询**: {#1: 容量, #2: 当前待领, #3: 杯数}
 const CMD_REFRESH = 63;     // 刷新/查询
 const CMD_INTERACT = 66;    // ⚠ 实际返回「好友店铺排行(店名+热度)」→ 排行查询(非"互动")
-const CMD_WORK_INTERACT = 65;// **互动(我的工作)**: 请求 #170 = {#1: 好友gid, #2: 互动类型}; 实测类型 5
-const WORK_INTERACT_TYPE = 5;// 互动类型(实测只有 5; 有多档时按最优排序执行)
+const CMD_WORK_INTERACT = 65;// **互动(我的工作)**: 请求 #170 = {#1: 好友gid, #2: 互动类型}
+const CMD_CLAIM_WAGE = 64;   // **领工资**: 请求 #169 空 → 响应 {#1: {#1: 1041, #2: 120}}(奶茶券×120)
+/**
+ * 互动(工作事项)5 选 1 —— 名称/效果取自游戏「工作事项」界面(2026-10-16 截图)
+ * ⚠ 实测 type=5 会造成工资 -20(带"工资减半"风险的那档), 所以默认改成 2
+ */
+const WORK_INTERACT_OPTIONS = [
+    { id: 1, name: '宣传推广', desc: '帮老板立刻卖出40杯奶茶，获得本班工资 20% 的奖金' },
+    { id: 2, name: '花式摇杯', desc: '老板未来3小时奶茶券收益+10%，获得本班工资 30% 奖金', recommended: true },
+    { id: 3, name: '招牌试饮', desc: '老板未来2小时奶茶券收益+20%，随机获得 4 杯高级奶茶' },
+    { id: 4, name: '划水摸鱼', desc: '40% 概率得宣传喇叭×1，60% 概率工资减半（有风险）' },
+    { id: 5, name: '申请涨薪', desc: '60% 概率工资翻倍，40% 概率工资减半（实测亏损过）' },
+];
+const WORK_INTERACT_TYPE = 2;// 默认互动类型(推荐值: 花式摇杯, 稳定 +30%)
 const CMD_SHIFT = 67;       // 班次(带时间戳)
 const CMD_RECIPE = 69;      // 查询配方
 const FIELD_OFFSET = 105;   // 主活动 payload 字段 = cmd + 105
@@ -194,7 +206,9 @@ async function claimCashier() {
     log('活动', `奶茶热销中: 已领取收银台收益${gained ? ` ${itemLabel(gained.id, gained.count)}` : ''}${after.value ? ` (营业额 ${after.value})` : ''}`, {
         module: 'activity', event: '奶茶热销中', result: 'ok', before: before && before.value, after: after.value,
     });
-    return { ok: true, value: after.value, before: before && before.value, gained, state: after };
+    const emp = parseEmployerFromCashier(r.resultHex);
+    if (emp && emp.gid) lastEmployer = emp;
+    return { ok: true, value: after.value, before: before && before.value, gained, employer: emp, state: after };
 }
 
 /** 工坊加工(把活动果实加工成高级奶茶) */
@@ -610,6 +624,48 @@ async function interactWithFriend(friendGid, type = WORK_INTERACT_TYPE) {
 }
 
 /**
+ * 领工资(cmd=64) —— 兼职(被雇佣)班次结束后在【我的工作】里领
+ * 实测(20261016-080455 idx=127): 请求 #169 = ""; 响应 = {#1: {#1: 1041(奶茶券), #2: 120}, #2: 2}
+ */
+async function claimWage() {
+    const r = await mainOperate(CMD_CLAIM_WAGE, 169, Buffer.alloc(0));
+    if (r.errorCode !== 0) return { ok: false, reason: `领工资失败 code=${r.errorCode}` };
+    let gained = null;
+    if (r.resultHex) {
+        try {
+            const rf = parseTop(Buffer.from(r.resultHex, 'hex'));
+            const g = findField(rf, 1);
+            if (g && g.w === 2) {
+                const gf = parseTop(g.v);
+                gained = { id: toInt((findField(gf, 1) || {}).v), count: toInt((findField(gf, 2) || {}).v) };
+            }
+        } catch (e) { /* 忽略 */ }
+    }
+    log('活动', `奶茶热销中: 已领取兼职工资${gained ? ` ${itemLabel(gained.id, gained.count)}` : ''}`, {
+        module: 'activity', event: '奶茶热销中', result: 'ok',
+    });
+    return { ok: true, gained, state: parseMainState(r.activity) };
+}
+
+/** 我的工作(兼职)信息: 从收银台结果里解析**雇主**(兼职记录 #1.#9.#11 = {#1: gid, #2: 名字}) */
+function parseEmployerFromCashier(resultHex) {
+    if (!resultHex) return null;
+    try {
+        const rf = parseTop(Buffer.from(resultHex, 'hex'));
+        const box = findField(rf, 1);
+        const inner = box && box.w === 2 ? parseTop(box.v) : rf;
+        const rec = findField(inner, 9);
+        if (!rec || rec.w !== 2) return null;
+        const r2 = parseTop(rec.v);
+        const fr = findField(r2, 11);
+        if (!fr || fr.w !== 2) return null;
+        const f2 = parseTop(fr.v);
+        const gid = toInt((findField(f2, 1) || {}).v);
+        return gid > 0 ? { gid, name: String(((findField(f2, 2) || {}).v || '').toString?.() || '') } : null;
+    } catch (e) { return null; }
+}
+
+/**
  * 收银台查询(cmd=60): 返回待领取收益等。规则说"满载会暂停营业且不补发", 所以顶部要显示待领。
  * 实测结果 #1 = {#1: 容量(40), #2: 当前待领(253), #3: 累计杯数(164312)}
  */
@@ -719,6 +775,16 @@ async function hireAll(hireGids, limit = 10) {
     return { ok: okCount > 0, hired: okCount, total: results.length, results };
 }
 
+/** 自动雇佣的退避: 遇到"位置已存在/已达上限"这类错误, 冷却一段时间不再尝试(避免一直刷报错) */
+let hireBackoffUntil = 0;
+/** 最近一次探测到的雇主(兼职记录里的老板) */
+let lastEmployer = null;
+const HIRE_BACKOFF_MS = 30 * 60 * 1000;
+function isHireAlreadyError(msg) {
+    const t = String(msg || '');
+    return /已存在|已有|上限|已满|只能|重复/.test(t);
+}
+
 /**
  * 自动流程(每次调用都幂等):
  *   ① 刷新状态(顺带确认活动还在)  ② 未开业则开业  ③ 领收银台收益  ④ 用工坊加工  ⑤ 用宣传喇叭
@@ -764,20 +830,42 @@ async function runMilkTea(opts = {}) {
         out.steps.push({ step: 'speaker', ...r });
         await sleep(1000);
     }
-    if (opts.autoInteract && opts.employerGid) {
+    // 互动/领工资都需要"被雇佣": 雇主 GID 优先用配置, 没配就用收银台结果里探测到的(兼职记录里的老板)
+    const employerGid = opts.employerGid || (out.steps.find((x) => x.step === 'cashier' && x.employer) || {}).employer?.gid || '';
+    if (opts.claimWage !== false) {
         if (stopped()) { out.cancelled = true; return out; }
-        const r = await interactWithFriend(opts.employerGid, opts.interactType).catch((e) => ({ ok: false, reason: e.message }));
+        const r = await claimWage().catch((e) => ({ ok: false, reason: e.message }));
+        out.steps.push({ step: 'claimWage', ...r });
+        if (!r.ok && !/没有|不存在|无/.test(String(r.reason))) {
+            log('活动', `奶茶热销中: 领工资未成功 — ${r.reason}`, { module: 'activity', event: '奶茶热销中', result: 'warn' });
+        }
+        await sleep(600);
+    }
+    if (opts.autoInteract && employerGid) {
+        if (stopped()) { out.cancelled = true; return out; }
+        const r = await interactWithFriend(employerGid, opts.interactType).catch((e) => ({ ok: false, reason: e.message }));
         out.steps.push({ step: 'autoInteract', ...r });
         if (r.ok) {
-            log('活动', `奶茶热销中: 已自动互动(雇主 ${opts.employerGid}, 类型 ${opts.interactType || 5})`, { module: 'activity', event: '奶茶热销中', result: 'ok' });
+            log('活动', `奶茶热销中: 已自动互动(雇主 ${employerGid}, 类型 ${opts.interactType || WORK_INTERACT_TYPE})`, { module: 'activity', event: '奶茶热销中', result: 'ok' });
         } else {
             log('活动', `奶茶热销中: 自动互动未执行 — ${r.reason}`, { module: 'activity', event: '奶茶热销中', result: 'warn' });
         }
         await sleep(700);
     }
     if (opts.autoHire && Array.isArray(opts.hireGids) && opts.hireGids.length) {
+        if (Date.now() < hireBackoffUntil) {
+            out.steps.push({ step: 'autoHire', ok: false, skipped: true, reason: '上次提示雇佣位置已存在, 退避中' });
+            return out;
+        }
         const r = await autoHire(opts.hireGids);
         out.steps.push({ step: 'autoHire', ...r });
+        if (!r.ok && isHireAlreadyError(r.reason)) {
+            hireBackoffUntil = Date.now() + HIRE_BACKOFF_MS;
+            log('活动', `奶茶热销中: 雇佣位置已存在/已满, 30 分钟内不再自动雇佣(${r.reason})`, {
+                module: 'activity', event: '奶茶热销中', result: 'skip',
+            });
+            return out;
+        }
         if (r.ok) {
             log('活动', `奶茶热销中: 已自动雇佣好友 ${r.friendGid}`, { module: 'activity', event: '奶茶热销中', result: 'ok' });
         } else {
@@ -811,9 +899,13 @@ module.exports = {
     craft,
     craftMilkTea,
     craftAllFruits,
+    claimWage,
+    parseEmployerFromCashier,
+    WORK_INTERACT_OPTIONS,
     interactWithFriend,
     WORK_INTERACT_TYPE,
     getCraftableFruitIds,
+    getLastEmployer: () => lastEmployer,
     useSpeaker,
     openStore,
     hireFriend,
