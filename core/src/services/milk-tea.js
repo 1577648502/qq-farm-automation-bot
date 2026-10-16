@@ -46,6 +46,7 @@ const CMD_CRAFT = 56;       // ⚠ 实际返回「员工列表(好友+NPC店员)
 const CMD_HIRE = 57;        // 雇佣好友(返回班次+特长)
 const CMD_SPEAKER = 58;     // ⚠ 实际返回「9 种配方菜单」→ 菜单查询(非"喇叭")
 const CMD_CASHIER_DETAIL = 55;// **收银台详情**(结果 #160: 可领取/明细) —— ⚠ 它**不是领取**, 只是查询
+const CMD_UPGRADE_STORE = 61;  // **店铺升级**(实测: 字段 #166, 空 payload)
 const CMD_CLAIM_CASHIER = 59; // **领取收银台收益**(执行) → 响应 #164 = 到账物品(实测 奶茶券×10 + 金币×8648)
 const CMD_CASHIER_INFO = 60;// **收银台查询**: {#1: 容量, #2: 当前待领, #3: 杯数}
 const CMD_REFRESH = 63;     // 刷新/查询
@@ -363,6 +364,59 @@ const shopBought = new Map();
  * 实测(20261016-195923): 兑换 = 商店组 2026110102 cmd=1, payload #101 = {#1 商品id, #2 数量};
  *   响应 #101 = {#1 = {物品id, 数量}, #2 = {货币id, 总价}}
  */
+/**
+ * 店铺升级信息(cmd=55 收银台详情的 box 标量, 实测 20261017-062113):
+ *   #1 = 当前等级   #2 = 累计营业额   #3 = 下一级所需营业额(实测升级后 14000 → 33000)
+ * 条件: 营业额(#2) >= 所需(#3) 时可升级
+ */
+async function getUpgradeInfo() {
+    const r = await mainOperate(CMD_CASHIER_DETAIL, 160, Buffer.alloc(0));
+    if (!r.ok) return { ok: false, reason: r.reason || `读取店铺信息失败 code=${r.errorCode}` };
+    try {
+        const rf = parseTop(Buffer.from(r.resultHex || '', 'hex'));
+        const box = findField(rf, 1);
+        const inner = box && box.w === 2 ? parseTop(box.v) : rf;
+        const level = toInt((findField(inner, 1) || {}).v);
+        const revenue = toInt((findField(inner, 2) || {}).v);
+        const required = toInt((findField(inner, 3) || {}).v);
+        return { ok: true, level, revenue, required, canUpgrade: required > 0 && revenue >= required };
+    } catch (e) {
+        return { ok: false, reason: `解析店铺信息失败: ${e.message}` };
+    }
+}
+
+/**
+ * 店铺升级(cmd=61, 字段 #166, 空 payload —— 实测 20261017-062113)
+ *   响应 #166 = {#1 = 升级后等级, #2 = repeated {#1 物品id, #2 数量}(升级奖励, 实测 黄金芽种子×2/喇叭×2/有机化肥×10)}
+ */
+async function upgradeStore() {
+    const info = await getUpgradeInfo().catch(() => null);
+    if (info && info.ok && !info.canUpgrade) {
+        return { ok: false, skipped: true, reason: `营业额 ${info.revenue} < 升级所需 ${info.required}(Lv${info.level})` };
+    }
+    const r = await mainOperate(CMD_UPGRADE_STORE, 166, Buffer.alloc(0));
+    if (r.errorCode !== 0) return { ok: false, reason: `升级失败 ${r.reason || `code=${r.errorCode}`}` };
+    let level = 0;
+    const got = [];
+    if (r.resultHex) {
+        try {
+            const rf = parseTop(Buffer.from(r.resultHex, 'hex'));
+            level = toInt((findField(rf, 1) || {}).v);
+            for (const x of rf) {
+                if (x.f !== 2 || x.w !== 2) continue;
+                const e = parseTop(x.v);
+                const id = toInt((findField(e, 1) || {}).v);
+                const n = toInt((findField(e, 2) || {}).v);
+                if (id) got.push(`${itemLabel(id, n)}`);
+            }
+        } catch (e) { /* 忽略 */ }
+    }
+    log('活动', `奶茶热销中: 店铺已升级到 Lv${level || '?'}${got.length ? ` (奖励 ${got.join('、')})` : ''}`, {
+        module: 'activity', event: '奶茶热销中', result: 'ok',
+    });
+    return { ok: true, level, got };
+}
+
 async function buyDailySeeds(perSeed = 1) {
     const st0 = await getMainStatus().catch(() => null);
     if (st0 && isSettling(st0)) return { ok: false, skipped: true, reason: '结算期, 不兑换' };
@@ -1343,6 +1397,15 @@ async function runMilkTea(opts = {}) {
             out.steps.push({ step: 'buyDailySeeds', ok: false, skipped: true, reason: `今天(${dayKey})已兑换过` });
         }
     }
+    // 自动升级店铺(条件来自服务端: 营业额 >= 下一级所需)
+    if (opts.autoUpgrade) {
+        const r = await upgradeStore().catch((e) => ({ ok: false, reason: e.message }));
+        out.steps.push({ step: 'upgradeStore', ...r });
+        if (!r.ok && !r.skipped) {
+            log('活动', `奶茶热销中: 店铺升级未成功 — ${shortErr(r.reason)}`, { module: 'activity', event: '奶茶热销中', result: 'warn' });
+        }
+        await sleep(900);
+    }
     if (opts.autoInteract && inShift && curWork.canInteract !== false) {
         const r = await interactWithFriend(employerGid, opts.interactType).catch((e) => ({ ok: false, reason: e.message }));
         out.steps.push({ step: 'autoInteract', ...r });
@@ -1445,6 +1508,8 @@ module.exports = {
     getCraftableFruitIds,
     getEmployees,
     getSalesRecords,
+    getUpgradeInfo,
+    upgradeStore,
     buyDailySeeds,
     getMenuNames,
     getLastEmployer: () => lastEmployer,

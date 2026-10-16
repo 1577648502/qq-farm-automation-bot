@@ -318,6 +318,7 @@ async function runMilkTea(reason = 'interval') {
             autoInteract: cfg.autoInteract,
             autoWage: cfg.autoWage,
             autoBuySeed: cfg.autoBuySeed,
+            autoUpgrade: cfg.autoUpgrade,
             seedBuyCount: cfg.seedBuyCount,
             claimWage: true,   // 兼容旧字段(实际以 autoWage 为准)
             interactType: cfg.interactType,
@@ -1444,6 +1445,12 @@ async function handleApiCall(msg) {
                 result = to.taskId ? await milkTea.claimTask(to.taskId) : await milkTea.claimAllTasks();
                 break;
             }
+            case 'upgradeMilkTeaStore':
+                result = await milkTea.upgradeStore();
+                break;
+            case 'getMilkTeaUpgrade':
+                result = await milkTea.getUpgradeInfo();
+                break;
             case 'getMilkTeaSales':
                 result = await milkTea.getSalesRecords();
                 break;

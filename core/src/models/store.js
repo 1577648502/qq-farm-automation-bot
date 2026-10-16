@@ -242,6 +242,7 @@ const DEFAULT_ACCOUNT_CONFIG = {
     milkTeaAutoInteract: false,       // 自动互动(需"自己被好友雇佣", 每轮一次)
     milkTeaAutoWage: true,            // 自动领兼职工资(cmd 64, 纯收益; 需被雇佣)
     milkTeaAutoBuySeed: false,        // **每日自动兑换种子**(一天一次, 商店组 cmd=1)
+    milkTeaAutoUpgrade: true,         // **自动升级店铺**(营业额达标即升, cmd=61)
     milkTeaSeedBuyCount: 1,           // 每种活动种子每天兑换几份
     milkTeaInteractType: 5,           // 互动类型(#2), 实测 5
     milkTeaEmployerGid: '',           // 雇主 GID(互动对象 = 雇佣我的那位好友)
@@ -566,6 +567,7 @@ function normalizeAccountConfig(input, fallback = accountFallbackConfig) {
     if (src.milkTeaAutoInteract !== undefined && src.milkTeaAutoInteract !== null) cfg.milkTeaAutoInteract = !!src.milkTeaAutoInteract;
     if (src.milkTeaAutoWage !== undefined && src.milkTeaAutoWage !== null) cfg.milkTeaAutoWage = !!src.milkTeaAutoWage;
     if (src.milkTeaAutoBuySeed !== undefined && src.milkTeaAutoBuySeed !== null) cfg.milkTeaAutoBuySeed = !!src.milkTeaAutoBuySeed;
+    if (src.milkTeaAutoUpgrade !== undefined && src.milkTeaAutoUpgrade !== null) cfg.milkTeaAutoUpgrade = !!src.milkTeaAutoUpgrade;
     if (src.milkTeaSeedBuyCount !== undefined && src.milkTeaSeedBuyCount !== null) cfg.milkTeaSeedBuyCount = Math.max(1, Number(src.milkTeaSeedBuyCount) || 1);
     if (src.milkTeaInteractType !== undefined && src.milkTeaInteractType !== null) cfg.milkTeaInteractType = Math.max(1, Number(src.milkTeaInteractType) || 5);
     if (typeof src.milkTeaEmployerGid === 'string') cfg.milkTeaEmployerGid = src.milkTeaEmployerGid.trim().slice(0, 32);
@@ -860,6 +862,7 @@ function getConfigSnapshot(accountId) {
         milkTeaAutoInteract: !!cfg.milkTeaAutoInteract,
         milkTeaAutoWage: cfg.milkTeaAutoWage !== false,
         milkTeaAutoBuySeed: !!cfg.milkTeaAutoBuySeed,
+        milkTeaAutoUpgrade: cfg.milkTeaAutoUpgrade !== false,
         milkTeaSeedBuyCount: Math.max(1, Number(cfg.milkTeaSeedBuyCount) || 1),
         milkTeaInteractType: Math.max(1, Number(cfg.milkTeaInteractType) || 5),
         milkTeaEmployerGid: cfg.milkTeaEmployerGid || '',
@@ -1034,6 +1037,7 @@ function applyConfigSnapshot(snapshot, options = {}) {
     if (cfg.milkTeaAutoInteract !== undefined && cfg.milkTeaAutoInteract !== null) next.milkTeaAutoInteract = !!cfg.milkTeaAutoInteract;
     if (cfg.milkTeaAutoWage !== undefined && cfg.milkTeaAutoWage !== null) next.milkTeaAutoWage = !!cfg.milkTeaAutoWage;
     if (cfg.milkTeaAutoBuySeed !== undefined && cfg.milkTeaAutoBuySeed !== null) next.milkTeaAutoBuySeed = !!cfg.milkTeaAutoBuySeed;
+    if (cfg.milkTeaAutoUpgrade !== undefined && cfg.milkTeaAutoUpgrade !== null) next.milkTeaAutoUpgrade = !!cfg.milkTeaAutoUpgrade;
     if (cfg.milkTeaSeedBuyCount !== undefined && cfg.milkTeaSeedBuyCount !== null) next.milkTeaSeedBuyCount = Math.max(1, Number(cfg.milkTeaSeedBuyCount) || 1);
     if (cfg.milkTeaInteractType !== undefined && cfg.milkTeaInteractType !== null) next.milkTeaInteractType = Math.max(1, Number(cfg.milkTeaInteractType) || 5);
     if (typeof cfg.milkTeaEmployerGid === 'string') next.milkTeaEmployerGid = cfg.milkTeaEmployerGid.trim().slice(0, 32);
@@ -1616,6 +1620,7 @@ function getMilkTeaConfig(accountId) {
         autoInteract: !!cfg.milkTeaAutoInteract,
         autoWage: cfg.milkTeaAutoWage !== false,
         autoBuySeed: !!cfg.milkTeaAutoBuySeed,
+        autoUpgrade: cfg.milkTeaAutoUpgrade !== false,
         seedBuyCount: Math.max(1, Number(cfg.milkTeaSeedBuyCount) || 1),
         interactType: Math.max(1, Number(cfg.milkTeaInteractType) || 5),
         employerGid: cfg.milkTeaEmployerGid || '',

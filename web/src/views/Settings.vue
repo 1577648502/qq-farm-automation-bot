@@ -636,6 +636,7 @@ const localAutomationSettings = ref({
   milkTeaAutoInteract: false,
   milkTeaAutoWage: true,
   milkTeaAutoBuySeed: false,
+  milkTeaAutoUpgrade: true,
   milkTeaInteractType: 5,
   milkTeaEmployerGid: '',
   sellGoldenFruit: false,
@@ -941,6 +942,7 @@ function syncLocalAutomationSettings() {
   localAutomationSettings.value.milkTeaAutoInteract = settings.value.milkTeaAutoInteract ?? false
   localAutomationSettings.value.milkTeaAutoWage = settings.value.milkTeaAutoWage !== false
   localAutomationSettings.value.milkTeaAutoBuySeed = !!settings.value.milkTeaAutoBuySeed
+  localAutomationSettings.value.milkTeaAutoUpgrade = settings.value.milkTeaAutoUpgrade !== false
   localAutomationSettings.value.milkTeaInteractType = settings.value.milkTeaInteractType ?? 5
   localAutomationSettings.value.milkTeaEmployerGid = settings.value.milkTeaEmployerGid ?? ''
   localAutomationSettings.value.sellGoldenFruit = settings.value.sellGoldenFruit ?? false
@@ -1147,6 +1149,7 @@ async function saveAutomationSettings() {
       milkTeaAutoInteract: localAutomationSettings.value.milkTeaAutoInteract,
       milkTeaAutoWage: localAutomationSettings.value.milkTeaAutoWage,
       milkTeaAutoBuySeed: localAutomationSettings.value.milkTeaAutoBuySeed,
+      milkTeaAutoUpgrade: localAutomationSettings.value.milkTeaAutoUpgrade,
       milkTeaInteractType: localAutomationSettings.value.milkTeaInteractType,
       milkTeaEmployerGid: localAutomationSettings.value.milkTeaEmployerGid,
       sellGoldenFruit: localAutomationSettings.value.sellGoldenFruit,
@@ -2019,6 +2022,7 @@ async function handleTestOffline() {
                     <BaseSwitch v-model="localAutomationSettings.milkTeaAutoInteract" label="自动互动（被雇佣后每轮一次）" />
                     <BaseSwitch v-model="localAutomationSettings.milkTeaAutoWage" label="自动领兼职工资（被雇佣后）" />
                     <BaseSwitch v-model="localAutomationSettings.milkTeaAutoBuySeed" label="每日自动购买森野黄金芽种子（1份/天）" />
+                    <BaseSwitch v-model="localAutomationSettings.milkTeaAutoUpgrade" label="自动升级店铺（营业额达标即升）" />
                   </div>
                   <template #note>
                     手动操作（领收益 / 制作奶茶 / 领工资 / 互动一次）和参数（店名、互动事项、雇主 GID）都在左侧栏「奶茶热销中」页面。

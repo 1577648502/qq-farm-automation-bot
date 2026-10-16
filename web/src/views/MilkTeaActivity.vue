@@ -294,6 +294,28 @@ async function craftNow() {
   } finally { busy.value = '' }
 }
 
+/** 升级店铺(cmd=61) */
+async function upgradeNow() {
+  busy.value = 'upgrade'
+  try {
+    const res = await api.post('/api/activity/milk-tea/upgrade-store', {})
+    const d = res.data?.data || {}
+    if (apiError(res, d)) return
+    if (d.ok) {
+      actionResult.value = `店铺已升级到 Lv${d.level}${d.got && d.got.length ? `，奖励 ${d.got.join('、')}` : ''}`
+      toast.success('店铺升级成功')
+      await loadStatus()
+    } else {
+      actionResult.value = d.reason || '升级未成功'
+      toast.warning(d.reason || '升级未成功')
+    }
+  } catch (e: any) {
+    toast.error(e.response?.data?.error || e.message)
+  } finally {
+    busy.value = ''
+  }
+}
+
 /** 领工资(cmd=64): 实测 奶茶券×120 */
 async function claimWageNow() {
   busy.value = 'wage'
@@ -767,6 +789,7 @@ onMounted(() => {
         <BaseButton variant="secondary" size="sm" :loading="busy === 'craft'" @click="craftNow">制作奶茶（全部果实）</BaseButton>
         <BaseButton variant="secondary" size="sm" :loading="busy === 'wage'" @click="claimWageNow">领工资</BaseButton>
         <BaseButton variant="secondary" size="sm" :loading="busy === 'interact'" @click="interactNow">互动一次</BaseButton>
+          <BaseButton variant="secondary" size="sm" :loading="busy === 'upgrade'" @click="upgradeNow">升级店铺</BaseButton>
       </div>
         <!-- 参数: 互动事项 / 店名(雇主 GID 已改为自动探测, 不再手填) -->
         <div class="mb-2 flex flex-wrap items-center gap-2 rounded border border-gray-200 px-2.5 py-2 dark:border-gray-700">
