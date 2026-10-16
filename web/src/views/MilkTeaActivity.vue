@@ -171,11 +171,14 @@ async function loadSales(day?: number) {
   try {
     const res = await api.post('/api/activity/milk-tea/sales-record', day ? { day } : {})
     const d = res.data?.data || {}
-    if (!apiError(res, d)) {
-      sales.value = d
-      salesDay.value = Number(d.day) || 0
-    }
-  } catch (e: any) { /* 静默 */ } finally { salesLoading.value = false }
+    if (apiError(res, d)) { sales.value = { ok: false, reason: `接口返回异常: ${JSON.stringify(res.data).slice(0, 120)}` }; return }
+    if (!d || d.ok !== true) { sales.value = { ok: false, reason: d.reason || `接口返回体不含 ok 字段(可能后端未更新): ${JSON.stringify(res.data).slice(0, 120)}` }; return }
+    sales.value = d
+    salesDay.value = Number(d.day) || 0
+  } catch (e: any) {
+    const st = e.response?.status ? `HTTP ${e.response.status}` : ''
+    sales.value = { ok: false, reason: `营业记录请求失败：${st} ${e.response?.data?.error || e.message || '未知错误'}` }
+  } finally { salesLoading.value = false }
 }
 /** 前一天 / 后一天 */
 function shiftSalesDay(delta: number) {
