@@ -54,6 +54,9 @@ const employees = ref<any[]>([])
 const sales = ref<any>(null)
 const salesLoading = ref(false)
 const employeesLoading = ref(false)
+/** 每日自动兑换种子(一天一次) + 每种兑换份数 */
+const autoBuySeed = ref(false)
+const seedBuyCount = ref(1)
 const interactType = ref(2)
 
 const KIND_LABEL: Record<string, string> = { seed: '种子', exchange: '装扮兑换' }
@@ -209,6 +212,8 @@ async function loadHireConfig() {
     if (d.interactType) interactType.value = Number(d.interactType)
     if (d.employerGid) interactGid.value = String(d.employerGid)
     if (d.storeName) storeName.value = String(d.storeName)
+    autoBuySeed.value = !!d.autoBuySeed
+    if (d.seedBuyCount) seedBuyCount.value = Number(d.seedBuyCount)
   } catch (e: any) {
     reportError('读取雇佣设置', apiError(null, null, e))
   }
@@ -398,6 +403,8 @@ async function saveHireConfig() {
       interactType: Number(interactType.value) || 5,
       employerGid: String(interactGid.value || ''),
       storeName: String(storeName.value || ''),
+      autoBuySeed: !!autoBuySeed.value,
+      seedBuyCount: Number(seedBuyCount.value) || 1,
     })
     const err = apiError(res, res.data?.data)
     if (err) { reportError('保存设置', err); return }
@@ -597,6 +604,15 @@ onMounted(() => {
           <select v-model.number="interactType" class="rounded border border-gray-300 bg-white px-1.5 py-1 text-xs dark:border-gray-600 dark:bg-gray-900">
             <option v-for="op in INTERACT_OPTIONS" :key="op.id" :value="op.id">{{ op.name }}{{ op.recommended ? '（推荐）' : '' }}</option>
           </select>
+        </label>
+        <label class="flex items-center gap-1 text-xs text-gray-600 dark:text-gray-300">
+          <input v-model="autoBuySeed" type="checkbox" class="h-3.5 w-3.5">
+          每日自动兑换种子
+        </label>
+        <label class="flex items-center gap-1 text-xs text-gray-600 dark:text-gray-300">
+          每种
+          <input v-model.number="seedBuyCount" type="number" min="1" class="w-14 rounded border border-gray-300 bg-white px-1.5 py-1 text-xs dark:border-gray-600 dark:bg-gray-900">
+          份/天
         </label>
         <label class="flex items-center gap-1 text-xs text-gray-600 dark:text-gray-300">
           雇主 GID

@@ -350,6 +350,40 @@ async function getShopGoods() {
 const shopBought = new Map();
 
 /** 兑换/购买商品(数量必填) —— 实测 {#101: {#1: 商品ID, #2: 数量}} */
+/**
+ * 每日兑换种子 —— 从兑换商店挑出"活动种子"商品, 每个买 perSeed 份(默认 1), 一天一次
+ * 实测(20261016-195923): 兑换 = 商店组 2026110102 cmd=1, payload #101 = {#1 商品id, #2 数量};
+ *   响应 #101 = {#1 = {物品id, 数量}, #2 = {货币id, 总价}}
+ */
+async function buyDailySeeds(perSeed = 1) {
+    const st0 = await getMainStatus().catch(() => null);
+    if (st0 && isSettling(st0)) return { ok: false, skipped: true, reason: '结算期, 不兑换' };
+    const shop = await getShopGoods();
+    if (!shop.ok) return { ok: false, reason: shop.reason || '读取商店失败' };
+    const seeds = (shop.goods || []).filter((g) => MILK_TEA_SEED_IDS.includes(toInt(g.itemId)));
+    if (!seeds.length) return { ok: false, skipped: true, reason: '商店里没有活动种子' };
+    const bought = [];
+    let spent = 0;
+    for (const g of seeds) {
+        const n = Math.max(1, toInt(perSeed) || 1);
+        const r = await buyShopGoods(g.goodsId, n);
+        if (r && r.ok) {
+            bought.push(`${g.name}×${n}`);
+            spent += toInt(r.cost && r.cost.amount) || 0;
+        } else if (r && /限购|已满|上限|已售/.test(String(r.reason))) {
+            // 已到限购: 正常现象, 不记为失败
+        } else if (r) {
+            log('活动', `奶茶热销中: 兑换「${g.name}」失败 — ${shortErr(r.reason)}`, { module: 'activity', event: '奶茶热销中', result: 'warn' });
+        }
+        await sleep(700);
+    }
+    if (!bought.length) return { ok: false, skipped: true, reason: '活动种子都已限购/未解锁' };
+    log('活动', `奶茶热销中: 每日兑换种子 → ${bought.join('、')}${spent ? ` (花费 ${spent})` : ''}`, {
+        module: 'activity', event: '奶茶热销中', result: 'ok',
+    });
+    return { ok: true, bought, spent };
+}
+
 async function buyShopGoods(goodsId, count = 1) {
     const st0 = await getMainStatus().catch(() => null);
     if (st0 && isSettling(st0)) return { ok: false, reason: '活动已进入结算期(11/15–11/16), 不能兑换活动种子' };
@@ -739,7 +773,11 @@ async function interactWithFriend(friendGid, type = WORK_INTERACT_TYPE) {
             };
         } catch (e) { /* 忽略 */ }
     }
-    log('活动', `奶茶热销中: 已与好友 ${gid} 互动(type=${toInt(type) || WORK_INTERACT_TYPE})`, {
+    // 互动结果里带工资信息(实测 #170.#8 = {#1 底薪?, #2/#3 工资/加成}) → 日志带上, 便于核对类型效果
+    const wageTxt = result && result.wage
+        ? `, 工资${toInt(result.wage.extra) >= 0 ? '+' : ''}${toInt(result.wage.extra)}`
+        : '';
+    log('活动', `奶茶热销中: 已与好友 ${gid} 互动(${interactNameOf(toInt(type) || WORK_INTERACT_TYPE)}${wageTxt})`, {
         module: 'activity', event: '奶茶热销中', result: 'ok', friendGid: gid, type: toInt(type) || WORK_INTERACT_TYPE,
     });
     return { ok: true, friendGid: gid, interact: result };
@@ -1165,6 +1203,12 @@ let hireBackoffUntil = 0;
 const SERVICE_TAG = 'milk-tea v2 (次数门槛/班次门槛/失败关闭/1034147记忆)';
 let tagLogged = false;
 
+/** 互动类型名(与 WORK_INTERACT_OPTIONS 一致) */
+function interactNameOf(type) {
+    const hit = WORK_INTERACT_OPTIONS.find((o) => o.id === toInt(type));
+    return hit ? hit.name : `type=${toInt(type)}`;
+}
+
 /** 互动判定用的诊断串(短), 用于日志里一眼看清各判据的实际取值 */
 function workDiag(w, gid) {
     const nowSec = Math.floor(Date.now() / 1000);
@@ -1172,6 +1216,7 @@ function workDiag(w, gid) {
 }
 
 /** 已被服务端判定"本班不能互动"的班次(按班次开始时间记, 本班内不再重试) */
+let lastSeedBuyDay = '';    // 每日兑换种子的日期标记(服务器日期)
 const interactCooldown = new Map();   // 班次key → 下次可尝试时间(30 分钟, 班次资格可能中途变化)
 const INTERACT_COOLDOWN_MS = 30 * 60 * 1000;
 /** 最近一次探测到的雇主(兼职记录里的老板) */
@@ -1252,6 +1297,22 @@ async function runMilkTea(opts = {}) {
     const inShift = !!employerGid && (!curWork.endAt || Math.floor(Date.now() / 1000) < curWork.endAt);
     if (opts.autoInteract && inShift && curWork.canInteract === false) {
         out.steps.push({ step: 'autoInteract', ok: false, skipped: true, reason: `本班互动次数已用完(${curWork.interactUsed}/${curWork.interactTotal})` });
+    }
+    // 每日兑换种子(一天一次; 日期用状态里的服务器时间算, 取不到才用本地)
+    if (opts.autoBuySeed) {
+        const dayKey = (() => {
+            const t = toInt(st && st.at) > 0 ? toInt(st.at) : Math.floor(Date.now() / 1000);
+            const d = new Date((t + 8 * 3600) * 1000);
+            return `${d.getUTCFullYear()}-${d.getUTCMonth() + 1}-${d.getUTCDate()}`;
+        })();
+        if (lastSeedBuyDay !== dayKey) {
+            const r = await buyDailySeeds(opts.seedBuyCount || 1);
+            out.steps.push({ step: 'buyDailySeeds', ...r });
+            if (r.ok) lastSeedBuyDay = dayKey;
+            await sleep(800);
+        } else {
+            out.steps.push({ step: 'buyDailySeeds', ok: false, skipped: true, reason: `今天(${dayKey})已兑换过` });
+        }
     }
     if (opts.autoInteract && inShift && curWork.canInteract !== false) {
         const r = await interactWithFriend(employerGid, opts.interactType).catch((e) => ({ ok: false, reason: e.message }));
@@ -1351,6 +1412,7 @@ module.exports = {
     getCraftableFruitIds,
     getEmployees,
     getSalesRecords,
+    buyDailySeeds,
     getMenuNames,
     getLastEmployer: () => lastEmployer,
     useSpeaker,

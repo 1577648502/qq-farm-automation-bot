@@ -317,6 +317,8 @@ async function runMilkTea(reason = 'interval') {
             autoTask: false,   // 任务需充值激活, 功能已移除(不再自动领取)
             autoInteract: cfg.autoInteract,
             autoWage: cfg.autoWage,
+            autoBuySeed: cfg.autoBuySeed,
+            seedBuyCount: cfg.seedBuyCount,
             claimWage: true,   // 兼容旧字段(实际以 autoWage 为准)
             interactType: cfg.interactType,
             employerGid: cfg.employerGid,

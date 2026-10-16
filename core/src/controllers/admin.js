@@ -3624,6 +3624,8 @@ app.use('/api', (req, res, next) => {
                 interactType: cfg.interactType || 5,
                 employerGid: cfg.employerGid || '',
                 storeName: cfg.storeName || '奶茶小铺',
+                autoBuySeed: !!cfg.autoBuySeed,
+                seedBuyCount: cfg.seedBuyCount || 1,
             } });
         } catch (e) { res.json({ ok: false, error: e.message }); }
     });
@@ -3642,6 +3644,8 @@ app.use('/api', (req, res, next) => {
                 milkTeaInteractType: body.interactType !== undefined ? body.interactType : undefined,
                 milkTeaEmployerGid: typeof body.employerGid === 'string' ? body.employerGid : undefined,
                 milkTeaStoreName: typeof body.storeName === 'string' ? body.storeName : undefined,
+                milkTeaAutoBuySeed: typeof body.autoBuySeed === 'boolean' ? body.autoBuySeed : undefined,
+                milkTeaSeedBuyCount: body.seedBuyCount !== undefined ? body.seedBuyCount : undefined,
             });
             res.json({ ok: true, data: {
                 hireGids: body.hireGids || [],
