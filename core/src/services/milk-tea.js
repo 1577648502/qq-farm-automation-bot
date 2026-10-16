@@ -457,10 +457,27 @@ async function autoHire(hireGids) {
     const list = (Array.isArray(hireGids) ? hireGids : []).map((g) => toInt(g)).filter((g) => g > 0);
     if (!list.length) return { ok: false, reason: '未配置可雇佣好友(先在页面里勾选)' };
     // 先在岗好友跳过(否则必报 1034140 该雇佣位已有员工在工作)
+    // ⚠ 在岗判定不能只看"是否在 #4 列表里": 实测列表里有人**没有状态字段**(已下班/历史条目)
+    //    真在岗 = state === 1, 或(按真实时间)下班时间 #6 还没到
     const emp = await getEmployees().catch(() => null);
-    const working = new Set(((emp && emp.friends) || []).map((x) => toInt(x.gid)));
+    const nowSec = Math.floor(Date.now() / 1000);
+    const workingNames = [];
+    const working = new Set();
+    for (const f of (emp && emp.friends) || []) {
+        const onDuty = toInt(f.state) === 1 || (toInt(f.offAt) > nowSec);
+        if (onDuty) {
+            working.add(toInt(f.gid));
+            workingNames.push(f.name || `GID:${f.gid}`);
+        }
+    }
     const todo = list.filter((g) => !working.has(g));
-    if (!todo.length) return { ok: true, skipped: true, reason: '白名单好友都已在岗' };
+    if (!todo.length) {
+        return {
+            ok: true,
+            skipped: true,
+            reason: `白名单 ${list.length} 位都已在岗(${workingNames.slice(0, 4).join('、')}${workingNames.length > 4 ? ' 等' : ''})`,
+        };
+    }
     return autoHireInner(todo);
 }
 
