@@ -518,33 +518,10 @@ onMounted(() => {
           <div class="text-xs text-gray-500 dark:text-gray-400">结算期开始</div>
           <div class="text-sm text-gray-900 font-medium dark:text-gray-100">{{ fmtTime(status.settleAt) }}</div>
         </div>
-        <!-- 好友列表(可雇佣; 标在岗=已被某位老板雇佣中) -->
-        <div class="col-span-2 md:col-span-2">
-          <div class="text-xs text-gray-500 dark:text-gray-400">
-            我雇佣的员工
-            <span class="ml-1">{{ employees.length }} 位</span>
-            <button class="ml-1 text-[10px] text-blue-600 hover:underline dark:text-blue-400" :disabled="employeesLoading" @click="loadEmployees">
-              刷新
-            </button>
-          </div>
-          <div class="mt-1 text-[10px] text-gray-400">
-            来源：员工列表(#161.#4) · 「在岗」= 该员工正在上班（state=1 或 下班时间未到）
-          </div>
-          <div class="mt-1 flex flex-wrap gap-1">
-            <span
-              v-for="e in employees"
-              :key="e.gid"
-              class="rounded px-1.5 py-0.5 text-xs"
-              :class="isOnDuty(e) ? 'bg-emerald-50 text-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-300' : 'bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-300'"
-            >
-              {{ e.name }}<template v-if="e.titleName"> · {{ e.titleName }}</template>
-              <template v-if="e.offAt"> · 下班 {{ fmtTime(e.offAt) }}</template>
-              <template v-if="isOnDuty(e)"> · 在岗</template>
-            </span>
-            <span v-if="!employees.length" class="text-xs text-gray-500 dark:text-gray-400">
-              {{ employeesLoading ? '读取中…' : '暂无员工' }}
-            </span>
-          </div>
+        <!-- 顶部只显示员工数量; 员工名单在下方"雇佣好友"卡片里 -->
+        <div>
+          <div class="text-xs text-gray-500 dark:text-gray-400">我雇佣的员工</div>
+          <div class="text-sm text-gray-900 font-medium dark:text-gray-100">{{ employees.length }} 位</div>
         </div>
         <div>
           <div class="text-xs text-gray-500 dark:text-gray-400">受雇状态</div>
@@ -830,6 +807,30 @@ onMounted(() => {
           >
           <BaseButton variant="secondary" size="sm" @click="addGid">添加</BaseButton>
           <span class="text-xs text-gray-400">GID 可在「好友」页面查看</span>
+        </div>
+        <!-- 我雇佣的员工(名单, 来自 #161.#4) -->
+        <div class="mb-3 rounded border border-emerald-200 p-2 dark:border-emerald-800">
+          <div class="mb-1 text-xs text-gray-600 dark:text-gray-300">
+            我雇佣的员工
+            <span class="ml-1 font-medium">{{ employees.length }} 位</span>
+            <button class="ml-1 text-[10px] text-blue-600 hover:underline dark:text-blue-400" :disabled="employeesLoading" @click="loadEmployees">刷新</button>
+            <span class="ml-2 text-[10px] text-gray-400">「在岗」= state=1 或下班时间未到</span>
+          </div>
+          <div class="flex flex-wrap gap-1">
+            <span
+              v-for="e in employees"
+              :key="e.gid"
+              class="rounded px-1.5 py-0.5 text-xs"
+              :class="isOnDuty(e) ? 'bg-emerald-50 text-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-300' : 'bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-300'"
+            >
+              {{ e.name }}<template v-if="e.titleName"> · {{ e.titleName }}</template>
+              <template v-if="e.offAt"> · 下班 {{ fmtTime(e.offAt) }}</template>
+              <template v-if="isOnDuty(e)"> · 在岗</template>
+            </span>
+            <span v-if="!employees.length" class="text-xs text-gray-500 dark:text-gray-400">
+              {{ employeesLoading ? '读取中…' : '暂无员工' }}
+            </span>
+          </div>
         </div>
         <div class="mb-2 flex flex-wrap items-center gap-2">
           <BaseButton variant="secondary" size="sm" :loading="employeesLoading" @click="loadEmployees">刷新好友</BaseButton>
