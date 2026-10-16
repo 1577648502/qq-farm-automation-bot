@@ -1224,10 +1224,14 @@ async function runMilkTea(opts = {}) {
             });
             return out;
         }
-        if (r.ok) {
+        if (r.ok && !r.skipped && r.friendGid) {
             log('活动', `奶茶热销中: 已自动雇佣好友 ${r.friendGid}`, { module: 'activity', event: '奶茶热销中', result: 'ok' });
         } else {
-            log('活动', `奶茶热销中: 自动雇佣未成功 — ${r.reason}`, { module: 'activity', event: '奶茶热销中', result: 'warn' });
+            if (r.skipped) {
+                log('活动', `奶茶热销中: 雇佣跳过(${r.reason})`, { module: 'activity', event: '奶茶热销中', result: 'skip' });
+            } else {
+                log('活动', `奶茶热销中: 自动雇佣未成功 — ${r.reason}`, { module: 'activity', event: '奶茶热销中', result: 'warn' });
+            }
         }
     }
     out.state = await getMainStatus().catch(() => st);
