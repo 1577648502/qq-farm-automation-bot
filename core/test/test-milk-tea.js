@@ -338,6 +338,26 @@ const byIdx = (i) => FRAMES.find(f => f.idx === i);
         check('超长会截断加省略号', se('x'.repeat(80)).endsWith('…'), se('x'.repeat(80)).slice(-6));
     }
 
+    section('4h. 最新互动验证包(09:04): 当前老板=哈哈, 班次进行中, 类型1=宣传推广');
+    {
+        const mg5 = require(`${SB}/src/services/mengchong`);
+        const bodyOf3 = (hex) => Buffer.from(types.GateMessage.decode(Buffer.from(hex, 'hex')).body || []);
+        const frames = loadFrames(path.join(__dirname, '..', '..', 'wx-code-grabber', 'captures', '20261016-090422_互动验证.jsonl'));
+        let resHex = '';
+        for (const f of frames) {
+            const fsx = mg5.parseTop(bodyOf3(f.hex));
+            if (Number((fsx.find((x) => x.f === 1) || {}).v) !== 2026110101) continue;
+            if (Number((fsx.find((x) => x.f === 2) || {}).v) !== 63) continue;
+            const res = fsx.find((x) => x.f === 168);
+            if (res && res.w === 2 && res.v) { resHex = Buffer.from(res.v).toString('hex'); break; }
+        }
+        const work = milkTea.parseWorkFromRefresh(resHex);
+        check('当前老板 = 1253397809 哈哈(会随班次变化)', work.employer && work.employer.gid === 1253397809 && work.employer.name === '哈哈', work.employer);
+        check('该班次进行中(未到结束时间)', work.active === true, { endAt: work.endAt, active: work.active });
+        const opts = milkTea.WORK_INTERACT_OPTIONS;
+        check('互动事项 5 项, 1=宣传推广', opts.length === 5 && opts[0].id === 1 && opts[0].name === '宣传推广', opts.map((x) => x.name));
+    }
+
     section('5. 任务列表');
     {
         const t = await milkTea.getTasks();

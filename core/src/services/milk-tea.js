@@ -56,6 +56,7 @@ const CMD_CLAIM_WAGE = 64;   // **领工资**: 请求 #169 空 → 响应 {#1: {
  * 互动(工作事项)5 选 1 —— 名称/效果取自游戏「工作事项」界面(2026-10-16 截图)
  * ⚠ 实测 type=5 会造成工资 -20(带"工资减半"风险的那档), 所以默认改成 2
  */
+// 实测对照(2026-10-16 09:04 抓包): 选"宣传推广"(type=1) → 工资 40→48(#8#3=+8, 即 +20%) ✓ 与下表一致
 const WORK_INTERACT_OPTIONS = [
     { id: 1, name: '宣传推广', desc: '帮老板立刻卖出40杯奶茶，获得本班工资 20% 的奖金' },
     { id: 2, name: '花式摇杯', desc: '老板未来3小时奶茶券收益+10%，获得本班工资 30% 奖金', recommended: true },
@@ -629,7 +630,21 @@ async function interactWithFriend(friendGid, type = WORK_INTERACT_TYPE) {
     }
     const inner = Buffer.concat([encodeVarintField(1, gid), encodeVarintField(2, toInt(type) || WORK_INTERACT_TYPE)]);
     const payload = Buffer.concat([Buffer.from([0x0a, inner.length]), inner]);
-    const r = await mainOperate(CMD_WORK_INTERACT, 170, payload);
+    let r = await mainOperate(CMD_WORK_INTERACT, 170, payload);
+    // 自愈: 1034147(本班工作已结束) 通常是"老板/班次在这期间换了" —— 刷新拿新老板重试一次
+    if (r.errorCode === 1034147) {
+        const st2 = await getMainStatus().catch(() => null);
+        const newGid = st2 && st2.work && st2.work.employer && st2.work.employer.gid;
+        if (newGid && newGid !== gid) {
+            log('活动', `奶茶热销中: 互动目标已变更(${gid} → ${newGid}), 用新老板重试一次`, {
+                module: 'activity', event: '奶茶热销中', result: 'warn',
+            });
+            gid = newGid;
+            const inner2 = Buffer.concat([encodeVarintField(1, gid), encodeVarintField(2, toInt(type) || WORK_INTERACT_TYPE)]);
+            const payload2 = Buffer.concat([Buffer.from([0x0a, inner2.length]), inner2]);
+            r = await mainOperate(CMD_WORK_INTERACT, 170, payload2);
+        }
+    }
     if (r.errorCode !== 0) return { ok: false, reason: `互动失败 code=${r.errorCode}` };
     let result = null;
     if (r.resultHex) {
