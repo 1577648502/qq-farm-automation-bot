@@ -1453,7 +1453,13 @@ async function runMilkTea(opts = {}) {
         if (lastSeedBuyDay !== dayKey) {
             const r = await buyDailySeeds(opts.seedBuyCount || 1);
             out.steps.push({ step: 'buyDailySeeds', ...r });
-            if (r.ok) lastSeedBuyDay = dayKey;
+            // 每日任务: 无论成功/失败/限购, 当天只做一次(用户要求"报异常一次后不要再跑, 明天再跑")
+            lastSeedBuyDay = dayKey;
+            if (!r.ok && !r.skipped) {
+                log('活动', `奶茶热销中: 每日兑换今天不再尝试(明天再跑) — ${shortErr(r.reason)}`, {
+                    module: 'activity', event: '奶茶热销中', result: 'skip',
+                });
+            }
             await stepGap();
         } else {
             out.steps.push({ step: 'buyDailySeeds', ok: false, skipped: true, reason: `今天(${dayKey})已兑换过` });
