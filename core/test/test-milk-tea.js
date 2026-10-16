@@ -301,6 +301,29 @@ const byIdx = (i) => FRAMES.find(f => f.idx === i);
         }
     }
 
+    section('4f. 我的工作信息(雇主/工资/特长) —— 从刷新(63)结果解析');
+    {
+        const mg4 = require(`${SB}/src/services/mengchong`);
+        const bodyOf2 = (hex) => Buffer.from(types.GateMessage.decode(Buffer.from(hex, 'hex')).body || []);
+        const frames = loadFrames(path.join(__dirname, '..', '..', 'wx-code-grabber', 'captures', '20261016-080455_互动新.jsonl'));
+        let resHex = '';
+        for (const f of frames) {
+            const fsx = mg4.parseTop(bodyOf2(f.hex));
+            if (Number((fsx.find((x) => x.f === 1) || {}).v) !== 2026110101) continue;
+            if (Number((fsx.find((x) => x.f === 2) || {}).v) !== 63) continue;
+            const res = fsx.find((x) => x.f === 168);
+            // 注意: parseTop 里 wire=2 字段的字节放在 .v(不是 .raw)
+            if (res && res.w === 2 && res.v) { resHex = Buffer.from(res.v).toString('hex'); break; }
+        }
+        check('抓到 cmd=63 的结果帧', !!resHex);
+        const work = milkTea.parseWorkFromRefresh(resHex);
+        check('当前雇主 = 1244632861 南桉', work.employer && work.employer.gid === 1244632861 && work.employer.name === '南桉', work.employer);
+        check('我的特长 = 9001 金牌销售', work.titleId === 9001 && work.titleName === '金牌销售', [work.titleId, work.titleName]);
+        check('本班工资 = 40', work.wage === 40, work.wage);
+        check('含兼职历史记录(哈哈)', work.records.some((r) => r.name === '哈哈'), work.records.slice(0, 3));
+        check('互动目标 gid 与 cmd=65 传参一致(1244632861)', work.employer.gid === 1244632861, work.employer.gid);
+    }
+
     section('5. 任务列表');
     {
         const t = await milkTea.getTasks();

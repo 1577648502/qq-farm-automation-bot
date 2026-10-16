@@ -179,7 +179,9 @@ async function getMainStatus() {
     const r = await mainOperate(CMD_REFRESH, undefined, Buffer.alloc(0));
     if (r.errorCode !== 0) return { ok: false, reason: `刷新失败 code=${r.errorCode}` };
     const st = parseMainState(r.activity);
-    return { ...st, ok: st.ok };
+    const work = parseWorkFromRefresh(r.resultHex);
+    if (work.employer && work.employer.gid) lastEmployer = work.employer;
+    return { ...st, work, ok: st.ok };
 }
 
 /** 领取收银台收益(核心: 满载会暂停营业且不补发) */
@@ -673,6 +675,55 @@ function parseEmployerFromCashier(resultHex) {
 }
 
 /**
+ * 解析"我的工作"信息 —— 来自**刷新(cmd=63)的结果 #168**(权威来源, 实测 2026-10-16):
+ *   #168.#1 = 本次兼职(进行中): #1 = {gid, 名字} = **当前老板**, #2 店名, #3 班次id,
+ *             #4/#5 我的特长, #6/#7 班次起止, #11 工资, #13 = {#1 已完成班次, #2 累计奖金}
+ *   #168.#2 = 兼职记录(历史, repeated)   #168.#3/#4 = 我的特长 id/名称
+ * ⚠ 互动(cmd=65)要传的 gid = 这里 #1.#1.#1(当前老板); 别从收银台详情(55)的历史记录取(踩过, 取到旧班次)
+ */
+function parseWorkFromRefresh(resultHex) {
+    const out = { ok: false, employer: null, storeName: '', startAt: 0, endAt: 0, wage: 0, bonus: 0, titleId: 0, titleName: '', records: [] };
+    if (!resultHex) return out;
+    try {
+        const rf = parseTop(Buffer.from(resultHex, 'hex'));
+        const cur = findField(rf, 1);
+        if (cur && cur.w === 2) {
+            const c = parseTop(cur.v);
+            const emp = findField(c, 1);
+            if (emp && emp.w === 2) {
+                const e = parseTop(emp.v);
+                const gid = toInt((findField(e, 1) || {}).v);
+                const nm = (findField(e, 2) || {}).v;
+                if (gid > 0) out.employer = { gid, name: nm ? String(nm) : '' };
+            }
+            const store = (findField(c, 2) || {}).v;
+            out.storeName = store ? String(store) : '';
+            out.startAt = toInt((findField(c, 6) || {}).v);
+            out.endAt = toInt((findField(c, 7) || {}).v);
+            out.wage = toInt((findField(c, 11) || {}).v);
+            const t13 = findField(c, 13);
+            if (t13 && t13.w === 2) out.bonus = toInt((findField(parseTop(t13.v), 2) || {}).v);
+            out.ok = !!out.employer;
+        }
+        const t = findField(rf, 3);
+        if (t && t.w === 0) out.titleId = toInt(t.v);
+        const tn = findField(rf, 4);
+        if (tn && tn.w === 2) out.titleName = String(tn.v);
+        for (const x of rf) {
+            if (x.f !== 2 || x.w !== 2) continue;
+            const r2 = parseTop(x.v);
+            const emp2 = findField(r2, 1);
+            if (!emp2 || emp2.w !== 2) continue;
+            const e2 = parseTop(emp2.v);
+            const gid2 = toInt((findField(e2, 1) || {}).v);
+            const nm2 = (findField(e2, 2) || {}).v;
+            if (gid2 > 0) out.records.push({ gid: gid2, name: nm2 ? String(nm2) : '' });
+        }
+    } catch (e) { /* 忽略 */ }
+    return out;
+}
+
+/**
  * 收银台详情(cmd=55) —— **查询**用: 结果 #160 内含可领取与**兼职雇主**(#1.#9.#11 = {gid, 名字})
  * 注意: 实测它不会发放任何东西(别当领取用, 踩过)
  */
@@ -867,7 +918,11 @@ async function runMilkTea(opts = {}) {
         await sleep(1000);
     }
     // 互动/领工资都需要"被雇佣": 雇主 GID 优先用配置, 没配就用收银台结果里探测到的(兼职记录里的老板)
-    const employerGid = opts.employerGid || (out.steps.find((x) => x.step === 'cashier' && x.employer) || {}).employer?.gid || '';
+    const employerGid = opts.employerGid
+        || (st && st.work && st.work.employer && st.work.employer.gid)   // 权威: 刷新(63)结果
+        || (out.steps.find((x) => x.step === 'cashier' && x.employer) || {}).employer?.gid
+        || (lastEmployer && lastEmployer.gid)
+        || '';
     if (opts.claimWage !== false) {
         if (stopped()) { out.cancelled = true; return out; }
         const r = await claimWage().catch((e) => ({ ok: false, reason: e.message }));
@@ -937,6 +992,7 @@ module.exports = {
     craftAllFruits,
     claimWage,
     getCashierDetail,
+    parseWorkFromRefresh,
     parseEmployerFromCashier,
     WORK_INTERACT_OPTIONS,
     interactWithFriend,

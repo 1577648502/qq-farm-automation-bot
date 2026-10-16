@@ -268,7 +268,14 @@ async function interactNow() {
     toast.warning('当前没有被好友雇佣（【我的工作】为空），不能互动')
     return
   }
-  const gid = String(interactGid.value || (status.value && status.value.employer && status.value.employer.gid) || hireGids.value[0] || '').trim()
+  const w = status.value && status.value.work
+  const gid = String(
+    interactGid.value
+    || (w && w.employer && w.employer.gid)
+    || (status.value && status.value.employer && status.value.employer.gid)
+    || hireGids.value[0]
+    || '',
+  ).trim()
   if (!gid) { toast.warning('请先勾选好友（或填 GID）'); return }
   busy.value = 'interact'
   try {
@@ -456,8 +463,14 @@ onMounted(() => {
             :class="status.employed ? 'text-emerald-600 dark:text-emerald-400' : 'text-gray-500 dark:text-gray-400'"
           >
             {{ status.employed ? '已被雇佣（可互动）' : '未受雇' }}
-            <span v-if="status.employer && status.employer.gid" class="ml-1 text-xs text-gray-500 font-normal">
-              雇主 {{ status.employer.name || '' }} {{ status.employer.gid }}
+            <span
+              v-if="(status.work && status.work.employer) || (status.employer && status.employer.gid)"
+              class="ml-1 text-xs text-gray-500 font-normal"
+            >
+              老板 {{ (status.work && status.work.employer ? status.work.employer.name : status.employer.name) || '' }}
+              {{ status.work && status.work.employer ? status.work.employer.gid : status.employer.gid }}
+              <template v-if="status.work && status.work.wage"> · 工资 {{ status.work.wage }}</template>
+              <template v-if="status.work && status.work.titleName"> · 特长 {{ status.work.titleName }}</template>
             </span>
           </div>
         </div>
