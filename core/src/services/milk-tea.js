@@ -561,10 +561,21 @@ async function craftAllFruits(perBatch = 20, maxBatches = 20) {
             break;                                   // 后续批次失败 → 停手, 但保留已完成的
         }
         used += slice.length;
-        made.push(...(r.made || []));
+        const batchMade = r.made || [];
+        usedUnits += batchMade.reduce((a, x) => a + (Number(x.count) || 0), 0);
+        made.push(...batchMade);
         if (i + perBatch < all.uids.length) await sleep(700);
     }
-    log('活动', `奶茶热销中: 已加工 ${used} 组果实(共 ${usedUnits || '?'} 个)${made.length ? `: ${made.map((m) => m.name).join('、')}` : ''}`, {
+    // 同名合并(森野甜莓×99), 避免 5 组并列刷一长串
+    const agg = new Map();
+    for (const m of made) {
+        const k = toInt(m.id);
+        const prev = agg.get(k) || { name: m.name, count: 0 };
+        prev.count += Number(m.count) || 0;
+        agg.set(k, prev);
+    }
+    const aggText = Array.from(agg.values()).map((x) => `${x.name}×${x.count}`).join('、');
+    log('活动', `奶茶热销中: 已加工 ${used} 组果实(共 ${usedUnits} 个)${aggText ? `: ${aggText}` : ''}`, {
         module: 'activity', event: '奶茶热销中', result: 'ok', fruits: used, batches,
     });
     return { ok: true, used, usedUnits, batches, made, state: null };
