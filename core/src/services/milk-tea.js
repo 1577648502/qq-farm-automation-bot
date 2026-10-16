@@ -826,7 +826,10 @@ function parseWorkFromRefresh(resultHex) {
  * 菜单(cmd=58) —— 品类 id → 名字(用于营业记录)
  * 结果 #163 = repeated {#1 序号, #2 名称, #4 是否解锁, #5 售价, #6 解锁所需}
  */
-async function getMenuNames() {
+/** 菜单名缓存(品类 → 名字; 5 分钟有效, 减少请求) */
+let menuNamesCache = { at: 0, map: new Map() };
+async function getMenuNames(force = false) {
+    if (!force && menuNamesCache.at && Date.now() - menuNamesCache.at < 5 * 60 * 1000) return menuNamesCache.map;
     const map = new Map();
     try {
         const r = await mainOperate(CMD_SPEAKER, 163, Buffer.alloc(0));
@@ -840,6 +843,7 @@ async function getMenuNames() {
             }
         }
     } catch (e) { /* 名字拿不到就退回编号 */ }
+    if (map.size) menuNamesCache = { at: Date.now(), map };
     return map;
 }
 
@@ -850,7 +854,11 @@ async function getMenuNames() {
  */
 async function getSalesRecords() {
     const r = await mainOperate(CMD_CASHIER_DETAIL, 160, Buffer.alloc(0));
-    if (!r.ok) return { ok: false, reason: r.reason || `读取营业记录失败 code=${r.errorCode}` };
+    if (!r.ok) {
+        const why = r.reason || `code=${r.errorCode}`;
+        log('活动', `奶茶热销中: 读取营业记录失败 — ${why}`, { module: 'activity', event: '奶茶热销中', result: 'warn' });
+        return { ok: false, reason: why };
+    }
     const out = { ok: true, value: 0, cups: 0, items: [], balances: [], pending: null, at: 0 };
     try {
         const rf = parseTop(Buffer.from(r.resultHex || '', 'hex'));
