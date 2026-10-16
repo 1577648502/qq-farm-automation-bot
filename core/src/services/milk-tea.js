@@ -501,7 +501,8 @@ async function craftAllFruits(perBatch = 20, maxBatches = 20) {
     if (!all.uids.length) return { ok: false, reason: '背包里没有活动果实(森野系列)，先种再收' };
 
     const made = [];
-    let used = 0;
+    let used = 0;         // 投入的"组"数(背包里每个 uid 一组)
+    let usedUnits = 0;    // 实际消耗的果实个数
     let batches = 0;
     for (let i = 0; i < all.uids.length; i += perBatch) {
         if (batches >= maxBatches) break;
@@ -516,10 +517,10 @@ async function craftAllFruits(perBatch = 20, maxBatches = 20) {
         made.push(...(r.made || []));
         if (i + perBatch < all.uids.length) await sleep(700);
     }
-    log('活动', `奶茶热销中: 已把 ${used} 个果实做成高级奶茶${made.length ? `(${made.map((m) => m.name).join('、')})` : ''}`, {
+    log('活动', `奶茶热销中: 已加工 ${used} 组果实(共 ${usedUnits || '?'} 个)${made.length ? `: ${made.map((m) => m.name).join('、')}` : ''}`, {
         module: 'activity', event: '奶茶热销中', result: 'ok', fruits: used, batches,
     });
-    return { ok: true, used, batches, made, state: null };
+    return { ok: true, used, usedUnits, batches, made, state: null };
 }
 
 /** 提交一批果实 uid 去制作(内部用) */
@@ -928,7 +929,6 @@ async function runMilkTea(opts = {}) {
         if (!st || !st.employed) {
             out.steps.push({ step: 'claimWage', ok: false, skipped: true, reason: '未受雇, 跳过领工资' });
         } else {
-            if (stopped()) { out.cancelled = true; return out; }
             const r = await claimWage().catch((e) => ({ ok: false, reason: e.message }));
             out.steps.push({ step: 'claimWage', ...r });
             if (!r.ok && !/没有|不存在|无/.test(String(r.reason))) {
@@ -938,7 +938,6 @@ async function runMilkTea(opts = {}) {
         }
     }
     if (opts.autoInteract && employerGid) {
-        if (stopped()) { out.cancelled = true; return out; }
         const r = await interactWithFriend(employerGid, opts.interactType).catch((e) => ({ ok: false, reason: e.message }));
         out.steps.push({ step: 'autoInteract', ...r });
         if (r.ok) {
