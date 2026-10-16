@@ -94,6 +94,7 @@ export interface SettingsState {
   milkTeaSpeaker: boolean
   milkTeaStoreName: string
   milkTeaAutoInteract: boolean
+  milkTeaAutoWage: boolean
   milkTeaInteractType: number
   milkTeaEmployerGid: string
   sellGoldenFruit: boolean
@@ -150,6 +151,7 @@ export const useSettingStore = defineStore('setting', () => {
   milkTeaSpeaker: false,
   milkTeaStoreName: '奶茶小铺',
   milkTeaAutoInteract: false,
+  milkTeaAutoWage: true,
   milkTeaInteractType: 5,
   milkTeaEmployerGid: '',
   sellGoldenFruit: false,
@@ -215,6 +217,7 @@ export const useSettingStore = defineStore('setting', () => {
   settings.value.milkTeaSpeaker = d.milkTeaSpeaker ?? false
   settings.value.milkTeaStoreName = d.milkTeaStoreName ?? '奶茶小铺'
   settings.value.milkTeaAutoInteract = d.milkTeaAutoInteract ?? false
+  settings.value.milkTeaAutoWage = d.milkTeaAutoWage !== false
   settings.value.milkTeaInteractType = Number(d.milkTeaInteractType) || 5
   settings.value.milkTeaEmployerGid = d.milkTeaEmployerGid ?? ''
   settings.value.sellGoldenFruit = d.sellGoldenFruit ?? false
@@ -272,6 +275,7 @@ export const useSettingStore = defineStore('setting', () => {
         milkTeaSpeaker: newSettings.milkTeaSpeaker,
         milkTeaStoreName: newSettings.milkTeaStoreName,
         milkTeaAutoInteract: newSettings.milkTeaAutoInteract,
+        milkTeaAutoWage: newSettings.milkTeaAutoWage,
         milkTeaInteractType: newSettings.milkTeaInteractType,
         milkTeaEmployerGid: newSettings.milkTeaEmployerGid,
         sellGoldenFruit: newSettings.sellGoldenFruit,

@@ -923,14 +923,19 @@ async function runMilkTea(opts = {}) {
         || (out.steps.find((x) => x.step === 'cashier' && x.employer) || {}).employer?.gid
         || (lastEmployer && lastEmployer.gid)
         || '';
-    if (opts.claimWage !== false) {
-        if (stopped()) { out.cancelled = true; return out; }
-        const r = await claimWage().catch((e) => ({ ok: false, reason: e.message }));
-        out.steps.push({ step: 'claimWage', ...r });
-        if (!r.ok && !/没有|不存在|无/.test(String(r.reason))) {
-            log('活动', `奶茶热销中: 领工资未成功 — ${r.reason}`, { module: 'activity', event: '奶茶热销中', result: 'warn' });
+    // 自动领兼职工资: 独立开关(opts.autoWage) + 必须处于"被雇佣"状态
+    if (opts.autoWage !== false) {
+        if (!st || !st.employed) {
+            out.steps.push({ step: 'claimWage', ok: false, skipped: true, reason: '未受雇, 跳过领工资' });
+        } else {
+            if (stopped()) { out.cancelled = true; return out; }
+            const r = await claimWage().catch((e) => ({ ok: false, reason: e.message }));
+            out.steps.push({ step: 'claimWage', ...r });
+            if (!r.ok && !/没有|不存在|无/.test(String(r.reason))) {
+                log('活动', `奶茶热销中: 领工资未成功 — ${r.reason}`, { module: 'activity', event: '奶茶热销中', result: 'warn' });
+            }
+            await sleep(600);
         }
-        await sleep(600);
     }
     if (opts.autoInteract && employerGid) {
         if (stopped()) { out.cancelled = true; return out; }
