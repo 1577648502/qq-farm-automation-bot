@@ -149,7 +149,7 @@ async function loadShop() {
 async function loadEmployees() {
   employeesLoading.value = true
   try {
-    const res = await api.get('/api/activity/milk-tea/employees')
+    const res = await api.post('/api/activity/milk-tea/employees', {})
     const d = res.data?.data || {}
     if (!apiError(res, d)) employees.value = d.friends || []
   } catch (e: any) { /* 静默: 不影响主流程 */ } finally {
@@ -160,7 +160,7 @@ async function loadEmployees() {
 async function loadSales() {
   salesLoading.value = true
   try {
-    const res = await api.get('/api/activity/milk-tea/sales')
+    const res = await api.post('/api/activity/milk-tea/sales', {})
     const d = res.data?.data || {}
     if (!apiError(res, d)) sales.value = d
   } catch (e: any) { /* 静默 */ } finally {
