@@ -1407,13 +1407,13 @@ async function runMilkTea(opts = {}) {
     if (!st.opened && opts.openStore !== false) {
         const r = await openStore(opts.storeName);
         out.steps.push({ step: 'openStore', ...r });
-        await sleep(1200);
+        await stepGap();
         st = await getMainStatus().catch(() => st);
     }
     if (opts.autoTask) {
         const r = await claimAllTasks().catch((e) => ({ ok: false, reason: e.message }));
         out.steps.push({ step: 'autoTask', ...r });
-        await sleep(800);
+        await stepGap();
     }
     if (opts.fetchEmployer !== false) {
         const d = await getCashierDetail().catch(() => null);
@@ -1493,7 +1493,7 @@ async function runMilkTea(opts = {}) {
         if (!r.ok && !r.skipped) {
             log('活动', `奶茶热销中: 店铺升级未成功 — ${shortErr(r.reason)}`, { module: 'activity', event: '奶茶热销中', result: 'warn' });
         }
-        await sleep(900);
+        await stepGap();
     }
     // 自动领兼职工资: 独立开关(opts.autoWage) + 必须处于"被雇佣"状态
     if (opts.autoWage !== false) {
@@ -1505,7 +1505,7 @@ async function runMilkTea(opts = {}) {
             if (!r.ok && !/没有|不存在|无/.test(String(r.reason))) {
                 log('活动', `奶茶热销中: 领工资未成功 — ${r.reason}`, { module: 'activity', event: '奶茶热销中', result: 'warn' });
             }
-            await sleep(600);
+            await stepGap();
         }
     }
     if (opts.autoHire && Array.isArray(opts.hireGids) && opts.hireGids.length) {
