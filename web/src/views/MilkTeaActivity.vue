@@ -54,6 +54,8 @@ const employees = ref<any[]>([])
 const sales = ref<any>(null)
 const salesLoading = ref(false)
 const employeesLoading = ref(false)
+/** 我的员工数 —— 取服务端 #161.#1(权威); 列表(#4)含非本人雇佣的好友, 不用于展示员工 */
+const employeeCount = ref(0)
 /** 每日自动兑换种子(一天一次) + 每种兑换份数 */
 const autoBuySeed = ref(false)
 const seedBuyCount = ref(1)
@@ -154,7 +156,10 @@ async function loadEmployees() {
   try {
     const res = await api.post('/api/activity/milk-tea/employees', {})
     const d = res.data?.data || {}
-    if (!apiError(res, d)) employees.value = d.friends || []
+    if (!apiError(res, d)) {
+      employees.value = d.friends || []
+      employeeCount.value = Number(d.count) || 0
+    }
   } catch (e: any) { /* 静默: 不影响主流程 */ } finally {
     employeesLoading.value = false
   }
@@ -184,10 +189,6 @@ function isOnDuty(e: any) {
 }
 
 
-/** 在岗人数 */
-function onDutyCount() {
-  return employees.value.filter((e: any) => isOnDuty(e)).length
-}
 
 
 async function loadHireConfig() {
@@ -521,10 +522,7 @@ onMounted(() => {
         <!-- 顶部只显示员工数量; 员工名单在下方"雇佣好友"卡片里 -->
         <div>
           <div class="text-xs text-gray-500 dark:text-gray-400">我雇佣的员工</div>
-          <div class="text-sm text-gray-900 font-medium dark:text-gray-100">
-            {{ employees.length }} 位
-            <span class="text-xs text-emerald-600 dark:text-emerald-400">（在岗 {{ onDutyCount() }}）</span>
-          </div>
+          <div class="text-sm text-gray-900 font-medium dark:text-gray-100">{{ employeeCount }} 位</div>
         </div>
         <div>
           <div class="text-xs text-gray-500 dark:text-gray-400">受雇状态</div>
@@ -792,7 +790,7 @@ onMounted(() => {
         <div class="mb-2 flex flex-wrap items-center gap-2">
           <BaseButton variant="secondary" size="sm" :loading="employeesLoading" @click="loadEmployees">刷新好友</BaseButton>
           <span class="text-xs text-gray-500 dark:text-gray-400">
-            好友列表（勾选后用于雇佣/自动雇佣；已是员工的会被自动跳过）
+            好友列表（勾选后用于雇佣/自动雇佣）；「在岗」= 该好友正在上班（谁的班不确定），在岗的雇不了(会被跳过)
             <template v-if="employees.length">：{{ employees.map((e: any) => `${e.name}(${e.titleName || '—'})`).join('、') }}</template>
             <template v-else>（暂无好友员工）</template>
           </span>
