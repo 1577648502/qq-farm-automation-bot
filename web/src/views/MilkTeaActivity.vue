@@ -182,11 +182,6 @@ function interactName(type: number) {
   return hit ? hit.name : `互动#${type}`
 }
 
-/** 是否在岗 —— **只看真实下班时间** #6(实测 state=1 更可能表示"已签约", 不代表在岗) */
-function isOnDuty(e: any) {
-  const now = Math.floor(Date.now() / 1000)
-  return Number(e.offAt) > now
-}
 
 
 
