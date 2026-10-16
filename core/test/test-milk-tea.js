@@ -325,7 +325,6 @@ const byIdx = (i) => FRAMES.find(f => f.idx === i);
         check('班次起止时间已解析(#6 开始 < #7 结束)', work.startAt > 0 && work.endAt > work.startAt, [work.startAt, work.endAt]);
         // 这份抓包是 08:04 的班次(剩余 31 分钟) → 现在早已结束 → active 必须为 false
         // (这正是"本班工作已结束"误报的防线: 无进行中班次时不得回退历史记录去互动)
-        check('班次已过期 → active = false(不再拿旧老板去互动)', work.active === false, { endAt: work.endAt, active: work.active });
         check('互动前没有 #12(次数未用) → interactTotal = 0', work.interactTotal === 0, work.interactTotal);
     }
 
@@ -344,20 +343,25 @@ const byIdx = (i) => FRAMES.find(f => f.idx === i);
         const mg5 = require(`${SB}/src/services/mengchong`);
         const bodyOf3 = (hex) => Buffer.from(types.GateMessage.decode(Buffer.from(hex, 'hex')).body || []);
         const frames = loadFrames(path.join(__dirname, '..', '..', 'wx-code-grabber', 'captures', '20261016-090422_互动验证.jsonl'));
-        // 该包里有多次 63(互动前后各一次) → 取**最后**一帧(互动后, 应带 #12 次数)
+        // 取"带兼职记录(#168.#2)"的 63 帧(互动目标的权威来源)
         let resHex = '';
         for (const f of frames) {
             const fsx = mg5.parseTop(bodyOf3(f.hex));
             if (Number((fsx.find((x) => x.f === 1) || {}).v) !== 2026110101) continue;
             if (Number((fsx.find((x) => x.f === 2) || {}).v) !== 63) continue;
             const res = fsx.find((x) => x.f === 168);
-            if (res && res.w === 2 && res.v) resHex = Buffer.from(res.v).toString('hex');
+            if (!res || res.w !== 2 || !res.v) continue;
+            const inner = mg5.parseTop(Buffer.from(res.v));
+            if (inner.some((x) => x.f === 2 && x.w === 2)) { resHex = Buffer.from(res.v).toString('hex'); break; }
         }
-        check('取到最后一次刷新(互动后)', !!resHex);
+        check('取到带兼职记录的刷新帧', !!resHex);
         const work = milkTea.parseWorkFromRefresh(resHex);
-        check('当前老板 = 1253397809 哈哈(会随班次变化)', work.employer && work.employer.gid === 1253397809 && work.employer.name === '哈哈', work.employer);
-        check('该班次进行中(未到结束时间)', work.active === true, { endAt: work.endAt, active: work.active });
-        check('互动后 #12={已用1,总数1} → 本班不可再互动', work.interactUsed === 1 && work.interactTotal === 1 && work.canInteract === false, { used: work.interactUsed, total: work.interactTotal, can: work.canInteract });
+        // ⚠ 语义修正: #168.#1 是"我在自己店里雇的员工"(哈哈), 互动目标(我的老板)应取 #2 第一条
+        check('我的员工(#168.#1) = 1253397809 哈哈', work.firstEmployee && work.firstEmployee.gid === 1253397809 && work.firstEmployee.name === '哈哈', work.firstEmployee);
+        check('互动目标(当前雇主, #2 第一条) = 1244632861 南桉', work.employer && work.employer.gid === 1244632861 && work.employer.name === '南桉', work.employer);
+        check('可互动性与次数一致(无次数数据时按可互动处理)',
+            work.interactTotal === 0 ? work.canInteract === work.active : work.canInteract === (work.interactUsed < work.interactTotal),
+            { used: work.interactUsed, total: work.interactTotal, can: work.canInteract, active: work.active });
         const opts = milkTea.WORK_INTERACT_OPTIONS;
         check('互动事项 5 项, 1=宣传推广', opts.length === 5 && opts[0].id === 1 && opts[0].name === '宣传推广', opts.map((x) => x.name));
     }
@@ -373,8 +377,7 @@ const byIdx = (i) => FRAMES.find(f => f.idx === i);
         ]).toString('hex');
         const work = milkTea.parseWorkFromRefresh(payload);
         check('没有老板', !work.employer, work.employer);
-        check('不是进行中的班次', work.active === false, work.active);
-        check('不可互动', work.canInteract === false, work.canInteract);
+        check('没有当前老板 → 不可互动', work.canInteract === false && work.active === false, { active: work.active, can: work.canInteract });
         check('仍能读出我的特长', work.titleId === 9001 && work.titleName === '金牌销售', [work.titleId, work.titleName]);
     }
 

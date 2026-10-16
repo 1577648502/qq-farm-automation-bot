@@ -641,9 +641,7 @@ async function interactWithFriend(friendGid, type = WORK_INTERACT_TYPE) {
         if (!w.employer || !w.employer.gid) {
             return { ok: false, skipped: true, reason: '当前没有进行中的兼职(未被雇佣), 不能互动', diag: workDiag(w, gid) };
         }
-        if (w.endAt && Math.floor(Date.now() / 1000) >= w.endAt) {
-            return { ok: false, skipped: true, reason: '本班工作已结束(班次已过), 不能再互动', diag: workDiag(w, gid) };
-        }
+        // ⚠ 不按记录时间窗口拦截(实测窗口过了仍可互动成功), 交给服务端判定 + 冷却兜底
         if (w.interactTotal > 0 && w.interactUsed >= w.interactTotal) {
             return { ok: false, skipped: true, reason: `本班互动次数已用完(${w.interactUsed}/${w.interactTotal}), 等下一班`, diag: workDiag(w, gid) };
         }
@@ -762,7 +760,7 @@ function parseEmployerFromCashier(resultHex) {
  * ⚠ 互动(cmd=65)要传的 gid = 这里 #1.#1.#1(当前老板); 别从收银台详情(55)的历史记录取(踩过, 取到旧班次)
  */
 function parseWorkFromRefresh(resultHex) {
-    const out = { ok: false, employer: null, storeName: '', startAt: 0, endAt: 0, wage: 0, bonus: 0, titleId: 0, titleName: '', records: [], active: false, interactUsed: 0, interactTotal: 0, canInteract: false };
+    const out = { ok: false, employer: null, firstEmployee: null, storeName: '', startAt: 0, endAt: 0, wage: 0, bonus: 0, titleId: 0, titleName: '', records: [], active: false, interactUsed: 0, interactTotal: 0, canInteract: false };
     if (!resultHex) return out;
     try {
         const rf = parseTop(Buffer.from(resultHex, 'hex'));
@@ -774,7 +772,8 @@ function parseWorkFromRefresh(resultHex) {
                 const e = parseTop(emp.v);
                 const gid = toInt((findField(e, 1) || {}).v);
                 const nm = (findField(e, 2) || {}).v;
-                if (gid > 0) out.employer = { gid, name: nm ? String(nm) : '' };
+                // ⚠ #168.#1 = **我在自己店里雇的员工**(我付他工资), 不是"我的老板"(见下方 #2 记录)
+                if (gid > 0) out.firstEmployee = { gid, name: nm ? String(nm) : '' };
             }
             const store = (findField(c, 2) || {}).v;
             out.storeName = store ? String(store) : '';
@@ -793,9 +792,12 @@ function parseWorkFromRefresh(resultHex) {
             out.ok = !!out.employer;
             // "进行中的班次" = 有本次兼职 && (没给结束时间 或 现在还没到结束时间)
             const nowSec = Math.floor(Date.now() / 1000);
-            out.active = !!out.employer && (!out.endAt || nowSec < out.endAt);
-            // 还能不能互动: 在进行中的班次里 且 次数没用完(实测用完再发会 1034147「本班工作已结束」)
+            // active = 有当前老板(兼职记录第一条存在) —— ⚠ 不用记录的时间窗口判断:
+            // 实测 09:04 那次, 记录的 endAt 已过但互动仍成功(服务端有自己的判定), 用窗口会误杀
+            out.active = !!out.employer;
+            // canInteract = 有当前老板 && 本班次数没用完(若服务端回了次数)
             out.canInteract = out.active && (out.interactTotal <= 0 || out.interactUsed < out.interactTotal);
+            void nowSec;
         }
         const t = findField(rf, 3);
         if (t && t.w === 0) out.titleId = toInt(t.v);
@@ -830,6 +832,15 @@ function parseWorkFromRefresh(resultHex) {
             }
         }
     } catch (e) { /* 忽略 */ }
+    // ⚠ 当前雇主 = 兼职记录(#2)第一条(老板付我工资) —— 这是**互动目标**
+    //    (实测: 09:04 成功那次的 #2[0] = 南桉, 与发送的互动 gid 一致; 而 #1 是另一位(我的员工))
+    if (out.records.length) {
+        const r0 = out.records[0];
+        out.employer = { gid: r0.gid, name: r0.name };
+        if (r0.storeName) out.storeName = r0.storeName;
+        if (r0.startAt) out.startAt = r0.startAt;
+        if (r0.endAt) out.endAt = r0.endAt;
+    }
     return out;
 }
 
