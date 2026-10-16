@@ -497,14 +497,23 @@ async function autoHire(hireGids) {
     const nowSec = Math.floor(Date.now() / 1000);
     const workingNames = [];
     const working = new Set();
+    const skillOf = new Map();
     for (const f of (emp && emp.friends) || []) {
         const onDuty = toInt(f.state) === 1 || (toInt(f.offAt) > nowSec);
         if (onDuty) {
             working.add(toInt(f.gid));
-            workingNames.push(f.name || `GID:${f.gid}`);
+            workingNames.push(`${f.name || `GID:${f.gid}`}(${EMPLOYEE_SKILLS[toInt(f.titleId)] || '?'})`);
         }
+        skillOf.set(toInt(f.gid), toInt(f.titleId));
     }
-    const todo = list.filter((g) => !working.has(g));
+    // 按"特长加成"排序: 先生命里带的高加成特长(默认 9001 销售 > 9002 宣传 > 9003 服务), 未知放最后
+    const order = Array.isArray(opts.hireSkillOrder) && opts.hireSkillOrder.length ? opts.hireSkillOrder : DEFAULT_HIRE_SKILL_ORDER;
+    const rank = (g) => {
+        const sid = skillOf.get(toInt(g));
+        const i = order.indexOf(sid);
+        return i >= 0 ? i : order.length + 1;
+    };
+    const todo = list.filter((g) => !working.has(g)).sort((a, b) => rank(a) - rank(b));
     if (!todo.length) {
         return {
             ok: true,
@@ -1030,12 +1039,12 @@ async function getEmployees() {
                     });
                 }
             }
-            return { ok: true, wage, friends, npcs };
+            return { ok: true, wage, count: toInt((findField(rf, 1) || {}).v), friends, npcs };
         } catch (e) {
             return { ok: false, reason: `解析员工列表失败: ${e.message}` };
         }
     }
-    return { ok: true, wage: 0, friends, npcs };
+    return { ok: true, wage: 0, count: 0, friends, npcs };
 }
 
 /**
@@ -1216,6 +1225,13 @@ function workDiag(w, gid) {
 }
 
 /** 已被服务端判定"本班不能互动"的班次(按班次开始时间记, 本班内不再重试) */
+/**
+ * 员工特长(实测 id↔名): 9001 金牌销售 / 9002 金牌宣传 / 9003 金牌服务 / 9004 默默搬砖(NPC)
+ * 雇佣优先级: 销售 > 宣传 > 服务 (默认; 可被 opts.hireSkillOrder 覆盖)
+ */
+const EMPLOYEE_SKILLS = { 9001: '金牌销售', 9002: '金牌宣传', 9003: '金牌服务', 9004: '默默搬砖' };
+const DEFAULT_HIRE_SKILL_ORDER = [9001, 9002, 9003];
+
 let lastSeedBuyDay = '';    // 每日兑换种子的日期标记(服务器日期)
 const interactCooldown = new Map();   // 班次key → 下次可尝试时间(30 分钟, 班次资格可能中途变化)
 const INTERACT_COOLDOWN_MS = 30 * 60 * 1000;

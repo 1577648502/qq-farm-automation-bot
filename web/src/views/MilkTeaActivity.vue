@@ -533,20 +533,29 @@ onMounted(() => {
         <!-- 好友列表(可雇佣; 标在岗=已被某位老板雇佣中) -->
         <div class="col-span-2 md:col-span-2">
           <div class="text-xs text-gray-500 dark:text-gray-400">
-            我雇佣的人（员工）
-            <span class="ml-1">{{ myEmployees.length }} 位</span>
+            我雇佣的员工
+            <span class="ml-1">{{ employees.length }} 位</span>
+            <button class="ml-1 text-[10px] text-blue-600 hover:underline dark:text-blue-400" :disabled="employeesLoading" @click="loadEmployees">
+              刷新
+            </button>
+          </div>
+          <div class="mt-1 text-[10px] text-gray-400">
+            来源：员工列表(#161.#4) · 「在岗」= 该员工正在上班（state=1 或 下班时间未到）
           </div>
           <div class="mt-1 flex flex-wrap gap-1">
             <span
-              v-for="e in myEmployees"
+              v-for="e in employees"
               :key="e.gid"
-              class="rounded bg-emerald-50 px-1.5 py-0.5 text-xs text-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-300"
+              class="rounded px-1.5 py-0.5 text-xs"
+              :class="isOnDuty(e) ? 'bg-emerald-50 text-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-300' : 'bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-300'"
             >
-              {{ e.name }}<template v-if="e.hours"> · {{ e.hours }}小时</template>
-              <template v-if="e.wage"> · 工资 {{ e.wage }}</template>
-              <template v-if="e.times > 1"> · {{ e.times }}班</template>
+              {{ e.name }}<template v-if="e.titleName"> · {{ e.titleName }}</template>
+              <template v-if="e.offAt"> · 下班 {{ fmtTime(e.offAt) }}</template>
+              <template v-if="isOnDuty(e)"> · 在岗</template>
             </span>
-            <span v-if="!myEmployees.length" class="text-xs text-gray-500 dark:text-gray-400">暂无雇佣记录</span>
+            <span v-if="!employees.length" class="text-xs text-gray-500 dark:text-gray-400">
+              {{ employeesLoading ? '读取中…' : '暂无员工' }}
+            </span>
           </div>
         </div>
         <div>
@@ -837,7 +846,7 @@ onMounted(() => {
         <div class="mb-2 flex flex-wrap items-center gap-2">
           <BaseButton variant="secondary" size="sm" :loading="employeesLoading" @click="loadEmployees">刷新好友</BaseButton>
           <span class="text-xs text-gray-500 dark:text-gray-400">
-            好友（可雇佣）{{ employees.length }} 位
+            候选好友（未在当前员工列表中的可雇）
             <template v-if="employees.length">：{{ employees.map((e: any) => `${e.name}(${e.titleName || '—'})`).join('、') }}</template>
             <template v-else>（暂无好友员工）</template>
           </span>
