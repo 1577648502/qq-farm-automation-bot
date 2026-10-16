@@ -1445,9 +1445,11 @@ async function handleApiCall(msg) {
                 result = to.taskId ? await milkTea.claimTask(to.taskId) : await milkTea.claimAllTasks();
                 break;
             }
-            case 'getMilkTeaSalesRecord':
-                result = await milkTea.getSalesRecord(to && to.day);
+            case 'getMilkTeaSalesRecord': {
+                const to = args[0] || {};
+                result = await milkTea.getSalesRecord(to.day);
                 break;
+            }
             case 'upgradeMilkTeaStore':
                 result = await milkTea.upgradeStore();
                 break;
