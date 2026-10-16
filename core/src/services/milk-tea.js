@@ -809,7 +809,25 @@ function parseWorkFromRefresh(resultHex) {
             const e2 = parseTop(emp2.v);
             const gid2 = toInt((findField(e2, 1) || {}).v);
             const nm2 = (findField(e2, 2) || {}).v;
-            if (gid2 > 0) out.records.push({ gid: gid2, name: nm2 ? String(nm2) : '' });
+            if (gid2 > 0) {
+                // 每条兼职记录: #2 店名 / #4,#5 起止 / #6 工作时长 / #7 = {#1?, #2 支付工资}
+                // #10 = 该班的互动记录(实测 {#1 类型, ..., #7 = {#1?, #2 加成}})
+                const w7 = findField(r2, 7);
+                const w7f = w7 && w7.w === 2 ? parseTop(w7.v) : [];
+                const i10 = findField(r2, 10);
+                const i10f = i10 && i10.w === 2 ? parseTop(i10.v) : [];
+                out.records.push({
+                    gid: gid2,
+                    name: nm2 ? String(nm2) : '',
+                    storeName: String((findField(r2, 2) || {}).v || ''),
+                    startAt: toInt((findField(r2, 4) || {}).v),
+                    endAt: toInt((findField(r2, 5) || {}).v),
+                    hours: Math.round((toInt((findField(r2, 6) || {}).v) || 0) / 3600),
+                    wage: toInt((findField(w7f, 2) || {}).v),
+                    interactType: toInt((findField(i10f, 1) || {}).v),
+                    interactBonus: toInt((findField(parseTop((findField(i10f, 7) || {}).v || Buffer.from([])) || [], 2) || {}).v),
+                });
+            }
         }
     } catch (e) { /* 忽略 */ }
     return out;
@@ -860,12 +878,14 @@ async function getSalesRecords() {
         log('活动', `奶茶热销中: 读取营业记录失败 — ${why}`, { module: 'activity', event: '奶茶热销中', result: 'warn' });
         return { ok: false, reason: why };
     }
-    const out = { ok: true, value: 0, cups: 0, items: [], balances: [], pending: null, at: 0 };
+    const out = { ok: true, value: 0, cups: 0, items: [], cupsByItem: [], balances: [], pending: null, at: 0, records: [] };
     try {
         const rf = parseTop(Buffer.from(r.resultHex || '', 'hex'));
         const box = findField(rf, 1);
         const inner = box && box.w === 2 ? parseTop(box.v) : rf;
         const names = await getMenuNames();
+        // 品类名回填(杯数表用菜单名)
+
         for (const x of inner) {
             if (x.w !== 2) continue;
             const sub = parseTop(x.v);
@@ -873,6 +893,7 @@ async function getSalesRecords() {
             const b = toInt((findField(sub, 2) || {}).v);
             if (x.f === 25) out.items.push({ id: a, name: names.get(a) || `品类${a}`, revenue: b });
             else if (x.f === 19) out.balances.push({ id: a, name: itemLabel(a, b), count: b });
+            else if (x.f === 20) out.cupsByItem.push({ id: a, name: `品类${a}`, cups: b });
             else if (x.f === 23) out.pending = { id: a, name: itemLabel(a, b), count: b };
         }
         const flatFields = new Map();
@@ -882,6 +903,11 @@ async function getSalesRecords() {
         const c21 = findField(inner, 21);
         if (c21 && c21.w === 2) out.cups = toInt((findField(parseTop(c21.v), 2) || {}).v);
         out.items.sort((p1, p2) => p2.revenue - p1.revenue);
+        for (const c of out.cupsByItem) c.name = names.get(c.id) || `品类${c.id}`;
+        out.cupsByItem.sort((a, b) => b.cups - a.cups);
+        // 雇员记录: 来自刷新(63)的 #168.#2(与游戏"雇员记录"面板一致)
+        const st = await getMainStatus().catch(() => null);
+        if (st && st.work && Array.isArray(st.work.records)) out.records = st.work.records.slice(0, 8);
     } catch (e) {
         return { ok: false, reason: `解析营业记录失败: ${e.message}` };
     }

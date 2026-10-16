@@ -387,25 +387,31 @@ const byIdx = (i) => FRAMES.find(f => f.idx === i);
         // 找同一批里的第一条 55 与第一条 58(该 jsonl 是多次采集拼接, 按文件顺序取即可)
         let f55 = '';
         let f58 = '';
+        let f63 = '';
         for (const f of all) {
             const fsx = mg7.parseTop(bodyOf5(f.hex));
             if (Number((fsx.find((x) => x.f === 1) || {}).v) !== 2026110101) continue;
             const c = Number((fsx.find((x) => x.f === 2) || {}).v);
             if (c === 55 && !f55) f55 = f.hex;
-            if (c === 58 && !f58 && f55) f58 = f.hex;
-            if (f55 && f58) break;
+            if (c === 58 && !f58) f58 = f.hex;
+            // 63 要挑"带雇员记录(#168.#2)"的那一帧
+            if (c === 63 && !f63) {
+                const res = fsx.find((x) => x.f === 168);
+                if (res && res.w === 2 && res.v) {
+                    const inner = mg7.parseTop(Buffer.from(res.v));
+                    const box = inner.find((x) => x.f === 1);
+                    if (box && box.w === 2) f63 = f.hex;
+                }
+            }
+            if (f55 && f58 && f63) break;
         }
-        check('抓到 55 与 58 帧', !!f55 && !!f58);
+        check('抓到 55 / 58 / 63 帧', !!f55 && !!f58 && !!f63);
         const saved = sendStub;
-        sendStub = async (service) => {
-            if (service !== 'gamepb.activitypb.ActivityService') return { body: Buffer.alloc(0) };
-            return { body: bodyOf5(f58 || f55) };
-        };
-        // 先只回 58(菜单) 场景: 再切到 55
         sendStub = async (service, method, body) => {
             const fsx = mg7.parseTop(Buffer.from(body));
             const cmd = Number((fsx.find((x) => x.f === 2) || {}).v) || 0;
-            return { body: bodyOf5(cmd === 58 ? f58 : f55) };
+            // 63=刷新(雇员记录来源) / 58=菜单名 / 55=收银台详情
+            return { body: bodyOf5(cmd === 63 ? f63 : (cmd === 58 ? f58 : f55)) };
         };
         const sales = await milkTea.getSalesRecords();
         sendStub = saved;
@@ -413,7 +419,11 @@ const byIdx = (i) => FRAMES.find(f => f.idx === i);
         check('累计营业额 > 0', sales.value > 0, sales.value);
         check('累计杯数 > 0', sales.cups > 0, sales.cups);
         check('有分品类记录且带名字', sales.items.length > 0 && sales.items.every((x) => x.name && !/^品类\d+$/.test(x.name) || x.name), sales.items.slice(0, 3));
-        check('余额含奶茶券/金币', sales.balances.length > 0, sales.balances);
+        check('余额含奶茶券/金币(=游戏"营业收益")', sales.balances.length > 0, sales.balances);
+        check('各品类杯数(#20)带菜单名', Array.isArray(sales.cupsByItem) && sales.cupsByItem.every((x) => x.name && x.cups >= 0), sales.cupsByItem.slice(0, 3));
+        check('雇员记录(来自刷新 #168.#2)存在且含时长/工资字段',
+            Array.isArray(sales.records) && sales.records.length > 0 && 'hours' in sales.records[0] && 'wage' in sales.records[0],
+            sales.records.slice(0, 2));
     }
 
     section('5. 任务列表');

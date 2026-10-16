@@ -168,6 +168,12 @@ async function loadSales() {
   }
 }
 
+/** 互动类型名(与后端 WORK_INTERACT_OPTIONS 一致) */
+function interactName(type: number) {
+  const hit = INTERACT_OPTIONS.find((o: any) => o.id === Number(type))
+  return hit ? hit.name : `互动#${type}`
+}
+
 /** 该 gid 是否已是我的员工 */
 function isMyEmployee(gid: any) {
   return employees.value.some((e: any) => String(e.gid) === String(gid))
@@ -563,60 +569,74 @@ onMounted(() => {
       </div>
     </div>
 
-    <!-- ①c 营业记录(cmd=55 收银台详情 + 菜单名 cmd=58) -->
+    <!-- ①c 营业记录(对齐游戏面板: 今日售卖 + 营业收益 + 雇员记录) -->
     <div class="rounded-lg border border-gray-200 bg-white p-4 shadow-sm dark:border-gray-700 dark:bg-gray-800">
       <div class="mb-3 flex flex-wrap items-center justify-between gap-2">
         <h3 class="text-sm text-gray-900 font-medium dark:text-white">营业记录</h3>
         <BaseButton variant="secondary" size="sm" :loading="salesLoading" @click="loadSales">刷新</BaseButton>
       </div>
       <template v-if="sales && sales.ok">
-        <div class="mb-3 grid grid-cols-2 gap-3 md:grid-cols-4">
-          <div>
-            <div class="text-xs text-gray-500 dark:text-gray-400">累计营业额</div>
-            <div class="text-sm text-gray-900 font-medium dark:text-gray-100">{{ sales.value }}</div>
+        <!-- 今日售卖(各饮品杯数) -->
+        <div class="mb-3">
+          <div class="mb-1 text-xs text-gray-500 dark:text-gray-400">今日售卖（杯数）</div>
+          <div v-if="sales.cupsByItem && sales.cupsByItem.length" class="flex flex-wrap gap-2">
+            <span
+              v-for="c in sales.cupsByItem"
+              :key="c.id"
+              class="rounded bg-amber-50 px-2 py-1 text-xs text-amber-800 dark:bg-amber-900/20 dark:text-amber-300"
+            >{{ c.name }} {{ c.cups }}杯</span>
           </div>
-          <div>
-            <div class="text-xs text-gray-500 dark:text-gray-400">累计杯数</div>
-            <div class="text-sm text-gray-900 font-medium dark:text-gray-100">{{ sales.cups || '—' }}</div>
-          </div>
-          <div>
-            <div class="text-xs text-gray-500 dark:text-gray-400">待领取</div>
-            <div class="text-sm text-gray-900 font-medium dark:text-gray-100">
-              {{ sales.pending && sales.pending.count ? sales.pending.name : '—' }}
-            </div>
-          </div>
-          <div>
-            <div class="text-xs text-gray-500 dark:text-gray-400">余额</div>
-            <div class="text-sm text-gray-900 font-medium dark:text-gray-100">
-              {{ (sales.balances || []).map((b: any) => b.name).join('、') || '—' }}
-            </div>
+          <div v-else class="text-xs text-gray-500 dark:text-gray-400">暂无售卖数据</div>
+        </div>
+
+        <!-- 营业收益 -->
+        <div class="mb-3">
+          <div class="mb-1 text-xs text-gray-500 dark:text-gray-400">营业收益</div>
+          <div class="flex flex-wrap gap-2">
+            <span
+              v-for="b in (sales.balances || [])"
+              :key="b.id"
+              class="rounded bg-emerald-50 px-2 py-1 text-xs text-emerald-800 dark:bg-emerald-900/20 dark:text-emerald-300"
+            >{{ b.name }}</span>
+            <span v-if="!(sales.balances || []).length" class="text-xs text-gray-500 dark:text-gray-400">—</span>
+            <span v-if="sales.pending && sales.pending.count" class="rounded bg-rose-50 px-2 py-1 text-xs text-rose-700 dark:bg-rose-900/20 dark:text-rose-300">
+              待领取 {{ sales.pending.name }}
+            </span>
           </div>
         </div>
-        <div v-if="sales.items && sales.items.length" class="overflow-hidden rounded border border-gray-200 dark:border-gray-700">
-          <table class="w-full text-xs">
-            <thead class="bg-gray-50 text-gray-500 dark:bg-gray-900/40 dark:text-gray-400">
-              <tr>
-                <th class="px-2 py-1 text-left">奶茶</th>
-                <th class="px-2 py-1 text-right">营业额</th>
-                <th class="px-2 py-1 text-right">占比</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr
-                v-for="it in sales.items"
-                :key="it.id"
-                class="border-t border-gray-100 text-gray-700 dark:border-gray-700 dark:text-gray-200"
-              >
-                <td class="px-2 py-1">{{ it.name }}</td>
-                <td class="px-2 py-1 text-right font-medium">{{ it.revenue }}</td>
-                <td class="px-2 py-1 text-right text-gray-500">
-                  {{ sales.value ? ((it.revenue / sales.value) * 100).toFixed(1) + '%' : '—' }}
-                </td>
-              </tr>
-            </tbody>
-          </table>
+
+        <!-- 雇员记录 -->
+        <div>
+          <div class="mb-1 text-xs text-gray-500 dark:text-gray-400">雇员记录（本店员工/兼职）</div>
+          <div v-if="sales.records && sales.records.length" class="overflow-hidden rounded border border-gray-200 dark:border-gray-700">
+            <table class="w-full text-xs">
+              <thead class="bg-gray-50 text-gray-500 dark:bg-gray-900/40 dark:text-gray-400">
+                <tr>
+                  <th class="px-2 py-1 text-left">员工</th>
+                  <th class="px-2 py-1 text-right">工作时长</th>
+                  <th class="px-2 py-1 text-right">支付工资</th>
+                  <th class="px-2 py-1 text-left">互动</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr
+                  v-for="r in sales.records"
+                  :key="`${r.gid}-${r.startAt}`"
+                  class="border-t border-gray-100 text-gray-700 dark:border-gray-700 dark:text-gray-200"
+                >
+                  <td class="px-2 py-1">{{ r.name }}<span class="ml-1 text-gray-400">{{ r.storeName }}</span></td>
+                  <td class="px-2 py-1 text-right">{{ r.hours ? r.hours + '小时' : '—' }}</td>
+                  <td class="px-2 py-1 text-right">{{ r.wage ? '+' + r.wage : '—' }}</td>
+                  <td class="px-2 py-1">
+                    <template v-if="r.interactType">{{ interactName(r.interactType) }}{{ r.interactBonus ? ` (+${r.interactBonus})` : '' }}</template>
+                    <span v-else class="text-gray-400">无互动</span>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <div v-else class="text-xs text-gray-500 dark:text-gray-400">暂无雇员记录</div>
         </div>
-        <div v-else class="text-xs text-gray-500 dark:text-gray-400">暂无分品类数据</div>
       </template>
       <div v-else class="text-xs text-gray-500 dark:text-gray-400">
         {{ salesLoading ? '读取中…' : (sales && sales.reason ? sales.reason : '点「刷新」读取营业记录') }}
