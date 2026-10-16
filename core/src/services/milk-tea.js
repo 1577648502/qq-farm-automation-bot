@@ -495,7 +495,7 @@ async function getFriendList() {
  * 自动雇佣: 从白名单里挑一个去雇佣(服务端对已雇佣/不可雇佣会报错, 失败就换下一个)
  * @param hireGids 白名单(账号配置里的 milkTeaHireGids)
  */
-async function autoHire(hireGids) {
+async function autoHire(hireGids, opts = {}) {
     const list = (Array.isArray(hireGids) ? hireGids : []).map((g) => toInt(g)).filter((g) => g > 0);
     if (!list.length) return { ok: false, reason: '未配置可雇佣好友(先在页面里勾选)' };
     // 先在岗好友跳过(否则必报 1034140 该雇佣位已有员工在工作)
@@ -1369,7 +1369,7 @@ async function runMilkTea(opts = {}) {
             out.steps.push({ step: 'autoHire', ok: false, skipped: true, reason: '上次提示雇佣位置已存在, 退避中' });
             return out;
         }
-        const r = await autoHire(opts.hireGids);
+        const r = await autoHire(opts.hireGids, opts);
         out.steps.push({ step: 'autoHire', ...r });
         if (!r.ok && isHireAlreadyError(r.reason)) {
             const nowSec = Math.floor(Date.now() / 1000);
