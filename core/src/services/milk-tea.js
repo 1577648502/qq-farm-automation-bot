@@ -908,6 +908,7 @@ function parseWorkFromRefresh(resultHex) {
             if (gid2 > 0) {
                 // 每条兼职记录: #2 店名 / #4,#5 起止 / #6 工作时长 / #7 = {#1?, #2 支付工资}
                 // #10 = 该班的互动记录(实测 {#1 类型, ..., #7 = {#1?, #2 加成}})
+                // ⚠ 工资取 #7.#1(实测: 记录里 #7 = {40, 80}, 而游戏"雇员记录"显示"支付工资 +40" → #1 才对)
                 const w7 = findField(r2, 7);
                 const w7f = w7 && w7.w === 2 ? parseTop(w7.v) : [];
                 const i10 = findField(r2, 10);
@@ -919,7 +920,7 @@ function parseWorkFromRefresh(resultHex) {
                     startAt: toInt((findField(r2, 4) || {}).v),
                     endAt: toInt((findField(r2, 5) || {}).v),
                     hours: Math.round((toInt((findField(r2, 6) || {}).v) || 0) / 3600),
-                    wage: toInt((findField(w7f, 2) || {}).v),
+                    wage: toInt((findField(w7f, 1) || {}).v),
                     interactType: toInt((findField(i10f, 1) || {}).v),
                     interactBonus: toInt((findField(parseTop((findField(i10f, 7) || {}).v || Buffer.from([])) || [], 2) || {}).v),
                 });
