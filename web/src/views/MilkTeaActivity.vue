@@ -183,19 +183,16 @@ function isOnDuty(e: any) {
   return Number(e.offAt) > now
 }
 
-/** 员工列表排序: 在岗的排前面(与游戏店铺页一致) */
-function sortedEmployees() {
-  return [...employees.value].sort((a: any, b: any) => Number(isOnDuty(b)) - Number(isOnDuty(a)))
+/** 该 gid 的员工记录(不是员工则返回 null) */
+function empOf(gid: any) {
+  return employees.value.find((e: any) => String(e.gid) === String(gid)) || null
 }
+
 /** 在岗人数 */
 function onDutyCount() {
   return employees.value.filter((e: any) => isOnDuty(e)).length
 }
 
-/** 该 gid 是否已在岗 */
-function isMyEmployee(gid: any) {
-  return employees.value.some((e: any) => String(e.gid) === String(gid) && isOnDuty(e))
-}
 
 async function loadHireConfig() {
   try {
@@ -775,30 +772,6 @@ onMounted(() => {
           <BaseButton variant="secondary" size="sm" @click="addGid">添加</BaseButton>
           <span class="text-xs text-gray-400">GID 可在「好友」页面查看</span>
         </div>
-        <!-- 我雇佣的员工(名单, 来自 #161.#4) -->
-        <div class="mb-3 rounded border border-emerald-200 p-2 dark:border-emerald-800">
-          <div class="mb-1 text-xs text-gray-600 dark:text-gray-300">
-            我雇佣的员工
-            <span class="ml-1 font-medium">{{ employees.length }} 位</span>
-            <button class="ml-1 text-[10px] text-blue-600 hover:underline dark:text-blue-400" :disabled="employeesLoading" @click="loadEmployees">刷新</button>
-            <span class="ml-2 text-[10px] text-gray-400">「在岗」= 下班时间(#6)还没到</span>
-          </div>
-          <div class="flex flex-wrap gap-1">
-            <span
-              v-for="e in sortedEmployees()"
-              :key="e.gid"
-              class="rounded px-1.5 py-0.5 text-xs"
-              :class="isOnDuty(e) ? 'bg-emerald-50 text-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-300' : 'bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-300'"
-            >
-              {{ e.name }}<template v-if="e.titleName"> · {{ e.titleName }}</template>
-              <template v-if="e.offAt"> · 下班 {{ fmtTime(e.offAt) }}</template>
-              <template v-if="isOnDuty(e)"> · 在岗</template>
-            </span>
-            <span v-if="!employees.length" class="text-xs text-gray-500 dark:text-gray-400">
-              {{ employeesLoading ? '读取中…' : '暂无员工' }}
-            </span>
-          </div>
-        </div>
         <!-- 手动操作 -->
       <div class="mb-2 flex flex-wrap items-center gap-2">
         <BaseButton variant="secondary" size="sm" :loading="busy === 'cashier'" @click="claimCashierNow">领收银台收益</BaseButton>
@@ -823,7 +796,7 @@ onMounted(() => {
         <div class="mb-2 flex flex-wrap items-center gap-2">
           <BaseButton variant="secondary" size="sm" :loading="employeesLoading" @click="loadEmployees">刷新好友</BaseButton>
           <span class="text-xs text-gray-500 dark:text-gray-400">
-            候选好友（未在当前员工列表中的可雇）
+            好友列表（★ = 我的员工，含特长/在岗状态；勾选后用于雇佣）
             <template v-if="employees.length">：{{ employees.map((e: any) => `${e.name}(${e.titleName || '—'})`).join('、') }}</template>
             <template v-else>（暂无好友员工）</template>
           </span>
@@ -853,10 +826,15 @@ onMounted(() => {
             >
             <span class="truncate">
               {{ f.name || `好友 ${f.gid}` }}
-              <span
-                v-if="isMyEmployee(f.gid)"
-                class="ml-1 rounded bg-emerald-100 px-1 text-[10px] text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300"
-              >在岗中</span>
+              <template v-if="empOf(f.gid)">
+                <span class="ml-1 rounded bg-emerald-100 px-1 text-[10px] text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300">我的员工</span>
+                <span class="ml-1 text-[10px] text-gray-500">{{ empOf(f.gid).titleName }}</span>
+                <span
+                  class="ml-1 rounded px-1 text-[10px]"
+                  :class="isOnDuty(empOf(f.gid)) ? 'bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300' : 'bg-gray-100 text-gray-500 dark:bg-gray-700 dark:text-gray-300'"
+                >{{ isOnDuty(empOf(f.gid)) ? '在岗' : '休息' }}</span>
+                <span v-if="empOf(f.gid).offAt" class="ml-1 text-[10px] text-gray-400">下班 {{ fmtTime(empOf(f.gid).offAt) }}</span>
+              </template>
             </span>
             <span v-if="f.level" class="ml-auto shrink-0 text-[10px] text-gray-400">Lv{{ f.level }}</span>
           </label>
