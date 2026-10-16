@@ -660,8 +660,9 @@ async function interactWithFriend(friendGid, type = WORK_INTERACT_TYPE) {
     const payload = Buffer.concat([Buffer.from([0x0a, inner.length]), inner]);
     // 本班已被服务端拒绝过(1034147) → 记住, 本班内不再尝试
     const shiftKey = toInt((st && st.work && st.work.startAt) || 0);
-    if (shiftKey && blockedInteractShifts.has(shiftKey)) {
-        return { ok: false, skipped: true, reason: '本班已被服务端判定不能互动(次数已用完), 等下一班' };
+    const nextTryAt = shiftKey ? (interactCooldown.get(shiftKey) || 0) : 0;
+    if (nextTryAt > Date.now()) {
+        return { ok: false, skipped: true, reason: `本班暂不可互动, ${Math.ceil((nextTryAt - Date.now()) / 60000)} 分钟后再试` };
     }
     let r = await mainOperate(CMD_WORK_INTERACT, 170, payload);
     // 自愈: 1034147(本班工作已结束) 通常是"老板/班次在这期间换了" —— 刷新拿新老板重试一次
@@ -679,12 +680,12 @@ async function interactWithFriend(friendGid, type = WORK_INTERACT_TYPE) {
         }
     }
     if (r.errorCode === 1034147) {
-        if (shiftKey) blockedInteractShifts.add(shiftKey);
-        if (blockedInteractShifts.size > 20) blockedInteractShifts.clear();
+        if (shiftKey) interactCooldown.set(shiftKey, Date.now() + INTERACT_COOLDOWN_MS);
+        if (interactCooldown.size > 50) interactCooldown.clear();
         return {
             ok: false,
             skipped: true,
-            reason: `本班不能互动(${r.reason || 'code=1034147'}), 本班内不再尝试`,
+            reason: `本班暂不可互动(${r.reason || 'code=1034147'}), 30 分钟后再试`,
             diag: workDiag((st && st.work) || {}, gid),
         };
     }
@@ -1104,7 +1105,8 @@ function workDiag(w, gid) {
 }
 
 /** 已被服务端判定"本班不能互动"的班次(按班次开始时间记, 本班内不再重试) */
-const blockedInteractShifts = new Set();
+const interactCooldown = new Map();   // 班次key → 下次可尝试时间(30 分钟, 班次资格可能中途变化)
+const INTERACT_COOLDOWN_MS = 30 * 60 * 1000;
 /** 最近一次探测到的雇主(兼职记录里的老板) */
 let lastEmployer = null;
 const HIRE_BACKOFF_MS = 30 * 60 * 1000;
@@ -1184,19 +1186,6 @@ async function runMilkTea(opts = {}) {
     if (opts.autoInteract && inShift && curWork.canInteract === false) {
         out.steps.push({ step: 'autoInteract', ok: false, skipped: true, reason: `本班互动次数已用完(${curWork.interactUsed}/${curWork.interactTotal})` });
     }
-    // 自动领兼职工资: 独立开关(opts.autoWage) + 必须处于"被雇佣"状态
-    if (opts.autoWage !== false) {
-        if (!inShift) {
-            out.steps.push({ step: 'claimWage', ok: false, skipped: true, reason: '当前没有进行中的班次, 跳过领工资' });
-        } else {
-            const r = await claimWage().catch((e) => ({ ok: false, reason: e.message }));
-            out.steps.push({ step: 'claimWage', ...r });
-            if (!r.ok && !/没有|不存在|无/.test(String(r.reason))) {
-                log('活动', `奶茶热销中: 领工资未成功 — ${r.reason}`, { module: 'activity', event: '奶茶热销中', result: 'warn' });
-            }
-            await sleep(600);
-        }
-    }
     if (opts.autoInteract && inShift && curWork.canInteract !== false) {
         const r = await interactWithFriend(employerGid, opts.interactType).catch((e) => ({ ok: false, reason: e.message }));
         out.steps.push({ step: 'autoInteract', ...r });
@@ -1209,6 +1198,19 @@ async function runMilkTea(opts = {}) {
             log('活动', `奶茶热销中: 自动互动未执行 — ${r.reason}${r.diag ? ` (${r.diag})` : ''}`, { module: 'activity', event: '奶茶热销中', result: 'warn' });
         }
         await sleep(700);
+    }
+    // 自动领兼职工资: 独立开关(opts.autoWage) + 必须处于"被雇佣"状态
+    if (opts.autoWage !== false) {
+        if (!inShift) {
+            out.steps.push({ step: 'claimWage', ok: false, skipped: true, reason: '当前没有进行中的班次, 跳过领工资' });
+        } else {
+            const r = await claimWage().catch((e) => ({ ok: false, reason: e.message }));
+            out.steps.push({ step: 'claimWage', ...r });
+            if (!r.ok && !/没有|不存在|无/.test(String(r.reason))) {
+                log('活动', `奶茶热销中: 领工资未成功 — ${r.reason}`, { module: 'activity', event: '奶茶热销中', result: 'warn' });
+            }
+            await sleep(600);
+        }
     }
     if (opts.autoHire && Array.isArray(opts.hireGids) && opts.hireGids.length) {
         if (Date.now() < hireBackoffUntil) {
