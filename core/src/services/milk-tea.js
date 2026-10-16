@@ -87,6 +87,8 @@ const MILK_TEA_SEED_IDS = [20525, 20526, 20527, 20528, 20021, 21435, 20529, 2900
 //     301 20525 甜莓 / 302 20526 白桃 / 303 20527 甜橙 / 304 20528 红柚 / 305 20021 可可豆
 //     306 21435 柿子 / 307 20529 芭乐 / 308 29005 黄金芽 / 309 20522 金币果 / 310 20523 经验蘑菇
 const EXCHANGE_SEED_IDS = [20525, 20526, 20527, 20528, 20021, 21435, 20529, 29005, 20522, 20523];
+// **每日自动兑换**只买这一种: 森野黄金芽种子(商品308, 物品29005, 8000 奶茶券, 限购1)
+const DAILY_BUY_SEED_ID = 29005;
 
 /**
  * 动态推导"可制作的果实 id"——不要写死列表(会漏):
@@ -357,7 +359,7 @@ const shopBought = new Map();
 
 /** 兑换/购买商品(数量必填) —— 实测 {#101: {#1: 商品ID, #2: 数量}} */
 /**
- * 每日兑换种子 —— 从兑换商店挑出"活动种子"商品, 每个买 perSeed 份(默认 1), 一天一次
+ * 每日兑换种子 —— **只兑换森野黄金芽种子**(商品308/物品29005), 买 perSeed 份(默认 1), 一天一次
  * 实测(20261016-195923): 兑换 = 商店组 2026110102 cmd=1, payload #101 = {#1 商品id, #2 数量};
  *   响应 #101 = {#1 = {物品id, 数量}, #2 = {货币id, 总价}}
  */
@@ -366,8 +368,8 @@ async function buyDailySeeds(perSeed = 1) {
     if (st0 && isSettling(st0)) return { ok: false, skipped: true, reason: '结算期, 不兑换' };
     const shop = await getShopGoods();
     if (!shop.ok) return { ok: false, reason: shop.reason || '读取商店失败' };
-    const seeds = (shop.goods || []).filter((g) => EXCHANGE_SEED_IDS.includes(toInt(g.itemId)));
-    if (!seeds.length) return { ok: false, skipped: true, reason: '商店里没有活动种子' };
+    const seeds = (shop.goods || []).filter((g) => toInt(g.itemId) === DAILY_BUY_SEED_ID);
+    if (!seeds.length) return { ok: false, skipped: true, reason: '商店里没有森野黄金芽种子' };
     const bought = [];
     let spent = 0;
     for (const g of seeds) {
@@ -383,7 +385,7 @@ async function buyDailySeeds(perSeed = 1) {
         }
         await sleep(700);
     }
-    if (!bought.length) return { ok: false, skipped: true, reason: '活动种子都已限购/未解锁' };
+    if (!bought.length) return { ok: false, skipped: true, reason: '森野黄金芽种子已限购/未解锁' };
     log('活动', `奶茶热销中: 每日兑换种子 → ${bought.join('、')}${spent ? ` (花费 ${spent})` : ''}`, {
         module: 'activity', event: '奶茶热销中', result: 'ok',
     });
