@@ -635,6 +635,7 @@ const localAutomationSettings = ref({
   milkTeaStoreName: '奶茶小铺',
   milkTeaAutoInteract: false,
   milkTeaAutoWage: true,
+  milkTeaAutoBuySeed: false,
   milkTeaInteractType: 5,
   milkTeaEmployerGid: '',
   sellGoldenFruit: false,
@@ -939,6 +940,7 @@ function syncLocalAutomationSettings() {
   localAutomationSettings.value.milkTeaStoreName = settings.value.milkTeaStoreName ?? '奶茶小铺'
   localAutomationSettings.value.milkTeaAutoInteract = settings.value.milkTeaAutoInteract ?? false
   localAutomationSettings.value.milkTeaAutoWage = settings.value.milkTeaAutoWage !== false
+  localAutomationSettings.value.milkTeaAutoBuySeed = !!settings.value.milkTeaAutoBuySeed
   localAutomationSettings.value.milkTeaInteractType = settings.value.milkTeaInteractType ?? 5
   localAutomationSettings.value.milkTeaEmployerGid = settings.value.milkTeaEmployerGid ?? ''
   localAutomationSettings.value.sellGoldenFruit = settings.value.sellGoldenFruit ?? false
@@ -1144,6 +1146,7 @@ async function saveAutomationSettings() {
       milkTeaStoreName: localAutomationSettings.value.milkTeaStoreName,
       milkTeaAutoInteract: localAutomationSettings.value.milkTeaAutoInteract,
       milkTeaAutoWage: localAutomationSettings.value.milkTeaAutoWage,
+      milkTeaAutoBuySeed: localAutomationSettings.value.milkTeaAutoBuySeed,
       milkTeaInteractType: localAutomationSettings.value.milkTeaInteractType,
       milkTeaEmployerGid: localAutomationSettings.value.milkTeaEmployerGid,
       sellGoldenFruit: localAutomationSettings.value.sellGoldenFruit,
@@ -2015,6 +2018,7 @@ async function handleTestOffline() {
                     <BaseSwitch v-model="localAutomationSettings.milkTeaCraft" label="自动制作奶茶（全部果实）" />
                     <BaseSwitch v-model="localAutomationSettings.milkTeaAutoInteract" label="自动互动（被雇佣后每轮一次）" />
                     <BaseSwitch v-model="localAutomationSettings.milkTeaAutoWage" label="自动领兼职工资（被雇佣后）" />
+                    <BaseSwitch v-model="localAutomationSettings.milkTeaAutoBuySeed" label="每日自动购买森野黄金芽种子（1份/天）" />
                   </div>
                   <template #note>
                     手动操作（领收益 / 制作奶茶 / 领工资 / 互动一次）和参数（店名、互动事项、雇主 GID）都在左侧栏「奶茶热销中」页面。

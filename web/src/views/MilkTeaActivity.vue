@@ -391,8 +391,6 @@ async function saveHireConfig() {
       interactType: Number(interactType.value) || 5,
       employerGid: String(interactGid.value || ''),
       storeName: String(storeName.value || ''),
-      autoBuySeed: !!autoBuySeed.value,
-      seedBuyCount: Number(seedBuyCount.value) || 1,
     })
     const err = apiError(res, res.data?.data)
     if (err) { reportError('保存设置', err); return }
@@ -550,49 +548,6 @@ onMounted(() => {
       </div>
       <div v-if="status && pending > 0" class="mt-2 text-xs text-amber-600 dark:text-amber-400">
         收银台还有 {{ pending.toLocaleString() }} 待领取 —— 满载会暂停营业且不补发，建议在「设置 → 自动控制」开启自动领取。
-      </div>
-    </div>
-
-    <!-- ①b 操作(手动按钮 + 参数) —— 设置页只留开关, 操作都在这 -->
-    <div class="rounded-lg border border-gray-200 bg-white p-4 shadow-sm dark:border-gray-700 dark:bg-gray-800">
-      <div class="mb-3 flex flex-wrap items-center justify-between gap-2">
-        <h3 class="text-sm text-gray-900 font-medium dark:text-white">
-          操作
-          <span class="ml-2 text-xs text-gray-500">自动化开关在 设置 → 自动控制</span>
-        </h3>
-        <span v-if="actionResult" class="text-xs text-gray-600 dark:text-gray-300">{{ actionResult }}</span>
-      </div>
-      <div class="mb-2 flex flex-wrap items-center gap-2">
-        <BaseButton variant="secondary" size="sm" :loading="busy === 'cashier'" @click="claimCashierNow">领收银台收益</BaseButton>
-        <BaseButton variant="secondary" size="sm" :loading="busy === 'craft'" @click="craftNow">制作奶茶（全部果实）</BaseButton>
-        <BaseButton variant="secondary" size="sm" :loading="busy === 'wage'" @click="claimWageNow">领工资</BaseButton>
-        <BaseButton variant="secondary" size="sm" :loading="busy === 'interact'" @click="interactNow">互动一次</BaseButton>
-      </div>
-      <div class="flex flex-wrap items-center gap-2 rounded border border-gray-200 px-2.5 py-2 dark:border-gray-700">
-        <label class="flex items-center gap-1 text-xs text-gray-600 dark:text-gray-300">
-          店名
-          <input v-model="storeName" type="text" class="w-32 rounded border border-gray-300 bg-white px-2 py-1 text-xs dark:border-gray-600 dark:bg-gray-900">
-        </label>
-        <label class="flex items-center gap-1 text-xs text-gray-600 dark:text-gray-300">
-          互动事项
-          <select v-model.number="interactType" class="rounded border border-gray-300 bg-white px-1.5 py-1 text-xs dark:border-gray-600 dark:bg-gray-900">
-            <option v-for="op in INTERACT_OPTIONS" :key="op.id" :value="op.id">{{ op.name }}{{ op.recommended ? '（推荐）' : '' }}</option>
-          </select>
-        </label>
-        <label class="flex items-center gap-1 text-xs text-gray-600 dark:text-gray-300">
-          <input v-model="autoBuySeed" type="checkbox" class="h-3.5 w-3.5">
-          每日自动兑换种子
-        </label>
-        <label class="flex items-center gap-1 text-xs text-gray-600 dark:text-gray-300">
-          每种
-          <input v-model.number="seedBuyCount" type="number" min="1" class="w-14 rounded border border-gray-300 bg-white px-1.5 py-1 text-xs dark:border-gray-600 dark:bg-gray-900">
-          份/天
-        </label>
-        <label class="flex items-center gap-1 text-xs text-gray-600 dark:text-gray-300">
-          雇主 GID
-          <input v-model="interactGid" type="text" :placeholder="status && status.employer ? String(status.employer.gid) : '可留空自动探测'" class="w-36 rounded border border-gray-300 bg-white px-2 py-1 text-xs dark:border-gray-600 dark:bg-gray-900">
-        </label>
-        <BaseButton variant="primary" size="sm" :loading="hireSaving" @click="saveHireConfig">保存参数</BaseButton>
       </div>
     </div>
 
@@ -767,9 +722,9 @@ onMounted(() => {
         @click="toggleHire"
       >
         <span class="text-sm text-gray-900 font-medium dark:text-white">
-          雇佣好友
+          员工与雇佣
           <span class="ml-2 text-xs text-gray-500 font-normal">
-            已勾选 {{ hireGids.length }} 位{{ autoHire ? ' · 自动雇佣已开' : '' }}
+            员工 {{ employees.length }} 位 · 已勾选 {{ hireGids.length }} 位{{ autoHire ? ' · 自动雇佣已开' : '' }}
           </span>
         </span>
         <span class="text-xs text-gray-400">{{ hireOpen ? '收起 ▲' : '展开 ▼' }}</span>
@@ -831,6 +786,27 @@ onMounted(() => {
               {{ employeesLoading ? '读取中…' : '暂无员工' }}
             </span>
           </div>
+        </div>
+        <!-- 手动操作 -->
+      <div class="mb-2 flex flex-wrap items-center gap-2">
+        <BaseButton variant="secondary" size="sm" :loading="busy === 'cashier'" @click="claimCashierNow">领收银台收益</BaseButton>
+        <BaseButton variant="secondary" size="sm" :loading="busy === 'craft'" @click="craftNow">制作奶茶（全部果实）</BaseButton>
+        <BaseButton variant="secondary" size="sm" :loading="busy === 'wage'" @click="claimWageNow">领工资</BaseButton>
+        <BaseButton variant="secondary" size="sm" :loading="busy === 'interact'" @click="interactNow">互动一次</BaseButton>
+      </div>
+        <!-- 参数: 互动事项 / 店名(雇主 GID 已改为自动探测, 不再手填) -->
+        <div class="mb-2 flex flex-wrap items-center gap-2 rounded border border-gray-200 px-2.5 py-2 dark:border-gray-700">
+          <label class="flex items-center gap-1 text-xs text-gray-600 dark:text-gray-300">
+            店名
+            <input v-model="storeName" type="text" class="w-32 rounded border border-gray-300 bg-white px-2 py-1 text-xs dark:border-gray-600 dark:bg-gray-900">
+          </label>
+          <label class="flex items-center gap-1 text-xs text-gray-600 dark:text-gray-300">
+            互动事项
+            <select v-model.number="interactType" class="rounded border border-gray-300 bg-white px-1.5 py-1 text-xs dark:border-gray-600 dark:bg-gray-900">
+              <option v-for="op in INTERACT_OPTIONS" :key="op.id" :value="op.id">{{ op.name }}{{ op.recommended ? '（推荐）' : '' }}</option>
+            </select>
+          </label>
+          <BaseButton variant="primary" size="sm" :loading="hireSaving" @click="saveHireConfig">保存参数</BaseButton>
         </div>
         <div class="mb-2 flex flex-wrap items-center gap-2">
           <BaseButton variant="secondary" size="sm" :loading="employeesLoading" @click="loadEmployees">刷新好友</BaseButton>

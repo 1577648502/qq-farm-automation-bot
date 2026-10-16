@@ -241,6 +241,8 @@ function createDataProvider(options) {
                 milkTeaAutoTask: body.milkTeaAutoTask,
                 milkTeaAutoInteract: body.milkTeaAutoInteract,
                 milkTeaAutoWage: body.milkTeaAutoWage,
+                milkTeaAutoBuySeed: body.milkTeaAutoBuySeed,
+                milkTeaSeedBuyCount: body.milkTeaSeedBuyCount,
                 milkTeaInteractType: body.milkTeaInteractType,
                 milkTeaEmployerGid: body.milkTeaEmployerGid,
                 adGiftEnabled: body.adGiftEnabled,
