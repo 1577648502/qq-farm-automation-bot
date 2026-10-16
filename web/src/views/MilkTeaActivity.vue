@@ -183,10 +183,6 @@ function isOnDuty(e: any) {
   return Number(e.offAt) > now
 }
 
-/** 该 gid 的员工记录(不是员工则返回 null) */
-function empOf(gid: any) {
-  return employees.value.find((e: any) => String(e.gid) === String(gid)) || null
-}
 
 /** 在岗人数 */
 function onDutyCount() {
@@ -796,7 +792,7 @@ onMounted(() => {
         <div class="mb-2 flex flex-wrap items-center gap-2">
           <BaseButton variant="secondary" size="sm" :loading="employeesLoading" @click="loadEmployees">刷新好友</BaseButton>
           <span class="text-xs text-gray-500 dark:text-gray-400">
-            好友列表（★ = 我的员工，含特长/在岗状态；勾选后用于雇佣）
+            好友列表（勾选后用于雇佣/自动雇佣；已是员工的会被自动跳过）
             <template v-if="employees.length">：{{ employees.map((e: any) => `${e.name}(${e.titleName || '—'})`).join('、') }}</template>
             <template v-else>（暂无好友员工）</template>
           </span>
@@ -824,18 +820,7 @@ onMounted(() => {
               :checked="hireGids.includes(String(f.gid))"
               @change="toggleGid(String(f.gid))"
             >
-            <span class="truncate">
-              {{ f.name || `好友 ${f.gid}` }}
-              <template v-if="empOf(f.gid)">
-                <span class="ml-1 rounded bg-emerald-100 px-1 text-[10px] text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300">我的员工</span>
-                <span class="ml-1 text-[10px] text-gray-500">{{ empOf(f.gid).titleName }}</span>
-                <span
-                  class="ml-1 rounded px-1 text-[10px]"
-                  :class="isOnDuty(empOf(f.gid)) ? 'bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300' : 'bg-gray-100 text-gray-500 dark:bg-gray-700 dark:text-gray-300'"
-                >{{ isOnDuty(empOf(f.gid)) ? '在岗' : '休息' }}</span>
-                <span v-if="empOf(f.gid).offAt" class="ml-1 text-[10px] text-gray-400">下班 {{ fmtTime(empOf(f.gid).offAt) }}</span>
-              </template>
-            </span>
+            <span class="truncate">{{ f.name || `好友 ${f.gid}` }}</span>
             <span v-if="f.level" class="ml-auto shrink-0 text-[10px] text-gray-400">Lv{{ f.level }}</span>
           </label>
         </div>
