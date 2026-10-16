@@ -142,7 +142,7 @@ const byIdx = (i) => FRAMES.find(f => f.idx === i);
         sent.length = 0;
         const cashier = await milkTea.claimCashier();
         check('领收益 ok', cashier.ok === true, cashier);
-        check('用 cmd=55 且字段 #160', sent.some(x => x.cmd === 55 && x.fields.some(y => y.f === 160)), sent.map(x => x.cmd));
+        check('用 cmd=59(领取) 而不是 55(详情)', sent.some(x => x.cmd === 59 && x.fields.some(y => y.f === 164)), sent.map(x => x.cmd));
 
         sent.length = 0;
         const craft = await milkTea.craft();

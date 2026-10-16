@@ -45,7 +45,8 @@ const CMD_CASHIER = 55;     // 领取收银台收益
 const CMD_CRAFT = 56;       // ⚠ 实际返回「员工列表(好友+NPC店员)」→ 工坊/招募面板(非"加工")
 const CMD_HIRE = 57;        // 雇佣好友(返回班次+特长)
 const CMD_SPEAKER = 58;     // ⚠ 实际返回「9 种配方菜单」→ 菜单查询(非"喇叭")
-const CMD_SETTLE = 59;      // 结算(返回 {奶茶券+10} / {金币+8648})
+const CMD_CASHIER_DETAIL = 55;// **收银台详情**(结果 #160: 可领取/明细) —— ⚠ 它**不是领取**, 只是查询
+const CMD_CLAIM_CASHIER = 59; // **领取收银台收益**(执行) → 响应 #164 = 到账物品(实测 奶茶券×10 + 金币×8648)
 const CMD_CASHIER_INFO = 60;// **收银台查询**: {#1: 容量, #2: 当前待领, #3: 杯数}
 const CMD_REFRESH = 63;     // 刷新/查询
 const CMD_INTERACT = 66;    // ⚠ 实际返回「好友店铺排行(店名+热度)」→ 排行查询(非"互动")
@@ -184,31 +185,37 @@ async function getMainStatus() {
 /** 领取收银台收益(核心: 满载会暂停营业且不补发) */
 async function claimCashier() {
     const before = await getMainStatus().catch(() => null);
-    const r = await mainOperate(CMD_CASHIER, undefined, Buffer.alloc(0));
-    if (r.errorCode !== 0) {
-        return { ok: false, reason: `领取收益失败 code=${r.errorCode}` };
+    if (before && before.ok && isSettling(before)) {
+        return { ok: false, skipped: true, reason: '结算期, 不能领取收银台收益' };
     }
-    const after = parseMainState(r.activity);
-    // 结果 #160.#1 = 收银台详情: #23 = 本次到账 {货币/数量}, #25 = 各品类明细
-    let gained = null;
+    // 先看有没有可领(收银台查询 #2 = 待领取), 没有就不发领取请求(避免无意义请求/报错)
+    const info = await getCashierStatus().catch(() => null);
+    if (info && info.ok && info.pending <= 0) {
+        return { ok: true, skipped: true, reason: '收银台暂无可领取收益' };
+    }
+    // ⚠ 真正的"领取"是 cmd=59(实测: 响应 #164 = 到账物品); cmd=55 只是收银台详情(踩过)
+    const r = await mainOperate(CMD_CLAIM_CASHIER, 164, Buffer.alloc(0));
+    if (r.errorCode !== 0) return { ok: false, reason: `领取收银台收益失败 code=${r.errorCode}` };
+    // 结果 #164 = 重复的 #1 {物品id, 数量} = 本次到账
+    const gainedList = [];
     if (r.resultHex) {
         try {
-            const rf = parseTop(Buffer.from(r.resultHex, 'hex'));
-            const boxField = findField(rf, 1);
-            const inner = boxField && boxField.w === 2 ? parseTop(boxField.v) : rf;
-            const gainField = findField(inner, 23);
-            if (gainField && gainField.w === 2) {
-                const gf = parseTop(gainField.v);
-                gained = { id: toInt((findField(gf, 1) || {}).v), count: toInt((findField(gf, 2) || {}).v) };
+            for (const x of parseTop(Buffer.from(r.resultHex, 'hex'))) {
+                if (x.f !== 1 || x.w !== 2) continue;
+                const xf = parseTop(x.v);
+                const id = toInt((findField(xf, 1) || {}).v);
+                const count = toInt((findField(xf, 2) || {}).v);
+                if (id) gainedList.push({ id, count, name: itemLabel(id, count) });
             }
         } catch (e) { /* 忽略 */ }
     }
-    log('活动', `奶茶热销中: 已领取收银台收益${gained ? ` ${itemLabel(gained.id, gained.count)}` : ''}${after.value ? ` (营业额 ${after.value})` : ''}`, {
-        module: 'activity', event: '奶茶热销中', result: 'ok', before: before && before.value, after: after.value,
-    });
+    const after = parseMainState(r.activity);
     const emp = parseEmployerFromCashier(r.resultHex);
     if (emp && emp.gid) lastEmployer = emp;
-    return { ok: true, value: after.value, before: before && before.value, gained, employer: emp, state: after };
+    log('活动', `奶茶热销中: 已领取收银台收益${gainedList.length ? ` → ${gainedList.map((x) => x.name).join('、')}` : ''}${after.value ? ` (累计营业额 ${after.value})` : ''}`, {
+        module: 'activity', event: '奶茶热销中', result: 'ok',
+    });
+    return { ok: true, gained: gainedList, gainedList, value: after.value, before: before && before.value, employer: emp, state: after };
 }
 
 /** 工坊加工(把活动果实加工成高级奶茶) */
@@ -666,6 +673,31 @@ function parseEmployerFromCashier(resultHex) {
 }
 
 /**
+ * 收银台详情(cmd=55) —— **查询**用: 结果 #160 内含可领取与**兼职雇主**(#1.#9.#11 = {gid, 名字})
+ * 注意: 实测它不会发放任何东西(别当领取用, 踩过)
+ */
+async function getCashierDetail() {
+    const r = await mainOperate(CMD_CASHIER_DETAIL, 160, Buffer.alloc(0));
+    if (r.errorCode !== 0) return { ok: false, reason: `收银台详情失败 code=${r.errorCode}` };
+    const emp = parseEmployerFromCashier(r.resultHex);
+    if (emp && emp.gid) lastEmployer = emp;
+    let claimable = null;
+    if (r.resultHex) {
+        try {
+            const rf = parseTop(Buffer.from(r.resultHex, 'hex'));
+            const box = findField(rf, 1);
+            const inner = box && box.w === 2 ? parseTop(box.v) : rf;
+            const c23 = findField(inner, 23);
+            if (c23 && c23.w === 2) {
+                const f = parseTop(c23.v);
+                claimable = { id: toInt((findField(f, 1) || {}).v), count: toInt((findField(f, 2) || {}).v) };
+            }
+        } catch (e) { /* 忽略 */ }
+    }
+    return { ok: true, employer: emp, claimable, at: Date.now() };
+}
+
+/**
  * 收银台查询(cmd=60): 返回待领取收益等。规则说"满载会暂停营业且不补发", 所以顶部要显示待领。
  * 实测结果 #1 = {#1: 容量(40), #2: 当前待领(253), #3: 累计杯数(164312)}
  */
@@ -815,6 +847,10 @@ async function runMilkTea(opts = {}) {
         out.steps.push({ step: 'autoTask', ...r });
         await sleep(800);
     }
+    if (opts.fetchEmployer !== false) {
+        const d = await getCashierDetail().catch(() => null);
+        if (d && d.ok) out.steps.push({ step: 'cashierDetail', employer: d.employer, claimable: d.claimable });
+    }
     if (doCashier) {
         const r = await claimCashier();
         out.steps.push({ step: 'cashier', ...r });
@@ -900,6 +936,7 @@ module.exports = {
     craftMilkTea,
     craftAllFruits,
     claimWage,
+    getCashierDetail,
     parseEmployerFromCashier,
     WORK_INTERACT_OPTIONS,
     interactWithFriend,
