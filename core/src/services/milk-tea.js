@@ -965,7 +965,15 @@ async function runMilkTea(opts = {}) {
     // ⚠ 雇主只认"当前进行中的班次"(刷新 63 结果的 work.employer) ——
     //   不回退到收银台历史记录/缓存(那会拿到旧老板 → 服务端报 1034147 本班工作已结束)
     const curWork = (st && st.work) || {};
-    const employerGid = opts.employerGid || (curWork.employer && curWork.employer.gid) || '';
+    // ⚠ 当前班次的老板优先级最高: 配置里填的(可能是上一个班次的)旧 GID **不能**覆盖它,
+    //   否则会拿旧老板去互动 → 服务端报 1034147 本班工作已结束(踩过两次)
+    const liveEmployerGid = (curWork.employer && curWork.employer.gid) || 0;
+    const employerGid = liveEmployerGid || opts.employerGid || '';
+    if (liveEmployerGid && opts.employerGid && toNum(opts.employerGid) !== liveEmployerGid) {
+        log('活动', `奶茶热销中: 配置的雇主 GID(${opts.employerGid}) 与当前老板(${liveEmployerGid}) 不一致, 按当前老板执行`, {
+            module: 'activity', event: '奶茶热销中', result: 'warn',
+        });
+    }
     const inShift = !!employerGid && (!curWork.endAt || Math.floor(Date.now() / 1000) < curWork.endAt);
     // 自动领兼职工资: 独立开关(opts.autoWage) + 必须处于"被雇佣"状态
     if (opts.autoWage !== false) {
