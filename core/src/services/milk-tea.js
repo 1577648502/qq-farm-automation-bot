@@ -822,6 +822,63 @@ function parseWorkFromRefresh(resultHex) {
  *   #5 = NPC 店员(101 实习员工 / 102 …)
  * 用途: ①页面展示"我的员工" ②雇佣好友时标出"已雇佣"(避免 1034140 该雇佣位已有员工在工作)
  */
+/**
+ * 菜单(cmd=58) —— 品类 id → 名字(用于营业记录)
+ * 结果 #163 = repeated {#1 序号, #2 名称, #4 是否解锁, #5 售价, #6 解锁所需}
+ */
+async function getMenuNames() {
+    const map = new Map();
+    try {
+        const r = await mainOperate(CMD_SPEAKER, 163, Buffer.alloc(0));
+        if (r.resultHex) {
+            for (const x of parseTop(Buffer.from(r.resultHex, 'hex'))) {
+                if (x.w !== 2) continue;
+                const e = parseTop(x.v);
+                const id = toInt((findField(e, 1) || {}).v);
+                const nm = (findField(e, 2) || {}).v;
+                if (id) map.set(id, nm ? String(nm) : `品类${id}`);
+            }
+        }
+    } catch (e) { /* 名字拿不到就退回编号 */ }
+    return map;
+}
+
+/**
+ * 营业记录(cmd=55 收银台详情) —— 实测字段(2026-10-16 抓包):
+ *   #2 累计营业额   #11 时间   #19 = {货币id, 数量}(余额)   #21 = {0, 累计杯数}
+ *   #23 = {货币id, 待领取}    #25 = repeated {品类, 收益}  ← 各品类营业额
+ */
+async function getSalesRecords() {
+    const r = await mainOperate(CMD_CASHIER_DETAIL, 160, Buffer.alloc(0));
+    if (!r.ok) return { ok: false, reason: r.reason || `读取营业记录失败 code=${r.errorCode}` };
+    const out = { ok: true, value: 0, cups: 0, items: [], balances: [], pending: null, at: 0 };
+    try {
+        const rf = parseTop(Buffer.from(r.resultHex || '', 'hex'));
+        const box = findField(rf, 1);
+        const inner = box && box.w === 2 ? parseTop(box.v) : rf;
+        const names = await getMenuNames();
+        for (const x of inner) {
+            if (x.w !== 2) continue;
+            const sub = parseTop(x.v);
+            const a = toInt((findField(sub, 1) || {}).v);
+            const b = toInt((findField(sub, 2) || {}).v);
+            if (x.f === 25) out.items.push({ id: a, name: names.get(a) || `品类${a}`, revenue: b });
+            else if (x.f === 19) out.balances.push({ id: a, name: itemLabel(a, b), count: b });
+            else if (x.f === 23) out.pending = { id: a, name: itemLabel(a, b), count: b };
+        }
+        const flatFields = new Map();
+        for (const x of inner) if (x.w === 0) flatFields.set(x.f, x.v);
+        out.value = toInt(flatFields.get(2));
+        out.at = toInt(flatFields.get(11));
+        const c21 = findField(inner, 21);
+        if (c21 && c21.w === 2) out.cups = toInt((findField(parseTop(c21.v), 2) || {}).v);
+        out.items.sort((p1, p2) => p2.revenue - p1.revenue);
+    } catch (e) {
+        return { ok: false, reason: `解析营业记录失败: ${e.message}` };
+    }
+    return out;
+}
+
 async function getEmployees() {
     const r = await mainOperate(CMD_CRAFT, 161, Buffer.alloc(0));
     if (!r.ok && r.errorCode !== 0) return { ok: false, reason: r.reason || `员工列表失败 code=${r.errorCode}` };
@@ -1201,6 +1258,8 @@ module.exports = {
     WORK_INTERACT_TYPE,
     getCraftableFruitIds,
     getEmployees,
+    getSalesRecords,
+    getMenuNames,
     getLastEmployer: () => lastEmployer,
     useSpeaker,
     openStore,

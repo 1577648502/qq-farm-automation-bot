@@ -50,6 +50,9 @@ const interactGid = ref('')
 const storeName = ref('奶茶小铺')
 /** 我的员工(cmd=56): 展示 + 在好友列表里标"已雇佣"(避免 1034140) */
 const employees = ref<any[]>([])
+/** 营业记录(cmd=55): 累计营业额/杯数/余额/各品类收益 */
+const sales = ref<any>(null)
+const salesLoading = ref(false)
 const employeesLoading = ref(false)
 const interactType = ref(2)
 
@@ -153,6 +156,18 @@ async function loadEmployees() {
     employeesLoading.value = false
   }
 }
+/** 营业记录(cmd=55 + 菜单名 cmd=58) */
+async function loadSales() {
+  salesLoading.value = true
+  try {
+    const res = await api.get('/api/activity/milk-tea/sales')
+    const d = res.data?.data || {}
+    if (!apiError(res, d)) sales.value = d
+  } catch (e: any) { /* 静默 */ } finally {
+    salesLoading.value = false
+  }
+}
+
 /** 该 gid 是否已是我的员工 */
 function isMyEmployee(gid: any) {
   return employees.value.some((e: any) => String(e.gid) === String(gid))
@@ -412,6 +427,7 @@ onMounted(() => {
   loadStatus()
   setTimeout(() => loadHireConfig(), 500)
   setTimeout(() => loadEmployees(), 900)
+  setTimeout(() => loadSales(), 1200)
   setTimeout(() => loadShop(), 1000)
 })
 </script>
@@ -544,6 +560,66 @@ onMounted(() => {
           <input v-model="interactGid" type="text" :placeholder="status && status.employer ? String(status.employer.gid) : '可留空自动探测'" class="w-36 rounded border border-gray-300 bg-white px-2 py-1 text-xs dark:border-gray-600 dark:bg-gray-900">
         </label>
         <BaseButton variant="primary" size="sm" :loading="hireSaving" @click="saveHireConfig">保存参数</BaseButton>
+      </div>
+    </div>
+
+    <!-- ①c 营业记录(cmd=55 收银台详情 + 菜单名 cmd=58) -->
+    <div class="rounded-lg border border-gray-200 bg-white p-4 shadow-sm dark:border-gray-700 dark:bg-gray-800">
+      <div class="mb-3 flex flex-wrap items-center justify-between gap-2">
+        <h3 class="text-sm text-gray-900 font-medium dark:text-white">营业记录</h3>
+        <BaseButton variant="secondary" size="sm" :loading="salesLoading" @click="loadSales">刷新</BaseButton>
+      </div>
+      <template v-if="sales && sales.ok">
+        <div class="mb-3 grid grid-cols-2 gap-3 md:grid-cols-4">
+          <div>
+            <div class="text-xs text-gray-500 dark:text-gray-400">累计营业额</div>
+            <div class="text-sm text-gray-900 font-medium dark:text-gray-100">{{ sales.value }}</div>
+          </div>
+          <div>
+            <div class="text-xs text-gray-500 dark:text-gray-400">累计杯数</div>
+            <div class="text-sm text-gray-900 font-medium dark:text-gray-100">{{ sales.cups || '—' }}</div>
+          </div>
+          <div>
+            <div class="text-xs text-gray-500 dark:text-gray-400">待领取</div>
+            <div class="text-sm text-gray-900 font-medium dark:text-gray-100">
+              {{ sales.pending && sales.pending.count ? sales.pending.name : '—' }}
+            </div>
+          </div>
+          <div>
+            <div class="text-xs text-gray-500 dark:text-gray-400">余额</div>
+            <div class="text-sm text-gray-900 font-medium dark:text-gray-100">
+              {{ (sales.balances || []).map((b: any) => b.name).join('、') || '—' }}
+            </div>
+          </div>
+        </div>
+        <div v-if="sales.items && sales.items.length" class="overflow-hidden rounded border border-gray-200 dark:border-gray-700">
+          <table class="w-full text-xs">
+            <thead class="bg-gray-50 text-gray-500 dark:bg-gray-900/40 dark:text-gray-400">
+              <tr>
+                <th class="px-2 py-1 text-left">奶茶</th>
+                <th class="px-2 py-1 text-right">营业额</th>
+                <th class="px-2 py-1 text-right">占比</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr
+                v-for="it in sales.items"
+                :key="it.id"
+                class="border-t border-gray-100 text-gray-700 dark:border-gray-700 dark:text-gray-200"
+              >
+                <td class="px-2 py-1">{{ it.name }}</td>
+                <td class="px-2 py-1 text-right font-medium">{{ it.revenue }}</td>
+                <td class="px-2 py-1 text-right text-gray-500">
+                  {{ sales.value ? ((it.revenue / sales.value) * 100).toFixed(1) + '%' : '—' }}
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <div v-else class="text-xs text-gray-500 dark:text-gray-400">暂无分品类数据</div>
+      </template>
+      <div v-else class="text-xs text-gray-500 dark:text-gray-400">
+        {{ salesLoading ? '读取中…' : (sales && sales.reason ? sales.reason : '点「刷新」读取营业记录') }}
       </div>
     </div>
 
