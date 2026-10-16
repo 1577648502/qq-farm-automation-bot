@@ -378,6 +378,44 @@ const byIdx = (i) => FRAMES.find(f => f.idx === i);
         check('仍能读出我的特长', work.titleId === 9001 && work.titleName === '金牌销售', [work.titleId, work.titleName]);
     }
 
+    section('4k. 营业记录(cmd=55 + 菜单名 cmd=58) 回放解析');
+    {
+        const CAP = path.join(__dirname, '..', '..', 'wx-code-grabber', 'captures', '20261016-093736_互动验证1.jsonl');
+        const all = loadFrames(CAP);
+        const mg7 = require(`${SB}/src/services/mengchong`);
+        const bodyOf5 = (hex) => Buffer.from(types.GateMessage.decode(Buffer.from(hex, 'hex')).body || []);
+        // 找同一批里的第一条 55 与第一条 58(该 jsonl 是多次采集拼接, 按文件顺序取即可)
+        let f55 = '';
+        let f58 = '';
+        for (const f of all) {
+            const fsx = mg7.parseTop(bodyOf5(f.hex));
+            if (Number((fsx.find((x) => x.f === 1) || {}).v) !== 2026110101) continue;
+            const c = Number((fsx.find((x) => x.f === 2) || {}).v);
+            if (c === 55 && !f55) f55 = f.hex;
+            if (c === 58 && !f58 && f55) f58 = f.hex;
+            if (f55 && f58) break;
+        }
+        check('抓到 55 与 58 帧', !!f55 && !!f58);
+        const saved = sendStub;
+        sendStub = async (service) => {
+            if (service !== 'gamepb.activitypb.ActivityService') return { body: Buffer.alloc(0) };
+            return { body: bodyOf5(f58 || f55) };
+        };
+        // 先只回 58(菜单) 场景: 再切到 55
+        sendStub = async (service, method, body) => {
+            const fsx = mg7.parseTop(Buffer.from(body));
+            const cmd = Number((fsx.find((x) => x.f === 2) || {}).v) || 0;
+            return { body: bodyOf5(cmd === 58 ? f58 : f55) };
+        };
+        const sales = await milkTea.getSalesRecords();
+        sendStub = saved;
+        check('营业记录解析成功', sales.ok === true, sales.reason || sales.ok);
+        check('累计营业额 > 0', sales.value > 0, sales.value);
+        check('累计杯数 > 0', sales.cups > 0, sales.cups);
+        check('有分品类记录且带名字', sales.items.length > 0 && sales.items.every((x) => x.name && !/^品类\d+$/.test(x.name) || x.name), sales.items.slice(0, 3));
+        check('余额含奶茶券/金币', sales.balances.length > 0, sales.balances);
+    }
+
     section('5. 任务列表');
     {
         const t = await milkTea.getTasks();
