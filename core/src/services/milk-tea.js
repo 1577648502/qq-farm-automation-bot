@@ -1069,6 +1069,9 @@ async function runMilkTea(opts = {}) {
         out.steps.push({ step: 'autoInteract', ...r });
         if (r.ok) {
             log('活动', `奶茶热销中: 已自动互动(雇主 ${employerGid}, 类型 ${opts.interactType || WORK_INTERACT_TYPE})`, { module: 'activity', event: '奶茶热销中', result: 'ok' });
+        } else if (r.skipped) {
+            // 正常情况(本班次数已用完/没有班次/服务端已拒绝): 记一条 skip, 不当失败
+            log('活动', `奶茶热销中: 本班互动跳过(${r.reason})`, { module: 'activity', event: '奶茶热销中', result: 'skip' });
         } else {
             log('活动', `奶茶热销中: 自动互动未执行 — ${r.reason}${r.diag ? ` (${r.diag})` : ''}`, { module: 'activity', event: '奶茶热销中', result: 'warn' });
         }
