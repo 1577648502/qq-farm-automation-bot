@@ -174,6 +174,18 @@ function interactName(type: number) {
   return hit ? hit.name : `互动#${type}`
 }
 
+/** 我雇佣的人 —— 来自刷新(63)结果 #168.#2(雇佣记录: 老板位=我雇的那位; 支付工资=我付的) */
+const myEmployees = computed(() => {
+  const seen = new Map<string, any>()
+  const recs = (status.value && status.value.work && status.value.work.records) || []
+  for (const r of recs) {
+    const k = String(r.gid)
+    if (!seen.has(k)) seen.set(k, { ...r, times: 1 })
+    else seen.get(k).times += 1
+  }
+  return Array.from(seen.values())
+})
+
 /** 是否在岗(state=1 或下班时间未到) —— 用真实时间判定 */
 function isOnDuty(e: any) {
   const now = Math.floor(Date.now() / 1000)
@@ -514,27 +526,20 @@ onMounted(() => {
         <!-- 好友列表(可雇佣; 标在岗=已被某位老板雇佣中) -->
         <div class="col-span-2 md:col-span-2">
           <div class="text-xs text-gray-500 dark:text-gray-400">
-            好友（可雇佣 · 含在岗状态）
-            <span class="ml-1">{{ employees.length }} 位</span>
-            <button class="ml-1 text-[10px] text-blue-600 hover:underline dark:text-blue-400" :disabled="employeesLoading" @click="loadEmployees">
-              刷新
-            </button>
+            我雇佣的人（员工）
+            <span class="ml-1">{{ myEmployees.length }} 位</span>
           </div>
-          <div class="mt-1 text-[10px] text-gray-400">标「在岗」= 已被某位老板雇佣中（不可雇佣，需等其下班）</div>
           <div class="mt-1 flex flex-wrap gap-1">
             <span
-              v-for="e in employees"
+              v-for="e in myEmployees"
               :key="e.gid"
-              class="rounded px-1.5 py-0.5 text-xs"
-              :class="isOnDuty(e) ? 'bg-sky-50 text-sky-800 dark:bg-sky-900/30 dark:text-sky-300' : 'bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-300'"
+              class="rounded bg-emerald-50 px-1.5 py-0.5 text-xs text-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-300"
             >
-              {{ e.name }}<template v-if="e.titleName"> · {{ e.titleName }}</template>
-              <template v-if="e.offAt"> · 下班 {{ fmtTime(e.offAt) }}</template>
-              <template v-if="isOnDuty(e)"> · 在岗</template>
+              {{ e.name }}<template v-if="e.hours"> · {{ e.hours }}小时</template>
+              <template v-if="e.wage"> · 工资 {{ e.wage }}</template>
+              <template v-if="e.times > 1"> · {{ e.times }}班</template>
             </span>
-            <span v-if="!employees.length" class="text-xs text-gray-500 dark:text-gray-400">
-              {{ employeesLoading ? '读取中…' : '暂无数据' }}
-            </span>
+            <span v-if="!myEmployees.length" class="text-xs text-gray-500 dark:text-gray-400">暂无雇佣记录</span>
           </div>
         </div>
         <div>
