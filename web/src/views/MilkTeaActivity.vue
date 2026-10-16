@@ -177,10 +177,19 @@ function interactName(type: number) {
   return hit ? hit.name : `互动#${type}`
 }
 
-/** 是否在岗(state=1 或下班时间未到) —— 用真实时间判定 */
+/** 是否在岗 —— **只看真实下班时间** #6(实测 state=1 更可能表示"已签约", 不代表在岗) */
 function isOnDuty(e: any) {
   const now = Math.floor(Date.now() / 1000)
-  return Number(e.state) === 1 || Number(e.offAt) > now
+  return Number(e.offAt) > now
+}
+
+/** 员工列表排序: 在岗的排前面(与游戏店铺页一致) */
+function sortedEmployees() {
+  return [...employees.value].sort((a: any, b: any) => Number(isOnDuty(b)) - Number(isOnDuty(a)))
+}
+/** 在岗人数 */
+function onDutyCount() {
+  return employees.value.filter((e: any) => isOnDuty(e)).length
 }
 
 /** 该 gid 是否已在岗 */
@@ -519,7 +528,10 @@ onMounted(() => {
         <!-- 顶部只显示员工数量; 员工名单在下方"雇佣好友"卡片里 -->
         <div>
           <div class="text-xs text-gray-500 dark:text-gray-400">我雇佣的员工</div>
-          <div class="text-sm text-gray-900 font-medium dark:text-gray-100">{{ employees.length }} 位</div>
+          <div class="text-sm text-gray-900 font-medium dark:text-gray-100">
+            {{ employees.length }} 位
+            <span class="text-xs text-emerald-600 dark:text-emerald-400">（在岗 {{ onDutyCount() }}）</span>
+          </div>
         </div>
         <div>
           <div class="text-xs text-gray-500 dark:text-gray-400">受雇状态</div>
@@ -769,11 +781,11 @@ onMounted(() => {
             我雇佣的员工
             <span class="ml-1 font-medium">{{ employees.length }} 位</span>
             <button class="ml-1 text-[10px] text-blue-600 hover:underline dark:text-blue-400" :disabled="employeesLoading" @click="loadEmployees">刷新</button>
-            <span class="ml-2 text-[10px] text-gray-400">「在岗」= state=1 或下班时间未到</span>
+            <span class="ml-2 text-[10px] text-gray-400">「在岗」= 下班时间(#6)还没到</span>
           </div>
           <div class="flex flex-wrap gap-1">
             <span
-              v-for="e in employees"
+              v-for="e in sortedEmployees()"
               :key="e.gid"
               class="rounded px-1.5 py-0.5 text-xs"
               :class="isOnDuty(e) ? 'bg-emerald-50 text-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-300' : 'bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-300'"

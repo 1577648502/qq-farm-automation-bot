@@ -507,7 +507,8 @@ async function autoHire(hireGids, opts = {}) {
     const working = new Set();
     const skillOf = new Map();
     for (const f of (emp && emp.friends) || []) {
-        const onDuty = toInt(f.state) === 1 || (toInt(f.offAt) > nowSec);
+        // ⚠ 在岗只看真实下班时间(实测 #5=1 更像是"已签约", 不能当在岗)
+        const onDuty = toInt(f.offAt) > nowSec;
         if (onDuty) {
             working.add(toInt(f.gid));
             workingNames.push(`${f.name || `GID:${f.gid}`}(${EMPLOYEE_SKILLS[toInt(f.titleId)] || '?'})`);
