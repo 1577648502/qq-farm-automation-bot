@@ -606,7 +606,8 @@ async function craftMilkTea(limit = 10) {
  * 待补: 互动类型(#2)的可选值与各自收益 —— 拿到后按"最优"排序执行
  */
 async function interactWithFriend(friendGid, type = WORK_INTERACT_TYPE) {
-    let gid = toNum(friendGid);   // 可能会被纠正为"当前老板"(见下方), 所以用 let
+    // ⚠ 必须用 toInt 强转成数字: toNum('1229231763') 会**原样返回字符串** → 与数字比较永远不等(踩过)
+    let gid = toInt(friendGid);
     if (!gid) return { ok: false, reason: '缺少好友 gid(先在页面勾选并保存雇佣好友)' };
     // ⚠ 前置判断: 互动只属于"**正在进行中的班次**"(【我的工作】的本次兼职)
     //   —— 判据用刷新(63)结果的 work.active(有当前老板且未到结束时间),
@@ -623,16 +624,22 @@ async function interactWithFriend(friendGid, type = WORK_INTERACT_TYPE) {
         if (w.interactTotal > 0 && w.interactUsed >= w.interactTotal) {
             return { ok: false, reason: `本班互动次数已用完(${w.interactUsed}/${w.interactTotal}), 等下一班` };
         }
-        if (gid !== toNum(w.employer.gid)) {
+        const liveGid = toInt(w.employer.gid);
+        if (gid !== liveGid) {
             // 传的 gid 不是当前老板 → 直接纠正为当前老板(避免 1034147)
             log('活动', `奶茶热销中: 互动目标 gid ${gid} 与当前老板 ${w.employer.gid} 不一致, 已按当前老板执行`, {
                 module: 'activity', event: '奶茶热销中', result: 'warn',
             });
-            gid = toNum(w.employer.gid);
+            gid = liveGid;
         }
     }
     const inner = Buffer.concat([encodeVarintField(1, gid), encodeVarintField(2, toInt(type) || WORK_INTERACT_TYPE)]);
     const payload = Buffer.concat([Buffer.from([0x0a, inner.length]), inner]);
+    // 本班已被服务端拒绝过(1034147) → 记住, 本班内不再尝试
+    const shiftKey = toInt((st && st.work && st.work.startAt) || 0);
+    if (shiftKey && blockedInteractShifts.has(shiftKey)) {
+        return { ok: false, skipped: true, reason: '本班已被服务端判定不能互动(次数已用完), 等下一班' };
+    }
     let r = await mainOperate(CMD_WORK_INTERACT, 170, payload);
     // 自愈: 1034147(本班工作已结束) 通常是"老板/班次在这期间换了" —— 刷新拿新老板重试一次
     if (r.errorCode === 1034147) {
@@ -647,6 +654,11 @@ async function interactWithFriend(friendGid, type = WORK_INTERACT_TYPE) {
             const payload2 = Buffer.concat([Buffer.from([0x0a, inner2.length]), inner2]);
             r = await mainOperate(CMD_WORK_INTERACT, 170, payload2);
         }
+    }
+    if (r.errorCode === 1034147) {
+        if (shiftKey) blockedInteractShifts.add(shiftKey);
+        if (blockedInteractShifts.size > 20) blockedInteractShifts.clear();
+        return { ok: false, skipped: true, reason: `本班不能互动(${r.reason || 'code=1034147'}), 本班内不再尝试` };
     }
     if (r.errorCode !== 0) return { ok: false, reason: `互动失败 code=${r.errorCode}` };
     let result = null;
@@ -933,6 +945,8 @@ function shortErr(msg, maxLen = 40) {
 
 /** 自动雇佣的退避: 遇到"位置已存在/已达上限"这类错误, 冷却一段时间不再尝试(避免一直刷报错) */
 let hireBackoffUntil = 0;
+/** 已被服务端判定"本班不能互动"的班次(按班次开始时间记, 本班内不再重试) */
+const blockedInteractShifts = new Set();
 /** 最近一次探测到的雇主(兼职记录里的老板) */
 let lastEmployer = null;
 const HIRE_BACKOFF_MS = 30 * 60 * 1000;
