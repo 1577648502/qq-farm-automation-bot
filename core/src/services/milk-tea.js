@@ -126,7 +126,7 @@ async function throttle() {
 /** 主活动请求(串行节流) */
 async function mainOperate(cmd, payloadField, payloadBytes) {
     await throttle();
-    return operateRaw(GROUP_MAIN, cmd, payloadField === undefined ? cmd + FIELD_OFFSET : payloadField, payloadBytes || Buffer.alloc(0));
+    return operateSafe(GROUP_MAIN, cmd, payloadField === undefined ? cmd + FIELD_OFFSET : payloadField, payloadBytes || Buffer.alloc(0));
 }
 
 /** 把 varint 编成 payload: {#1: n} */
@@ -266,7 +266,7 @@ function encodeVarintField(field, value) {
 /** 我的工作: 每班一次互动 */
 async function interact() {
     const r = await mainOperate(CMD_INTERACT, undefined, encodeUint1(1));
-    if (r.errorCode !== 0) return { ok: false, reason: `互动失败 code=${r.errorCode}` };
+    if (r.errorCode !== 0) return { ok: false, reason: `互动失败 ${r.reason || `code=${r.errorCode}`}` };
     log('活动', '奶茶热销中: 已完成一次互动', { module: 'activity', event: '奶茶热销中', result: 'ok' });
     return { ok: true, state: parseMainState(r.activity) };
 }
@@ -274,7 +274,7 @@ async function interact() {
 /** 种子商店列表(0102 cmd=7) */
 async function getShopGoods() {
     await throttle();
-    const r = await operateRaw(GROUP_SHOP, CMD_SHOP_LIST, 0, Buffer.alloc(0));
+    const r = await operateSafe(GROUP_SHOP, CMD_SHOP_LIST, 0, Buffer.alloc(0));
     if (r.errorCode !== 0) return { ok: false, reason: `读取商店失败 code=${r.errorCode}`, goods: [] };
     const goods = [];
     try {
@@ -363,7 +363,7 @@ async function buyShopGoods(goodsId, count = 1) {
         }
     } catch (e) { /* 校验失败就按原样尝试 */ }
     const payload = Buffer.concat([encodeVarintField(1, id), encodeVarintField(2, n)]);
-    const r = await operateRaw(GROUP_SHOP, CMD_SHOP_BUY, FIELD_SHOP_BUY, payload);
+    const r = await operateSafe(GROUP_SHOP, CMD_SHOP_BUY, FIELD_SHOP_BUY, payload);
     if (r.errorCode !== 0) return { ok: false, reason: `兑换失败 code=${r.errorCode}` };
     // 结果 #101 = {#1: {物品ID, 数量}, #2: {货币ID, 总价}}
     let got = null; let cost = null;
@@ -392,7 +392,7 @@ async function buyShopGoods(goodsId, count = 1) {
 /** 任务列表(0103 cmd=7) */
 async function getTasks() {
     await throttle();
-    const r = await operateRaw(GROUP_TASK, 7, 0, Buffer.alloc(0));
+    const r = await operateSafe(GROUP_TASK, 7, 0, Buffer.alloc(0));
     if (r.errorCode !== 0) return { ok: false, reason: `读取任务失败 code=${r.errorCode}`, tasks: [] };
     const tasks = [];
     try {
@@ -531,7 +531,7 @@ async function craftAllFruits(perBatch = 20, maxBatches = 20) {
 async function mainOperateCraft(uids) {
     const packed = encodePackedVarints(uids);
     const payload = Buffer.concat([Buffer.from([0x0a, packed.length]), packed]);
-    const r = await operateRaw(GROUP_MAIN, CMD_CRAFT_REAL, 167, payload);
+    const r = await operateSafe(GROUP_MAIN, CMD_CRAFT_REAL, 167, payload);
     if (r.errorCode !== 0) return { ok: false, reason: `制作失败 code=${r.errorCode}` };
     const made = [];
     if (r.resultHex) {
@@ -578,7 +578,7 @@ async function craftMilkTea(limit = 10) {
     if (!picked.length) return { ok: false, reason: '背包里没有活动果实(森野系列)，先种再收' };
     const packed = encodePackedVarints(picked);
     const payload = Buffer.concat([Buffer.from([0x0a, packed.length]), packed]);   // {#1: packed uids}
-    const r = await operateRaw(GROUP_MAIN, CMD_CRAFT_REAL, 167, payload);
+    const r = await operateSafe(GROUP_MAIN, CMD_CRAFT_REAL, 167, payload);
     if (r.errorCode !== 0) return { ok: false, reason: `制作失败 code=${r.errorCode}` };
     const made = [];
     if (r.resultHex) {
@@ -843,7 +843,7 @@ async function claimTask(taskId) {
     for (const cmd of candidates) {
         let r = null;
         try {
-            r = await operateRaw(GROUP_TASK, cmd, cmd + 100, encodeUint1(id));
+            r = await operateSafe(GROUP_TASK, cmd, cmd + 100, encodeUint1(id));
         } catch (e) {
             errors.push(`cmd=${cmd}: ${e.message}`);
             continue;
@@ -893,6 +893,23 @@ async function hireAll(hireGids, limit = 10) {
     const okCount = results.filter((x) => x.ok).length;
     log('活动', `奶茶热销中: 批量雇佣 ${okCount}/${results.length} 成功`, { module: 'activity', event: '奶茶热销中', result: okCount ? 'ok' : 'warn' });
     return { ok: okCount > 0, hired: okCount, total: results.length, results };
+}
+
+/**
+ * 统一封装活动请求 —— ⚠ 关键: network 层遇到游戏错误码是 **抛异常**(new Error('gamepb... 错误: code=NNN ...')),
+ * 直接 `const r = await operateRaw(...)` 再判断 `r.errorCode` 是**永远不成立的**(异常穿透) —— 踩过。
+ * 这里统一 try/catch, 转成 { errorCode, ok, reason(已压短) }, 让所有调用点能正常处理错误。
+ */
+async function operateSafe(groupId, cmd, payloadField, payloadBytes) {
+    try {
+        const r = await operateRaw(groupId, cmd, payloadField, payloadBytes);
+        const code = toNum(r.errorCode) || 0;
+        return { ...r, errorCode: code, ok: code === 0, reason: code === 0 ? '' : `code=${code}` };
+    } catch (e) {
+        const m = String((e && e.message) || '');
+        const code = toNum((m.match(/code=(\d+)/) || [])[1]) || 0;
+        return { errorCode: code, resultFieldNo: 0, resultHex: '', activity: null, ok: false, reason: shortErr(m) };
+    }
 }
 
 /** 把服务端长错误压短(去掉 gamepb.xxx.Service.Method 错误: 前缀, 只留 code + 短因) */
