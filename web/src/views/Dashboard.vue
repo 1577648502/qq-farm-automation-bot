@@ -625,7 +625,7 @@ useIntervalFn(updateCountdowns, 1000)
         </div>
         <div class="mt-4 border-t border-gray-100 pt-3 dark:border-gray-700">
           <div class="flex items-center justify-between">
-            <div class="flex min-w-0 items-center gap-2">
+            <div class="min-w-0 flex items-center gap-2">
               <div class="h-2.5 w-2.5 shrink-0 rounded-full" :class="status?.connection?.connected ? 'bg-green-500' : 'bg-red-500'" />
               <span class="shrink-0 text-xs font-bold">{{ status?.connection?.connected ? '在线' : '离线' }}</span>
               <!-- 离线原因: 以前只显示"已离线", 用户不知道是掉线还是 Code 失效 -->
@@ -704,73 +704,79 @@ useIntervalFn(updateCountdowns, 1000)
       <!-- Logs (Left Column) -->
       <div class="flex flex-1 flex-col gap-6 md:w-3/4">
         <!-- Logs -->
-        <div class="flex flex-1 flex-col rounded-lg bg-white p-6 shadow md:overflow-hidden dark:bg-gray-800">
-          <div class="mb-4 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+        <div class="flex flex-1 flex-col overflow-hidden rounded-lg bg-white p-4 shadow dark:bg-gray-800 sm:p-6">
+          <div class="mb-4 flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
             <h3 class="flex items-center gap-2 text-lg font-medium">
               <div class="i-carbon-document" />
               <span>运行日志</span>
             </h3>
 
-            <div class="flex flex-wrap items-center gap-2 text-sm">
+            <div class="grid grid-cols-2 gap-2 text-sm sm:flex sm:flex-wrap sm:items-center">
               <BaseSelect
                 v-model="filter.module"
                 :options="modules"
-                class="w-32"
+                class="w-full sm:w-32"
                 @change="onLogFilterChange"
               />
 
               <BaseSelect
                 v-model="filter.event"
                 :options="events"
-                class="w-32"
+                class="w-full sm:w-32"
                 @change="onLogFilterChange"
               />
 
               <BaseSelect
                 v-model="filter.level"
                 :options="logLevels"
-                class="w-32"
+                class="w-full sm:w-32"
                 @change="onLogFilterChange"
               />
 
-              <BaseInput
-                v-model="filter.keyword"
-                placeholder="关键词..."
-                class="w-32"
-                clearable
-                @keyup.enter="onLogSearchTrigger"
-                @clear="onLogSearchTrigger"
-              />
+              <div class="col-span-2 min-w-0 flex items-center gap-2 sm:contents">
+                <BaseInput
+                  v-model="filter.keyword"
+                  placeholder="关键词..."
+                  class="min-w-0 flex-1 sm:w-32 sm:flex-none"
+                  clearable
+                  @keyup.enter="onLogSearchTrigger"
+                  @clear="onLogSearchTrigger"
+                />
 
-              <BaseButton
-                variant="primary"
-                size="sm"
-                @click="onLogSearchTrigger"
-              >
-                <div class="i-carbon-search" />
-              </BaseButton>
+                <BaseButton
+                  variant="primary"
+                  size="sm"
+                  class="shrink-0"
+                  @click="onLogSearchTrigger"
+                >
+                  <div class="i-carbon-search" />
+                </BaseButton>
 
-              <BaseButton
-                variant="secondary"
-                size="sm"
-                :loading="clearingLogs"
-                @click="clearLogs"
-              >
-                <div class="i-carbon-trash-can" />
-              </BaseButton>
+                <BaseButton
+                  variant="secondary"
+                  size="sm"
+                  class="shrink-0"
+                  :loading="clearingLogs"
+                  @click="clearLogs"
+                >
+                  <div class="i-carbon-trash-can" />
+                </BaseButton>
+              </div>
             </div>
           </div>
 
-          <div ref="logContainer" class="max-h-[50vh] min-h-0 flex-1 overflow-y-auto rounded bg-gray-50 p-4 text-sm leading-relaxed font-mono dark:bg-gray-900" @scroll="onLogScroll">
+          <div ref="logContainer" class="max-h-[50vh] min-h-0 flex-1 overflow-x-hidden overflow-y-auto rounded bg-gray-50 p-3 text-sm leading-relaxed font-mono dark:bg-gray-900 sm:p-4" @scroll="onLogScroll">
             <div v-if="!allLogs.length" class="py-8 text-center text-gray-400">
               暂无日志
             </div>
-            <div v-for="log in allLogs" :key="log._uiKey" class="mb-1.5 flex items-start gap-2 break-all">
-              <span class="shrink-0 select-none text-gray-400">[{{ formatLogTime(log.time) }}]</span>
-              <span class="shrink-0 rounded px-1.5 py-0.5 text-xs font-bold" :class="getLogTagClass(getLogTag(log))">{{ getLogTag(log) }}</span>
-              <span v-if="getLogLevel(log) !== 'info'" class="shrink-0 rounded px-1.5 py-0.5 text-xs font-bold" :class="getLogLevelClass(getLogLevel(log))">{{ getLogLevelLabel(getLogLevel(log)) }}</span>
-              <span v-if="log.meta?.event" class="shrink-0 rounded bg-blue-50 px-1.5 py-0.5 text-xs text-blue-500 dark:bg-blue-900/20 dark:text-blue-400">{{ getEventLabel(log.meta.event) }}</span>
-              <span class="min-w-0" :class="getLogMsgClass(getLogLevel(log))">{{ log.msg }}</span>
+            <div v-for="log in allLogs" :key="log._uiKey" class="mb-2 min-w-0 sm:mb-1.5 sm:flex sm:items-start sm:gap-2">
+              <div class="mb-1 min-w-0 flex flex-wrap items-center gap-1.5 sm:mb-0 sm:shrink-0 sm:flex-nowrap">
+                <span class="shrink-0 select-none text-gray-400">[{{ formatLogTime(log.time) }}]</span>
+                <span class="shrink-0 rounded px-1.5 py-0.5 text-xs font-bold" :class="getLogTagClass(getLogTag(log))">{{ getLogTag(log) }}</span>
+                <span v-if="getLogLevel(log) !== 'info'" class="shrink-0 rounded px-1.5 py-0.5 text-xs font-bold" :class="getLogLevelClass(getLogLevel(log))">{{ getLogLevelLabel(getLogLevel(log)) }}</span>
+                <span v-if="log.meta?.event" class="max-w-40 shrink-0 truncate rounded bg-blue-50 px-1.5 py-0.5 text-xs text-blue-500 dark:bg-blue-900/20 dark:text-blue-400" :title="getEventLabel(log.meta.event)">{{ getEventLabel(log.meta.event) }}</span>
+              </div>
+              <span class="block min-w-0 break-all sm:inline sm:flex-1" :class="getLogMsgClass(getLogLevel(log))">{{ log.msg }}</span>
             </div>
           </div>
         </div>
