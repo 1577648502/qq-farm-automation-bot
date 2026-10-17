@@ -1425,7 +1425,13 @@ async function runMilkTea(opts = {}) {
     const out = { ok: true, steps: [] };
 
     let st = await getMainStatus();
-    if (!st.ok) return { ok: false, reason: st.reason };
+    if (!st.ok) {
+        // ⚠ 以前这里是静默 return → 出问题时看不到任何日志, 表现为"自动流程不触发"
+        log('活动', `奶茶热销中: 刷新活动状态失败, 跳过本轮(${shortErr(st.reason)})`, {
+            module: 'activity', event: '奶茶热销中', result: 'warn',
+        });
+        return { ok: false, reason: st.reason };
+    }
     out.state = st;
     if (isSettling(st)) {
         log('活动', '奶茶热销中: 已进入结算期(11/15–11/16), 跳过自动经营', { module: 'activity', event: '奶茶热销中', result: 'skip' });
