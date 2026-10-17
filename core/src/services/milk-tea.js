@@ -747,11 +747,34 @@ async function craftAllFruits(perBatch = 6, maxBatches = 50) {
     let used = 0;         // 投入的"组"数(背包里每个 uid 一组)
     let usedUnits = 0;    // 实际消耗的果实个数
     let batches = 0;
+    let skippedUids = 0;
     for (let i = 0; i < all.uids.length; i += perBatch) {
         if (batches >= maxBatches) break;
         const slice = all.uids.slice(i, i + perBatch);
-        const r = await mainOperateCraft(slice);
+        let r = await mainOperateCraft(slice);
         batches += 1;
+        // ⚠ 整批失败时逐个重试: 未解锁的品类会让**整批**被拒(1034149),
+        //   拆成单个提交后, 已解锁的能成功、未解锁的单独失败并跳过
+        if (r && !r.ok && slice.length > 1) {
+            log('活动', `奶茶热销中: 制作整批失败(${String(r.reason || '').slice(0, 40)}), 改为逐个提交以跳过未解锁品类`, {
+                module: 'activity', event: '奶茶热销中', result: 'warn',
+            });
+            const okOnes = [];
+            const madeOnes = [];
+            for (const one of slice) {
+                const r1 = await mainOperateCraft([one]).catch((e) => ({ ok: false, reason: e.message }));
+                if (r1 && r1.ok) {
+                    okOnes.push(one);
+                    madeOnes.push(...(r1.made || []));
+                } else {
+                    skippedUids += 1;
+                }
+                await sleep(300);
+            }
+            r = okOnes.length
+                ? { ok: true, made: madeOnes, partial: true, okCount: okOnes.length, failCount: slice.length - okOnes.length }
+                : { ok: false, reason: String(r.reason || '全部单个提交均失败') };
+        }
         if (!r.ok) {
             if (batches === 1) return r;            // 第一批就失败 → 直接报错
             break;                                   // 后续批次失败 → 停手, 但保留已完成的
