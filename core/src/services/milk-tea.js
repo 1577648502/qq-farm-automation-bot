@@ -95,27 +95,33 @@ const EXCHANGE_SEED_IDS = [20525, 20526, 20527, 20528, 20021, 21435, 20529, 2900
 const DAILY_BUY_SEED_ID = 29005;
 
 /**
- * 动态推导"可制作的果实 id"——不要写死列表(会漏):
- *  · 优先用官方 Plant.json 的 fruit.id / fruit_alter.id / special_fruit.id(含变异果实)
- *  · 官方表缺(如森野系列)时按实测规律兜底: **果实 id = 种子 id + 20000**(20525→40525, 29005→49005)
+ * 可加工果实 → 配方 id。
+ * 抓包(cmd=58)确认配方 #2..#9 与 MILK_TEA_SEED_IDS 顺序一一对应；
+ * 变异/特殊果实也按所属植物归到同一配方，未知果实不提交。
  */
-function getCraftableFruitIds() {
-    const ids = new Set();
-    for (const seed of MILK_TEA_SEED_IDS) {
+function getCraftableFruitRecipeMap() {
+    const map = new Map();
+    MILK_TEA_SEED_IDS.forEach((seed, index) => {
+        const recipeId = index + 2;
         const plant = getPlantBySeedId(seed) || getFallbackPlantBySeedId(seed);
         const add = (o) => {
             const id = toNum(o && o.id);
-            if (id > 0) ids.add(id);
+            if (id > 0 && !map.has(id)) map.set(id, recipeId);
         };
         if (plant) {
             add(plant.fruit);
             add(plant.fruit_alter);
             add(plant.special_fruit);
         }
-        // 兜底: 无论官方有没有, 都按规律补一个(幂等, 重复无害)
-        ids.add(seed + 20000);
-    }
-    return [...ids];
+        // 官方表缺森野系列时，果实 id = 种子 id + 20000。
+        add({ id: seed + 20000 });
+    });
+    return map;
+}
+
+/** 动态推导"可制作的果实 id"——不要写死列表(会漏)。 */
+function getCraftableFruitIds() {
+    return [...getCraftableFruitRecipeMap().keys()];
 }
 const CMD_CRAFT_REAL = 62;   // 制作奶茶(工坊加工): 请求 #167 = {#1: 果实 uid 列表(packed varint)}
 const SHOP_BODY_FIELD = 102;// 商店列表所在字段
@@ -124,6 +130,25 @@ const TASK_BODY_FIELD = 122;// 任务列表所在字段
 function itemLabel(id, count) {
     const it = getItemById(toNum(id));
     return `${(it && it.name) || `物品#${id}`}×${count}`;
+}
+
+/** 合并同一种产出，避免日志出现 "物品#50001×1×1" 或重复条目。 */
+function aggregateMadeItems(made) {
+    const agg = new Map();
+    for (const m of made || []) {
+        const id = toInt(m && m.id);
+        if (!id) continue;
+        const prev = agg.get(id) || { id, count: 0 };
+        prev.count += Number(m.count) || 0;
+        agg.set(id, prev);
+    }
+    const items = [...agg.values()].map((x) => {
+        const cfg = getItemById(x.id);
+        const fallback = String((made || []).find((m) => toInt(m.id) === x.id)?.name || `物品#${x.id}`)
+            .replace(/×\d+$/, '');
+        return { ...x, name: (cfg && cfg.name) || fallback };
+    });
+    return { items, text: items.map((x) => `${x.name}×${x.count}`).join('、') };
 }
 
 /** 最近一次游戏请求时间: 奶茶活动的请求一律串行 + 至少间隔 300ms,
@@ -708,22 +733,124 @@ function encodePackedVarints(values) {
     return Buffer.concat((Array.isArray(values) ? values : []).map((v) => encodeVarint(v)));
 }
 
-/** 收集背包里所有可加工的果实 uid/count(只读一次背包) */
-async function collectFruitUids() {
+/** 配方菜单缓存；只有服务端明确下发 #3=1 的配方才允许制作。 */
+const MENU_CACHE_MS = 5 * 60 * 1000;
+let menuRecipesCache = { at: 0, recipes: [], names: new Map() };
+
+async function getMenuRecipes(force = false) {
+    if (!force && menuRecipesCache.at && Date.now() - menuRecipesCache.at < MENU_CACHE_MS) {
+        return menuRecipesCache.recipes;
+    }
+    const recipes = [];
+    const r = await mainOperate(CMD_MENU, 163, Buffer.alloc(0));
+    if (r.errorCode !== 0 || !r.resultHex) return [];
+    try {
+        for (const x of parseTop(Buffer.from(r.resultHex, 'hex'))) {
+            if (x.w !== 2) continue;
+            const e = parseTop(x.v);
+            const id = toInt((findField(e, 1) || {}).v);
+            if (!id) continue;
+            const nameField = findField(e, 2);
+            const unlockField = findField(e, 3);
+            const field4 = findField(e, 4);
+            const productField = findField(e, 5);
+            const priceField = findField(e, 6);
+            const field7 = findField(e, 7);
+            recipes.push({
+                id,
+                name: nameField && nameField.w === 2 ? nameField.v.toString('utf8') : `品类${id}`,
+                unlocked: !!unlockField && toInt(unlockField.v) === 1,
+                field4: field4 ? toInt(field4.v) : 0,
+                productId: productField ? toInt(productField.v) : 0,
+                price: priceField ? toInt(priceField.v) : 0,
+                field7: field7 ? (field7.w === 0 ? toInt(field7.v) : Buffer.from(field7.v).toString('hex')) : 0,
+            });
+        }
+    } catch (e) {
+        return [];
+    }
+    if (recipes.length) {
+        const names = new Map(recipes.map((x) => [x.id, x.name]));
+        menuRecipesCache = { at: Date.now(), recipes, names };
+    }
+    return recipes;
+}
+
+function clearMenuCache() {
+    menuRecipesCache = { at: 0, recipes: [], names: new Map() };
+}
+
+function skippedFruitText(skipped) {
+    const byRecipe = new Map();
+    for (const x of skipped || []) {
+        const key = `${x.reason}:${x.recipeId}:${x.recipeName}`;
+        const prev = byRecipe.get(key) || {
+            reason: x.reason,
+            recipeName: x.recipeName,
+            fruits: new Map(),
+        };
+        prev.fruits.set(x.itemName, (prev.fruits.get(x.itemName) || 0) + x.count);
+        byRecipe.set(key, prev);
+    }
+    return [...byRecipe.values()].map((x) => {
+        const fruits = [...x.fruits.entries()].map(([name, count]) => `${name}×${count}`).join('、');
+        if (x.reason === 'locked') return `${x.recipeName}（${fruits}）`;
+        return `${x.recipeName || '未知配方'}（${fruits}，配方未下发）`;
+    }).join('、');
+}
+
+/** 收集背包里已解锁配方的果实 uid/count(只读一次背包，并查询配方菜单)。 */
+async function collectFruitUids(limit = Number.MAX_SAFE_INTEGER) {
     const { getBag, getBagItems } = require('./warehouse');
     const items = getBagItems(await getBag());
-    const fruitIds = getCraftableFruitIds();
+    const fruitRecipeMap = getCraftableFruitRecipeMap();
+    const fruitIds = new Set(fruitRecipeMap.keys());
+    const recipes = await getMenuRecipes();
+    const recipeById = new Map(recipes.map((x) => [x.id, x]));
     const uids = [];
     const entries = [];
+    const skippedByKey = new Map();
+    const max = Math.max(0, toInt(limit));
     for (const it of items) {
-        if (!fruitIds.includes(toNum(it && it.id))) continue;
+        const itemId = toNum(it && it.id);
+        if (!fruitIds.has(itemId)) continue;
         const uid = toNum(it && it.uid);
-        if (uid > 0) {
+        if (uid <= 0) continue;
+        const count = Math.max(1, toInt(it.count) || 1);
+        const recipeId = fruitRecipeMap.get(itemId);
+        const recipe = recipeById.get(recipeId);
+        if (!recipe || !recipe.unlocked) {
+            const reason = recipe ? 'locked' : 'missing';
+            const recipeName = recipe ? recipe.name : `配方#${recipeId}`;
+            const itemCfg = getItemById(itemId);
+            const itemName = (itemCfg && itemCfg.name) || `果实#${itemId}`;
+            const key = `${reason}:${recipeId}:${itemId}`;
+            const prev = skippedByKey.get(key) || {
+                recipeId,
+                recipeName,
+                itemId,
+                itemName,
+                count: 0,
+                groups: 0,
+                reason,
+            };
+            prev.count += count;
+            prev.groups += 1;
+            skippedByKey.set(key, prev);
+            continue;
+        }
+        if (uids.length < max) {
             uids.push(uid);
-            entries.push({ uid, count: toInt(it.count) || 1, itemId: toNum(it.id) });
+            entries.push({ uid, count, itemId, recipeId });
         }
     }
-    return { uids, entries, fruitIds };
+    return {
+        uids,
+        entries,
+        fruitIds: [...fruitIds],
+        recipes,
+        skipped: [...skippedByKey.values()],
+    };
 }
 
 /**
@@ -735,75 +862,96 @@ async function collectFruitUids() {
 async function craftAllFruits(perBatch = 8, maxBatches = 50) {
     perBatch = Math.max(1, toInt(perBatch) || 8);
     maxBatches = Math.max(1, toInt(maxBatches) || 50);
-    let all = { uids: [], entries: [], fruitIds: [] };
+    let all = { uids: [], entries: [], fruitIds: [], recipes: [], skipped: [] };
     try {
         all = await collectFruitUids();
     } catch (e) {
         return { ok: false, reason: `读取背包失败: ${e.message}` };
     }
-    if (!all.uids.length) return { ok: false, reason: '背包里没有活动果实(森野系列)，先种再收' };
+    if (!all.uids.length) {
+        if (all.skipped.length) {
+            const detail = skippedFruitText(all.skipped);
+            const reason = `未制作: 配方尚未解锁 — ${detail}`;
+            log('活动', `奶茶热销中: ${reason}`, {
+                module: 'activity', event: '奶茶热销中', result: 'skip', skippedGroups: all.skipped.reduce((n, x) => n + x.groups, 0),
+            });
+            return {
+                ok: false,
+                skipped: true,
+                reason,
+                skippedItems: all.skipped,
+                used: 0,
+                usedUnits: 0,
+                batches: 0,
+                made: [],
+            };
+        }
+        return { ok: false, reason: '背包里没有活动果实(森野系列)，先种再收' };
+    }
 
     const entryByUid = new Map(all.entries.map((x) => [x.uid, x]));
     const made = [];
     let used = 0;         // 投入的"组"数(背包里每个 uid 一组)
     let usedUnits = 0;    // 实际消耗的果实个数
     let batches = 0;
-    const skippedUids = [];
+    let failure = null;
     for (let i = 0; i < all.uids.length; i += perBatch) {
         if (batches >= maxBatches) break;
         const slice = all.uids.slice(i, i + perBatch);
-        let succeededUids = slice;
-        let r = await mainOperateCraft(slice);
+        const r = await mainOperateCraft(slice);
         batches += 1;
-        // 1034149 的真实触发条件尚未用失败请求/响应闭环确认。
-        // 这里保留整批失败后逐个提交的兜底，用于定位并跳过服务端拒绝的 UID。
-        if (r && !r.ok && slice.length > 1) {
-            log('活动', `奶茶热销中: 制作整批失败(${String(r.reason || '').slice(0, 40)}), 改为逐个提交定位失败项`, {
-                module: 'activity', event: '奶茶热销中', result: 'warn',
-            });
-            const okOnes = [];
-            const madeOnes = [];
-            for (const one of slice) {
-                const r1 = await mainOperateCraft([one]).catch((e) => ({ ok: false, reason: e.message }));
-                if (r1 && r1.ok) {
-                    okOnes.push(one);
-                    madeOnes.push(...(r1.made || []));
-                } else {
-                    skippedUids.push(one);
-                }
-                await sleep(300);
-            }
-            succeededUids = okOnes;
-            r = okOnes.length
-                ? { ok: true, made: madeOnes, partial: true, okCount: okOnes.length, failCount: slice.length - okOnes.length }
-                : { ok: false, reason: String(r.reason || '全部单个提交均失败') };
-        }
         if (!r.ok) {
-            if (slice.length === 1 && !skippedUids.includes(slice[0])) skippedUids.push(slice[0]);
-            if (batches === 1) {
-                return { ...r, used, usedUnits, batches, made, skippedUids };
-            }
-            break;                                   // 后续批次失败 → 停手, 但保留已完成的
+            failure = r;
+            break; // 服务端拒绝后停手，保留已经成功的批次，不再逐 UID 刷请求。
         }
-        used += succeededUids.length;
-        usedUnits += succeededUids.reduce((sum, uid) => sum + (entryByUid.get(uid)?.count || 1), 0);
-        const batchMade = r.made || [];
-        made.push(...batchMade);
+        used += slice.length;
+        usedUnits += slice.reduce((sum, uid) => sum + (entryByUid.get(uid)?.count || 1), 0);
+        made.push(...(r.made || []));
         if (i + perBatch < all.uids.length) await sleep(700);
     }
-    // 同名合并(森野甜莓×99), 避免 5 组并列刷一长串
-    const agg = new Map();
-    for (const m of made) {
-        const k = toInt(m.id);
-        const prev = agg.get(k) || { name: m.name, count: 0 };
-        prev.count += Number(m.count) || 0;
-        agg.set(k, prev);
+
+    const skippedDetail = skippedFruitText(all.skipped);
+    const output = aggregateMadeItems(made);
+    if (!used) {
+        const reason = failure ? failure.reason : '制作未产生任何结果';
+        const text = `奶茶热销中: 制作未完成 — ${reason}${skippedDetail ? `；跳过未解锁配方 ${skippedDetail}` : ''}`;
+        log('活动', text, {
+            module: 'activity', event: '奶茶热销中', result: 'error',
+            errorCode: failure && failure.errorCode, skippedGroups: all.skipped.reduce((n, x) => n + x.groups, 0),
+        });
+        return {
+            ok: false,
+            errorCode: failure && failure.errorCode,
+            reason,
+            rawReason: failure && failure.rawReason,
+            used,
+            usedUnits,
+            batches,
+            made,
+            skipped: false,
+            skippedItems: all.skipped,
+        };
     }
-    const aggText = Array.from(agg.values()).map((x) => `${x.name}×${x.count}`).join('、');
-    log('活动', `奶茶热销中: 已加工 ${used} 组果实(共 ${usedUnits} 个)${skippedUids.length ? `, 跳过 ${skippedUids.length} 个 UID` : ''}${aggText ? `: ${aggText}` : ''}`, {
-        module: 'activity', event: '奶茶热销中', result: 'ok', fruits: used, batches, skippedUids: skippedUids.length,
+
+    const skipText = skippedDetail ? `；跳过未解锁配方 ${skippedDetail}` : '';
+    const failureText = failure ? `；后续停止: ${failure.reason}` : '';
+    log('活动', `奶茶热销中: 已制作 ${used} 组/共 ${usedUnits} 个果实${output.text ? ` → ${output.text}` : ''}${skipText}${failureText}`, {
+        module: 'activity', event: '奶茶热销中', result: failure ? 'warn' : 'ok',
+        fruits: used, batches, skippedGroups: all.skipped.reduce((n, x) => n + x.groups, 0),
     });
-    return { ok: true, used, usedUnits, batches, made, skippedUids, state: null };
+    return {
+        ok: true,
+        partial: !!failure,
+        errorCode: failure && failure.errorCode,
+        failureReason: failure && failure.reason,
+        used,
+        usedUnits,
+        batches,
+        made,
+        skipped: false,
+        skippedItems: all.skipped,
+        state: null,
+    };
 }
 
 /** 提交一批果实 uid 去制作(内部用) */
@@ -813,12 +961,12 @@ async function mainOperateCraft(uids) {
     const payload = Buffer.concat([Buffer.from([0x0a, packed.length]), packed]);
     const r = await operateSafe(GROUP_MAIN, CMD_CRAFT_REAL, 167, payload);
     if (r.errorCode !== 0) {
-        log('活动', `奶茶热销中: [制作请求] uids=${uids.length} 批 payload=${payload.toString('hex').slice(0, 80)}`, {
-            module: 'activity', event: '奶茶热销中', result: 'info',
-        });
-        log('活动', `奶茶热销中: [制作应答] code=${r.errorCode} reason=${String(r.reason || '').slice(0, 60)} ` +
-            `raw=${String(r.resultHex || '').slice(0, 120) || '(空)'}`, { module: 'activity', event: '奶茶热销中', result: 'warn' });
-        return { ok: false, reason: `制作失败 code=${r.errorCode}` };
+        return {
+            ok: false,
+            errorCode: r.errorCode,
+            reason: r.reason || `code=${r.errorCode}`,
+            rawReason: r.rawReason || r.reason || '',
+        };
     }
     const made = [];
     if (r.resultHex) {
@@ -833,7 +981,7 @@ async function mainOperateCraft(uids) {
             }
         } catch (e) { /* 忽略 */ }
     }
-    return { ok: true, made, state: parseMainState(r.activity) };
+    return { ok: true, errorCode: 0, reason: '', made, state: parseMainState(r.activity) };
 }
 
 /**
@@ -844,36 +992,64 @@ async function mainOperateCraft(uids) {
  */
 async function craftMilkTea(limit = 8) {
     limit = Math.max(1, toInt(limit) || 8);
-    let items = [];
+    let all;
     try {
-        const { getBag, getBagItems } = require('./warehouse');
-        items = getBagItems(await getBag());
+        all = await collectFruitUids(limit);
     } catch (e) {
         return { ok: false, reason: `读取背包失败: ${e.message}` };
     }
-    const fruitIds = getCraftableFruitIds();
-    const picked = [];
-    const usedIds = new Set();
-    let usedUnits = 0;
-    for (const it of items) {
-        if (picked.length >= limit) break;
-        const iid = toNum(it && it.id);
-        if (!fruitIds.includes(iid)) continue;
-        const uid = toNum(it && it.uid);
-        if (uid > 0) {
-            usedIds.add(iid);
-            picked.push(uid);
-            usedUnits += toInt(it.count) || 1;
+    const picked = all.uids;
+    const usedIds = new Set(all.entries.map((x) => x.itemId));
+    const usedUnits = all.entries.reduce((sum, x) => sum + x.count, 0);
+    if (!picked.length) {
+        if (all.skipped.length) {
+            const detail = skippedFruitText(all.skipped);
+            const reason = `未制作: 配方尚未解锁 — ${detail}`;
+            log('活动', `奶茶热销中: ${reason}`, {
+                module: 'activity', event: '奶茶热销中', result: 'skip',
+            });
+            return {
+                ok: false,
+                skipped: true,
+                reason,
+                skippedItems: all.skipped,
+                used: 0,
+                usedUnits: 0,
+                usedFruits: [],
+            };
         }
+        return { ok: false, reason: '背包里没有活动果实(森野系列)，先种再收' };
     }
-    if (!picked.length) return { ok: false, reason: '背包里没有活动果实(森野系列)，先种再收' };
     const r = await mainOperateCraft(picked);
-    if (!r.ok) return { ...r, used: 0, usedUnits: 0, usedFruits: [...usedIds] };
+    if (!r.ok) {
+        log('活动', `奶茶热销中: 制作未完成 — ${r.reason}`, {
+            module: 'activity', event: '奶茶热销中', result: 'error', errorCode: r.errorCode,
+        });
+        return {
+            ...r,
+            used: 0,
+            usedUnits: 0,
+            usedFruits: [...usedIds],
+            skipped: false,
+            skippedItems: all.skipped,
+        };
+    }
     const made = r.made || [];
-    log('活动', `奶茶热销中: 已制作奶茶(投入 ${picked.length} 组/共 ${usedUnits} 个果实)${made.length ? ` → ${made.map((m) => m.name).join('、')}` : ''}`, {
+    const output = aggregateMadeItems(made);
+    const skipText = all.skipped.length ? `；跳过未解锁配方 ${skippedFruitText(all.skipped)}` : '';
+    log('活动', `奶茶热销中: 已制作 ${picked.length} 组/共 ${usedUnits} 个果实${output.text ? ` → ${output.text}` : ''}${skipText}`, {
         module: 'activity', event: '奶茶热销中', result: 'ok', fruits: picked.length, usedUnits,
     });
-    return { ok: true, used: picked.length, usedUnits, usedFruits: [...usedIds], made, state: r.state };
+    return {
+        ok: true,
+        used: picked.length,
+        usedUnits,
+        usedFruits: [...usedIds],
+        made,
+        skipped: false,
+        skippedItems: all.skipped,
+        state: r.state,
+    };
 }
 
 /**
@@ -1106,25 +1282,10 @@ function parseWorkFromRefresh(resultHex) {
  * 用途: 雇佣好友时标出可雇佣性(避免 1034140 该雇佣位已有员工在工作)。
  * 注意: #4 列表里包含非本人雇佣的好友, 不能当员工总数。
  */
-/** 菜单名缓存(品类 → 名字; 5 分钟有效, 减少请求) */
-let menuNamesCache = { at: 0, map: new Map() };
+/** 兼容销量页：复用配方菜单缓存，返回"品类 id → 名字"。 */
 async function getMenuNames(force = false) {
-    if (!force && menuNamesCache.at && Date.now() - menuNamesCache.at < 5 * 60 * 1000) return menuNamesCache.map;
-    const map = new Map();
-    try {
-        const r = await mainOperate(CMD_MENU, 163, Buffer.alloc(0));
-        if (r.resultHex) {
-            for (const x of parseTop(Buffer.from(r.resultHex, 'hex'))) {
-                if (x.w !== 2) continue;
-                const e = parseTop(x.v);
-                const id = toInt((findField(e, 1) || {}).v);
-                const nm = (findField(e, 2) || {}).v;
-                if (id) map.set(id, nm ? String(nm) : `品类${id}`);
-            }
-        }
-    } catch (e) { /* 名字拿不到就退回编号 */ }
-    if (map.size) menuNamesCache = { at: Date.now(), map };
-    return map;
+    await getMenuRecipes(force);
+    return menuRecipesCache.names;
 }
 
 /** 兼容旧调用名；营业记录统一走 cmd=67/#172，传入北京时间当日 00:00。 */
@@ -1325,11 +1486,21 @@ async function operateSafe(groupId, cmd, payloadField, payloadBytes) {
     try {
         const r = await operateRaw(groupId, cmd, payloadField, payloadBytes);
         const code = toInt(r.errorCode);          // ⚠ 必须 toInt: toNum 对字符串会原样返回 → 数字比较失效
-        return { ...r, errorCode: code, ok: code === 0, reason: code === 0 ? '' : `code=${code}` };
+        const reason = code === 0 ? '' : `code=${code}`;
+        return { ...r, errorCode: code, ok: code === 0, reason, rawReason: reason };
     } catch (e) {
         const m = String((e && e.message) || '');
         const code = toInt((m.match(/code=(\d+)/) || [])[1]);   // ⚠ 必须 toInt(踩过: toNum 返回字符串)
-        return { errorCode: code, resultFieldNo: 0, resultHex: '', activity: null, ok: false, reason: shortErr(m), thrown: true };
+        return {
+            errorCode: code,
+            resultFieldNo: 0,
+            resultHex: '',
+            activity: null,
+            ok: false,
+            reason: shortErr(m),
+            rawReason: shortErr(m, 240),
+            thrown: true,
+        };
     }
 }
 
@@ -1577,6 +1748,10 @@ module.exports = {
         shortErr,
         operateSafe,
         mainOperateCraft,
+        getMenuRecipes,
+        clearMenuCache,
+        getCraftableFruitRecipeMap,
+        collectFruitUids,
         getSalesRecords,
         interactWithFriend,
         craftAllFruits,
@@ -1594,6 +1769,7 @@ module.exports = {
     interactWithFriend,
     WORK_INTERACT_TYPE,
     getCraftableFruitIds,
+    getCraftableFruitRecipeMap,
     getEmployees,
     getSalesRecords,
     getSalesRecord,
@@ -1601,6 +1777,7 @@ module.exports = {
     getUpgradeInfo,
     upgradeStore,
     buyDailySeeds,
+    getMenuRecipes,
     getMenuNames,
     useSpeaker,
     openStore,

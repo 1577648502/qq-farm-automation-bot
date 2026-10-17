@@ -110,6 +110,23 @@ function craftResult(uids) {
     ]))));
 }
 
+function menuResult(recipes) {
+    return Buffer.concat((recipes || []).map((recipe) => {
+        const fields = [
+            varintField(1, recipe.id),
+            bytesField(2, recipe.name || `品类${recipe.id}`),
+        ];
+        if (recipe.unlocked) fields.push(varintField(3, 1));
+        fields.push(
+            varintField(4, recipe.field4 || 0),
+            varintField(5, recipe.productId || 0),
+            varintField(6, recipe.price || 0),
+        );
+        if (recipe.field7 !== undefined) fields.push(varintField(7, recipe.field7));
+        return bytesField(1, Buffer.concat(fields));
+    }));
+}
+
 function workRefreshResult({
     employerGid = 0,
     employerName = '',
@@ -291,10 +308,15 @@ sendImpl = async (service, method, body) => {
             bytesField(8, Buffer.concat([varintField(1, 1042), varintField(2, 2)])),
             bytesField(8, Buffer.concat([varintField(1, 80011), varintField(2, 10)])),
         ]);
-        const menu = bytesField(1, Buffer.concat([
-            varintField(1, 10),
-            bytesField(2, '普通奶茶'),
-        ]));
+        const menu = menuResult([{
+            id: 10,
+            name: '普通奶茶',
+            unlocked: true,
+            field4: 12,
+            productId: 50010,
+            price: 18,
+            field7: 7,
+        }]);
         router = async (req) => {
             if (req.cmd === 63) return operateReply(63, { activity: mainActivity(), result: Buffer.alloc(0), resultField: 168 });
             if (req.cmd === 67) return operateReply(67, { result: sales, resultField: 172 });
@@ -329,6 +351,13 @@ sendImpl = async (service, method, body) => {
         check('雇员记录不再输出未证实工资/销量',
             r.records.length === 1 && !Object.prototype.hasOwnProperty.call(r.records[0], 'wage')
             && !Object.prototype.hasOwnProperty.call(r.records[0], 'soldCups'), r.records[0]);
+        const recipes = await milkTea.__testing.getMenuRecipes();
+        check('cmd58 结构化解析配方字段与解锁状态',
+            recipes.length === 1 && recipes[0].id === 10 && recipes[0].name === '普通奶茶'
+            && recipes[0].unlocked === true && recipes[0].field4 === 12
+            && recipes[0].productId === 50010 && recipes[0].price === 18 && recipes[0].field7 === 7,
+            recipes);
+        milkTea.__testing.clearMenuCache();
     }
 
     section('5. 制作奶茶 cmd62/#167');
@@ -358,7 +387,14 @@ sendImpl = async (service, method, body) => {
         const originalGetBagItems = warehouse.getBagItems;
         warehouse.getBag = async () => ({});
         warehouse.getBagItems = () => [{ id: 40525, uid: 60001, count: 2 }];
+        milkTea.__testing.clearMenuCache();
         router = async (req) => {
+            if (req.cmd === 58) {
+                return operateReply(58, {
+                    result: menuResult([{ id: 2, name: '甜莓奶茶', unlocked: true }]),
+                    resultField: 163,
+                });
+            }
             if (req.cmd !== 62) throw new Error(`防跑飞用例收到 cmd=${req.cmd}`);
             const payload = mg.parseTop(req.payload);
             const packed = (payload.find((x) => x.f === 1) || {}).v;
@@ -370,8 +406,10 @@ sendImpl = async (service, method, body) => {
         check('perBatch=0 时仍只处理有效批次', zero.ok === true && zero.batches === 1 && zero.used === 1, zero);
         check('perBatch/maxBatches 为负数时仍能在有限批次结束',
             negative.ok === true && negative.batches === 1 && negative.used === 1, negative);
+        check('配方菜单只查询一次并复用缓存', sent.filter((x) => x.cmd === 58).length === 1, sent.map((x) => x.cmd));
         warehouse.getBag = originalGetBag;
         warehouse.getBagItems = originalGetBagItems;
+        milkTea.__testing.clearMenuCache();
     }
 
     section('7. 互动只认刷新 #168.#1');
@@ -434,7 +472,7 @@ sendImpl = async (service, method, body) => {
         check('没有发送任何猜测请求', sent.length === 0, sent.map((x) => x.cmd));
     }
 
-    section('9. 整批制作失败后逐 UID 回退');
+    section('9. 只制作已解锁配方，未解锁配方直接跳过');
     {
         const originalGetBag = warehouse.getBag;
         const originalGetBagItems = warehouse.getBagItems;
@@ -443,25 +481,74 @@ sendImpl = async (service, method, body) => {
             { id: 40525, uid: 70001, count: 3 },
             { id: 40526, uid: 70002, count: 5 },
         ];
+        milkTea.__testing.clearMenuCache();
         router = async (req) => {
+            if (req.cmd === 58) {
+                return operateReply(58, {
+                    result: menuResult([
+                        { id: 2, name: '甜莓奶茶', unlocked: true },
+                        { id: 3, name: '白桃乌龙', unlocked: false },
+                    ]),
+                    resultField: 163,
+                });
+            }
             if (req.cmd !== 62) throw new Error(`部分失败用例收到 cmd=${req.cmd}`);
             const payload = mg.parseTop(req.payload);
             const packed = (payload.find((x) => x.f === 1) || {}).v;
             const uids = parsePackedVarints(packed);
-            if (uids.length > 1 || uids[0] === 70002) {
-                return operateReply(62, { errorCode: 1034149, resultField: 167 });
-            }
+            if (uids.join(',') !== '70001') throw new Error(`未解锁 UID 不应提交: ${uids.join(',')}`);
             return operateReply(62, { result: craftResult(uids), resultField: 167 });
         };
 
+        sent.length = 0;
         const r = await milkTea.__testing.craftAllFruits(2, 1);
-        check('部分失败仍返回整体成功（保留已完成结果）', r.ok === true, r);
+        const craftRequests = sent.filter((x) => x.cmd === 62);
+        const craftUids = craftRequests.flatMap((request) => {
+            const payload = mg.parseTop(request.payload);
+            const packed = (payload.find((x) => x.f === 1) || {}).v;
+            return parsePackedVarints(packed);
+        });
+        check('只提交已解锁配方的 UID', craftRequests.length === 1 && craftUids.join(',') === '70001', craftUids);
+        check('未解锁 UID 不会进入制作请求', !craftUids.includes(70002), craftUids);
+        check('部分可制作时返回成功且不标记失败', r.ok === true && r.partial === false, r);
         check('成功计数按实际 UID 返回', r.used === 1, r.used);
         check('实际投入数量使用背包 count 汇总', r.usedUnits === 3, r.usedUnits);
-        check('失败 UID 单独记录', r.skippedUids.length === 1 && r.skippedUids[0] === 70002, r.skippedUids);
+        check('未解锁配方按果实数量汇总记录', r.skipped === false && r.skippedItems.length === 1
+            && r.skippedItems[0].recipeId === 3 && r.skippedItems[0].reason === 'locked'
+            && r.skippedItems[0].itemName === '森野白桃' && r.skippedItems[0].count === 5,
+        r.skippedItems);
         check('保留成功产出的物品', r.made.length === 1 && r.made[0].count === 1, r.made);
         warehouse.getBag = originalGetBag;
         warehouse.getBagItems = originalGetBagItems;
+    }
+
+    section('10. 全部配方未解锁时不发送制作请求');
+    {
+        const originalGetBag = warehouse.getBag;
+        const originalGetBagItems = warehouse.getBagItems;
+        warehouse.getBag = async () => ({});
+        warehouse.getBagItems = () => [{ id: 40526, uid: 70003, count: 6 }];
+        milkTea.__testing.clearMenuCache();
+        router = async (req) => {
+            if (req.cmd === 58) {
+                return operateReply(58, {
+                    result: menuResult([
+                        { id: 2, name: '甜莓奶茶', unlocked: true },
+                        { id: 3, name: '白桃乌龙', unlocked: false },
+                    ]),
+                    resultField: 163,
+                });
+            }
+            throw new Error(`全部未解锁时不应发送 cmd=${req.cmd}`);
+        };
+
+        sent.length = 0;
+        const r = await milkTea.__testing.craftAllFruits(2, 1);
+        check('返回跳过而不是制作失败', r.ok === false && r.skipped === true && r.used === 0, r);
+        check('没有发送 cmd62', !sent.some((x) => x.cmd === 62), sent.map((x) => x.cmd));
+        warehouse.getBag = originalGetBag;
+        warehouse.getBagItems = originalGetBagItems;
+        milkTea.__testing.clearMenuCache();
     }
 
     finish();
