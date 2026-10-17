@@ -733,7 +733,8 @@ async function collectFruitUids() {
  * @param perBatch 每批提交几个果实 uid
  * @param maxBatches 最多几批(防跑飞)
  */
-async function craftAllFruits(perBatch = 20, maxBatches = 20) {
+// ⚠ 实测客户端(cmd=62 请求)一次只提交 **6 个**果实 uid; 之前用 20 个 → 服务端回 1034149(批次超限/参数错误)
+async function craftAllFruits(perBatch = 6, maxBatches = 50) {
     let all = { uids: [], fruitIds: [] };
     try {
         all = await collectFruitUids();
@@ -781,7 +782,14 @@ async function mainOperateCraft(uids) {
     const packed = encodePackedVarints(uids);
     const payload = Buffer.concat([Buffer.from([0x0a, packed.length]), packed]);
     const r = await operateSafe(GROUP_MAIN, CMD_CRAFT_REAL, 167, payload);
-    if (r.errorCode !== 0) return { ok: false, reason: `制作失败 code=${r.errorCode}` };
+    if (r.errorCode !== 0) {
+        log('活动', `奶茶热销中: [制作请求] uids=${uids.length} 批 payload=${payload.toString('hex').slice(0, 80)}`, {
+            module: 'activity', event: '奶茶热销中', result: 'info',
+        });
+        log('活动', `奶茶热销中: [制作应答] code=${r.errorCode} reason=${String(r.reason || '').slice(0, 60)} ` +
+            `raw=${String(r.resultHex || '').slice(0, 120) || '(空)'}`, { module: 'activity', event: '奶茶热销中', result: 'warn' });
+        return { ok: false, reason: `制作失败 code=${r.errorCode}` };
+    }
     const made = [];
     if (r.resultHex) {
         try {
