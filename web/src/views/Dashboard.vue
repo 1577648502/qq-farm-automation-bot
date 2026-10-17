@@ -19,7 +19,6 @@ const toastStore = useToastStore()
 const {
   status,
   logs: statusLogs,
-  accountLogs: statusAccountLogs,
   realtimeConnected,
 } = storeToRefs(statusStore)
 const { currentAccountId, currentAccount } = storeToRefs(accountStore)
@@ -30,27 +29,23 @@ const lastBagFetchAt = ref(0)
 const clearingLogs = ref(false)
 
 const allLogs = computed(() => {
-  const sLogs = statusLogs.value || []
-  const aLogs = (statusAccountLogs.value || []).map((l: any) => ({
-    ts: new Date(l.time).getTime(),
-    time: l.time,
-    tag: l.action === 'Error' ? '错误' : '系统',
-    msg: l.reason ? `${l.msg} (${l.reason})` : l.msg,
-    isAccountLog: true,
-  }))
-
-  return [...sLogs, ...aLogs].sort((a: any, b: any) => a.ts - b.ts).filter((l: any) => !l.isAccountLog)
+  return (statusLogs.value || [])
+    .map((log: any, index: number) => ({
+      ...log,
+      _uiKey: `${log.id || 'log'}-${log.ts || 0}-${index}`,
+    }))
+    .sort((a: any, b: any) => getLogTimestamp(a) - getLogTimestamp(b))
 })
 
 const filter = reactive({
   module: '',
   event: '',
   keyword: '',
-  isWarn: '',
+  level: '',
 })
 
 const hasActiveLogFilter = computed(() =>
-  !!(filter.module || filter.event || filter.keyword || filter.isWarn),
+  !!(filter.module || filter.event || filter.keyword || filter.level),
 )
 
 const modules = [
@@ -59,34 +54,45 @@ const modules = [
   { label: '好友', value: 'friend' },
   { label: '仓库', value: 'warehouse' },
   { label: '任务', value: 'task' },
+  { label: '活动', value: 'activity' },
+  { label: '商城', value: 'mall' },
+  { label: '神秘商店', value: 'mystery_shop' },
+  { label: '网络', value: 'network' },
+  { label: '调度', value: 'scheduler' },
   { label: '系统', value: 'system' },
 ]
 
 const events = [
   { label: '所有事件', value: '' },
-  { label: '农场巡查', value: 'farm_cycle' },
-  { label: '收获作物', value: 'harvest_crop' },
-  { label: '清理枯株', value: 'remove_plant' },
-  { label: '种植种子', value: 'plant_seed' },
-  { label: '施加化肥', value: 'fertilize' },
-  { label: '土地推送', value: 'lands_notify' },
-  { label: '选择种子', value: 'seed_pick' },
-  { label: '购买种子', value: 'seed_buy' },
-  { label: '购买化肥', value: 'fertilizer_buy' },
-  { label: '开启礼包', value: 'fertilizer_gift_open' },
-  { label: '获取任务', value: 'task_scan' },
-  { label: '完成任务', value: 'task_claim' },
-  { label: '免费礼包', value: 'mall_free_gifts' },
-  { label: '分享奖励', value: 'daily_share' },
-  { label: '会员礼包', value: 'vip_daily_gift' },
-  { label: '月卡礼包', value: 'month_card_gift' },
-  { label: '图鉴奖励', value: 'illustrated_rewards' },
-  { label: '邮箱领取', value: 'email_rewards' },
-  { label: '出售成功', value: 'sell_success' },
-  { label: '土地升级', value: 'upgrade_land' },
-  { label: '土地解锁', value: 'unlock_land' },
-  { label: '好友巡查', value: 'friend_cycle' },
-  { label: '访问好友', value: 'visit_friend' },
+  { label: '奶茶热销中', value: '奶茶热销中' },
+  { label: '秋祈良愿', value: '秋祈良愿' },
+  { label: '萌宠游记', value: '萌宠游记' },
+  { label: '雨落成诗', value: '雨落成诗' },
+  { label: '千星点亮', value: '千星点亮' },
+  { label: '夺宝', value: '夺宝' },
+  { label: '公益小红花', value: '公益小红花' },
+  { label: '快乐不独享', value: '快乐不独享' },
+  { label: '农场循环', value: '农场循环' },
+  { label: '收获作物', value: '收获作物' },
+  { label: '种植种子', value: '种植种子' },
+  { label: '施肥', value: '施肥' },
+  { label: '铲除植物', value: '铲除植物' },
+  { label: '选择种子', value: '选择种子' },
+  { label: '购买种子', value: '购买种子' },
+  { label: '购买化肥', value: '购买化肥' },
+  { label: '开启化肥礼包', value: '开启化肥礼包' },
+  { label: '扫描任务', value: '扫描任务' },
+  { label: '领取任务', value: '领取任务' },
+  { label: '扫描活跃奖励', value: '扫描活跃奖励' },
+  { label: '领取活跃奖励', value: '领取活跃奖励' },
+  { label: '图鉴奖励', value: '图鉴奖励' },
+  { label: '偷菜巡查', value: '偷菜巡查' },
+  { label: '好友巡查循环', value: '好友巡查循环' },
+  { label: '帮助巡查', value: '帮助巡查' },
+  { label: '升级土地', value: '升级土地' },
+  { label: '解锁土地', value: '解锁土地' },
+  { label: '登录成功', value: 'login_success' },
+  { label: '登录失败', value: 'login_failed' },
 ]
 
 const eventLabelMap: Record<string, string> = Object.fromEntries(
@@ -97,10 +103,12 @@ function getEventLabel(event: string) {
   return eventLabelMap[event] || event
 }
 
-const logs = [
+const logLevels = [
   { label: '所有等级', value: '' },
   { label: '普通', value: 'info' },
   { label: '警告', value: 'warn' },
+  { label: '错误', value: 'error' },
+  { label: '跳过', value: 'skip' },
 ]
 
 const displayName = computed(() => {
@@ -273,19 +281,69 @@ function formatSignedCurrencyNumber(value: unknown) {
   return formatSignedCompactNumber(value)
 }
 
+function getLogTimestamp(log: any) {
+  const ts = Number(log?.ts)
+  if (Number.isFinite(ts) && ts > 0)
+    return ts
+  const parsed = Date.parse(String(log?.time || ''))
+  return Number.isFinite(parsed) ? parsed : 0
+}
+
+function getLogLevel(log: any) {
+  const tag = String(log?.tag || '')
+  const result = String(log?.meta?.result || '').toLowerCase()
+  if (tag === '错误' || result === 'error')
+    return 'error'
+  if (result === 'skip')
+    return 'skip'
+  if (tag === '警告' || result === 'warn' || log?.isWarn)
+    return 'warn'
+  return 'info'
+}
+
+function getLogTag(log: any) {
+  const tag = String(log?.tag || '系统')
+  return tag === '错误' || tag === '警告' ? '系统' : tag
+}
+
+const LOG_LEVEL_LABELS: Record<string, string> = {
+  info: '普通',
+  warn: '警告',
+  error: '错误',
+  skip: '跳过',
+}
+
+function getLogLevelLabel(level: string) {
+  return LOG_LEVEL_LABELS[level] || level
+}
+
 function getLogTagClass(tag: string) {
-  if (tag === '错误')
-    return 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-300'
+  if (tag === '活动')
+    return 'bg-teal-100 text-teal-700 dark:bg-teal-900/30 dark:text-teal-300'
+  if (tag === '商城' || tag === '神秘商店')
+    return 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300'
+  if (tag === '网络' || tag === '调度')
+    return 'bg-slate-100 text-slate-700 dark:bg-slate-700 dark:text-slate-300'
   if (tag === '系统')
     return 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300'
-  if (tag === '警告')
-    return 'bg-orange-100 text-orange-700 dark:bg-orange-900/30 dark:text-orange-300'
   return 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-300'
 }
 
-function getLogMsgClass(tag: string) {
-  if (tag === '错误')
+function getLogLevelClass(level: string) {
+  if (level === 'warn')
+    return 'bg-orange-100 text-orange-700 dark:bg-orange-900/30 dark:text-orange-300'
+  if (level === 'error')
+    return 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-300'
+  if (level === 'skip')
+    return 'bg-gray-200 text-gray-600 dark:bg-gray-700 dark:text-gray-300'
+  return ''
+}
+
+function getLogMsgClass(level: string) {
+  if (level === 'error')
     return 'text-red-600 dark:text-red-400'
+  if (level === 'warn')
+    return 'text-orange-700 dark:text-orange-300'
   return 'text-gray-700 dark:text-gray-300'
 }
 
@@ -365,7 +423,6 @@ async function refresh(forceReloadLogs = false) {
     // 首次加载、断线兜底时走 HTTP；连接正常时优先走 WS 实时推送
     if (!realtimeConnected.value) {
       await statusStore.fetchStatus(currentAccountId.value)
-      await statusStore.fetchAccountLogs()
     }
 
     if (forceReloadLogs || hasActiveLogFilter.value || !realtimeConnected.value) {
@@ -373,7 +430,7 @@ async function refresh(forceReloadLogs = false) {
         module: filter.module || undefined,
         event: filter.event || undefined,
         keyword: filter.keyword || undefined,
-        isWarn: filter.isWarn === 'warn' ? true : filter.isWarn === 'info' ? false : undefined,
+        level: filter.level || undefined,
       })
     }
 
@@ -670,8 +727,8 @@ useIntervalFn(updateCountdowns, 1000)
               />
 
               <BaseSelect
-                v-model="filter.isWarn"
-                :options="logs"
+                v-model="filter.level"
+                :options="logLevels"
                 class="w-32"
                 @change="onLogFilterChange"
               />
@@ -708,11 +765,12 @@ useIntervalFn(updateCountdowns, 1000)
             <div v-if="!allLogs.length" class="py-8 text-center text-gray-400">
               暂无日志
             </div>
-            <div v-for="log in allLogs" :key="log.ts + log.msg" class="mb-1 break-all">
-              <span class="mr-2 select-none text-gray-400">[{{ formatLogTime(log.time) }}]</span>
-              <span class="mr-2 rounded px-1.5 py-0.5 text-xs font-bold" :class="getLogTagClass(log.tag)">{{ log.tag }}</span>
-              <span v-if="log.meta?.event" class="mr-2 rounded bg-blue-50 px-1.5 py-0.5 text-xs text-blue-500 dark:bg-blue-900/20 dark:text-blue-400">{{ getEventLabel(log.meta.event) }}</span>
-              <span :class="getLogMsgClass(log.tag)">{{ log.msg }}</span>
+            <div v-for="log in allLogs" :key="log._uiKey" class="mb-1.5 flex items-start gap-2 break-all">
+              <span class="shrink-0 select-none text-gray-400">[{{ formatLogTime(log.time) }}]</span>
+              <span class="shrink-0 rounded px-1.5 py-0.5 text-xs font-bold" :class="getLogTagClass(getLogTag(log))">{{ getLogTag(log) }}</span>
+              <span v-if="getLogLevel(log) !== 'info'" class="shrink-0 rounded px-1.5 py-0.5 text-xs font-bold" :class="getLogLevelClass(getLogLevel(log))">{{ getLogLevelLabel(getLogLevel(log)) }}</span>
+              <span v-if="log.meta?.event" class="shrink-0 rounded bg-blue-50 px-1.5 py-0.5 text-xs text-blue-500 dark:bg-blue-900/20 dark:text-blue-400">{{ getEventLabel(log.meta.event) }}</span>
+              <span class="min-w-0" :class="getLogMsgClass(getLogLevel(log))">{{ log.msg }}</span>
             </div>
           </div>
         </div>

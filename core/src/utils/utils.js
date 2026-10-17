@@ -68,6 +68,12 @@ function resolveModuleTag(moduleName) {
         friend: '好友',
         warehouse: '仓库',
         task: '任务',
+        activity: '活动',
+        mall: '商城',
+        mystery_shop: '神秘商店',
+        mysteryshop: '神秘商店',
+        network: '网络',
+        scheduler: '调度',
         system: '系统',
     };
     const m = String(moduleName || '').trim();
@@ -84,6 +90,10 @@ function inferModuleFromTag(tag) {
         好友: 'friend',
         任务: 'task',
         活跃: 'task',
+        活动: 'activity',
+        商城: 'mall',
+        网络: 'network',
+        调度: 'scheduler',
         系统: 'system',
         错误: 'system',
         WS: 'system',
@@ -115,9 +125,10 @@ function log(arg1, arg2, arg3 = null) {
     const safeMeta = normalizeMeta(meta);
     if (!safeMeta.module) safeMeta.module = inferModuleFromTag(tag);
     const displayTag = resolveModuleTag(safeMeta.module);
-    coreLogger.info(msg, { tag: displayTag, ...safeMeta });
+    const level = safeMeta.result === 'error' ? 'error' : safeMeta.result === 'warn' ? 'warn' : 'info';
+    coreLogger[level](msg, { tag: displayTag, ...safeMeta });
     if (logHook) {
-        try { logHook(displayTag, msg, false, safeMeta); } catch {}
+        try { logHook(displayTag, msg, level === 'warn', safeMeta); } catch {}
     }
 }
 

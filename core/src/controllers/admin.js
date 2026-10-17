@@ -2899,6 +2899,7 @@ app.use('/api', (req, res, next) => {
                 module: req.query.module || '',
                 event: req.query.event || '',
                 keyword: req.query.keyword || '',
+                level: req.query.level || '',
                 isWarn: req.query.isWarn,
                 timeFrom: req.query.timeFrom || '',
                 timeTo: req.query.timeTo || '',
@@ -2913,7 +2914,8 @@ app.use('/api', (req, res, next) => {
             }
 
             // 按时间排序并限制数量
-            allLogs.sort((a, b) => (b.time || 0) - (a.time || 0));
+            const logTime = (entry) => Number(entry && entry.ts) || Date.parse(String((entry && entry.time) || '')) || 0;
+            allLogs.sort((a, b) => logTime(b) - logTime(a));
             const limitedLogs = allLogs.slice(0, options.limit);
 
             return res.json({ ok: true, data: limitedLogs });
@@ -2926,6 +2928,7 @@ app.use('/api', (req, res, next) => {
             module: req.query.module || '',
             event: req.query.event || '',
             keyword: req.query.keyword || '',
+            level: req.query.level || '',
             isWarn: req.query.isWarn,
             timeFrom: req.query.timeFrom || '',
             timeTo: req.query.timeTo || '',

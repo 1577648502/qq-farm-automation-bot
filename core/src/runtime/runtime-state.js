@@ -164,6 +164,7 @@ function createRuntimeState(options) {
         const tag = String(f.tag || '').trim();
         const moduleName = String(f.module || '').trim();
         const eventName = String(f.event || '').trim();
+        const levelName = String(f.level || '').trim().toLowerCase();
         const isWarn = f.isWarn;
         const timeFromMs = f.timeFrom ? Date.parse(String(f.timeFrom)) : Number.NaN;
         const timeToMs = f.timeTo ? Date.parse(String(f.timeTo)) : Number.NaN;
@@ -176,13 +177,27 @@ function createRuntimeState(options) {
                 const logModule = String((l.meta || {}).module || '');
                 // 兼容历史主进程日志：仅有 tag=系统/错误，没有 meta.module
                 if (moduleName === 'system') {
-                    const isSystemTag = String(l.tag || '') === '系统' || String(l.tag || '') === '错误';
+                    const isSystemTag = ['系统', '警告', '错误'].includes(String(l.tag || ''));
                     if (logModule !== 'system' && !isSystemTag) return false;
+                } else if (moduleName === 'mystery_shop') {
+                    if (logModule !== 'mystery_shop' && logModule !== 'mysteryshop') return false;
                 } else if (logModule !== moduleName) {
                     return false;
                 }
             }
             if (eventName && String((l.meta || {}).event || '') !== eventName) return false;
+            if (levelName) {
+                const tagName = String(l.tag || '');
+                const result = String((l.meta || {}).result || '').toLowerCase();
+                const logLevel = tagName === '错误' || result === 'error'
+                    ? 'error'
+                    : result === 'skip'
+                        ? 'skip'
+                        : tagName === '警告' || result === 'warn' || !!l.isWarn
+                            ? 'warn'
+                            : 'info';
+                if (logLevel !== levelName) return false;
+            }
             if (isWarn !== undefined && isWarn !== null && String(isWarn) !== '') {
                 const expected = String(isWarn) === '1' || String(isWarn).toLowerCase() === 'true';
                 if (!!l.isWarn !== expected) return false;
