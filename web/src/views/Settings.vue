@@ -16,6 +16,7 @@ import { getPlatformClass, getPlatformLabel, useAccountStore } from '@/stores/ac
 import { useFarmStore } from '@/stores/farm'
 import { useSettingStore } from '@/stores/setting'
 import { useUserStore } from '@/stores/user'
+import { useToastStore } from '@/stores/toast'
 import { getAccountQQUin, getQQAvatarUrl } from '@/utils/qq'
 
 const router = useRouter()
@@ -1362,6 +1363,89 @@ async function handleTestOffline() {
     offlineTesting.value = false
   }
 }
+// ===== 配置备份 / 恢复（迁移服务器用） =====
+const toast = useToastStore()
+const backupExporting = ref(false)
+const backupImporting = ref(false)
+const backupInfo = ref('')
+const backupFileInput = ref<HTMLInputElement | null>(null)
+
+/** 导出全部配置（下载 JSON） */
+async function exportBackup() {
+  backupExporting.value = true
+  backupInfo.value = ''
+  try {
+    const res = await api.get('/api/backup/export')
+    const data = res.data || {}
+    const text = JSON.stringify(data, null, 2)
+    const blob = new Blob([text], { type: 'application/json;charset=utf-8' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-')
+    a.href = url
+    a.download = `qq-farm-backup-${stamp}.json`
+    document.body.appendChild(a)
+    a.click()
+    a.remove()
+    URL.revokeObjectURL(url)
+    const n = data && data.files ? Object.keys(data.files).length : 0
+    backupInfo.value = `已导出 ${n} 个配置文件（含账号 Code 与管理员密码哈希，请妥善保管）`
+    toast.success('配置已导出')
+  } catch (e: any) {
+    backupInfo.value = `导出失败：${e?.response?.data?.error || e?.message || '未知错误'}`
+    toast.error(backupInfo.value)
+  } finally {
+    backupExporting.value = false
+  }
+}
+
+function pickBackupFile() {
+  backupFileInput.value?.click()
+}
+
+/** 选择文件后：确认 → 上报导入（后端会先自动把当前数据快照到 data/backup-<时间>/） */
+async function onBackupFileChange(ev: Event) {
+  const input = ev.target as HTMLInputElement
+  const file = input.files && input.files[0]
+  input.value = ''
+  if (!file) return
+  let payload: any = null
+  try {
+    payload = JSON.parse(await file.text())
+  } catch (e) {
+    backupInfo.value = '所选文件不是合法的 JSON'
+    toast.error(backupInfo.value)
+    return
+  }
+  const ok = window.confirm(
+    `将用「${file.name}」覆盖当前配置。\n\n` +
+    `· 覆盖范围：store.json（全部配置）、accounts.json（账号+Code）、users.json、qcby-code.json、cards.json、card-claim.json\n` +
+    `· 导入前会自动把当前数据备份到服务器 data/backup-<时间>/\n` +
+    `· 导入后需要【重启服务】才能生效\n\n确定继续吗？`
+  )
+  if (!ok) return
+  backupImporting.value = true
+  backupInfo.value = ''
+  try {
+    const res = await api.post('/api/backup/import', payload)
+    const d = res.data || {}
+    if (d.ok) {
+      const written = (d.data && d.data.written) || []
+      backupInfo.value = `导入成功：${written.join('、') || '（无）'}；请【重启服务】生效` +
+        (d.data && d.data.backupDir ? `（旧数据已备份到 ${d.data.backupDir}）` : '')
+      toast.success('导入成功，请重启服务')
+    } else {
+      backupInfo.value = `导入失败：${d.error || '未知原因'}`
+      toast.error(backupInfo.value)
+    }
+  } catch (e: any) {
+    backupInfo.value = `导入失败：${e?.response?.data?.error || e?.message || '未知错误'}`
+    toast.error(backupInfo.value)
+  } finally {
+    backupImporting.value = false
+  }
+}
+
 </script>
 
 <template>
@@ -1567,7 +1651,29 @@ async function handleTestOffline() {
             @saved="handleSaved"
           />
 
-          <ConfirmModal
+          <!-- 备份与恢复（迁移服务器） -->
+    <div class="rounded-xl border border-gray-200 bg-white p-4 dark:border-gray-700 dark:bg-gray-800">
+      <div class="mb-1 flex items-center justify-between">
+        <h2 class="text-base font-semibold text-gray-900 dark:text-white">备份与恢复（迁移服务器）</h2>
+      </div>
+      <p class="mb-1 text-xs text-gray-500 dark:text-gray-400">
+        导出全部可保存的配置：<b>store.json</b>（账号配置/自动化/界面/公告/离线提醒/管理员密码）、<b>accounts.json</b>（账号+Code）、
+        <b>users.json</b>（用户）、<b>qcby-code.json</b>、<b>cards.json</b>、<b>card-claim.json</b>。
+      </p>
+      <p class="mb-2 text-xs text-gray-500 dark:text-gray-400">
+        不含：logs/（日志）、stats/（统计）、known_friend_gids/（好友缓存）、gameConfig/（游戏素材，新机器上执行
+        <code class="rounded bg-gray-100 px-1 dark:bg-gray-700">pnpm sync:game-config</code> 重新生成）。
+      </p>
+      <p class="mb-2 text-xs text-amber-600 dark:text-amber-400">⚠️ 导出文件含账号 Code 与管理员密码哈希，请妥善保管，勿外传。</p>
+      <div class="flex flex-wrap items-center gap-2">
+        <BaseButton variant="primary" size="sm" :loading="backupExporting" @click="exportBackup">导出配置</BaseButton>
+        <BaseButton variant="secondary" size="sm" :loading="backupImporting" @click="pickBackupFile">导入配置（覆盖当前）</BaseButton>
+        <input ref="backupFileInput" type="file" accept="application/json,.json" class="hidden" @change="onBackupFileChange">
+      </div>
+      <div v-if="backupInfo" class="mt-2 rounded bg-gray-50 px-2 py-1 text-xs text-gray-700 dark:bg-gray-900/40 dark:text-gray-200">{{ backupInfo }}</div>
+    </div>
+
+    <ConfirmModal
             :show="showDeleteConfirm"
             :loading="deleteLoading"
             title="删除账号"

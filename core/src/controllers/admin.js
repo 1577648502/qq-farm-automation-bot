@@ -15,6 +15,7 @@ const { CONFIG, updateRuntimeConfig, getRuntimeConfig, getDefaultSystemConfig } 
 const { getLevelExpProgress } = require('../config/gameConfig');
 const { getResourcePath } = require('../config/runtime-paths');
 const store = require('../models/store');
+const backup = require('../services/backup');
 const { addOrUpdateAccount, deleteAccount } = store;
 const { findAccountByRef, normalizeAccountRef, resolveAccountId } = require('../services/account-resolver');
 const { createModuleLogger } = require('../services/logger');
@@ -2067,6 +2068,40 @@ app.use('/api', (req, res, next) => {
     });
 
     // API: 获取配置
+    // ===== 配置备份 / 恢复（迁移服务器用） =====
+    // 导出：所有可保存的配置(store.json/accounts.json/users.json/qcby-code.json/cards.json/card-claim.json)
+    app.get('/api/backup/export', (req, res) => {
+        try {
+            if (!req.currentUser || req.currentUser.role !== 'admin') {
+                return res.status(403).json({ ok: false, error: '仅管理员可导出配置' });
+            }
+            const data = backup.exportConfigs();
+            const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
+            res.setHeader('Content-Type', 'application/json; charset=utf-8');
+            res.setHeader('Content-Disposition', `attachment; filename="qq-farm-backup-${stamp}.json"`);
+            res.send(JSON.stringify(data, null, 2));
+        } catch (e) {
+            res.status(500).json({ ok: false, error: e.message });
+        }
+    });
+    // 导入：校验 → 备份当前数据(backup-<时间>/) → 原子写入；需重启生效
+    app.post('/api/backup/import', (req, res) => {
+        try {
+            if (!req.currentUser || req.currentUser.role !== 'admin') {
+                return res.status(403).json({ ok: false, error: '仅管理员可恢复配置' });
+            }
+            const r = backup.importConfigs(req.body);
+            if (!r.ok) return res.json({ ok: false, error: r.reason });
+            res.json({
+                ok: true,
+                message: '导入成功，请重启服务后生效',
+                data: { written: r.written, skipped: r.skipped, backupDir: r.backupDir, needRestart: true },
+            });
+        } catch (e) {
+            res.status(500).json({ ok: false, error: e.message });
+        }
+    });
+
     app.get('/api/settings', async (req, res) => {
         try {
             const id = getAccId(req);
