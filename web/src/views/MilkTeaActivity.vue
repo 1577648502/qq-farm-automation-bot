@@ -632,6 +632,14 @@ onMounted(() => {
         </div>
       </div>
       <template v-if="sales && sales.ok">
+        <!-- 正在热卖(本小时杯数, 来自 cmd=67 的 #6 按小时分布) -->
+        <div class="mb-3 flex flex-wrap items-center gap-2 rounded bg-rose-50 px-2 py-1.5 dark:bg-rose-900/20">
+          <span class="text-xs font-medium text-rose-700 dark:text-rose-300">正在热卖</span>
+          <span class="text-xs text-rose-700 dark:text-rose-300">本小时 {{ sales.currentHourCups || 0 }} 杯</span>
+          <span v-if="sales.hourly && sales.hourly.length" class="text-[10px] text-gray-500 dark:text-gray-400">
+            最近几小时：{{ sales.hourly.map((h: any) => h.hour === 0 ? `本小时 ${h.cups}杯` : `${h.hour}小时前 ${h.cups}杯`).join(' · ') }}
+          </span>
+        </div>
         <!-- 今日售卖(按品类杯数) -->
         <div class="mb-3">
           <div class="mb-1 text-xs text-gray-500 dark:text-gray-400">今日售卖（共 {{ sales.cups }} 杯）</div>

@@ -401,7 +401,7 @@ async function getSalesRecord(dayTs) {
     const payload = Buffer.concat([encodeVarintField(1, base)]);
     const r = await mainOperate(CMD_SALES_RECORD, 172, payload);
     if (r.errorCode !== 0) return { ok: false, reason: `读取营业记录失败 ${r.reason || `code=${r.errorCode}`}` };
-    const out = { ok: true, day: base, coupon: 0, gold: 0, cups: 0, items: [], rewards: [], records: [] };
+    const out = { ok: true, day: base, coupon: 0, gold: 0, cups: 0, items: [], hourly: [], currentHourCups: 0, rewards: [], records: [] };
     try {
         const rf = parseTop(Buffer.from(r.resultHex || '', 'hex'));
         out.day = toInt((findField(rf, 1) || {}).v) || base;
@@ -413,6 +413,7 @@ async function getSalesRecord(dayTs) {
             if (x.w !== 2) continue;
             const e = parseTop(x.v);
             if (x.f === 5) out.items.push({ id: toInt((findField(e, 1) || {}).v), cups: toInt((findField(e, 2) || {}).v) });
+            else if (x.f === 6) out.hourly.push({ hour: toInt((findField(e, 1) || {}).v), cups: toInt((findField(e, 2) || {}).v) });
             else if (x.f === 8) out.rewards.push({ id: toInt((findField(e, 1) || {}).v), count: toInt((findField(e, 2) || {}).v) });
             else if (x.f === 7) {
                 const info = findField(e, 1);
@@ -431,6 +432,12 @@ async function getSalesRecord(dayTs) {
                 });
             }
         }
+        // 本小时杯数:
+        // ⚠ 实测 20261017-070514(07:05) 的 #6 = [{#1:0, #2:287}, {#1:2, #2:290}] —— 里面**没有 7**,
+        //   所以 #1 不是"几点", 而是"**几小时前**"的索引(0 = 本小时; 缺 1 表示那一小时 0 杯被省略)
+        const hitHour = out.hourly.find((h) => h.hour === 0);
+        out.currentHourCups = hitHour ? hitHour.cups : 0;
+        out.hourly.sort((a, b) => a.hour - b.hour);
         for (const it of out.items) it.name = names.get(it.id) || `品类${it.id}`;
         out.items.sort((a, b) => b.cups - a.cups);
         for (const rw of out.rewards) rw.name = itemLabel(rw.id, rw.count);
