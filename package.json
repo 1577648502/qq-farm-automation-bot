@@ -26,7 +26,6 @@
     "check": "node core/scripts/check-imports.js && node core/scripts/check-settings-fields.js"
   },
   "dependencies": {
-    "frida": "^17.15.3",
     "lzma-native": "^8.0.6"
   }
 }

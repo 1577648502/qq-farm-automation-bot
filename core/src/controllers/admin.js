@@ -21,8 +21,6 @@ const { findAccountByRef, normalizeAccountRef, resolveAccountId } = require('../
 const { createModuleLogger } = require('../services/logger');
 const { MiniProgramLoginSession } = require('../services/qrlogin');
 const { getSchedulerRegistrySnapshot } = require('../services/scheduler');
-const { createDesktopLoginService } = require('../services/desktop-login');
-const desktopSessions = require('../models/desktop-sessions');
 const userStore = require('../models/user-store');
 const { readQcbyCodeConfigForUI, saveQcbyCodeConfig } = require('../services/qcby-code-config');
 
@@ -33,7 +31,6 @@ let app = null;
 let server = null;
 let provider = null; // DataProvider
 let io = null;
-let desktopLogin = null;
 
 function emitRealtimeStatus(accountId, status) {
     if (!io) return;
@@ -473,45 +470,8 @@ function startAdminServer(dataProvider) {
         res.json(result);
     });
 
-    
-    // code-captured route registered before auth middleware
-    app.post('/api/desktop-login/code-captured', (req, res) => {
-        try {
-            var body = req.body || {};
-            var code = body.code;
-            if (code) {
-                adminLogger.info('[FarmCapture] Code: ' + code.substring(0, 12) + '...');
-                var sessions = require('../models/desktop-sessions');
-                var all = sessions.getAll();
-                var matchedUin = body.uin || '';
-                for (var i = 0; i < all.length; i++) {
-                    if (all[i].pid && all[i].pid === (body.pid || 0)) {
-                        matchedUin = all[i].uin;
-                        break;
-                    }
-                }
-                if (desktopLogin && typeof desktopLogin.reportFarmCapture === 'function') {
-                    desktopLogin.reportFarmCapture({
-                        code: code,
-                        url: body.url || '',
-                        uin: matchedUin,
-                        pid: body.pid || 0,
-                        ts: Date.now(),
-                    });
-                } else if (matchedUin) {
-                    sessions.update(matchedUin, { farmCode: code, lastCapturedAt: Date.now() });
-                }
-                res.json({ ok: true });
-            } else {
-                res.json({ ok: false, error: 'missing_code' });
-            }
-        } catch (e) {
-            adminLogger.warn('[FarmCapture] Error: ' + e.message);
-            res.json({ ok: false, error: e.message });
-        }
-    });
 app.use('/api', (req, res, next) => {
-        if (req.path === '/login' || req.path === '/qr/create' || req.path === '/qr/check' || req.path === '/proxy' || req.path === '/card-claim/status' || req.path === '/card-claim/claim' || req.path === '/activities/status' || req.path === '/game-version' || req.path === '/desktop-login/agent-status' || req.path === '/desktop-login/qrcode' || req.path === '/desktop-login/check' || req.path === '/desktop-login/code-captured' || req.path.startsWith('/pet/')) return next();
+        if (req.path === '/login' || req.path === '/qr/create' || req.path === '/qr/check' || req.path === '/proxy' || req.path === '/card-claim/status' || req.path === '/card-claim/claim' || req.path === '/activities/status' || req.path === '/game-version' || req.path.startsWith('/pet/')) return next();
         return authRequired(req, res, next);
     });
 
@@ -3059,212 +3019,6 @@ app.use('/api', (req, res, next) => {
         }
     });
 
-
-    // ============ 桌面登录 APIs (QQ 扫码 → 自动打开 QQ.exe 登录) ============
-    function getDesktopSessionForRequest(req, uin) {
-        const session = desktopSessions.findByUin(uin);
-        if (!session) {
-            const err = new Error('Session not found');
-            err.statusCode = 404;
-            throw err;
-        }
-        if (!desktopSessions.canAccessSession(session, req.currentUser)) {
-            const err = new Error('无权访问此桌面登录记录');
-            err.statusCode = 403;
-            throw err;
-        }
-        return session;
-    }
-
-    app.post('/api/desktop-login/qrcode', async (req, res) => {
-        try {
-            if (!desktopLogin) {
-                return res.status(500).json({ ok: false, error: 'Desktop login service not ready' });
-            }
-            const { preset } = req.body || {};
-            const result = await desktopLogin.createQR(preset || 'vip');
-            res.json({ ok: true, data: result });
-        } catch (e) {
-            res.status(500).json({ ok: false, error: e.message });
-        }
-    });
-
-    app.post('/api/desktop-login/check', async (req, res) => {
-        try {
-            if (!desktopLogin) {
-                return res.status(500).json({ ok: false, error: 'Desktop login service not ready' });
-            }
-            const { qrsig, preset } = req.body || {};
-            if (!qrsig) {
-                return res.status(400).json({ ok: false, error: 'Missing qrsig' });
-            }
-            const result = await desktopLogin.checkQrStatus(qrsig, preset || 'vip');
-            if (result.ret === '0') {
-                const { uin, cookies, nickname } = desktopLogin.parseLoginResult(result);
-                res.json({
-                    ok: true,
-                    data: { status: 'OK', uin, nickname, cookies, raw: result }
-                });
-            } else if (result.ret === '65' || result.ret === '66') {
-                const msg = result.ret === '66' ? '二维码已扫描，请在手机上确认登录' : '等待扫码...';
-                res.json({ ok: true, data: { status: 'Wait', msg } });
-            } else {
-                res.json({ ok: true, data: { status: 'Error', msg: result.msg || '登录失败' } });
-            }
-        } catch (e) {
-            res.status(500).json({ ok: false, error: e.message });
-        }
-    });
-
-    app.post('/api/desktop-login/launch', async (req, res) => {
-        try {
-            if (!desktopLogin) {
-                return res.status(500).json({ ok: false, error: 'Desktop login service not ready' });
-            }
-            const { uin, cookies, nickname, autoLogin, qqPath } = req.body || {};
-            if (!uin) {
-                return res.status(400).json({ ok: false, error: 'Missing uin' });
-            }
-            const existing = desktopSessions.findByUin(uin);
-            if (existing && !desktopSessions.canAccessSession(existing, req.currentUser)) {
-                return res.status(403).json({ ok: false, error: '无权覆盖此桌面登录记录' });
-            }
-            const result = await desktopLogin.launchQQ(uin, cookies, nickname || '', !!autoLogin, req.currentUser?.username || '', qqPath);
-            res.json({ ok: true, data: result });
-        } catch (e) {
-            res.status(e.statusCode || 500).json({ ok: false, error: e.message });
-        }
-    });
-
-    app.post('/api/desktop-login/stop', async (req, res) => {
-        try {
-            if (!desktopLogin) {
-                return res.status(500).json({ ok: false, error: 'Desktop login service not ready' });
-            }
-            const { uin } = req.body || {};
-            if (!uin) {
-                return res.status(400).json({ ok: false, error: 'Missing uin' });
-            }
-            getDesktopSessionForRequest(req, uin);
-            await desktopLogin.stopQQ(uin);
-            res.json({ ok: true });
-        } catch (e) {
-            res.status(e.statusCode || 500).json({ ok: false, error: e.message });
-        }
-    });
-
-    app.post('/api/desktop-login/open-farm', async (req, res) => {
-        try {
-            if (!desktopLogin) {
-                return res.status(500).json({ ok: false, error: 'Desktop login service not ready' });
-            }
-            const { uin, captureMode } = req.body || {};
-            if (!uin) {
-                return res.status(400).json({ ok: false, error: 'Missing uin' });
-            }
-            getDesktopSessionForRequest(req, uin);
-            const result = await desktopLogin.openFarm(uin, { captureMode });
-            res.json({ ok: true, data: result });
-        } catch (e) {
-            res.status(e.statusCode || 500).json({ ok: false, error: e.message });
-        }
-    });
-
-    app.get('/api/desktop-login/sessions', async (req, res) => {
-        try {
-            if (!desktopLogin) {
-                return res.status(500).json({ ok: false, error: 'Desktop login service not ready' });
-            }
-            const sessions = desktopSessions.filterVisibleSessions(desktopLogin.getSessions(), req.currentUser);
-            res.json({ ok: true, data: { sessions } });
-        } catch (e) {
-            res.status(500).json({ ok: false, error: e.message });
-        }
-    });
-
-    app.delete('/api/desktop-login/sessions', async (req, res) => {
-        try {
-            if (!desktopLogin) {
-                return res.status(500).json({ ok: false, error: 'Desktop login service not ready' });
-            }
-            const { uin } = req.body || {};
-            if (!uin) {
-                return res.status(400).json({ ok: false, error: 'Missing uin' });
-            }
-            getDesktopSessionForRequest(req, uin);
-            desktopLogin.removeSession(uin);
-            res.json({ ok: true });
-        } catch (e) {
-            res.status(e.statusCode || 500).json({ ok: false, error: e.message });
-        }
-    });
-
-    app.post('/api/desktop-login/sessions/code-target', async (req, res) => {
-        try {
-            if (!desktopLogin) {
-                return res.status(500).json({ ok: false, error: 'Desktop login service not ready' });
-            }
-            const { uin, accountId } = req.body || {};
-            if (!uin) {
-                return res.status(400).json({ ok: false, error: 'Missing uin' });
-            }
-            getDesktopSessionForRequest(req, uin);
-
-            const id = String(accountId || '').trim();
-            if (!id) {
-                const session = desktopLogin.bindCodeTarget(uin, '', '');
-                return res.json({ ok: true, data: { session } });
-            }
-
-            if (!checkAccountAccess(req, id)) {
-                return res.status(403).json({ ok: false, error: '无权访问此账号实例' });
-            }
-            const account = getAccountList().find(a => String(a.id) === id);
-            if (!account) {
-                return res.status(404).json({ ok: false, error: '账号实例不存在' });
-            }
-            const session = desktopLogin.bindCodeTarget(uin, id, account.name || id);
-            res.json({ ok: true, data: { session } });
-        } catch (e) {
-            res.status(e.statusCode || 500).json({ ok: false, error: e.message });
-        }
-    });
-
-    app.post('/api/desktop-login/sessions/auto-login', async (req, res) => {
-        try {
-            if (!desktopLogin) {
-                return res.status(500).json({ ok: false, error: 'Desktop login service not ready' });
-            }
-            const { uin, enabled } = req.body || {};
-            if (!uin) {
-                return res.status(400).json({ ok: false, error: 'Missing uin' });
-            }
-            getDesktopSessionForRequest(req, uin);
-            const { update } = require('../models/desktop-sessions');
-            update(uin, { autoLogin: enabled === true });
-            res.json({ ok: true });
-        } catch (e) {
-            res.status(e.statusCode || 500).json({ ok: false, error: e.message });
-        }
-    });
-
-    app.post('/api/desktop-login/agent-status', (req, res) => {
-        try {
-            const { action, uin, pid, processName, hooksInstalled } = req.body || {};
-            if (action === 'injected') {
-                adminLogger.info('[Agent] Frida injected into ' + processName + ' (PID: ' + pid + ')');
-            } else if (action === 'cookies_injected') {
-                adminLogger.info('[Agent] Cookies injected for uin=' + uin);
-            } else if (action === 'heartbeat') {
-                const { update } = require('../models/desktop-sessions');
-                if (uin) update(uin, { lastActiveAt: Date.now() });
-            }
-            res.json({ ok: true });
-        } catch (e) {
-            res.status(500).json({ ok: false, error: e.message });
-        }
-    });
-
     // ============ 微信登录代理 API ============
     // 用于转发请求到第三方微信登录 API（如 api.aineishe.com）
     app.post('/api/proxy', async (req, res) => {
@@ -3981,32 +3735,6 @@ app.use('/api', (req, res, next) => {
     const port = CONFIG.adminPort || 3007;
     server = app.listen(port, '0.0.0.0', () => {
         adminLogger.info('admin panel started', { url: `http://localhost:${port}`, port });
-
-    // 初始化桌面登录服务
-    try {
-        desktopLogin = createDesktopLoginService({
-            log: function(tag, msg) { adminLogger.info(tag + ': ' + msg); },
-            applyFarmCodeToAccount: function(accountId, code) {
-                if (!provider || typeof provider.refreshAccountCode !== 'function') {
-                    return { ok: false, reason: 'refresh_not_supported' };
-                }
-                return provider.refreshAccountCode(accountId, code);
-            },
-            prepareFarmCodeRefresh: function(accountId) {
-                if (!provider || typeof provider.prepareAccountCodeRefresh !== 'function') {
-                    return { ok: false, reason: 'prepare_not_supported' };
-                }
-                return provider.prepareAccountCodeRefresh(accountId);
-            },
-            isBoundAccountRunning: function(accountId) {
-                return !!(provider && typeof provider.isAccountRunning === 'function' && provider.isAccountRunning(accountId));
-            },
-        });
-        adminLogger.info('Desktop login service initialized');
-    } catch (e) {
-        adminLogger.warn('Desktop login init failed: ' + e.message);
-    }
-
     });
 
     io = new SocketIOServer(server, {
@@ -4055,5 +3783,4 @@ module.exports = {
     emitRealtimeLog,
     emitRealtimeAccountLog,
 };
-
 

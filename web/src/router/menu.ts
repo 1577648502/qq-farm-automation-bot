@@ -190,22 +190,6 @@ export const menuRoutes: MenuItem[] = [
 
   {
 
-    path: 'desktop-login',
-
-    name: 'desktop-login',
-
-    label: '桌面登录',
-
-    icon: 'i-carbon-qr-code',
-
-    component: () => import('@/views/DesktopLogin.vue'),
-
-    adminOnly: true,
-
-  },
-
-  {
-
     path: 'admin',
 
     name: 'admin',
@@ -221,4 +205,3 @@ export const menuRoutes: MenuItem[] = [
   },
 
 ]
-
