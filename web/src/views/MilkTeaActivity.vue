@@ -499,7 +499,7 @@ onMounted(() => {
 </script>
 
 <template>
-  <div class="space-y-4">
+  <div class="mx-auto grid w-full max-w-[1500px] grid-cols-1 items-start gap-4 xl:grid-cols-2">
     <!-- 页头 -->
     <div class="flex flex-wrap items-center justify-between gap-2">
       <h2 class="text-xl text-gray-900 font-bold dark:text-gray-100">
@@ -523,7 +523,7 @@ onMounted(() => {
     </div>
 
     <!-- ① 顶部信息 -->
-    <div class="rounded-lg border border-gray-200 bg-white p-4 shadow-sm dark:border-gray-700 dark:bg-gray-800">
+    <div class="rounded-lg border border-gray-200 bg-white p-4 shadow-sm dark:border-gray-700 dark:bg-gray-800 order-1 col-span-full">
       <div v-if="status" class="grid grid-cols-2 gap-4 md:grid-cols-3 xl:grid-cols-6">
         <div>
           <div class="text-xs text-gray-500 dark:text-gray-400">店铺</div>
@@ -628,7 +628,7 @@ onMounted(() => {
     </div>
 
     <!-- ①c 营业记录(cmd=67 按天: 今日售卖 + 营业收益 + 雇员记录) -->
-    <div class="rounded-lg border border-gray-200 bg-white p-4 shadow-sm dark:border-gray-700 dark:bg-gray-800">
+    <div class="rounded-lg border border-gray-200 bg-white p-4 shadow-sm dark:border-gray-700 dark:bg-gray-800 order-3 col-span-full xl:col-span-1">
       <div class="mb-2 flex items-center justify-between">
         <h3 class="text-sm text-gray-900 font-medium dark:text-white">营业记录</h3>
         <div class="flex items-center gap-1">
@@ -682,7 +682,7 @@ onMounted(() => {
     </div>
 
     <!-- ② 活动种子商店 -->
-    <div class="rounded-lg border border-gray-200 bg-white p-4 shadow-sm dark:border-gray-700 dark:bg-gray-800">
+    <div class="rounded-lg border border-gray-200 bg-white p-4 shadow-sm dark:border-gray-700 dark:bg-gray-800 order-4 col-span-full xl:col-span-1">
       <div class="mb-3 flex flex-wrap items-center justify-between gap-2">
         <h3 class="text-sm text-gray-900 font-medium dark:text-white">
           活动种子商店
@@ -772,7 +772,7 @@ onMounted(() => {
     </div>
 
     <!-- ③ 雇佣好友（可折叠） -->
-    <div class="rounded-lg border border-gray-200 bg-white shadow-sm dark:border-gray-700 dark:bg-gray-800">
+    <div class="rounded-lg border border-gray-200 bg-white shadow-sm dark:border-gray-700 dark:bg-gray-800 order-2 col-span-full">
       <div class="flex w-full items-center justify-between px-4 py-3 text-left">
         <span class="text-sm text-gray-900 font-medium dark:text-white">
           员工与雇佣
@@ -816,7 +816,7 @@ onMounted(() => {
           <span class="text-xs text-gray-400">GID 可在「好友」页面查看</span>
         </div>
         <!-- 手动操作 -->
-      <div class="mb-2 flex flex-wrap items-center gap-2">
+      <div class="mb-2 grid grid-cols-2 gap-2 sm:flex sm:flex-wrap sm:items-center">
         <BaseButton variant="secondary" size="sm" :loading="busy === 'cashier'" @click="claimCashierNow">领收银台收益</BaseButton>
         <BaseButton variant="secondary" size="sm" :loading="busy === 'craft'" @click="craftNow">制作奶茶（全部果实）</BaseButton>
         <BaseButton variant="secondary" size="sm" :loading="busy === 'wage'" @click="claimWageNow">领工资</BaseButton>
