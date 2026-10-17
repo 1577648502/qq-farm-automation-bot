@@ -361,7 +361,8 @@ const shopBought = new Map();
  *   响应 #172:
  *     #1 日期(时间戳)   #2 奶茶券收益   #3 金币收益   #4 当日总杯数
  *     #5 = repeated {#1 品类, #2 杯数}(今日售卖)     ← 面板"普通奶茶254杯/甜莓750杯…"
- *     #6 = repeated {#1 ?, #2 ?}(语义未确认; 各条 #2 合计等于 #4, 不能当作小时销量)
+ *     #6 = repeated {#1 相对请求小时, #2 杯数}(分时销量; 0=本小时, 1=1小时前, 依此类推;
+ *          条目可能乱序, 零销量小时省略; 各条 #2 合计等于 #4)
  *     #7 = repeated 雇员记录 { #1 老板{gid,名}, #2 开始时间, #3 时长(秒), #6 班次id,
  *            #8 特长id, #9 特长名, #10 未闭环嵌套字段 }
  *     #8 = repeated 收益物品 {#1 物品id, #2 数量}
@@ -378,7 +379,18 @@ async function getSalesRecord(dayTs) {
     const payload = Buffer.concat([encodeVarintField(1, base)]);
     const r = await mainOperate(CMD_SALES_RECORD, 172, payload);
     if (r.errorCode !== 0) return { ok: false, reason: `读取营业记录失败 ${r.reason || `code=${r.errorCode}`}` };
-    const out = { ok: true, day: base, coupon: 0, gold: 0, cups: 0, items: [], rewards: [], records: [] };
+    const out = {
+        ok: true,
+        day: base,
+        coupon: 0,
+        gold: 0,
+        cups: 0,
+        currentHourCups: 0,
+        hourly: [],
+        items: [],
+        rewards: [],
+        records: [],
+    };
     try {
         const rf = parseTop(Buffer.from(r.resultHex || '', 'hex'));
         out.day = toInt((findField(rf, 1) || {}).v) || base;
@@ -390,6 +402,12 @@ async function getSalesRecord(dayTs) {
             if (x.w !== 2) continue;
             const e = parseTop(x.v);
             if (x.f === 5) out.items.push({ id: toInt((findField(e, 1) || {}).v), cups: toInt((findField(e, 2) || {}).v) });
+            else if (x.f === 6) {
+                out.hourly.push({
+                    hoursAgo: toInt((findField(e, 1) || {}).v),
+                    cups: toInt((findField(e, 2) || {}).v),
+                });
+            }
             else if (x.f === 8) {
                 const id = toInt((findField(e, 1) || {}).v);
                 const count = toInt((findField(e, 2) || {}).v);
@@ -414,6 +432,8 @@ async function getSalesRecord(dayTs) {
         }
         for (const it of out.items) it.name = names.get(it.id) || `品类${it.id}`;
         out.items.sort((a, b) => b.cups - a.cups);
+        out.hourly.sort((a, b) => a.hoursAgo - b.hoursAgo);
+        out.currentHourCups = (out.hourly.find((x) => x.hoursAgo === 0) || { cups: 0 }).cups;
         for (const rw of out.rewards) rw.name = itemLabel(rw.id, rw.count);
     } catch (e) {
         return { ok: false, reason: `解析营业记录失败: ${e.message}` };

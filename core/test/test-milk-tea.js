@@ -271,10 +271,10 @@ sendImpl = async (service, method, body) => {
             varintField(1, day),
             varintField(2, 123),
             varintField(3, 456),
-            varintField(4, 789),
-            bytesField(5, Buffer.concat([varintField(1, 10), varintField(2, 600)])),
-            bytesField(6, Buffer.concat([varintField(1, 0), varintField(2, 289)])),
-            bytesField(6, Buffer.concat([varintField(1, 2), varintField(2, 500)])),
+            varintField(4, 577),
+            bytesField(5, Buffer.concat([varintField(1, 10), varintField(2, 577)])),
+            bytesField(6, Buffer.concat([varintField(1, 2), varintField(2, 290)])),
+            bytesField(6, Buffer.concat([varintField(1, 0), varintField(2, 287)])),
             bytesField(7, Buffer.concat([
                 bytesField(1, Buffer.concat([
                     varintField(1, 1253397809),
@@ -310,10 +310,13 @@ sendImpl = async (service, method, body) => {
         check('营业记录 payload 字段为 #172', req && req.payloadField === 172, req && req.payloadField);
         check('北京时间当日 00:00 正确写入 #172.#1', toInt((payload && payload.find((x) => x.f === 1) || {}).v) === day);
         check('营业记录解析成功', r.ok === true, r);
-        check('收益/杯数解析正确', r.coupon === 123 && r.gold === 456 && r.cups === 789, r);
-        check('不再把未确认的 #6 当作小时销量',
-            !Object.prototype.hasOwnProperty.call(r, 'hourly')
-            && !Object.prototype.hasOwnProperty.call(r, 'currentHourCups'), r);
+        check('收益/杯数解析正确', r.coupon === 123 && r.gold === 456 && r.cups === 577, r);
+        check('#6 分时销量按相对小时升序解析',
+            r.hourly.length === 2
+            && r.hourly[0].hoursAgo === 0 && r.hourly[0].cups === 287
+            && r.hourly[1].hoursAgo === 2 && r.hourly[1].cups === 290, r.hourly);
+        check('#6 不虚构未返回的零销量小时', r.hourly.length === 2, r.hourly);
+        check('本小时杯数取 #6 中 hoursAgo=0', r.currentHourCups === 287, r.currentHourCups);
         check('品类名称由 cmd58 菜单补齐', r.items.length === 1 && r.items[0].name === '普通奶茶', r.items);
         check('金币和奶茶券不从 #8 重复计入附加奖励',
             r.rewards.length === 2 && r.rewards.every((x) => x.id !== 1001 && x.id !== 1041), r.rewards);

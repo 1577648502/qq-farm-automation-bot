@@ -179,6 +179,11 @@ function fmtDuration(sec: any) {
   return minutes ? `${minutes}分钟` : '不足1分钟'
 }
 
+function fmtHoursAgo(hoursAgo: any) {
+  const hours = Math.max(0, Math.floor(Number(hoursAgo) || 0))
+  return hours === 0 ? '本小时' : `${hours} 小时前`
+}
+
 async function loadStatus() {
   statusBusy.value = true
   try {
@@ -850,6 +855,27 @@ onMounted(() => {
             <div class="text-[11px] text-gray-500 dark:text-gray-400">奶茶券收益</div>
             <div class="mt-0.5 text-base text-emerald-600 font-bold dark:text-emerald-400">{{ Number(sales.coupon || 0).toLocaleString() }}</div>
           </div>
+        </div>
+
+        <div class="mt-4">
+          <div class="mb-2 flex items-center justify-between gap-2">
+            <span class="text-xs text-gray-500 dark:text-gray-400">分时销量</span>
+            <span class="text-[10px] text-gray-400">相对查询时刻</span>
+          </div>
+          <div
+            v-if="sales.hourly && sales.hourly.length"
+            class="grid grid-cols-2 gap-x-4 gap-y-1 rounded bg-gray-50 px-3 py-2 text-xs sm:grid-cols-3 dark:bg-gray-900/40"
+          >
+            <div
+              v-for="h in sales.hourly"
+              :key="h.hoursAgo"
+              class="flex min-w-0 items-baseline justify-between gap-2"
+            >
+              <span class="text-gray-500 dark:text-gray-400">{{ fmtHoursAgo(h.hoursAgo) }}</span>
+              <span class="shrink-0 text-gray-900 font-medium dark:text-gray-100">{{ Number(h.cups || 0).toLocaleString() }} 杯</span>
+            </div>
+          </div>
+          <div v-else class="text-xs text-gray-500 dark:text-gray-400">暂无分时数据</div>
         </div>
 
         <div class="mt-4">
