@@ -1,4 +1,4 @@
-﻿<script setup lang="ts">
+<script setup lang="ts">
 import { useIntervalFn } from '@vueuse/core'
 import { storeToRefs } from 'pinia'
 import { computed, onMounted, ref, watch, watchEffect } from 'vue'
@@ -6,7 +6,6 @@ import { useRouter } from 'vue-router'
 import api from '@/api'
 import AccountModal from '@/components/AccountModal.vue'
 import AutoTaskCard from '@/components/AutoTaskCard.vue'
-import { apiError } from '@/utils/api-result'
 import ConfirmModal from '@/components/ConfirmModal.vue'
 import BaseButton from '@/components/ui/BaseButton.vue'
 import BaseInput from '@/components/ui/BaseInput.vue'
@@ -15,8 +14,9 @@ import BaseSwitch from '@/components/ui/BaseSwitch.vue'
 import { getPlatformClass, getPlatformLabel, useAccountStore } from '@/stores/account'
 import { useFarmStore } from '@/stores/farm'
 import { useSettingStore } from '@/stores/setting'
-import { useUserStore } from '@/stores/user'
 import { useToastStore } from '@/stores/toast'
+import { useUserStore } from '@/stores/user'
+import { apiError } from '@/utils/api-result'
 import { getAccountQQUin, getQQAvatarUrl } from '@/utils/qq'
 
 const router = useRouter()
@@ -26,7 +26,7 @@ const settingStore = useSettingStore()
 const farmStore = useFarmStore()
 
 const activeTab = ref<'account' | 'strategy' | 'automation' | 'user'>(
-  (localStorage.getItem('settings-active-tab') as 'account' | 'strategy' | 'automation' | 'user') || 'account'
+  (localStorage.getItem('settings-active-tab') as 'account' | 'strategy' | 'automation' | 'user') || 'account',
 )
 
 watch(activeTab, (newTab) => {
@@ -37,7 +37,7 @@ const tabs = [
   { key: 'account', label: '账号管理', icon: 'i-carbon-user-settings' },
   { key: 'strategy', label: '策略设置', icon: 'i-fas-cogs' },
   { key: 'automation', label: '自动控制', icon: 'i-carbon-toggle-on' },
-  { key: 'user', label: '用户管理', icon: 'i-carbon-user' },
+  { key: 'user', label: '用户与通知', icon: 'i-carbon-user' },
 ] as const
 
 const modalVisible = ref(false)
@@ -96,39 +96,55 @@ const addAccountDisabledReason = computed(() => {
 
 const stoppedAccounts = computed(() => accounts.value.filter((acc: any) => !acc.running))
 const stoppedAccountsCount = computed(() => stoppedAccounts.value.length)
+const accountSettingsReady = ref(false)
+let accountSettingsQueue = Promise.resolve()
 
-/** 按当前账号加载所有设置(挂载时 + 切换账号时都会调用) */
-async function loadForCurrentAccount() {
-  if (!currentAccountId.value)
+/** 串行加载设置；切换账号期间排在后面的最新账号不会被并发锁漏掉 */
+function loadForCurrentAccount() {
+  const accountId = String(currentAccountId.value || '')
+  if (!accountId)
     return
-  await settingStore.fetchSettings(currentAccountId.value)
-  syncLocalStrategySettings()
-  syncLocalAutomationSettings()
-  syncLocalOfflineSettings()
-  await farmStore.fetchSeeds(currentAccountId.value)
-  await fetchStealthStatus()
+
+  accountSettingsQueue = accountSettingsQueue
+    .catch(() => undefined)
+    .then(async () => {
+      if (String(currentAccountId.value || '') !== accountId)
+        return
+      await settingStore.fetchSettings(accountId)
+      if (String(currentAccountId.value || '') !== accountId)
+        return
+      syncLocalStrategySettings()
+      syncLocalAutomationSettings()
+      syncLocalOfflineSettings()
+      await farmStore.fetchSeeds(accountId)
+      await fetchStealthStatus()
+    })
+
+  return accountSettingsQueue
 }
 
 onMounted(async () => {
   await accountStore.fetchAccounts()
-  if (!currentAccountId.value && accounts.value.length > 0 && accounts.value[0]) {
-    accountStore.selectAccount(String(accounts.value[0].id))
-  }
   // 先取活动开关状态, 再同步本地设置(否则后台已关闭的活动开关无法被自动关掉)
   await fetchActivityStatus()
+  accountSettingsReady.value = true
   await loadForCurrentAccount()
 })
 
-// 切换账号时重新加载该账号的设置(否则页面还显示上一个账号的配置)
+// 布局切换账号会重建页面; 此 watcher 只负责兜底同一实例内的账号变化。
 watch(currentAccountId, (now, prev) => {
-  if (String(now ?? '') !== String(prev ?? ''))
+  if (accountSettingsReady.value && String(now ?? '') !== String(prev ?? ''))
     void loadForCurrentAccount()
 })
 
 useIntervalFn(() => {
-  fetchStealthStatus()
-  accountStore.fetchAccounts()
-}, 3000)
+  if (document.visibilityState !== 'visible')
+    return
+  if (activeTab.value === 'automation')
+    void fetchStealthStatus()
+  if (activeTab.value === 'account')
+    void accountStore.fetchAccounts()
+}, 5000)
 
 function openSettings(account: any) {
   accountStore.selectAccount(account.id)
@@ -182,7 +198,7 @@ async function toggleKickoutCodeRefresh(account: any, enabled: boolean) {
   try {
     await accountStore.setKickoutCodeRefresh(String(account.id), enabled)
   }
-  catch (e) {
+  catch {
     account.keepRunningOnKickout = oldValue
     showAlert('保存失败，请稍后重试', 'danger')
   }
@@ -425,7 +441,7 @@ watchEffect(() => {
 })
 
 const preferredSeedOptions = computed(() => {
-  const options: { label: string; value: number; disabled?: boolean }[] = [{ label: '自动选择', value: 0, disabled: false }]
+  const options: { label: string, value: number, disabled?: boolean }[] = [{ label: '自动选择', value: 0, disabled: false }]
   if (seeds.value) {
     options.push(...seeds.value.map(seed => ({
       label: `${seed.requiredLevel}级 ${seed.name} (${seed.price}金)`,
@@ -521,45 +537,6 @@ function syncLocalStrategySettings() {
     }))
   }
 }
-
-async function loadStrategyData() {
-  if (currentAccountId.value) {
-    await settingStore.fetchSettings(currentAccountId.value)
-    syncLocalStrategySettings()
-    await farmStore.fetchSeeds(currentAccountId.value)
-  }
-}
-
-async function saveStrategySettings() {
-  if (!currentAccountId.value)
-    return
-  strategySaving.value = true
-  try {
-    const fullSettings = {
-      ...settings.value,
-      ...localStrategySettings.value,
-      automation: localAutomationSettings.value.automation,
-    }
-    const res = await settingStore.saveSettings(currentAccountId.value, fullSettings)
-    if (res.ok) {
-      showAlert('策略设置已保存', 'primary')
-    }
-    else {
-      showAlert(`保存失败: ${res.error}`, 'danger')
-    }
-  }
-  finally {
-    strategySaving.value = false
-  }
-}
-
-watch(currentAccountId, async () => {
-  if (currentAccountId.value) {
-    await loadStrategyData()
-    syncLocalAutomationSettings()
-    syncLocalOfflineSettings()
-  }
-})
 
 // ==================== 自动控制 ====================
 const automationSaving = ref(false)
@@ -686,9 +663,11 @@ function autoLabel(key: string, base: string): string {
 /** 把被后台关闭的活动的自动化开关强制置为 false */
 function applyActivityGate() {
   const auto = localAutomationSettings.value.automation as any
-  if (!auto) return
+  if (!auto)
+    return
   for (const key of Object.keys(ACTIVITY_GATED_AUTOMATION)) {
-    if (isAutomationGated(key)) auto[key] = false
+    if (isAutomationGated(key))
+      auto[key] = false
   }
 }
 
@@ -707,10 +686,12 @@ async function fetchStealthStatus() {
     if (res.data?.ok) {
       stealthStatus.value = res.data.data
       stealthStatusError.value = ''
-    } else {
+    }
+    else {
       stealthStatusError.value = `后台未返回防封号状态：${apiError(res, res.data?.data) || '未知原因'}`
     }
-  } catch (e: any) {
+  }
+  catch (e: any) {
     const code = e?.response?.status
     stealthStatusError.value = code === 404
       ? '后台没有 /api/stealth 接口 —— 说明后台进程还是旧版本，请重启后台（core）后再试'
@@ -769,11 +750,13 @@ async function saveStealthSettings() {
       stealthSaveState.value = 'saved'
       stealthSavedAt.value = new Date().toLocaleTimeString('zh-CN', { hour12: false })
       await fetchStealthStatus()
-    } else {
+    }
+    else {
       stealthSaveState.value = 'error'
       stealthSaveError.value = res?.error || '保存失败'
     }
-  } catch (e: any) {
+  }
+  catch (e: any) {
     stealthSaveState.value = 'error'
     stealthSaveError.value = e?.response?.data?.error || e?.message || '保存失败'
   }
@@ -781,12 +764,18 @@ async function saveStealthSettings() {
 
 // 防封号设置改动后自动保存(免去"改了但忘记点保存")
 watch(
-  () => { const p = stealthPayload(); return JSON.stringify(p) },
+  () => {
+    const payload = stealthPayload()
+    return JSON.stringify(payload)
+  },
   () => {
     if (!currentAccountId.value || !stealthDirty.value)
       return
-    if (stealthSaveTimer) clearTimeout(stealthSaveTimer)
-    stealthSaveTimer = setTimeout(() => { void saveStealthSettings() }, 700)
+    if (stealthSaveTimer)
+      clearTimeout(stealthSaveTimer)
+    stealthSaveTimer = setTimeout(() => {
+      void saveStealthSettings()
+    }, 700)
   },
 )
 
@@ -800,12 +789,15 @@ async function handleForceStealth(action: 'online' | 'offline') {
       const detail = res.data?.data?.message
       showAlert(detail || (action === 'offline' ? '已手动下线' : '已手动上线'), 'primary')
       await fetchStealthStatus()
-    } else {
+    }
+    else {
       showAlert(apiError(res, res.data?.data) || '操作失败', 'danger')
     }
-  } catch (e: any) {
+  }
+  catch (e: any) {
     showAlert(e?.response?.data?.error || e?.message || '操作失败', 'danger')
-  } finally {
+  }
+  finally {
     stealthLoading.value = false
   }
 }
@@ -843,7 +835,10 @@ async function fetchActivityStatus() {
       }
       applyActivityGate()
     }
-  } catch (e) { /* 状态取不到时不拦截 */ }
+  }
+  catch {
+    // 状态取不到时不拦截
+  }
 }
 
 function syncLocalAutomationSettings() {
@@ -870,8 +865,8 @@ function syncLocalAutomationSettings() {
         weather_research: false,
         charity_task: false,
         mengchong_task: false,
-    mengchong_hunt: false,
-    rob_treasure: false,
+        mengchong_hunt: false,
+        rob_treasure: false,
         fertilizer: 'none',
         skip_own_weed_bug: false,
         fertilizer_multi_season: false,
@@ -901,8 +896,8 @@ function syncLocalAutomationSettings() {
         weather_research: false,
         charity_task: false,
         mengchong_task: false,
-    mengchong_hunt: false,
-    rob_treasure: false,
+        mengchong_hunt: false,
+        rob_treasure: false,
         fertilizer: 'none',
         skip_own_weed_bug: false,
         fertilizer_multi_season: false,
@@ -925,33 +920,57 @@ function syncLocalAutomationSettings() {
     localAutomationSettings.value.stealthOfflineMaxMinutes = settings.value.stealthOfflineMaxMinutes ?? 60
     localAutomationSettings.value.stealthWakeForRipe = settings.value.stealthWakeForRipe !== false
     localAutomationSettings.value.robTreasureIntervalMinutes = settings.value.robTreasureIntervalMinutes ?? 10
-  localAutomationSettings.value.robMaxPerRun = settings.value.robMaxPerRun ?? 1
-  localAutomationSettings.value.robDailyLimit = settings.value.robDailyLimit ?? 20
-  localAutomationSettings.value.buyBookEnabled = settings.value.buyBookEnabled ?? true
-  localAutomationSettings.value.buyBookCount = settings.value.buyBookCount ?? 2
-  localAutomationSettings.value.autumnWishEnabled = settings.value.autumnWishEnabled ?? true
-  localAutomationSettings.value.fireworkEnabled = settings.value.fireworkEnabled ?? false
-  localAutomationSettings.value.fireworkMode = settings.value.fireworkMode === 'friend' ? 'friend' : 'self'
-  localAutomationSettings.value.fireworkCount = settings.value.fireworkCount ?? 1
-  localAutomationSettings.value.happyShareEnabled = settings.value.happyShareEnabled ?? true
-  localAutomationSettings.value.milkTeaEnabled = settings.value.milkTeaEnabled ?? true
-  localAutomationSettings.value.milkTeaCashier = settings.value.milkTeaCashier ?? true
-  localAutomationSettings.value.milkTeaCraft = settings.value.milkTeaCraft ?? true
-  localAutomationSettings.value.milkTeaSpeaker = settings.value.milkTeaSpeaker ?? false
-  localAutomationSettings.value.milkTeaStoreName = settings.value.milkTeaStoreName ?? '奶茶小铺'
-  localAutomationSettings.value.milkTeaAutoInteract = settings.value.milkTeaAutoInteract ?? false
-  localAutomationSettings.value.milkTeaAutoWage = settings.value.milkTeaAutoWage !== false
-  localAutomationSettings.value.milkTeaAutoBuySeed = !!settings.value.milkTeaAutoBuySeed
-  localAutomationSettings.value.milkTeaAutoUpgrade = settings.value.milkTeaAutoUpgrade !== false
-  localAutomationSettings.value.milkTeaInteractType = settings.value.milkTeaInteractType ?? 2
-  localAutomationSettings.value.sellGoldenFruit = settings.value.sellGoldenFruit ?? false
-  localAutomationSettings.value.adGiftEnabled = settings.value.adGiftEnabled ?? true
+    localAutomationSettings.value.robMaxPerRun = settings.value.robMaxPerRun ?? 1
+    localAutomationSettings.value.robDailyLimit = settings.value.robDailyLimit ?? 20
+    localAutomationSettings.value.buyBookEnabled = settings.value.buyBookEnabled ?? true
+    localAutomationSettings.value.buyBookCount = settings.value.buyBookCount ?? 2
+    localAutomationSettings.value.autumnWishEnabled = settings.value.autumnWishEnabled ?? true
+    localAutomationSettings.value.fireworkEnabled = settings.value.fireworkEnabled ?? false
+    localAutomationSettings.value.fireworkMode = settings.value.fireworkMode === 'friend' ? 'friend' : 'self'
+    localAutomationSettings.value.fireworkCount = settings.value.fireworkCount ?? 1
+    localAutomationSettings.value.happyShareEnabled = settings.value.happyShareEnabled ?? true
+    localAutomationSettings.value.milkTeaEnabled = settings.value.milkTeaEnabled ?? true
+    localAutomationSettings.value.milkTeaCashier = settings.value.milkTeaCashier ?? true
+    localAutomationSettings.value.milkTeaCraft = settings.value.milkTeaCraft ?? true
+    localAutomationSettings.value.milkTeaSpeaker = settings.value.milkTeaSpeaker ?? false
+    localAutomationSettings.value.milkTeaStoreName = settings.value.milkTeaStoreName ?? '奶茶小铺'
+    localAutomationSettings.value.milkTeaAutoInteract = settings.value.milkTeaAutoInteract ?? false
+    localAutomationSettings.value.milkTeaAutoWage = settings.value.milkTeaAutoWage !== false
+    localAutomationSettings.value.milkTeaAutoBuySeed = !!settings.value.milkTeaAutoBuySeed
+    localAutomationSettings.value.milkTeaAutoUpgrade = settings.value.milkTeaAutoUpgrade !== false
+    localAutomationSettings.value.milkTeaInteractType = settings.value.milkTeaInteractType ?? 2
+    localAutomationSettings.value.sellGoldenFruit = settings.value.sellGoldenFruit ?? false
+    localAutomationSettings.value.adGiftEnabled = settings.value.adGiftEnabled ?? true
     localAutomationSettings.value.fertilizerBuyOrganicCount = settings.value.fertilizerBuyOrganicCount ?? 10
     localAutomationSettings.value.fertilizerBuyOrganicThresholdHours = settings.value.fertilizerBuyOrganicThresholdHours ?? 10
     localAutomationSettings.value.fertilizerBuyNormalCount = settings.value.fertilizerBuyNormalCount ?? 10
     localAutomationSettings.value.fertilizerBuyNormalThresholdHours = settings.value.fertilizerBuyNormalThresholdHours ?? 10
     localAutomationSettings.value.fertilizerBuyCheckIntervalMinutes = settings.value.fertilizerBuyCheckIntervalMinutes ?? 30
     applyActivityGate()
+  }
+}
+
+async function saveStrategySettings() {
+  if (!currentAccountId.value)
+    return
+  strategySaving.value = true
+  try {
+    // 策略页保存时保留自动控制页尚未提交的本地编辑，避免切换页签后被旧值覆盖。
+    const fullSettings = {
+      ...settings.value,
+      ...localStrategySettings.value,
+      automation: localAutomationSettings.value.automation,
+    }
+    const res = await settingStore.saveSettings(currentAccountId.value, fullSettings)
+    if (res.ok) {
+      showAlert('策略设置已保存', 'primary')
+    }
+    else {
+      showAlert(`保存失败: ${res.error}`, 'danger')
+    }
+  }
+  finally {
+    strategySaving.value = false
   }
 }
 
@@ -970,19 +989,28 @@ const adGiftBusy = ref(false)
 const adGiftResult = ref('')
 async function adGiftAction() {
   const accountId = String(currentAccountId.value || '')
-  if (!accountId) { showAlert('请先选择账号', 'danger'); return }
+  if (!accountId) {
+    showAlert('请先选择账号', 'danger')
+    return
+  }
   adGiftBusy.value = true
   adGiftResult.value = ''
   try {
     // 该流程要等 30+ 秒(模拟看广告时长), 单独放宽超时
     const res = await api.post('/api/mall/ad-gift/claim', {}, { headers: { 'x-account-id': accountId }, timeout: 65000 })
     const d = res.data?.data || {}
-    if (apiError(res, res.data?.data)) { adGiftResult.value = apiError(res, res.data?.data) || '失败'; return }
-    if (d.ok) adGiftResult.value = `已跳过广告领取 ${d.itemName || ''}${d.gained ? ` +${d.gained}` : ''}`
-    else adGiftResult.value = `未领取：${d.reason || '未知原因'}` + (d.hint ? `（${d.hint}）` : '')
-  } catch (e: any) {
+    if (apiError(res, res.data?.data)) {
+      adGiftResult.value = apiError(res, res.data?.data) || '失败'
+      return
+    }
+    if (d.ok)
+      adGiftResult.value = `已跳过广告领取 ${d.itemName || ''}${d.gained ? ` +${d.gained}` : ''}`
+    else adGiftResult.value = `未领取：${d.reason || '未知原因'}${d.hint ? `（${d.hint}）` : ''}`
+  }
+  catch (e: any) {
     adGiftResult.value = e?.response?.data?.error || e?.message || '请求失败(账号未运行?)'
-  } finally {
+  }
+  finally {
     adGiftBusy.value = false
   }
 }
@@ -991,30 +1019,40 @@ async function adGiftAction() {
 const happyBusy = ref(false)
 const happyResult = ref('')
 
-
-
 async function happyAction() {
   const accountId = String(currentAccountId.value || '')
-  if (!accountId) { showAlert('请先选择账号', 'danger'); return }
+  if (!accountId) {
+    showAlert('请先选择账号', 'danger')
+    return
+  }
   happyBusy.value = true
   happyResult.value = ''
   try {
     const res = await api.post('/api/activity/happy-share/run', {}, { headers: { 'x-account-id': accountId } })
     const d = res.data?.data || {}
     const err = apiError(res, d)
-    if (err) { happyResult.value = err; showAlert(`快乐不独享：${err}`, 'danger'); return }
+    if (err) {
+      happyResult.value = err
+      showAlert(`快乐不独享：${err}`, 'danger')
+      return
+    }
     const parts: string[] = []
-    if (d.daily && d.daily.ok) parts.push(`快乐值 +${d.daily.gained}（现有 ${d.daily.happy}）`)
-    else if (d.daily && d.daily.reason) parts.push(`快乐值未领：${d.daily.reason}`)
+    if (d.daily && d.daily.ok)
+      parts.push(`快乐值 +${d.daily.gained}（现有 ${d.daily.happy}）`)
+    else if (d.daily && d.daily.reason)
+      parts.push(`快乐值未领：${d.daily.reason}`)
     if (d.tiers && d.tiers.claimed && d.tiers.claimed.length) {
       parts.push(...d.tiers.claimed.map((x: any) => `档位${x.tier}→${x.reward ? x.reward.name : '已发放'}`))
-    } else if (d.tiers && d.tiers.reason) {
+    }
+    else if (d.tiers && d.tiers.reason) {
       parts.push(`无可领档位（快乐值 ${d.tiers.happy}）`)
     }
     happyResult.value = parts.join('；') || '本次没有可领取的内容'
-  } catch (e: any) {
+  }
+  catch (e: any) {
     happyResult.value = e?.response?.data?.error || e?.message || '请求失败(账号未运行?)'
-  } finally {
+  }
+  finally {
     happyBusy.value = false
   }
 }
@@ -1024,7 +1062,10 @@ const autumnBusy = ref('')
 const autumnResult = ref('')
 async function autumnAction(kind: 'claim' | 'firework') {
   const accountId = String(currentAccountId.value || '')
-  if (!accountId) { showAlert('请先选择账号', 'danger'); return }
+  if (!accountId) {
+    showAlert('请先选择账号', 'danger')
+    return
+  }
   autumnBusy.value = kind
   autumnResult.value = ''
   try {
@@ -1033,19 +1074,28 @@ async function autumnAction(kind: 'claim' | 'firework') {
     const res = await api.post(url, payload, { headers: { 'x-account-id': accountId } })
     const d = res.data?.data || {}
     const err = apiError(res, d)
-    if (err) { autumnResult.value = err; showAlert(`秋祈良愿：${err}`, 'danger'); return }
+    if (err) {
+      autumnResult.value = err
+      showAlert(`秋祈良愿：${err}`, 'danger')
+      return
+    }
     if (kind === 'claim') {
-      if (d.skipped) autumnResult.value = `本次未领取：${d.reason || '无可领奖励'}`
-      else if (d.ok) autumnResult.value = `已领取 ${(d.rewards || []).map((r: any) => r.name).join('、') || '(无回包)'}`
+      if (d.skipped)
+        autumnResult.value = `本次未领取：${d.reason || '无可领奖励'}`
+      else if (d.ok)
+        autumnResult.value = `已领取 ${(d.rewards || []).map((r: any) => r.name).join('、') || '(无回包)'}`
       else autumnResult.value = `领取失败：${d.reason || '未知'}`
-    } else {
+    }
+    else {
       autumnResult.value = d.ok
         ? `已在${d.mode === 'friend' ? '好友家' : '自己家'}放烟花${d.friendGid ? ` @${d.friendGid}` : ''}`
         : `放烟花失败：${d.reason || '未知'}`
     }
-  } catch (e: any) {
+  }
+  catch (e: any) {
     autumnResult.value = e?.response?.data?.error || e?.message || '请求失败(账号未运行?)'
-  } finally {
+  }
+  finally {
     autumnBusy.value = ''
   }
 }
@@ -1073,12 +1123,15 @@ async function buyBooksNow() {
     const gamePart = d.gameDailyLimit ? `，游戏侧已购 ${d.gameBought ?? 0}/${d.gameDailyLimit}` : ''
     if (d.boughtNow > 0) {
       buyBookResult.value = `本次购买 ${d.boughtNow} 本（${botPart}${gamePart}）`
-    } else {
+    }
+    else {
       buyBookResult.value = `未购买：${d.skipped || '未知原因'}（${botPart}${gamePart}）`
     }
-  } catch (e: any) {
+  }
+  catch (e: any) {
     buyBookResult.value = e?.response?.data?.error || e?.message || '购买失败（账号未运行？）'
-  } finally {
+  }
+  finally {
     buyBookRunning.value = false
   }
 }
@@ -1097,19 +1150,25 @@ async function runTreasureNow() {
       const d = res.data.data || {}
       if (d.skipped) {
         showAlert('自动夺宝开关未开启（请先勾选上面的"启用自动夺宝"）', 'danger')
-      } else if (d.reason === 'no_book') {
+      }
+      else if (d.reason === 'no_book') {
         showAlert('没有可用的挑战书', 'danger')
-      } else if (d.reason === 'no_target') {
+      }
+      else if (d.reason === 'no_target') {
         showAlert(`已查 ${d.friends} 位好友，暂无可夺宝藏`, 'primary')
-      } else {
+      }
+      else {
         showAlert(`自动夺宝完成：尝试 ${d.attempted} 次，成功 ${d.success}，未生效 ${d.noEffect}，失败 ${d.failed}`, 'primary')
       }
-    } else {
+    }
+    else {
       showAlert(apiError(res, res.data?.data) || '执行失败', 'danger')
     }
-  } catch (e: any) {
+  }
+  catch (e: any) {
     showAlert(e?.response?.data?.error || e?.message || '执行失败', 'danger')
-  } finally {
+  }
+  finally {
     treasureRunning.value = false
   }
 }
@@ -1196,7 +1255,7 @@ async function saveAutomationSettings() {
   }
 }
 
-// ==================== 用户管理 ====================
+// ==================== 用户与通知 ====================
 const passwordSaving = ref(false)
 const offlineSaving = ref(false)
 const offlineTesting = ref(false)
@@ -1388,10 +1447,12 @@ async function exportBackup() {
     const n = data && data.files ? Object.keys(data.files).length : 0
     backupInfo.value = `已导出 ${n} 个配置文件（含账号 Code 与管理员密码哈希，请妥善保管）`
     toast.success('配置已导出')
-  } catch (e: any) {
+  }
+  catch (e: any) {
     backupInfo.value = `导出失败：${e?.response?.data?.error || e?.message || '未知错误'}`
     toast.error(backupInfo.value)
-  } finally {
+  }
+  finally {
     backupExporting.value = false
   }
 }
@@ -1405,22 +1466,25 @@ async function onBackupFileChange(ev: Event) {
   const input = ev.target as HTMLInputElement
   const file = input.files && input.files[0]
   input.value = ''
-  if (!file) return
+  if (!file)
+    return
   let payload: any = null
   try {
     payload = JSON.parse(await file.text())
-  } catch (e) {
+  }
+  catch {
     backupInfo.value = '所选文件不是合法的 JSON'
     toast.error(backupInfo.value)
     return
   }
   const ok = window.confirm(
-    `将用「${file.name}」覆盖当前配置。\n\n` +
-    `· 覆盖范围：store.json（全部配置）、accounts.json（账号+Code）、users.json、qcby-code.json、cards.json、card-claim.json\n` +
-    `· 导入前会自动把当前数据备份到服务器 data/backup-<时间>/\n` +
-    `· 导入后需要【重启服务】才能生效\n\n确定继续吗？`
+    `将用「${file.name}」覆盖当前配置。\n\n`
+    + `· 覆盖范围：store.json（全部配置）、accounts.json（账号+Code）、users.json、qcby-code.json、cards.json、card-claim.json\n`
+    + `· 导入前会自动把当前数据备份到服务器 data/backup-<时间>/\n`
+    + `· 导入后需要【重启服务】才能生效\n\n确定继续吗？`,
   )
-  if (!ok) return
+  if (!ok)
+    return
   backupImporting.value = true
   backupInfo.value = ''
   try {
@@ -1428,21 +1492,23 @@ async function onBackupFileChange(ev: Event) {
     const d = res.data || {}
     if (d.ok) {
       const written = (d.data && d.data.written) || []
-      backupInfo.value = `导入成功：${written.join('、') || '（无）'}；请【重启服务】生效` +
-        (d.data && d.data.backupDir ? `（旧数据已备份到 ${d.data.backupDir}）` : '')
+      backupInfo.value = `导入成功：${written.join('、') || '（无）'}；请【重启服务】生效${
+        d.data && d.data.backupDir ? `（旧数据已备份到 ${d.data.backupDir}）` : ''}`
       toast.success('导入成功，请重启服务')
-    } else {
+    }
+    else {
       backupInfo.value = `导入失败：${d.error || '未知原因'}`
       toast.error(backupInfo.value)
     }
-  } catch (e: any) {
+  }
+  catch (e: any) {
     backupInfo.value = `导入失败：${e?.response?.data?.error || e?.message || '未知错误'}`
     toast.error(backupInfo.value)
-  } finally {
+  }
+  finally {
     backupImporting.value = false
   }
 }
-
 </script>
 
 <template>
@@ -1453,1087 +1519,1140 @@ async function onBackupFileChange(ev: Event) {
       </h1>
     </div>
 
-    <div class="border border-gray-200 rounded-lg bg-white shadow dark:border-gray-700 dark:bg-gray-800">
-      <div class="border-b border-gray-200 dark:border-gray-700">
-        <nav class="flex flex-nowrap gap-1 overflow-x-auto pb-1 snap-x snap-mandatory scrollbar-none sm:flex-wrap sm:overflow-visible sm:pb-0 p-2">
-          <button
-            v-for="tab in tabs"
-            :key="tab.key"
-            class="flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-medium transition-all"
-            :class="activeTab === tab.key
-              ? 'text-white shadow-sm'
-              : 'text-gray-600 hover:bg-gray-100 dark:text-gray-400 dark:hover:bg-gray-700'"
-            :style="activeTab === tab.key ? { backgroundColor: 'var(--theme-primary)' } : {}"
-            @click="activeTab = tab.key"
-          >
-            <div :class="tab.icon" />
-            {{ tab.label }}
-          </button>
-        </nav>
-      </div>
+    <div class="overflow-hidden border border-gray-200 rounded-lg bg-white dark:border-gray-700 dark:bg-gray-800">
+      <nav class="scrollbar-none flex flex-nowrap snap-x snap-mandatory gap-1 overflow-x-auto p-2 sm:flex-wrap sm:overflow-visible">
+        <button
+          v-for="tab in tabs"
+          :key="tab.key"
+          class="flex shrink-0 snap-start items-center gap-2 rounded-md px-3 py-2 text-sm font-medium transition-all sm:px-4"
+          :class="activeTab === tab.key
+            ? 'text-white shadow-sm'
+            : 'text-gray-600 hover:bg-gray-100 dark:text-gray-400 dark:hover:bg-gray-700'"
+          :style="activeTab === tab.key ? { backgroundColor: 'var(--theme-primary)' } : {}"
+          @click="activeTab = tab.key"
+        >
+          <div :class="tab.icon" />
+          {{ tab.label }}
+        </button>
+      </nav>
+    </div>
 
-      <div class="p-4">
-        <!-- 账号管理 -->
-        <div v-if="activeTab === 'account'" class="space-y-4">
-          <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-            <h3 class="text-lg text-gray-900 font-bold dark:text-gray-100">
-              账号管理
-            </h3>
-            <div class="flex flex-wrap gap-2">
-              <BaseButton
-                v-if="userStore.isAdmin"
-                variant="secondary"
-                size="sm"
-                :disabled="stoppedAccountsCount === 0"
-                @click="openClearStoppedConfirm"
-              >
-                <div class="i-carbon-trash-can mr-2" />
-                <span class="hidden sm:inline">一键清理</span>
-                <span class="sm:hidden">清理</span>
-                ({{ stoppedAccountsCount }})
-              </BaseButton>
-              <BaseButton
-                variant="primary"
-                size="sm"
-                :disabled="isAddAccountDisabled"
-                :title="addAccountDisabledReason"
-                @click="openAddModal"
-              >
-                <div class="i-carbon-add mr-2" />
-                添加账号
-              </BaseButton>
-            </div>
-          </div>
-
-          <div v-if="accountsLoading && accounts.length === 0" class="py-8 text-center text-gray-500">
-            <div i-svg-spinners-90-ring-with-bg class="mb-2 inline-block text-2xl" />
-            <div>加载中...</div>
-          </div>
-
-          <div v-else-if="accounts.length === 0" class="rounded-lg bg-white py-12 text-center shadow dark:bg-gray-800">
-            <div i-carbon-user-avatar class="mb-4 inline-block text-4xl text-gray-400" />
-            <p class="mb-4 text-gray-500">
-              暂无账号
-            </p>
+    <div class="pt-4">
+      <!-- 账号管理 -->
+      <div v-if="activeTab === 'account'" class="space-y-4">
+        <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <h3 class="text-lg text-gray-900 font-bold dark:text-gray-100">
+            账号管理
+          </h3>
+          <div class="flex flex-wrap gap-2">
             <BaseButton
-              variant="text"
+              v-if="userStore.isAdmin"
+              variant="secondary"
+              size="sm"
+              :disabled="stoppedAccountsCount === 0"
+              @click="openClearStoppedConfirm"
+            >
+              <div class="i-carbon-trash-can mr-2" />
+              <span class="hidden sm:inline">一键清理</span>
+              <span class="sm:hidden">清理</span>
+              ({{ stoppedAccountsCount }})
+            </BaseButton>
+            <BaseButton
+              variant="primary"
               size="sm"
               :disabled="isAddAccountDisabled"
               :title="addAccountDisabledReason"
               @click="openAddModal"
             >
-              立即添加
+              <div class="i-carbon-add mr-2" />
+              添加账号
             </BaseButton>
           </div>
+        </div>
 
-          <div v-else class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-            <div
-              v-for="acc in accounts"
-              :key="acc.id"
-              class="cursor-pointer border rounded-lg bg-white p-3 shadow transition-all duration-200 dark:bg-gray-800 sm:p-4"
-              :class="String(currentAccountId) === String(acc.id)
-                ? 'ring-2'
-                : 'border-transparent'"
-              :style="String(currentAccountId) === String(acc.id)
-                ? { borderColor: 'var(--theme-primary)', backgroundColor: 'rgba(var(--theme-primary-rgb, 59, 130, 246), 0.1)' }
-                : {}"
-              @click="selectAccount(acc)"
-            >
-              <div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between sm:gap-4">
-                <div class="flex min-w-0 flex-1 items-center gap-3">
-                  <div class="h-10 w-10 flex shrink-0 items-center justify-center overflow-hidden rounded-full bg-gray-100 dark:bg-gray-700 sm:h-12 sm:w-12">
-                    <img v-if="getAccountQQUin(acc)" :src="getQQAvatarUrl(acc)" class="h-full w-full object-cover">
-                    <div v-else class="i-carbon-user text-xl text-gray-400 sm:text-2xl" />
+        <div v-if="accountsLoading && accounts.length === 0" class="py-8 text-center text-gray-500">
+          <div i-svg-spinners-90-ring-with-bg class="mb-2 inline-block text-2xl" />
+          <div>加载中...</div>
+        </div>
+
+        <div v-else-if="accounts.length === 0" class="rounded-lg bg-white py-12 text-center shadow dark:bg-gray-800">
+          <div i-carbon-user-avatar class="mb-4 inline-block text-4xl text-gray-400" />
+          <p class="mb-4 text-gray-500">
+            暂无账号
+          </p>
+          <BaseButton
+            variant="text"
+            size="sm"
+            :disabled="isAddAccountDisabled"
+            :title="addAccountDisabledReason"
+            @click="openAddModal"
+          >
+            立即添加
+          </BaseButton>
+        </div>
+
+        <div v-else class="grid grid-cols-1 gap-4 lg:grid-cols-3 sm:grid-cols-2 xl:grid-cols-4">
+          <div
+            v-for="acc in accounts"
+            :key="acc.id"
+            class="cursor-pointer border rounded-lg bg-white p-3 shadow transition-all duration-200 dark:bg-gray-800 sm:p-4"
+            :class="String(currentAccountId) === String(acc.id)
+              ? 'ring-2'
+              : 'border-transparent'"
+            :style="String(currentAccountId) === String(acc.id)
+              ? { borderColor: 'var(--theme-primary)', backgroundColor: 'rgba(var(--theme-primary-rgb, 59, 130, 246), 0.1)' }
+              : {}"
+            @click="selectAccount(acc)"
+          >
+            <div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between sm:gap-4">
+              <div class="min-w-0 flex flex-1 items-center gap-3">
+                <div class="h-10 w-10 flex shrink-0 items-center justify-center overflow-hidden rounded-full bg-gray-100 sm:h-12 sm:w-12 dark:bg-gray-700">
+                  <img v-if="getAccountQQUin(acc)" :src="getQQAvatarUrl(acc)" class="h-full w-full object-cover">
+                  <div v-else class="i-carbon-user text-xl text-gray-400 sm:text-2xl" />
+                </div>
+                <div class="min-w-0 flex-1">
+                  <h4 class="truncate text-base font-bold sm:text-lg">
+                    {{ acc.name || acc.nick || acc.id }}
+                  </h4>
+                  <div class="mt-0.5 flex flex-wrap items-center gap-1.5">
+                    <span
+                      v-if="acc.platform"
+                      class="rounded px-1.5 py-0.5 text-[10px] font-medium leading-tight"
+                      :class="getPlatformClass(acc.platform)"
+                    >
+                      {{ getPlatformLabel(acc.platform) }}
+                    </span>
+                    <span class="truncate text-xs text-gray-500 sm:text-sm">
+                      {{ getAccountQQUin(acc) || '未绑定' }}
+                    </span>
+                  </div>
+                </div>
+              </div>
+              <div class="flex items-center justify-end gap-2 sm:flex-col sm:items-end">
+                <span class="flex items-center gap-1 text-xs text-gray-500 sm:hidden">
+                  <div class="h-2 w-2 rounded-full" :class="acc.running ? 'bg-green-500' : 'bg-gray-300'" />
+                  {{ acc.running ? '运行中' : '已停止' }}
+                </span>
+                <BaseButton
+                  variant="secondary"
+                  size="sm"
+                  class="border rounded-full shadow-sm transition-all duration-500 ease-in-out sm:w-20 active:scale-95"
+                  :class="acc.running ? 'border-red-200 bg-red-50 text-red-600 hover:bg-red-100 focus:ring-red-500 active:border-red-300 dark:border-red-800 dark:bg-red-900/20 dark:text-red-400 dark:hover:bg-red-900/30 dark:focus:ring-red-500 dark:active:border-red-700' : 'border-green-200 bg-green-50 text-green-600 hover:bg-green-100 focus:ring-green-500 active:border-green-300 dark:border-green-800 dark:bg-green-900/20 dark:text-green-400 dark:hover:bg-green-900/30 dark:focus:ring-green-500 dark:active:border-green-700'"
+                  :disabled="!acc.running && isAccountOpsDisabled"
+                  :title="!acc.running && isAccountOpsDisabled ? '账号已到期，无法启动账号' : ''"
+                  @click.stop="toggleAccount(acc)"
+                >
+                  <div :class="acc.running ? 'i-carbon-stop-filled' : 'i-carbon-play-filled'" class="mr-1" />
+                  {{ acc.running ? '停止' : '启动' }}
+                </BaseButton>
+              </div>
+            </div>
+
+            <div class="mt-3 rounded-lg bg-gray-50 px-3 py-2 text-xs text-gray-600 dark:bg-gray-900/40 dark:text-gray-300" @click.stop>
+              <div class="flex items-center justify-between gap-3">
+                <div>
+                  <div class="font-medium">
+                    踢下线后等待 Code
+                  </div>
+                  <div class="mt-0.5 text-[11px] text-gray-400">
+                    开启后账号保持运行，重新获取 Code 后继续
+                  </div>
+                </div>
+                <BaseSwitch
+                  :model-value="!!acc.keepRunningOnKickout"
+                  @update:model-value="value => toggleKickoutCodeRefresh(acc, !!value)"
+                />
+              </div>
+              <div v-if="kickoutRefreshSavingId === String(acc.id)" class="mt-1 text-[11px] text-blue-500">
+                保存中...
+              </div>
+            </div>
+
+            <div class="mt-3 flex items-center justify-between border-t border-gray-100 pt-3 sm:mt-4 dark:border-gray-700 sm:pt-4">
+              <div class="hidden items-center gap-2 text-sm text-gray-500 sm:flex">
+                <span class="flex items-center gap-1">
+                  <div class="h-2 w-2 rounded-full" :class="acc.running ? 'bg-green-500' : 'bg-gray-300'" />
+                  {{ acc.running ? '运行中' : '已停止' }}
+                </span>
+              </div>
+
+              <div class="flex flex-1 justify-end gap-1 sm:flex-initial sm:gap-2">
+                <BaseButton
+                  variant="ghost"
+                  class="min-h-[36px] min-w-[36px] !p-2"
+                  title="设置"
+                  @click.stop="openSettings(acc)"
+                >
+                  <div i-carbon-settings />
+                </BaseButton>
+                <BaseButton
+                  variant="ghost"
+                  class="min-h-[36px] min-w-[36px] !p-2"
+                  title="编辑"
+                  @click.stop="openEditModal(acc)"
+                >
+                  <div i-carbon-edit />
+                </BaseButton>
+                <BaseButton
+                  variant="ghost"
+                  class="min-h-[36px] min-w-[36px] text-red-500 !p-2 dark:text-red-400 hover:text-red-600 dark:hover:text-red-300"
+                  title="删除"
+                  @click.stop="handleDelete(acc)"
+                >
+                  <div i-carbon-trash-can />
+                </BaseButton>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <AccountModal
+          :show="showModal"
+          :edit-data="editingAccount"
+          @close="showModal = false"
+          @saved="handleSaved"
+        />
+
+        <!-- 备份与恢复（迁移服务器） -->
+        <div class="border border-gray-200 rounded-lg bg-white p-4 dark:border-gray-700 dark:bg-gray-800">
+          <div class="mb-1 flex items-center justify-between">
+            <h2 class="text-base text-gray-900 font-semibold dark:text-white">
+              备份与恢复
+            </h2>
+            <span class="text-xs text-gray-400">迁移服务器</span>
+          </div>
+          <p class="mb-1 text-xs text-gray-500 dark:text-gray-400">
+            导出账号配置、账号 Code、用户、卡片及离线提醒等可恢复数据。
+          </p>
+          <p class="mb-2 text-xs text-gray-500 dark:text-gray-400">
+            不包含日志、统计、好友缓存和游戏素材。新服务器需执行
+            <code class="rounded bg-gray-100 px-1 dark:bg-gray-700">pnpm sync:game-config</code>。
+          </p>
+          <p class="mb-2 text-xs text-amber-600 dark:text-amber-400">
+            导出文件包含敏感凭据，请妥善保管。
+          </p>
+          <div class="flex flex-wrap items-center gap-2">
+            <BaseButton variant="primary" size="sm" :loading="backupExporting" @click="exportBackup">
+              导出配置
+            </BaseButton>
+            <BaseButton variant="secondary" size="sm" :loading="backupImporting" @click="pickBackupFile">
+              导入配置
+            </BaseButton>
+            <input ref="backupFileInput" type="file" accept="application/json,.json" class="hidden" @change="onBackupFileChange">
+          </div>
+          <div v-if="backupInfo" class="mt-2 rounded bg-gray-50 px-2 py-1 text-xs text-gray-700 dark:bg-gray-900/40 dark:text-gray-200">
+            {{ backupInfo }}
+          </div>
+        </div>
+
+        <ConfirmModal
+          :show="showDeleteConfirm"
+          :loading="deleteLoading"
+          title="删除账号"
+          :message="accountToDelete ? `确定要删除账号 ${accountToDelete.name || accountToDelete.id} 吗?` : ''"
+          confirm-text="删除"
+          type="danger"
+          @close="!deleteLoading && (showDeleteConfirm = false)"
+          @cancel="!deleteLoading && (showDeleteConfirm = false)"
+          @confirm="confirmDelete"
+        />
+
+        <ConfirmModal
+          :show="showClearStoppedConfirm"
+          :loading="clearStoppedLoading"
+          title="一键清理已停止账号"
+          :message="`确定要清理 ${stoppedAccountsCount} 个已停止的账号吗？此操作不可恢复！`"
+          confirm-text="确认清理"
+          type="danger"
+          @close="!clearStoppedLoading && (showClearStoppedConfirm = false)"
+          @cancel="!clearStoppedLoading && (showClearStoppedConfirm = false)"
+          @confirm="confirmClearStopped"
+        />
+      </div>
+
+      <!-- 策略设置 -->
+      <div v-else-if="activeTab === 'strategy'" class="space-y-4">
+        <div class="flex items-center justify-between">
+          <h3 class="flex items-center gap-2 text-lg text-gray-900 font-bold dark:text-gray-100">
+            <div class="i-fas-cog text-lg" />
+            策略设置
+            <span v-if="currentAccountName" class="ml-2 text-sm text-gray-500 font-normal dark:text-gray-400">
+              ({{ currentAccountName }})
+            </span>
+          </h3>
+        </div>
+
+        <div v-if="settingsLoading" class="py-4 text-center text-gray-500">
+          <div class="i-svg-spinners-ring-resize mx-auto mb-2 text-2xl" />
+          <p>加载中...</p>
+        </div>
+
+        <div v-else-if="!currentAccountId" class="py-8 text-center text-gray-500">
+          <div class="i-carbon-settings-adjust mx-auto mb-2 text-3xl text-gray-400" />
+          <p>请先选择账号</p>
+        </div>
+
+        <div v-else class="space-y-4">
+          <div class="grid grid-cols-1 gap-3 md:grid-cols-2 sm:grid-cols-2">
+            <BaseSelect
+              v-model="localStrategySettings.plantingStrategy"
+              label="种植策略"
+              :options="plantingStrategyOptions"
+            />
+            <BaseSelect
+              v-if="localStrategySettings.plantingStrategy === 'preferred'"
+              v-model="localStrategySettings.preferredSeedId"
+              label="优先种植种子"
+              :options="preferredSeedOptions"
+            />
+            <BaseSelect
+              v-else-if="localStrategySettings.plantingStrategy === 'bag_priority' && localStrategySettings.bagSeedFallbackStrategy === 'preferred'"
+              v-model="localStrategySettings.preferredSeedId"
+              label="优先种植种子"
+              :options="preferredSeedOptions"
+            />
+            <div v-else class="flex flex-col gap-1.5">
+              <label class="text-sm text-gray-700 font-medium dark:text-gray-300">
+                {{ localStrategySettings.plantingStrategy === 'bag_priority' ? '第二优先策略预览' : '策略选种预览' }}
+              </label>
+              <div
+                class="w-full flex items-center justify-between border border-gray-200 rounded-lg bg-gray-50 px-3 py-2 text-gray-500 dark:border-gray-600 dark:bg-gray-800/50 dark:text-gray-400"
+              >
+                <span class="truncate">{{ strategyPreviewLabel ?? '加载中...' }}</span>
+                <div class="i-carbon-chevron-down shrink-0 text-lg text-gray-400" />
+              </div>
+            </div>
+          </div>
+
+          <div v-if="localStrategySettings.plantingStrategy === 'bag_priority'" class="space-y-3">
+            <BaseSelect
+              v-model="localStrategySettings.bagSeedFallbackStrategy"
+              label="第二优先策略"
+              :options="BAG_FALLBACK_STRATEGY_OPTIONS"
+            />
+            <div class="border border-amber-200 rounded-lg bg-amber-50/70 p-3 space-y-3 dark:border-amber-800/50 dark:bg-amber-900/20">
+              <div class="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <div class="text-sm text-amber-900 font-semibold dark:text-amber-200">
+                    背包种子优先顺序
+                  </div>
+                  <p class="mt-1 text-xs text-amber-700/90 dark:text-amber-300/90">
+                    默认优先 2x2 作物；调整后按下方顺序种植，标记排外的种子不会被自动种植。
+                  </p>
+                </div>
+                <button
+                  class="rounded bg-amber-100 px-2 py-1 text-xs text-amber-700 transition dark:bg-amber-900/50 hover:bg-amber-200 dark:text-amber-300 dark:hover:bg-amber-900/70"
+                  @click="resetBagSeedPriority"
+                >
+                  重置顺序
+                </button>
+              </div>
+              <div v-if="bagSeedsLoading" class="py-4 text-center text-sm text-amber-700 dark:text-amber-300">
+                加载中...
+              </div>
+              <div v-else-if="bagSeedsError" class="py-4 text-center text-sm text-red-600 dark:text-red-400">
+                {{ bagSeedsError }}
+              </div>
+              <div v-else-if="bagSeeds.length === 0" class="py-4 text-center text-sm text-amber-700 dark:text-amber-300">
+                背包中暂无可用种子
+              </div>
+              <div v-else class="grid gap-2 lg:grid-cols-3 sm:grid-cols-2">
+                <div
+                  v-for="(seed, index) in sortedBagSeeds"
+                  :key="seed.seedId"
+                  class="flex items-center gap-2 border border-amber-200 rounded-lg bg-white p-2 dark:border-amber-700/50 dark:bg-gray-800"
+                  :class="isBagSeedExcluded(seed.seedId) ? 'opacity-70' : ''"
+                  draggable="true"
+                  @dragstart="startBagSeedDrag(seed.seedId, $event)"
+                  @dragover.prevent="dragOverBagSeed(seed.seedId, $event)"
+                  @drop="dropBagSeed(seed.seedId, $event)"
+                >
+                  <div class="h-8 w-8 flex shrink-0 items-center justify-center rounded bg-amber-100 text-xs text-amber-700 font-bold dark:bg-amber-900/50 dark:text-amber-300">
+                    {{ index + 1 }}
                   </div>
                   <div class="min-w-0 flex-1">
-                    <h4 class="truncate text-base font-bold sm:text-lg">
-                      {{ acc.name || acc.nick || acc.id }}
-                    </h4>
-                    <div class="mt-0.5 flex flex-wrap items-center gap-1.5">
-                      <span
-                        v-if="acc.platform"
-                        class="rounded px-1.5 py-0.5 text-[10px] font-medium leading-tight"
-                        :class="getPlatformClass(acc.platform)"
-                      >
-                        {{ getPlatformLabel(acc.platform) }}
+                    <div class="min-w-0 flex items-center gap-1.5">
+                      <span class="truncate text-sm text-gray-800 font-medium dark:text-gray-200">
+                        {{ seed.name }}
                       </span>
-                      <span class="truncate text-xs text-gray-500 sm:text-sm">
-                        {{ getAccountQQUin(acc) || '未绑定' }}
+                      <span v-if="isBagSeedExcluded(seed.seedId)" class="shrink-0 rounded bg-rose-100 px-1.5 py-0.5 text-[10px] text-rose-700 dark:bg-rose-900/40 dark:text-rose-300">
+                        已排外
                       </span>
                     </div>
-                  </div>
-                </div>
-                <div class="flex items-center justify-end gap-2 sm:flex-col sm:items-end">
-                  <span class="flex items-center gap-1 text-xs text-gray-500 sm:hidden">
-                    <div class="h-2 w-2 rounded-full" :class="acc.running ? 'bg-green-500' : 'bg-gray-300'" />
-                    {{ acc.running ? '运行中' : '已停止' }}
-                  </span>
-                  <BaseButton
-                    variant="secondary"
-                    size="sm"
-                    class="border rounded-full shadow-sm transition-all duration-500 ease-in-out active:scale-95 sm:w-20"
-                    :class="acc.running ? 'border-red-200 bg-red-50 text-red-600 hover:bg-red-100 focus:ring-red-500 active:border-red-300 dark:border-red-800 dark:bg-red-900/20 dark:text-red-400 dark:hover:bg-red-900/30 dark:focus:ring-red-500 dark:active:border-red-700' : 'border-green-200 bg-green-50 text-green-600 hover:bg-green-100 focus:ring-green-500 active:border-green-300 dark:border-green-800 dark:bg-green-900/20 dark:text-green-400 dark:hover:bg-green-900/30 dark:focus:ring-green-500 dark:active:border-green-700'"
-                    :disabled="!acc.running && isAccountOpsDisabled"
-                    :title="!acc.running && isAccountOpsDisabled ? '账号已到期，无法启动账号' : ''"
-                    @click="toggleAccount(acc)"
-                  >
-                    <div :class="acc.running ? 'i-carbon-stop-filled' : 'i-carbon-play-filled'" class="mr-1" />
-                    {{ acc.running ? '停止' : '启动' }}
-                  </BaseButton>
-                </div>
-              </div>
-
-              <div class="mt-3 rounded-lg bg-gray-50 px-3 py-2 text-xs text-gray-600 dark:bg-gray-900/40 dark:text-gray-300" @click.stop>
-                <div class="flex items-center justify-between gap-3">
-                  <div>
-                    <div class="font-medium">
-                      踢下线后等待 Code
+                    <div class="text-xs text-gray-500 dark:text-gray-400">
+                      数量: {{ seed.count }} | 等级: {{ seed.requiredLevel }} | 占地: {{ seed.plantSize }}x{{ seed.plantSize }}
                     </div>
-                    <div class="mt-0.5 text-[11px] text-gray-400">
-                      开启后不会自动停止，等桌面登录刷新 Code
-                    </div>
-                  </div>
-                  <BaseSwitch
-                    :model-value="!!acc.keepRunningOnKickout"
-                    @update:model-value="value => toggleKickoutCodeRefresh(acc, !!value)"
-                  />
-                </div>
-                <div v-if="kickoutRefreshSavingId === String(acc.id)" class="mt-1 text-[11px] text-blue-500">
-                  保存中...
-                </div>
-              </div>
-
-              <div class="mt-3 flex items-center justify-between border-t border-gray-100 pt-3 dark:border-gray-700 sm:mt-4 sm:pt-4">
-                <div class="hidden items-center gap-2 text-sm text-gray-500 sm:flex">
-                  <span class="flex items-center gap-1">
-                    <div class="h-2 w-2 rounded-full" :class="acc.running ? 'bg-green-500' : 'bg-gray-300'" />
-                    {{ acc.running ? '运行中' : '已停止' }}
-                  </span>
-                </div>
-
-                <div class="flex flex-1 justify-end gap-1 sm:flex-initial sm:gap-2">
-                  <BaseButton
-                    variant="ghost"
-                    class="min-h-[36px] min-w-[36px] !p-2"
-                    title="设置"
-                    @click="openSettings(acc)"
-                  >
-                    <div i-carbon-settings />
-                  </BaseButton>
-                  <BaseButton
-                    variant="ghost"
-                    class="min-h-[36px] min-w-[36px] !p-2"
-                    title="编辑"
-                    @click="openEditModal(acc)"
-                  >
-                    <div i-carbon-edit />
-                  </BaseButton>
-                  <BaseButton
-                    variant="ghost"
-                    class="text-red-500 min-h-[36px] min-w-[36px] !p-2 dark:text-red-400 hover:text-red-600 dark:hover:text-red-300"
-                    title="删除"
-                    @click="handleDelete(acc)"
-                  >
-                    <div i-carbon-trash-can />
-                  </BaseButton>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          <AccountModal
-            :show="showModal"
-            :edit-data="editingAccount"
-            @close="showModal = false"
-            @saved="handleSaved"
-          />
-
-          <!-- 备份与恢复（迁移服务器） -->
-    <div class="rounded-xl border border-gray-200 bg-white p-4 dark:border-gray-700 dark:bg-gray-800">
-      <div class="mb-1 flex items-center justify-between">
-        <h2 class="text-base font-semibold text-gray-900 dark:text-white">备份与恢复（迁移服务器）</h2>
-      </div>
-      <p class="mb-1 text-xs text-gray-500 dark:text-gray-400">
-        导出全部可保存的配置：<b>store.json</b>（账号配置/自动化/界面/公告/离线提醒/管理员密码）、<b>accounts.json</b>（账号+Code）、
-        <b>users.json</b>（用户）、<b>qcby-code.json</b>、<b>cards.json</b>、<b>card-claim.json</b>。
-      </p>
-      <p class="mb-2 text-xs text-gray-500 dark:text-gray-400">
-        不含：logs/（日志）、stats/（统计）、known_friend_gids/（好友缓存）、gameConfig/（游戏素材，新机器上执行
-        <code class="rounded bg-gray-100 px-1 dark:bg-gray-700">pnpm sync:game-config</code> 重新生成）。
-      </p>
-      <p class="mb-2 text-xs text-amber-600 dark:text-amber-400">⚠️ 导出文件含账号 Code 与管理员密码哈希，请妥善保管，勿外传。</p>
-      <div class="flex flex-wrap items-center gap-2">
-        <BaseButton variant="primary" size="sm" :loading="backupExporting" @click="exportBackup">导出配置</BaseButton>
-        <BaseButton variant="secondary" size="sm" :loading="backupImporting" @click="pickBackupFile">导入配置（覆盖当前）</BaseButton>
-        <input ref="backupFileInput" type="file" accept="application/json,.json" class="hidden" @change="onBackupFileChange">
-      </div>
-      <div v-if="backupInfo" class="mt-2 rounded bg-gray-50 px-2 py-1 text-xs text-gray-700 dark:bg-gray-900/40 dark:text-gray-200">{{ backupInfo }}</div>
-    </div>
-
-    <ConfirmModal
-            :show="showDeleteConfirm"
-            :loading="deleteLoading"
-            title="删除账号"
-            :message="accountToDelete ? `确定要删除账号 ${accountToDelete.name || accountToDelete.id} 吗?` : ''"
-            confirm-text="删除"
-            type="danger"
-            @close="!deleteLoading && (showDeleteConfirm = false)"
-            @cancel="!deleteLoading && (showDeleteConfirm = false)"
-            @confirm="confirmDelete"
-          />
-
-          <ConfirmModal
-            :show="showClearStoppedConfirm"
-            :loading="clearStoppedLoading"
-            title="一键清理已停止账号"
-            :message="`确定要清理 ${stoppedAccountsCount} 个已停止的账号吗？此操作不可恢复！`"
-            confirm-text="确认清理"
-            type="danger"
-            @close="!clearStoppedLoading && (showClearStoppedConfirm = false)"
-            @cancel="!clearStoppedLoading && (showClearStoppedConfirm = false)"
-            @confirm="confirmClearStopped"
-          />
-        </div>
-
-        <!-- 策略设置 -->
-        <div v-else-if="activeTab === 'strategy'" class="space-y-4">
-          <div class="flex items-center justify-between">
-            <h3 class="flex items-center gap-2 text-lg text-gray-900 font-bold dark:text-gray-100">
-              <div class="i-fas-cog text-lg" />
-              策略设置
-              <span v-if="currentAccountName" class="ml-2 text-sm text-gray-500 font-normal dark:text-gray-400">
-                ({{ currentAccountName }})
-              </span>
-            </h3>
-          </div>
-
-          <div v-if="settingsLoading" class="py-4 text-center text-gray-500">
-            <div class="i-svg-spinners-ring-resize mx-auto mb-2 text-2xl" />
-            <p>加载中...</p>
-          </div>
-
-          <div v-else-if="!currentAccountId" class="py-8 text-center text-gray-500">
-            <div class="i-carbon-settings-adjust mx-auto mb-2 text-3xl text-gray-400" />
-            <p>请先选择账号</p>
-          </div>
-
-          <div v-else class="space-y-4">
-            <div class="grid grid-cols-1 gap-3 sm:grid-cols-2 md:grid-cols-2">
-              <BaseSelect
-                v-model="localStrategySettings.plantingStrategy"
-                label="种植策略"
-                :options="plantingStrategyOptions"
-              />
-              <BaseSelect
-                v-if="localStrategySettings.plantingStrategy === 'preferred'"
-                v-model="localStrategySettings.preferredSeedId"
-                label="优先种植种子"
-                :options="preferredSeedOptions"
-              />
-              <BaseSelect
-                v-else-if="localStrategySettings.plantingStrategy === 'bag_priority' && localStrategySettings.bagSeedFallbackStrategy === 'preferred'"
-                v-model="localStrategySettings.preferredSeedId"
-                label="优先种植种子"
-                :options="preferredSeedOptions"
-              />
-              <div v-else class="flex flex-col gap-1.5">
-                <label class="text-sm text-gray-700 font-medium dark:text-gray-300">
-                  {{ localStrategySettings.plantingStrategy === 'bag_priority' ? '第二优先策略预览' : '策略选种预览' }}
-                </label>
-                <div
-                  class="w-full flex items-center justify-between border border-gray-200 rounded-lg bg-gray-50 px-3 py-2 text-gray-500 dark:border-gray-600 dark:bg-gray-800/50 dark:text-gray-400"
-                >
-                  <span class="truncate">{{ strategyPreviewLabel ?? '加载中...' }}</span>
-                  <div class="i-carbon-chevron-down shrink-0 text-lg text-gray-400" />
-                </div>
-              </div>
-            </div>
-
-            <div v-if="localStrategySettings.plantingStrategy === 'bag_priority'" class="space-y-3">
-              <BaseSelect
-                v-model="localStrategySettings.bagSeedFallbackStrategy"
-                label="第二优先策略"
-                :options="BAG_FALLBACK_STRATEGY_OPTIONS"
-              />
-              <div class="border border-amber-200 rounded-lg bg-amber-50/70 p-3 space-y-3 dark:border-amber-800/50 dark:bg-amber-900/20">
-                <div class="flex flex-wrap items-start justify-between gap-3">
-                  <div>
-                    <div class="text-sm text-amber-900 font-semibold dark:text-amber-200">
-                      背包种子优先顺序
-                    </div>
-                    <p class="mt-1 text-xs text-amber-700/90 dark:text-amber-300/90">
-                      默认优先 2x2 作物；调整后按下方顺序种植，标记排外的种子不会被自动种植。
-                    </p>
                   </div>
                   <button
-                    class="rounded bg-amber-100 px-2 py-1 text-xs text-amber-700 transition hover:bg-amber-200 dark:bg-amber-900/50 dark:text-amber-300 dark:hover:bg-amber-900/70"
-                    @click="resetBagSeedPriority"
+                    class="h-8 flex shrink-0 items-center gap-1 rounded px-2 text-xs transition"
+                    :class="isBagSeedExcluded(seed.seedId)
+                      ? 'bg-rose-100 text-rose-700 hover:bg-rose-200 dark:bg-rose-900/40 dark:text-rose-300 dark:hover:bg-rose-900/60'
+                      : 'bg-gray-100 text-gray-600 hover:bg-gray-200 dark:bg-gray-700 dark:text-gray-300 dark:hover:bg-gray-600'"
+                    :title="isBagSeedExcluded(seed.seedId) ? '取消种植排外' : '加入种植排外'"
+                    @click.stop="toggleBagSeedExcluded(seed)"
                   >
-                    重置顺序
+                    <div :class="isBagSeedExcluded(seed.seedId) ? 'i-carbon-checkmark text-sm' : 'i-carbon-subtract-alt text-sm'" />
+                    <span>{{ isBagSeedExcluded(seed.seedId) ? '取消' : '排外' }}</span>
                   </button>
-                </div>
-                <div v-if="bagSeedsLoading" class="py-4 text-center text-sm text-amber-700 dark:text-amber-300">
-                  加载中...
-                </div>
-                <div v-else-if="bagSeedsError" class="py-4 text-center text-sm text-red-600 dark:text-red-400">
-                  {{ bagSeedsError }}
-                </div>
-                <div v-else-if="bagSeeds.length === 0" class="py-4 text-center text-sm text-amber-700 dark:text-amber-300">
-                  背包中暂无可用种子
-                </div>
-                <div v-else class="grid gap-2 lg:grid-cols-3 sm:grid-cols-2">
-                  <div
-                    v-for="(seed, index) in sortedBagSeeds"
-                    :key="seed.seedId"
-                    class="flex items-center gap-2 border border-amber-200 rounded-lg bg-white p-2 dark:border-amber-700/50 dark:bg-gray-800"
-                    :class="isBagSeedExcluded(seed.seedId) ? 'opacity-70' : ''"
-                    draggable="true"
-                    @dragstart="startBagSeedDrag(seed.seedId, $event)"
-                    @dragover.prevent="dragOverBagSeed(seed.seedId, $event)"
-                    @drop="dropBagSeed(seed.seedId, $event)"
-                  >
-                    <div class="h-8 w-8 flex shrink-0 items-center justify-center rounded bg-amber-100 text-xs text-amber-700 font-bold dark:bg-amber-900/50 dark:text-amber-300">
-                      {{ index + 1 }}
-                    </div>
-                    <div class="min-w-0 flex-1">
-                      <div class="flex min-w-0 items-center gap-1.5">
-                        <span class="truncate text-sm text-gray-800 font-medium dark:text-gray-200">
-                          {{ seed.name }}
-                        </span>
-                        <span v-if="isBagSeedExcluded(seed.seedId)" class="shrink-0 rounded bg-rose-100 px-1.5 py-0.5 text-[10px] text-rose-700 dark:bg-rose-900/40 dark:text-rose-300">
-                          已排外
-                        </span>
-                      </div>
-                      <div class="text-xs text-gray-500 dark:text-gray-400">
-                        数量: {{ seed.count }} | 等级: {{ seed.requiredLevel }} | 占地: {{ seed.plantSize }}x{{ seed.plantSize }}
-                      </div>
-                    </div>
+                  <div class="flex shrink-0 flex-col gap-1">
                     <button
-                      class="h-8 shrink-0 flex items-center gap-1 rounded px-2 text-xs transition"
-                      :class="isBagSeedExcluded(seed.seedId)
-                        ? 'bg-rose-100 text-rose-700 hover:bg-rose-200 dark:bg-rose-900/40 dark:text-rose-300 dark:hover:bg-rose-900/60'
-                        : 'bg-gray-100 text-gray-600 hover:bg-gray-200 dark:bg-gray-700 dark:text-gray-300 dark:hover:bg-gray-600'"
-                      :title="isBagSeedExcluded(seed.seedId) ? '取消种植排外' : '加入种植排外'"
-                      @click.stop="toggleBagSeedExcluded(seed)"
+                      class="rounded p-1 text-gray-400 transition hover:bg-gray-100 hover:text-gray-600 dark:hover:bg-gray-700"
+                      :disabled="index === 0"
+                      @click="moveBagSeed(seed.seedId, -1)"
                     >
-                      <div :class="isBagSeedExcluded(seed.seedId) ? 'i-carbon-checkmark text-sm' : 'i-carbon-subtract-alt text-sm'" />
-                      <span>{{ isBagSeedExcluded(seed.seedId) ? '取消' : '排外' }}</span>
+                      <div class="i-carbon-arrow-up text-sm" />
                     </button>
-                    <div class="flex shrink-0 flex-col gap-1">
-                      <button
-                        class="rounded p-1 text-gray-400 transition hover:bg-gray-100 hover:text-gray-600 dark:hover:bg-gray-700"
-                        :disabled="index === 0"
-                        @click="moveBagSeed(seed.seedId, -1)"
-                      >
-                        <div class="i-carbon-arrow-up text-sm" />
-                      </button>
-                      <button
-                        class="rounded p-1 text-gray-400 transition hover:bg-gray-100 hover:text-gray-600 dark:hover:bg-gray-700"
-                        :disabled="index === sortedBagSeeds.length - 1"
-                        @click="moveBagSeed(seed.seedId, 1)"
-                      >
-                        <div class="i-carbon-arrow-down text-sm" />
-                      </button>
-                    </div>
+                    <button
+                      class="rounded p-1 text-gray-400 transition hover:bg-gray-100 hover:text-gray-600 dark:hover:bg-gray-700"
+                      :disabled="index === sortedBagSeeds.length - 1"
+                      @click="moveBagSeed(seed.seedId, 1)"
+                    >
+                      <div class="i-carbon-arrow-down text-sm" />
+                    </button>
                   </div>
                 </div>
               </div>
             </div>
+          </div>
 
-            <div class="grid grid-cols-2 gap-3 md:grid-cols-4">
-              <BaseInput
-                v-model.number="localStrategySettings.intervals.farmMin"
-                label="农场巡查最小 (秒)"
-                type="number"
-                min="1"
-              />
-              <BaseInput
-                v-model.number="localStrategySettings.intervals.farmMax"
-                label="农场巡查最大 (秒)"
-                type="number"
-                min="1"
-              />
-            </div>
-
-            <div class="grid grid-cols-2 gap-3 md:grid-cols-2">
-              <BaseInput
-                v-model.number="localStrategySettings.intervals.helpMin"
-                label="帮助巡查最小 (秒)"
-                type="number"
-                min="1"
-              />
-              <BaseInput
-                v-model.number="localStrategySettings.intervals.helpMax"
-                label="帮助巡查最大 (秒)"
-                type="number"
-                min="1"
-              />
-            </div>
-
-            <div class="grid grid-cols-2 gap-3 md:grid-cols-2">
-              <BaseInput
-                v-model.number="localStrategySettings.intervals.stealMin"
-                label="偷菜巡查最小 (秒)"
-                type="number"
-                min="1"
-              />
-              <BaseInput
-                v-model.number="localStrategySettings.intervals.stealMax"
-                label="偷菜巡查最大 (秒)"
-                type="number"
-                min="1"
-              />
-            </div>
-
-            <div class="flex flex-wrap items-center gap-4 border-t pt-3 dark:border-gray-700">
-              <BaseSwitch
-                v-model="localStrategySettings.friendQuietHours.enabled"
-                label="启用静默时段"
-              />
-              <div class="flex items-center gap-2">
-                <input
-                  v-model="localStrategySettings.friendQuietHours.start"
-                  type="time"
-                  class="w-20 border border-gray-200 rounded bg-white px-2 py-1 text-xs dark:border-gray-600 dark:bg-gray-800 dark:text-white"
-                  :disabled="!localStrategySettings.friendQuietHours.enabled"
-                >
-                <span class="text-xs text-gray-500">-</span>
-                <input
-                  v-model="localStrategySettings.friendQuietHours.end"
-                  type="time"
-                  class="w-20 border border-gray-200 rounded bg-white px-2 py-1 text-xs dark:border-gray-600 dark:bg-gray-800 dark:text-white"
-                  :disabled="!localStrategySettings.friendQuietHours.enabled"
-                >
-              </div>
-            </div>
-
-            <div class="border-t pt-3 space-y-3 dark:border-gray-700">
-              <h4 class="text-sm text-gray-700 font-medium dark:text-gray-300">
-                种植与偷菜延迟设置
+          <div class="border border-gray-200 rounded-lg bg-white p-4 space-y-4 dark:border-gray-700 dark:bg-gray-800">
+            <div>
+              <h4 class="text-sm text-gray-900 font-semibold dark:text-gray-100">
+                巡查频率
               </h4>
-              <div class="grid grid-cols-1 gap-3 md:grid-cols-3">
-                <BaseSwitch
-                  v-model="localStrategySettings.plantOrderRandom"
-                  label="种植顺序随机"
-                />
-                <BaseInput
-                  v-model.number="localStrategySettings.plantDelaySeconds"
-                  label="种植延迟 (秒)"
-                  type="number"
-                  min="0"
-                />
-                <BaseInput
-                  v-model.number="localStrategySettings.stealDelaySeconds"
-                  label="偷菜延迟 (秒)"
-                  type="number"
-                  min="0"
-                />
+              <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                每种巡查在最小与最大秒数之间随机执行。
+              </p>
+            </div>
+            <div class="grid grid-cols-1 gap-3 md:grid-cols-3">
+              <div class="rounded-lg bg-gray-50 p-3 dark:bg-gray-900/40">
+                <div class="mb-2 flex items-center gap-2 text-sm text-gray-700 font-medium dark:text-gray-300">
+                  <div class="i-carbon-sprout text-green-600 dark:text-green-400" />
+                  农场巡查
+                </div>
+                <div class="grid grid-cols-2 gap-2">
+                  <BaseInput v-model.number="localStrategySettings.intervals.farmMin" label="最小 (秒)" type="number" min="1" />
+                  <BaseInput v-model.number="localStrategySettings.intervals.farmMax" label="最大 (秒)" type="number" min="1" />
+                </div>
+              </div>
+              <div class="rounded-lg bg-gray-50 p-3 dark:bg-gray-900/40">
+                <div class="mb-2 flex items-center gap-2 text-sm text-gray-700 font-medium dark:text-gray-300">
+                  <div class="i-carbon-collaborate text-blue-600 dark:text-blue-400" />
+                  帮助巡查
+                </div>
+                <div class="grid grid-cols-2 gap-2">
+                  <BaseInput v-model.number="localStrategySettings.intervals.helpMin" label="最小 (秒)" type="number" min="1" />
+                  <BaseInput v-model.number="localStrategySettings.intervals.helpMax" label="最大 (秒)" type="number" min="1" />
+                </div>
+              </div>
+              <div class="rounded-lg bg-gray-50 p-3 dark:bg-gray-900/40">
+                <div class="mb-2 flex items-center gap-2 text-sm text-gray-700 font-medium dark:text-gray-300">
+                  <div class="i-carbon-crop-growth text-amber-600 dark:text-amber-400" />
+                  偷菜巡查
+                </div>
+                <div class="grid grid-cols-2 gap-2">
+                  <BaseInput v-model.number="localStrategySettings.intervals.stealMin" label="最小 (秒)" type="number" min="1" />
+                  <BaseInput v-model.number="localStrategySettings.intervals.stealMax" label="最大 (秒)" type="number" min="1" />
+                </div>
               </div>
             </div>
 
-            <div class="flex justify-end gap-2 border-t pt-3 dark:border-gray-700">
-              <BaseButton
-                variant="primary"
-                size="sm"
-                :loading="strategySaving"
-                @click="saveStrategySettings"
-              >
-                保存策略设置
-              </BaseButton>
+            <div class="border-t pt-4 dark:border-gray-700">
+              <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                <BaseSwitch
+                  v-model="localStrategySettings.friendQuietHours.enabled"
+                  label="启用好友互动静默时段"
+                />
+                <div class="grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-2 sm:flex">
+                  <input
+                    v-model="localStrategySettings.friendQuietHours.start"
+                    type="time"
+                    aria-label="静默开始时间"
+                    class="min-w-0 w-full border border-gray-200 rounded-md bg-white px-3 py-2 text-sm sm:w-32 dark:border-gray-600 dark:bg-gray-800 dark:text-white disabled:opacity-50"
+                    :disabled="!localStrategySettings.friendQuietHours.enabled"
+                  >
+                  <span class="text-sm text-gray-400">至</span>
+                  <input
+                    v-model="localStrategySettings.friendQuietHours.end"
+                    type="time"
+                    aria-label="静默结束时间"
+                    class="min-w-0 w-full border border-gray-200 rounded-md bg-white px-3 py-2 text-sm sm:w-32 dark:border-gray-600 dark:bg-gray-800 dark:text-white disabled:opacity-50"
+                    :disabled="!localStrategySettings.friendQuietHours.enabled"
+                  >
+                </div>
+              </div>
             </div>
+          </div>
+
+          <div class="border border-gray-200 rounded-lg bg-white p-4 space-y-3 dark:border-gray-700 dark:bg-gray-800">
+            <h4 class="text-sm text-gray-700 font-medium dark:text-gray-300">
+              种植与偷菜延迟
+            </h4>
+            <div class="grid grid-cols-1 gap-3 md:grid-cols-3">
+              <BaseSwitch
+                v-model="localStrategySettings.plantOrderRandom"
+                label="种植顺序随机"
+              />
+              <BaseInput
+                v-model.number="localStrategySettings.plantDelaySeconds"
+                label="种植延迟 (秒)"
+                type="number"
+                min="0"
+              />
+              <BaseInput
+                v-model.number="localStrategySettings.stealDelaySeconds"
+                label="偷菜延迟 (秒)"
+                type="number"
+                min="0"
+              />
+            </div>
+          </div>
+
+          <div class="flex justify-end gap-2 border-t pt-3 dark:border-gray-700">
+            <BaseButton
+              variant="primary"
+              size="sm"
+              :loading="strategySaving"
+              @click="saveStrategySettings"
+            >
+              保存策略设置
+            </BaseButton>
           </div>
         </div>
+      </div>
 
-        <!-- 自动控制 -->
-        <div v-else-if="activeTab === 'automation'" class="space-y-4">
-          <div class="flex items-center justify-between">
-            <h3 class="text-lg text-gray-900 font-bold dark:text-gray-100">
-              自动控制
-              <span v-if="currentAccountName" class="ml-2 text-sm text-gray-500 font-normal dark:text-gray-400">
-                ({{ currentAccountName }})
-              </span>
-            </h3>
-          </div>
+      <!-- 自动控制 -->
+      <div v-else-if="activeTab === 'automation'" class="space-y-4">
+        <div class="flex items-center justify-between">
+          <h3 class="text-lg text-gray-900 font-bold dark:text-gray-100">
+            自动控制
+            <span v-if="currentAccountName" class="ml-2 text-sm text-gray-500 font-normal dark:text-gray-400">
+              ({{ currentAccountName }})
+            </span>
+          </h3>
+        </div>
 
-          <div v-if="settingsLoading" class="py-4 text-center text-gray-500">
-            <div class="i-svg-spinners-ring-resize mx-auto mb-2 text-2xl" />
-            <p>加载中...</p>
-          </div>
+        <div v-if="settingsLoading" class="py-4 text-center text-gray-500">
+          <div class="i-svg-spinners-ring-resize mx-auto mb-2 text-2xl" />
+          <p>加载中...</p>
+        </div>
 
-          <div v-else-if="!currentAccountId" class="py-8 text-center text-gray-500">
-            <div class="i-carbon-settings-adjust mx-auto mb-2 text-3xl text-gray-400" />
-            <p>请先选择账号</p>
-          </div>
+        <div v-else-if="!currentAccountId" class="py-8 text-center text-gray-500">
+          <div class="i-carbon-settings-adjust mx-auto mb-2 text-3xl text-gray-400" />
+          <p>请先选择账号</p>
+        </div>
 
-            <div v-else class="space-y-4">
-              <!-- 基础开关: 一行多个, 保持整齐 -->
-              <div class="grid grid-cols-1 gap-x-6 gap-y-1 sm:grid-cols-2 lg:grid-cols-3">
+        <div v-else class="space-y-4">
+          <div class="grid grid-cols-1 gap-3 xl:grid-cols-3">
+            <section class="border border-gray-200 rounded-lg bg-white p-4 dark:border-gray-700 dark:bg-gray-800">
+              <div class="mb-3 flex items-center gap-2">
+                <div class="i-carbon-sprout text-green-600 dark:text-green-400" />
+                <h4 class="text-sm text-gray-900 font-semibold dark:text-gray-100">
+                  农场基础
+                </h4>
+              </div>
+              <div class="grid gap-3 2xl:grid-cols-2 sm:grid-cols-2 xl:grid-cols-1">
                 <BaseSwitch v-model="localAutomationSettings.automation.farm" label="自动种植收获" />
                 <BaseSwitch v-model="localAutomationSettings.automation.task" label="自动做任务" />
                 <BaseSwitch v-model="localAutomationSettings.automation.sell" label="自动卖果实" />
                 <BaseSwitch v-model="localAutomationSettings.sellGoldenFruit" label="连黄金果实一起卖" />
-                <BaseSwitch v-model="localAutomationSettings.automation.friend" label="自动好友互动" />
                 <BaseSwitch v-model="localAutomationSettings.automation.farm_push" label="推送触发巡田" />
                 <BaseSwitch v-model="localAutomationSettings.automation.land_upgrade" label="自动升级土地" />
+                <BaseSwitch v-model="localAutomationSettings.automation.skip_own_weed_bug" label="不除自己草虫" />
+              </div>
+            </section>
+
+            <section class="border border-gray-200 rounded-lg bg-white p-4 dark:border-gray-700 dark:bg-gray-800">
+              <div class="mb-3 flex items-center gap-2">
+                <div class="i-carbon-calendar text-rose-600 dark:text-rose-400" />
+                <h4 class="text-sm text-gray-900 font-semibold dark:text-gray-100">
+                  活动任务
+                </h4>
+              </div>
+              <div class="grid gap-3 2xl:grid-cols-2 sm:grid-cols-2 xl:grid-cols-1">
+                <BaseSwitch v-model="localAutomationSettings.automation.star_light_up" :label="autoLabel('star_light_up', '千星游记')" :disabled="isAutomationGated('star_light_up')" />
+                <BaseSwitch v-model="localAutomationSettings.automation.solar_terms" label="节令小礼" />
+                <BaseSwitch v-model="localAutomationSettings.automation.weather_task" :label="autoLabel('weather_task', '雨落成诗采集')" :disabled="isAutomationGated('weather_task')" />
+                <BaseSwitch v-model="localAutomationSettings.automation.weather_research" :label="autoLabel('weather_research', '雨落成诗研究')" :disabled="isAutomationGated('weather_research')" />
+                <BaseSwitch v-model="localAutomationSettings.automation.charity_task" :label="autoLabel('charity_task', '公益小红花')" :disabled="isAutomationGated('charity_task')" />
+                <BaseSwitch v-model="localAutomationSettings.automation.mengchong_task" :label="autoLabel('mengchong_task', '萌宠游记任务')" :disabled="isAutomationGated('mengchong_task')" />
+                <BaseSwitch v-model="localAutomationSettings.automation.mengchong_hunt" :label="autoLabel('mengchong_hunt', '萌宠游记寻宝')" :disabled="isAutomationGated('mengchong_hunt')" />
+                <BaseSwitch v-model="localAutomationSettings.milkTeaEnabled" label="奶茶热销中" />
+              </div>
+            </section>
+
+            <section class="border border-gray-200 rounded-lg bg-white p-4 dark:border-gray-700 dark:bg-gray-800">
+              <div class="mb-3 flex items-center gap-2">
+                <div class="i-carbon-shopping-cart text-amber-600 dark:text-amber-400" />
+                <h4 class="text-sm text-gray-900 font-semibold dark:text-gray-100">
+                  物资与好友
+                </h4>
+              </div>
+              <div class="grid gap-3 2xl:grid-cols-2 sm:grid-cols-2 xl:grid-cols-1">
                 <BaseSwitch v-model="localAutomationSettings.automation.fertilizer_gift" label="自动填充化肥" />
                 <BaseSwitch v-model="localAutomationSettings.automation.fertilizer_buy_organic" label="自动购买有机化肥" />
                 <BaseSwitch v-model="localAutomationSettings.automation.fertilizer_buy_normal" label="自动购买无机化肥" />
                 <BaseSwitch v-model="localAutomationSettings.automation.mystery_shop" label="自动购买神秘商店" />
-                <BaseSwitch v-model="localAutomationSettings.automation.star_light_up" :label="autoLabel('star_light_up', '千星游记自动点亮领取')" :disabled="isAutomationGated('star_light_up')" />
-                <BaseSwitch v-model="localAutomationSettings.automation.solar_terms" label="节令小礼自动领取" />
-                <BaseSwitch v-model="localAutomationSettings.automation.weather_task" :label="autoLabel('weather_task', '雨落成诗：采集瓶+雷雨瓶')" :disabled="isAutomationGated('weather_task')" />
-                <BaseSwitch v-model="localAutomationSettings.automation.weather_research" :label="autoLabel('weather_research', '雨落成诗：气象研究升级')" :disabled="isAutomationGated('weather_research')" />
-                <BaseSwitch v-model="localAutomationSettings.automation.charity_task" :label="autoLabel('charity_task', '公益小红花：礼包+送爱心+分享')" :disabled="isAutomationGated('charity_task')" />
-                <BaseSwitch v-model="localAutomationSettings.automation.mengchong_task" :label="autoLabel('mengchong_task', '萌宠游记：每日任务(礼包/手记/投喂)')" :disabled="isAutomationGated('mengchong_task')" />
-                <BaseSwitch v-model="localAutomationSettings.automation.mengchong_hunt" :label="autoLabel('mengchong_hunt', '萌宠游记：自动寻宝(元气糕700/次)')" :disabled="isAutomationGated('mengchong_hunt')" />
-                <BaseSwitch v-model="localAutomationSettings.milkTeaEnabled" label="奶茶热销中自动经营" />
-                <BaseSwitch v-model="localAutomationSettings.automation.skip_own_weed_bug" label="不除自己草虫" />
+                <BaseSwitch v-model="localAutomationSettings.automation.friend" label="自动好友互动" />
               </div>
-
-              <!-- 需要参数/手动触发的功能: 统一卡片 -->
-              <div class="space-y-3">
-                <!-- 夺宝(抢宝) -->
-                <!-- 已按需求隐藏(2026-10-15): 连同其子模块一起不显示; 恢复时删掉 v-if="false" -->
-                <AutoTaskCard v-if="false"
-                  title="夺宝（抢宝）"
-                  desc="遍历好友，抢夺正在运送的宝藏"
-                >
-                  <template #switch>
-                    <BaseSwitch v-model="localAutomationSettings.automation.rob_treasure" label="启用" />
-                  </template>
-                  <template #params>
-                    <BaseInput
-                      v-model.number="localAutomationSettings.robTreasureIntervalMinutes"
-                      label="检查间隔 (分钟)"
-                      type="number"
-                      min="1"
-                      max="1440"
-                      class="w-32"
-                    />
-                    <BaseInput
-                      v-model.number="localAutomationSettings.robMaxPerRun"
-                      label="每轮最多抢 (个)"
-                      type="number"
-                      min="1"
-                      max="20"
-                      class="w-32"
-                    />
-                    <BaseInput
-                      v-model.number="localAutomationSettings.robDailyLimit"
-                      label="每日上限 (次, 0=不限)"
-                      type="number"
-                      min="0"
-                      max="200"
-                      class="w-36"
-                    />
-                    <BaseButton variant="secondary" size="sm" :loading="treasureRunning" @click="runTreasureNow">
-                      立即执行一次
-                    </BaseButton>
-                  </template>
-                  <!-- 子任务: 每日购买挑战书 -->
-                  <div class="flex flex-wrap items-center gap-3 rounded border border-gray-200 px-2.5 py-2 dark:border-gray-700">
-                    <BaseSwitch v-model="localAutomationSettings.buyBookEnabled" label="每日购买中级挑战书" />
-                    <BaseInput
-                      v-model.number="localAutomationSettings.buyBookCount"
-                      label="每日数量 (个)"
-                      type="number"
-                      min="0"
-                      max="20"
-                      class="w-28"
-                    />
-                    <BaseButton variant="secondary" size="sm" :loading="buyBookRunning" @click="buyBooksNow">
-                      立即购买一次
-                    </BaseButton>
-                    <span v-if="buyBookResult" class="text-xs text-gray-600 dark:text-gray-300">{{ buyBookResult }}</span>
-                  </div>
-                  <template #note>
-                    每次抢夺消耗 1 张挑战书（胜负都算），按对方可博弈资金挑书面值；150 金豆豆/个，游戏每日限购 2 个。
-                    手动夺宝在「萌宠游记 → 夺宝（抢宝）」。
-                  </template>
-                </AutoTaskCard>
-
-                <!-- 秋祈良愿 -->
-                <!-- 已按需求隐藏(2026-10-15): 连同其子模块一起不显示; 恢复时删掉 v-if="false" -->
-                <AutoTaskCard v-if="false"
-                  title="秋祈良愿（9/24 – 10/7）"
-                  desc="每日祈愿领好运奖励（限定种子 / 烟花桶 / 盆栽装扮），可存 5 天，漏领会邮件补发"
-                >
-                  <template #switch>
-                    <BaseSwitch v-model="localAutomationSettings.autumnWishEnabled" label="每日自动祈愿" />
-                  </template>
-                  <template #actions>
-                    <BaseButton variant="secondary" size="sm" :loading="autumnBusy === 'claim'" @click="autumnAction('claim')">
-                      立即祈愿一次
-                    </BaseButton>
-                    <span v-if="autumnResult" class="text-xs text-gray-600 dark:text-gray-300">{{ autumnResult }}</span>
-                  </template>
-                  <!-- 子任务: 放烟花 -->
-                  <div class="flex flex-wrap items-center gap-3 rounded border border-gray-200 px-2.5 py-2 dark:border-gray-700">
-                    <BaseSwitch v-model="localAutomationSettings.fireworkEnabled" label="自动放烟花（每个 +30 经验）" />
-                    <BaseInput
-                      v-model.number="localAutomationSettings.fireworkCount"
-                      label="每日几个"
-                      type="number"
-                      min="0"
-                      max="20"
-                      class="w-24"
-                    />
-                    <select
-                      v-model="localAutomationSettings.fireworkMode"
-                      class="rounded border border-gray-300 bg-white px-2 py-1 text-xs dark:border-gray-600 dark:bg-gray-800"
-                    >
-                      <option value="self">在自己家放</option>
-                      <option value="friend">去好友家放</option>
-                    </select>
-                    <BaseButton variant="secondary" size="sm" :loading="autumnBusy === 'firework'" @click="autumnAction('firework')">
-                      放一个试试
-                    </BaseButton>
-                  </div>
-                  <template #note>
-                    烟花桶来自祈愿奖励，放完会给好友推送社交事件；商城另有「烟花·花好月圆」6 钻石/个。
-                  </template>
-                </AutoTaskCard>
-
-                <!-- 快乐不独享 -->
-                <AutoTaskCard
-                  title="快乐不独享（9/24 – 10/12）"
-                  desc="每日领快乐值 +5，攒够门槛自动领档位奖励"
-                >
-                  <template #switch>
-                    <BaseSwitch v-model="localAutomationSettings.happyShareEnabled" label="启用" />
-                  </template>
-                  <template #actions>
-                    <BaseButton variant="secondary" size="sm" :loading="happyBusy" @click="happyAction">
-                      立即领取一次
-                    </BaseButton>
-                    <span v-if="happyResult" class="text-xs text-gray-600 dark:text-gray-300">{{ happyResult }}</span>
-                  </template>
-                  <template #note>
-                    档位：10 → 化肥4h · 20 → 有机化肥8h · 30 → 点券×50 · 60 → 90042
-                  </template>
-                </AutoTaskCard>
-
-                <!-- 奶茶热销中: 这里只放开关; 操作按钮/参数在左侧栏「奶茶热销中」页面 -->
-                <AutoTaskCard
-                  v-if="localAutomationSettings.milkTeaEnabled"
-                  title="奶茶热销中（10/15 – 11/16）"
-                  desc="自动领收银台收益（满载会暂停营业且不补发）+ 自动制作奶茶（全部果实）+ 自动互动（被雇佣后）"
-                >
-                  <div class="flex flex-wrap items-center gap-3 rounded border border-gray-200 px-2.5 py-2 dark:border-gray-700">
-                    <BaseSwitch v-model="localAutomationSettings.milkTeaCashier" label="自动领收银台收益（核心）" />
-                    <BaseSwitch v-model="localAutomationSettings.milkTeaCraft" label="自动制作奶茶（全部果实）" />
-                    <BaseSwitch v-model="localAutomationSettings.milkTeaAutoInteract" label="自动互动（被雇佣后）" />
-                    <BaseSwitch v-model="localAutomationSettings.milkTeaAutoWage" label="自动领兼职工资（被雇佣后）" />
-                    <BaseSwitch v-model="localAutomationSettings.milkTeaAutoBuySeed" label="每日自动购买森野黄金芽种子（1份/天）" />
-                    <BaseSwitch v-model="localAutomationSettings.milkTeaAutoUpgrade" label="自动升级店铺（营业额达标即升）" />
-                  </div>
-                  <template #note>
-                    手动操作（领收益 / 制作奶茶 / 领工资 / 互动一次）和参数（店名、互动事项）都在左侧栏「奶茶热销中」页面。
-                  </template>
-                </AutoTaskCard>
-
-
-                <!-- 看广告礼包 -->
-                <!-- 已按需求隐藏(2026-10-15): 连同其子模块一起不显示; 恢复时删掉 v-if="false" -->
-                <AutoTaskCard v-if="false"
-                  title="看广告礼包（每日 1 次）"
-                  desc="礼包内容：化肥(1小时)×5。直接走完广告流程领取，不需要真的看广告"
-                >
-                  <template #switch>
-                    <BaseSwitch
-                      v-model="localAutomationSettings.adGiftEnabled"
-                      label="启用"
-                      :disabled="isQQAccount"
-                    />
-                  </template>
-                  <template #actions>
-                    <BaseButton variant="secondary" size="sm" :loading="adGiftBusy" :disabled="isQQAccount" @click="adGiftAction">
-                      {{ adGiftBusy ? '领取中（约 35 秒）…' : '立即领取一次' }}
-                    </BaseButton>
-                    <span v-if="adGiftResult" class="text-xs text-gray-600 dark:text-gray-300">{{ adGiftResult }}</span>
-                  </template>
-                  <template #note>
-                    次数以商城接口为准，领过就不再请求。<template v-if="isQQAccount">⚠ 当前是 QQ 端 —— QQ 小程序没有广告能力，本功能会自动跳过。</template>
-                  </template>
-                </AutoTaskCard>
-              </div>
-            </div>
-
-          <!-- 防封号(低调)模式 -->
-          <div class="space-y-3 rounded border border-amber-200 bg-amber-50 p-3 dark:border-amber-900/40 dark:bg-amber-900/10">
-            <div class="flex flex-wrap items-center justify-between gap-2">
-              <div>
-                <div class="text-sm text-amber-800 font-medium dark:text-amber-300">
-                  防封号（低调模式）
-                </div>
-                <div class="mt-0.5 text-xs text-gray-600 dark:text-gray-400">
-                  不长期在线：在线一小段时间 → 离线一大段时间循环；作物成熟时自动提前上线收取。
-                </div>
-                <div class="mt-1 text-xs text-gray-500 dark:text-gray-400">
-                  与「自动取码」配合：取码只更新 Code，不会打断正在进行的在线会话；离线期间也不会被取码自动拉起。
-                </div>
-              </div>
-              <BaseSwitch v-model="localAutomationSettings.stealthEnabled" label="启用" />
-            </div>
-
-            <div v-if="localAutomationSettings.stealthEnabled" class="space-y-2">
-              <div class="flex flex-wrap items-end gap-3">
-                <BaseInput
-                  v-model.number="localAutomationSettings.stealthOnlineMinMinutes"
-                  label="单次在线最短 (分钟)"
-                  type="number"
-                  min="1"
-                  max="180"
-                />
-                <BaseInput
-                  v-model.number="localAutomationSettings.stealthOnlineMaxMinutes"
-                  label="单次在线最长 (分钟)"
-                  type="number"
-                  min="1"
-                  max="180"
-                />
-              </div>
-              <div class="flex flex-wrap items-end gap-3">
-                <BaseInput
-                  v-model.number="localAutomationSettings.stealthOfflineMinMinutes"
-                  label="离线最短 (分钟)"
-                  type="number"
-                  min="1"
-                  max="1440"
-                />
-                <BaseInput
-                  v-model.number="localAutomationSettings.stealthOfflineMaxMinutes"
-                  label="离线最长 (分钟)"
-                  type="number"
-                  min="1"
-                  max="1440"
-                />
-              </div>
-              <BaseSwitch v-model="localAutomationSettings.stealthWakeForRipe" label="作物成熟时优先上线收取（推荐）" />
-
-              <!-- 实时状态 -->
-              <div class="rounded bg-white p-2 text-xs dark:bg-gray-800">
-                <div class="mb-1 flex items-center justify-between">
-                  <span class="text-gray-500 dark:text-gray-400">当前账号状态</span>
-                  <span v-if="stealthSaveState === 'saving'" class="text-blue-500">正在保存…</span>
-                  <span v-else-if="stealthSaveState === 'error'" class="text-red-500">保存失败：{{ stealthSaveError }}</span>
-                  <span v-else-if="stealthDirty" class="text-amber-600 dark:text-amber-400">有未保存的修改…</span>
-                  <span v-else-if="stealthSaveState === 'saved'" class="text-gray-400">已自动保存 {{ stealthSavedAt }}</span>
-                  <span v-else class="text-gray-400">修改后自动保存</span>
-                </div>
-                <div v-if="stealthStatusError" class="mb-2 rounded bg-red-50 px-2 py-1 text-red-600 dark:bg-red-900/30 dark:text-red-300">
-                  {{ stealthStatusError }}
-                </div>
-                <div v-if="myStealth" class="space-y-1">
-                  <div class="flex flex-wrap items-center gap-2">
-                    <span
-                      class="rounded px-1.5 py-0.5"
-                      :class="myStealth.phase === 'online'
-                        ? 'bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-300'
-                        : myStealth.phase === 'offline'
-                          ? 'bg-gray-200 text-gray-600 dark:bg-gray-700 dark:text-gray-300'
-                          : 'bg-gray-100 text-gray-500 dark:bg-gray-800 dark:text-gray-400'"
-                    >
-                      {{ !myStealth.enabled
-                        ? '未启用'
-                        : myStealth.phase === 'online'
-                          ? '在线中'
-                          : myStealth.phase === 'offline'
-                            ? '离线中'
-                            : '待调度' }}
-                    </span>
-                    <span v-if="myStealth.nextSwitchAt" class="text-gray-600 dark:text-gray-300">
-                      {{ myStealth.phase === 'online' ? '预计' : '预计' }}
-                      {{ fmtClock(myStealth.nextSwitchAt) }} {{ myStealth.phase === 'online' ? '下线' : '上线' }}
-                      ({{ fmtRemain(myStealth.nextSwitchInSec) }}后)
-                    </span>
-                  </div>
-                  <div v-if="myStealth.lastReason" class="text-gray-500 dark:text-gray-400">
-                    {{ myStealth.lastReason }}
-                  </div>
-                  <div v-if="myStealth.ripeness && myStealth.ripeness.nextReadyAt" class="text-gray-400 dark:text-gray-500">
-                    下一批成熟: {{ fmtClock(myStealth.ripeness.nextReadyAt * 1000) }}
-                    <span v-if="myStealth.ripeness.ripeCount > 0">(当前有 {{ myStealth.ripeness.ripeCount }} 块地已成熟)</span>
-                  </div>
-                </div>
-                <div v-else class="text-gray-400 dark:text-gray-500">
-                  暂无状态记录（开启防封号后自动开始计时）
-                </div>
-                <div class="mt-2 flex gap-2 border-t border-gray-100 pt-2 dark:border-gray-700">
-                  <BaseButton variant="secondary" size="sm" :loading="stealthLoading" @click="handleForceStealth('offline')">
-                    立即下线
-                  </BaseButton>
-                  <BaseButton variant="secondary" size="sm" :loading="stealthLoading" @click="handleForceStealth('online')">
-                    立即上线
-                  </BaseButton>
-                </div>
-              </div>
-            </div>
+            </section>
           </div>
 
-          <div v-if="localAutomationSettings.automation.fertilizer_buy_organic || localAutomationSettings.automation.fertilizer_buy_normal" class="space-y-3 rounded bg-green-50 p-3 text-sm dark:bg-green-900/20">
-            <div v-if="localAutomationSettings.automation.fertilizer_buy_organic" class="space-y-2">
-              <div class="font-medium text-green-700 dark:text-green-400">有机化肥设置</div>
-              <div class="flex flex-wrap gap-4">
+          <!-- 需要参数/手动触发的功能: 统一卡片 -->
+          <div class="space-y-3">
+            <!-- 夺宝(抢宝) -->
+            <!-- 已按需求隐藏(2026-10-15): 连同其子模块一起不显示; 恢复时删掉 v-if="false" -->
+            <AutoTaskCard
+              v-if="false"
+              title="夺宝（抢宝）"
+              desc="遍历好友，抢夺正在运送的宝藏"
+            >
+              <template #switch>
+                <BaseSwitch v-model="localAutomationSettings.automation.rob_treasure" label="启用" />
+              </template>
+              <template #params>
                 <BaseInput
-                  v-model.number="localAutomationSettings.fertilizerBuyOrganicCount"
-                  label="购买数量"
+                  v-model.number="localAutomationSettings.robTreasureIntervalMinutes"
+                  label="检查间隔 (分钟)"
                   type="number"
                   min="1"
-                  max="10000"
+                  max="1440"
+                  class="w-32"
                 />
                 <BaseInput
-                  v-model.number="localAutomationSettings.fertilizerBuyOrganicThresholdHours"
-                  label="触发阈值 (小时)"
+                  v-model.number="localAutomationSettings.robMaxPerRun"
+                  label="每轮最多抢 (个)"
                   type="number"
                   min="1"
-                  max="990"
+                  max="20"
+                  class="w-32"
                 />
+                <BaseInput
+                  v-model.number="localAutomationSettings.robDailyLimit"
+                  label="每日上限 (次, 0=不限)"
+                  type="number"
+                  min="0"
+                  max="200"
+                  class="w-36"
+                />
+                <BaseButton variant="secondary" size="sm" :loading="treasureRunning" @click="runTreasureNow">
+                  立即执行一次
+                </BaseButton>
+              </template>
+              <!-- 子任务: 每日购买挑战书 -->
+              <div class="flex flex-wrap items-center gap-3 border border-gray-200 rounded px-2.5 py-2 dark:border-gray-700">
+                <BaseSwitch v-model="localAutomationSettings.buyBookEnabled" label="每日购买中级挑战书" />
+                <BaseInput
+                  v-model.number="localAutomationSettings.buyBookCount"
+                  label="每日数量 (个)"
+                  type="number"
+                  min="0"
+                  max="20"
+                  class="w-28"
+                />
+                <BaseButton variant="secondary" size="sm" :loading="buyBookRunning" @click="buyBooksNow">
+                  立即购买一次
+                </BaseButton>
+                <span v-if="buyBookResult" class="text-xs text-gray-600 dark:text-gray-300">{{ buyBookResult }}</span>
+              </div>
+              <template #note>
+                每次抢夺消耗 1 张挑战书（胜负都算），按对方可博弈资金挑书面值；150 金豆豆/个，游戏每日限购 2 个。
+                手动夺宝在「萌宠游记 → 夺宝（抢宝）」。
+              </template>
+            </AutoTaskCard>
+
+            <!-- 秋祈良愿 -->
+            <!-- 已按需求隐藏(2026-10-15): 连同其子模块一起不显示; 恢复时删掉 v-if="false" -->
+            <AutoTaskCard
+              v-if="false"
+              title="秋祈良愿（9/24 – 10/7）"
+              desc="每日祈愿领好运奖励（限定种子 / 烟花桶 / 盆栽装扮），可存 5 天，漏领会邮件补发"
+            >
+              <template #switch>
+                <BaseSwitch v-model="localAutomationSettings.autumnWishEnabled" label="每日自动祈愿" />
+              </template>
+              <template #actions>
+                <BaseButton variant="secondary" size="sm" :loading="autumnBusy === 'claim'" @click="autumnAction('claim')">
+                  立即祈愿一次
+                </BaseButton>
+                <span v-if="autumnResult" class="text-xs text-gray-600 dark:text-gray-300">{{ autumnResult }}</span>
+              </template>
+              <!-- 子任务: 放烟花 -->
+              <div class="flex flex-wrap items-center gap-3 border border-gray-200 rounded px-2.5 py-2 dark:border-gray-700">
+                <BaseSwitch v-model="localAutomationSettings.fireworkEnabled" label="自动放烟花（每个 +30 经验）" />
+                <BaseInput
+                  v-model.number="localAutomationSettings.fireworkCount"
+                  label="每日几个"
+                  type="number"
+                  min="0"
+                  max="20"
+                  class="w-24"
+                />
+                <select
+                  v-model="localAutomationSettings.fireworkMode"
+                  class="border border-gray-300 rounded bg-white px-2 py-1 text-xs dark:border-gray-600 dark:bg-gray-800"
+                >
+                  <option value="self">
+                    在自己家放
+                  </option>
+                  <option value="friend">
+                    去好友家放
+                  </option>
+                </select>
+                <BaseButton variant="secondary" size="sm" :loading="autumnBusy === 'firework'" @click="autumnAction('firework')">
+                  放一个试试
+                </BaseButton>
+              </div>
+              <template #note>
+                烟花桶来自祈愿奖励，放完会给好友推送社交事件；商城另有「烟花·花好月圆」6 钻石/个。
+              </template>
+            </AutoTaskCard>
+
+            <!-- 快乐不独享 -->
+            <AutoTaskCard
+              title="快乐不独享 S4（10/15 起）"
+              desc="每日领快乐值 +5，攒够门槛自动领档位奖励"
+            >
+              <template #switch>
+                <BaseSwitch v-model="localAutomationSettings.happyShareEnabled" label="启用" />
+              </template>
+              <template #actions>
+                <BaseButton variant="secondary" size="sm" :loading="happyBusy" @click="happyAction">
+                  立即领取一次
+                </BaseButton>
+                <span v-if="happyResult" class="text-xs text-gray-600 dark:text-gray-300">{{ happyResult }}</span>
+              </template>
+              <template #note>
+                档位：10 → 化肥4h · 20 → 有机化肥8h · 30 → 点券×50 · 60 → 90042
+              </template>
+            </AutoTaskCard>
+
+            <!-- 奶茶热销中: 这里只放开关; 操作按钮/参数在左侧栏「奶茶热销中」页面 -->
+            <AutoTaskCard
+              v-if="localAutomationSettings.milkTeaEnabled"
+              title="奶茶热销中（10/15 – 11/16）"
+              desc="自动领收银台收益（满载会暂停营业且不补发）+ 自动制作奶茶（全部果实）+ 自动互动（被雇佣后）"
+            >
+              <div class="flex flex-wrap items-center gap-3 border border-gray-200 rounded px-2.5 py-2 dark:border-gray-700">
+                <BaseSwitch v-model="localAutomationSettings.milkTeaCashier" label="自动领收银台收益（核心）" />
+                <BaseSwitch v-model="localAutomationSettings.milkTeaCraft" label="自动制作奶茶（全部果实）" />
+                <BaseSwitch v-model="localAutomationSettings.milkTeaAutoInteract" label="自动互动（被雇佣后）" />
+                <BaseSwitch v-model="localAutomationSettings.milkTeaAutoWage" label="自动领兼职工资（被雇佣后）" />
+                <BaseSwitch v-model="localAutomationSettings.milkTeaAutoBuySeed" label="每日自动购买森野黄金芽种子（1份/天）" />
+                <BaseSwitch v-model="localAutomationSettings.milkTeaAutoUpgrade" label="自动升级店铺（营业额达标即升）" />
+              </div>
+              <template #note>
+                手动操作（领收益 / 制作奶茶 / 领工资 / 互动一次）和参数（店名、互动事项）都在左侧栏「奶茶热销中」页面。
+              </template>
+            </AutoTaskCard>
+
+            <!-- 看广告礼包 -->
+            <!-- 已按需求隐藏(2026-10-15): 连同其子模块一起不显示; 恢复时删掉 v-if="false" -->
+            <AutoTaskCard
+              v-if="false"
+              title="看广告礼包（每日 1 次）"
+              desc="礼包内容：化肥(1小时)×5。直接走完广告流程领取，不需要真的看广告"
+            >
+              <template #switch>
+                <BaseSwitch
+                  v-model="localAutomationSettings.adGiftEnabled"
+                  label="启用"
+                  :disabled="isQQAccount"
+                />
+              </template>
+              <template #actions>
+                <BaseButton variant="secondary" size="sm" :loading="adGiftBusy" :disabled="isQQAccount" @click="adGiftAction">
+                  {{ adGiftBusy ? '领取中（约 35 秒）…' : '立即领取一次' }}
+                </BaseButton>
+                <span v-if="adGiftResult" class="text-xs text-gray-600 dark:text-gray-300">{{ adGiftResult }}</span>
+              </template>
+              <template #note>
+                次数以商城接口为准，领过就不再请求。<template v-if="isQQAccount">
+                  ⚠ 当前是 QQ 端 —— QQ 小程序没有广告能力，本功能会自动跳过。
+                </template>
+              </template>
+            </AutoTaskCard>
+          </div>
+        </div>
+
+        <!-- 防封号(低调)模式 -->
+        <div class="border border-amber-200 rounded bg-amber-50 p-3 space-y-3 dark:border-amber-900/40 dark:bg-amber-900/10">
+          <div class="flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <div class="text-sm text-amber-800 font-medium dark:text-amber-300">
+                防封号（低调模式）
+              </div>
+              <div class="mt-0.5 text-xs text-gray-600 dark:text-gray-400">
+                不长期在线：在线一小段时间 → 离线一大段时间循环；作物成熟时自动提前上线收取。
+              </div>
+              <div class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                与「自动取码」配合：取码只更新 Code，不会打断正在进行的在线会话；离线期间也不会被取码自动拉起。
               </div>
             </div>
-            <div v-if="localAutomationSettings.automation.fertilizer_buy_normal" class="space-y-2">
-              <div class="font-medium text-green-700 dark:text-green-400">无机化肥设置</div>
-              <div class="flex flex-wrap gap-4">
-                <BaseInput
-                  v-model.number="localAutomationSettings.fertilizerBuyNormalCount"
-                  label="购买数量"
-                  type="number"
-                  min="1"
-                  max="10000"
-                />
-                <BaseInput
-                  v-model.number="localAutomationSettings.fertilizerBuyNormalThresholdHours"
-                  label="触发阈值 (小时)"
-                  type="number"
-                  min="1"
-                  max="990"
-                />
-              </div>
-            </div>
-            <div class="flex flex-wrap gap-4">
+            <BaseSwitch v-model="localAutomationSettings.stealthEnabled" label="启用" />
+          </div>
+
+          <div v-if="localAutomationSettings.stealthEnabled" class="space-y-2">
+            <div class="flex flex-wrap items-end gap-3">
               <BaseInput
-                v-model.number="localAutomationSettings.fertilizerBuyCheckIntervalMinutes"
-                label="检测间隔 (分钟)"
+                v-model.number="localAutomationSettings.stealthOnlineMinMinutes"
+                label="单次在线最短 (分钟)"
+                type="number"
+                min="1"
+                max="180"
+              />
+              <BaseInput
+                v-model.number="localAutomationSettings.stealthOnlineMaxMinutes"
+                label="单次在线最长 (分钟)"
+                type="number"
+                min="1"
+                max="180"
+              />
+            </div>
+            <div class="flex flex-wrap items-end gap-3">
+              <BaseInput
+                v-model.number="localAutomationSettings.stealthOfflineMinMinutes"
+                label="离线最短 (分钟)"
+                type="number"
+                min="1"
+                max="1440"
+              />
+              <BaseInput
+                v-model.number="localAutomationSettings.stealthOfflineMaxMinutes"
+                label="离线最长 (分钟)"
                 type="number"
                 min="1"
                 max="1440"
               />
             </div>
-            <p class="text-xs text-gray-500 dark:text-gray-400">
-              系统会按照设定的检测间隔定时检测化肥容器剩余量，当低于触发阈值时自动购买。保存设置后会立即检测一次。同时开启两种化肥购买时，优先购买有机化肥。
+            <BaseSwitch v-model="localAutomationSettings.stealthWakeForRipe" label="作物成熟时优先上线收取（推荐）" />
+
+            <!-- 实时状态 -->
+            <div class="rounded bg-white p-2 text-xs dark:bg-gray-800">
+              <div class="mb-1 flex items-center justify-between">
+                <span class="text-gray-500 dark:text-gray-400">当前账号状态</span>
+                <span v-if="stealthSaveState === 'saving'" class="text-blue-500">正在保存…</span>
+                <span v-else-if="stealthSaveState === 'error'" class="text-red-500">保存失败：{{ stealthSaveError }}</span>
+                <span v-else-if="stealthDirty" class="text-amber-600 dark:text-amber-400">有未保存的修改…</span>
+                <span v-else-if="stealthSaveState === 'saved'" class="text-gray-400">已自动保存 {{ stealthSavedAt }}</span>
+                <span v-else class="text-gray-400">修改后自动保存</span>
+              </div>
+              <div v-if="stealthStatusError" class="mb-2 rounded bg-red-50 px-2 py-1 text-red-600 dark:bg-red-900/30 dark:text-red-300">
+                {{ stealthStatusError }}
+              </div>
+              <div v-if="myStealth" class="space-y-1">
+                <div class="flex flex-wrap items-center gap-2">
+                  <span
+                    class="rounded px-1.5 py-0.5"
+                    :class="myStealth.phase === 'online'
+                      ? 'bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-300'
+                      : myStealth.phase === 'offline'
+                        ? 'bg-gray-200 text-gray-600 dark:bg-gray-700 dark:text-gray-300'
+                        : 'bg-gray-100 text-gray-500 dark:bg-gray-800 dark:text-gray-400'"
+                  >
+                    {{ !myStealth.enabled
+                      ? '未启用'
+                      : myStealth.phase === 'online'
+                        ? '在线中'
+                        : myStealth.phase === 'offline'
+                          ? '离线中'
+                          : '待调度' }}
+                  </span>
+                  <span v-if="myStealth.nextSwitchAt" class="text-gray-600 dark:text-gray-300">
+                    {{ myStealth.phase === 'online' ? '预计' : '预计' }}
+                    {{ fmtClock(myStealth.nextSwitchAt) }} {{ myStealth.phase === 'online' ? '下线' : '上线' }}
+                    ({{ fmtRemain(myStealth.nextSwitchInSec) }}后)
+                  </span>
+                </div>
+                <div v-if="myStealth.lastReason" class="text-gray-500 dark:text-gray-400">
+                  {{ myStealth.lastReason }}
+                </div>
+                <div v-if="myStealth.ripeness && myStealth.ripeness.nextReadyAt" class="text-gray-400 dark:text-gray-500">
+                  下一批成熟: {{ fmtClock(myStealth.ripeness.nextReadyAt * 1000) }}
+                  <span v-if="myStealth.ripeness.ripeCount > 0">(当前有 {{ myStealth.ripeness.ripeCount }} 块地已成熟)</span>
+                </div>
+              </div>
+              <div v-else class="text-gray-400 dark:text-gray-500">
+                暂无状态记录（开启防封号后自动开始计时）
+              </div>
+              <div class="mt-2 flex gap-2 border-t border-gray-100 pt-2 dark:border-gray-700">
+                <BaseButton variant="secondary" size="sm" :loading="stealthLoading" @click="handleForceStealth('offline')">
+                  立即下线
+                </BaseButton>
+                <BaseButton variant="secondary" size="sm" :loading="stealthLoading" @click="handleForceStealth('online')">
+                  立即上线
+                </BaseButton>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div v-if="localAutomationSettings.automation.fertilizer_buy_organic || localAutomationSettings.automation.fertilizer_buy_normal" class="rounded bg-green-50 p-3 text-sm space-y-3 dark:bg-green-900/20">
+          <div v-if="localAutomationSettings.automation.fertilizer_buy_organic" class="space-y-2">
+            <div class="text-green-700 font-medium dark:text-green-400">
+              有机化肥设置
+            </div>
+            <div class="flex flex-wrap gap-4">
+              <BaseInput
+                v-model.number="localAutomationSettings.fertilizerBuyOrganicCount"
+                label="购买数量"
+                type="number"
+                min="1"
+                max="10000"
+              />
+              <BaseInput
+                v-model.number="localAutomationSettings.fertilizerBuyOrganicThresholdHours"
+                label="触发阈值 (小时)"
+                type="number"
+                min="1"
+                max="990"
+              />
+            </div>
+          </div>
+          <div v-if="localAutomationSettings.automation.fertilizer_buy_normal" class="space-y-2">
+            <div class="text-green-700 font-medium dark:text-green-400">
+              无机化肥设置
+            </div>
+            <div class="flex flex-wrap gap-4">
+              <BaseInput
+                v-model.number="localAutomationSettings.fertilizerBuyNormalCount"
+                label="购买数量"
+                type="number"
+                min="1"
+                max="10000"
+              />
+              <BaseInput
+                v-model.number="localAutomationSettings.fertilizerBuyNormalThresholdHours"
+                label="触发阈值 (小时)"
+                type="number"
+                min="1"
+                max="990"
+              />
+            </div>
+          </div>
+          <div class="flex flex-wrap gap-4">
+            <BaseInput
+              v-model.number="localAutomationSettings.fertilizerBuyCheckIntervalMinutes"
+              label="检测间隔 (分钟)"
+              type="number"
+              min="1"
+              max="1440"
+            />
+          </div>
+          <p class="text-xs text-gray-500 dark:text-gray-400">
+            系统会按照设定的检测间隔定时检测化肥容器剩余量，当低于触发阈值时自动购买。保存设置后会立即检测一次。同时开启两种化肥购买时，优先购买有机化肥。
+          </p>
+        </div>
+
+        <div v-if="localAutomationSettings.automation.friend" class="flex flex-wrap gap-4 rounded bg-blue-50 p-3 text-sm dark:bg-blue-900/20">
+          <BaseSwitch v-model="localAutomationSettings.automation.friend_steal" label="自动偷菜" />
+          <BaseSwitch v-model="localAutomationSettings.automation.friend_help" label="自动帮忙" />
+          <BaseSwitch v-model="localAutomationSettings.automation.friend_bad" label="自动捣乱" />
+          <BaseSwitch v-model="localAutomationSettings.automation.friend_help_exp_limit" label="经验满不帮忙" />
+        </div>
+
+        <div class="space-y-3">
+          <div class="border border-amber-200 rounded bg-amber-50/60 p-3 dark:border-amber-800/60 dark:bg-amber-900/10">
+            <div class="mb-2 text-sm text-amber-800 font-medium dark:text-amber-300">
+              施肥范围
+            </div>
+            <div class="grid grid-cols-2 gap-2 md:grid-cols-4">
+              <label
+                v-for="option in fertilizerLandTypeOptions"
+                :key="option.value"
+                class="flex cursor-pointer items-center gap-1.5 rounded bg-white px-2 py-1 text-xs text-gray-700 dark:bg-gray-800 dark:text-gray-300"
+              >
+                <input
+                  v-model="localAutomationSettings.automation.fertilizer_land_types"
+                  :value="option.value"
+                  type="checkbox"
+                  class="h-3.5 w-3.5"
+                >
+                <span>{{ option.label }}</span>
+              </label>
+            </div>
+            <p class="mt-2 text-xs text-gray-500 dark:text-gray-400">
+              施肥前会优先按土地类型过滤，仅对命中范围的地块执行施肥策略。
             </p>
           </div>
 
-          <div v-if="localAutomationSettings.automation.friend" class="flex flex-wrap gap-4 rounded bg-blue-50 p-3 text-sm dark:bg-blue-900/20">
-              <BaseSwitch v-model="localAutomationSettings.automation.friend_steal" label="自动偷菜" />
-              <BaseSwitch v-model="localAutomationSettings.automation.friend_help" label="自动帮忙" />
-              <BaseSwitch v-model="localAutomationSettings.automation.friend_bad" label="自动捣乱" />
-              <BaseSwitch v-model="localAutomationSettings.automation.friend_help_exp_limit" label="经验满不帮忙" />
-            </div>
+          <BaseSelect
+            v-model="localAutomationSettings.automation.fertilizer"
+            label="施肥策略"
+            :options="fertilizerOptions"
+          />
 
-            <div class="space-y-3">
-              <div class="border border-amber-200 rounded bg-amber-50/60 p-3 dark:border-amber-800/60 dark:bg-amber-900/10">
-                <div class="mb-2 text-sm text-amber-800 font-medium dark:text-amber-300">
-                  施肥范围
-                </div>
-                <div class="grid grid-cols-2 gap-2 md:grid-cols-4">
-                  <label
-                    v-for="option in fertilizerLandTypeOptions"
-                    :key="option.value"
-                    class="flex cursor-pointer items-center gap-1.5 rounded bg-white px-2 py-1 text-xs text-gray-700 dark:bg-gray-800 dark:text-gray-300"
-                  >
-                    <input
-                      v-model="localAutomationSettings.automation.fertilizer_land_types"
-                      :value="option.value"
-                      type="checkbox"
-                      class="h-3.5 w-3.5"
-                    >
-                    <span>{{ option.label }}</span>
-                  </label>
-                </div>
-                <p class="mt-2 text-xs text-gray-500 dark:text-gray-400">
-                  施肥前会优先按土地类型过滤，仅对命中范围的地块执行施肥策略。
-                </p>
-              </div>
+          <div class="flex items-center gap-4">
+            <BaseSwitch
+              v-model="localAutomationSettings.automation.fertilizer_multi_season"
+              label="多季补肥"
+            />
+          </div>
 
-              <BaseSelect
-                v-model="localAutomationSettings.automation.fertilizer"
-                label="施肥策略"
-                :options="fertilizerOptions"
-              />
-
-              <div class="flex items-center gap-4">
-                <BaseSwitch
-                  v-model="localAutomationSettings.automation.fertilizer_multi_season"
-                  label="多季补肥"
-                />
-              </div>
-
-              <div v-if="localAutomationSettings.automation.fertilizer === 'smart'" class="flex flex-wrap gap-4 rounded bg-amber-50 p-3 text-sm dark:bg-amber-900/20">
-                <BaseInput
-                  v-model.number="localAutomationSettings.automation.fertilizer_smart_seconds"
-                  label="快成熟判定秒数"
-                  type="number"
-                  min="30"
-                  max="3600"
-                  class="w-40"
-                />
-                <span class="flex items-end pb-2 text-xs text-gray-500 dark:text-gray-400">
-                  距离成熟时间 ≤ 此秒数时施有机肥（默认300秒=5分钟）
-                </span>
-              </div>
-            </div>
-
-            <div class="flex justify-end gap-2 border-t pt-3 dark:border-gray-700">
-              <BaseButton
-                variant="primary"
-                size="sm"
-                :loading="automationSaving"
-                @click="saveAutomationSettings"
-              >
-                保存自动控制
-              </BaseButton>
-            </div>
+          <div v-if="localAutomationSettings.automation.fertilizer === 'smart'" class="flex flex-wrap gap-4 rounded bg-amber-50 p-3 text-sm dark:bg-amber-900/20">
+            <BaseInput
+              v-model.number="localAutomationSettings.automation.fertilizer_smart_seconds"
+              label="快成熟判定秒数"
+              type="number"
+              min="30"
+              max="3600"
+              class="w-40"
+            />
+            <span class="flex items-end pb-2 text-xs text-gray-500 dark:text-gray-400">
+              距离成熟时间 ≤ 此秒数时施有机肥（默认300秒=5分钟）
+            </span>
+          </div>
         </div>
 
-        <!-- 用户管理 -->
-        <div v-else-if="activeTab === 'user'" class="space-y-4">
-          <h3 class="text-lg text-gray-900 font-bold dark:text-gray-100">
-            用户管理
-          </h3>
+        <div class="flex justify-end gap-2 border-t pt-3 dark:border-gray-700">
+          <BaseButton
+            variant="primary"
+            size="sm"
+            :loading="automationSaving"
+            @click="saveAutomationSettings"
+          >
+            保存自动控制
+          </BaseButton>
+        </div>
+      </div>
 
-          <div class="space-y-4">
-            <div class="border border-gray-200 rounded-lg bg-white p-4 dark:border-gray-700 dark:bg-gray-800">
-              <h4 class="mb-3 flex items-center gap-2 text-base text-gray-900 font-bold dark:text-gray-100">
-                <div class="i-carbon-password" />
-                修改用户密码
-              </h4>
+      <!-- 用户与通知 -->
+      <div v-else-if="activeTab === 'user'" class="space-y-4">
+        <h3 class="text-lg text-gray-900 font-bold dark:text-gray-100">
+          用户与通知
+        </h3>
 
-              <div class="space-y-3">
-                <div class="grid grid-cols-1 gap-3 md:grid-cols-3">
-                  <BaseInput
-                    v-model="passwordForm.old"
-                    label="当前密码"
-                    type="password"
-                    placeholder="当前用户密码"
-                  />
-                  <BaseInput
-                    v-model="passwordForm.new"
-                    label="新密码"
-                    type="password"
-                    placeholder="至少 4 位"
-                  />
-                  <BaseInput
-                    v-model="passwordForm.confirm"
-                    label="确认新密码"
-                    type="password"
-                    placeholder="再次输入新密码"
-                  />
-                </div>
+        <div class="space-y-4">
+          <div class="border border-gray-200 rounded-lg bg-white p-4 dark:border-gray-700 dark:bg-gray-800">
+            <h4 class="mb-3 flex items-center gap-2 text-base text-gray-900 font-bold dark:text-gray-100">
+              <div class="i-carbon-password" />
+              修改用户密码
+            </h4>
 
-                <div class="flex items-center justify-end pt-1">
-                  <BaseButton
-                    variant="primary"
-                    size="sm"
-                    :loading="passwordSaving"
-                    @click="handleChangePassword"
-                  >
-                    修改用户密码
-                  </BaseButton>
-                </div>
-              </div>
-            </div>
-
-            <div class="border border-gray-200 rounded-lg bg-white p-4 dark:border-gray-700 dark:bg-gray-800">
-              <h4 class="mb-3 flex items-center gap-2 text-base text-gray-900 font-bold dark:text-gray-100">
-                <div class="i-carbon-notification" />
-                下线提醒
-              </h4>
-
-              <div class="space-y-3">
-                <div class="grid grid-cols-1 gap-3 sm:grid-cols-2 md:grid-cols-2">
-                  <div class="flex flex-col gap-1.5">
-                    <div class="flex items-center justify-between">
-                      <span class="text-sm text-gray-700 font-medium dark:text-gray-300">推送渠道</span>
-                      <BaseButton
-                        variant="text"
-                        size="sm"
-                        :disabled="!currentChannelDocUrl"
-                        @click="openChannelDocs"
-                      >
-                        官网
-                      </BaseButton>
-                    </div>
-                    <BaseSelect
-                      v-model="localOffline.channel"
-                      :options="channelOptions"
-                    />
-                  </div>
-                  <BaseSelect
-                    v-model="localOffline.reloginUrlMode"
-                    label="重登录链接"
-                    :options="reloginUrlModeOptions"
-                  />
-                </div>
-
+            <div class="space-y-3">
+              <div class="grid grid-cols-1 gap-3 md:grid-cols-3">
                 <BaseInput
-                  v-model="localOffline.endpoint"
-                  label="接口地址"
-                  type="text"
-                  :disabled="localOffline.channel !== 'webhook'"
+                  v-model="passwordForm.old"
+                  label="当前密码"
+                  type="password"
+                  placeholder="当前用户密码"
                 />
-
                 <BaseInput
-                  v-model="localOffline.token"
-                  label="Token"
-                  type="text"
-                  placeholder="接收端 token"
+                  v-model="passwordForm.new"
+                  label="新密码"
+                  type="password"
+                  placeholder="至少 4 位"
                 />
-
-                <div class="grid grid-cols-1 gap-3 sm:grid-cols-2 md:grid-cols-2">
-                  <BaseInput
-                    v-model="localOffline.title"
-                    label="标题"
-                    type="text"
-                    placeholder="提醒标题"
-                  />
-                  <BaseInput
-                    v-model.number="localOffline.offlineDeleteSec"
-                    label="离线删除账号 (秒)"
-                    type="number"
-                    min="0"
-                    placeholder="0 表示不删除"
-                  />
-                </div>
-
                 <BaseInput
-                  v-model="localOffline.msg"
-                  label="内容"
-                  type="text"
-                  placeholder="提醒内容"
+                  v-model="passwordForm.confirm"
+                  label="确认新密码"
+                  type="password"
+                  placeholder="再次输入新密码"
                 />
               </div>
 
-              <div class="mt-4 flex justify-end gap-2 border-t pt-3 dark:border-gray-700">
-                <BaseButton
-                  variant="secondary"
-                  size="sm"
-                  :loading="offlineTesting"
-                  :disabled="offlineSaving"
-                  @click="handleTestOffline"
-                >
-                  测试通知
-                </BaseButton>
+              <div class="flex items-center justify-end pt-1">
                 <BaseButton
                   variant="primary"
                   size="sm"
-                  :loading="offlineSaving"
-                  :disabled="offlineTesting"
-                  @click="handleSaveOffline"
+                  :loading="passwordSaving"
+                  @click="handleChangePassword"
                 >
-                  保存下线提醒设置
+                  修改用户密码
                 </BaseButton>
               </div>
+            </div>
+          </div>
+
+          <div class="border border-gray-200 rounded-lg bg-white p-4 dark:border-gray-700 dark:bg-gray-800">
+            <h4 class="mb-3 flex items-center gap-2 text-base text-gray-900 font-bold dark:text-gray-100">
+              <div class="i-carbon-notification" />
+              下线提醒
+            </h4>
+
+            <div class="space-y-3">
+              <div class="grid grid-cols-1 gap-3 md:grid-cols-2 sm:grid-cols-2">
+                <div class="flex flex-col gap-1.5">
+                  <div class="flex items-center justify-between">
+                    <span class="text-sm text-gray-700 font-medium dark:text-gray-300">推送渠道</span>
+                    <BaseButton
+                      variant="text"
+                      size="sm"
+                      :disabled="!currentChannelDocUrl"
+                      @click="openChannelDocs"
+                    >
+                      官网
+                    </BaseButton>
+                  </div>
+                  <BaseSelect
+                    v-model="localOffline.channel"
+                    :options="channelOptions"
+                  />
+                </div>
+                <BaseSelect
+                  v-model="localOffline.reloginUrlMode"
+                  label="重登录链接"
+                  :options="reloginUrlModeOptions"
+                />
+              </div>
+
+              <BaseInput
+                v-model="localOffline.endpoint"
+                label="接口地址"
+                type="text"
+                :disabled="localOffline.channel !== 'webhook'"
+              />
+
+              <BaseInput
+                v-model="localOffline.token"
+                label="Token"
+                type="text"
+                placeholder="接收端 token"
+              />
+
+              <div class="grid grid-cols-1 gap-3 md:grid-cols-2 sm:grid-cols-2">
+                <BaseInput
+                  v-model="localOffline.title"
+                  label="标题"
+                  type="text"
+                  placeholder="提醒标题"
+                />
+                <BaseInput
+                  v-model.number="localOffline.offlineDeleteSec"
+                  label="离线删除账号 (秒)"
+                  type="number"
+                  min="0"
+                  placeholder="0 表示不删除"
+                />
+              </div>
+
+              <BaseInput
+                v-model="localOffline.msg"
+                label="内容"
+                type="text"
+                placeholder="提醒内容"
+              />
+            </div>
+
+            <div class="mt-4 flex justify-end gap-2 border-t pt-3 dark:border-gray-700">
+              <BaseButton
+                variant="secondary"
+                size="sm"
+                :loading="offlineTesting"
+                :disabled="offlineSaving"
+                @click="handleTestOffline"
+              >
+                测试通知
+              </BaseButton>
+              <BaseButton
+                variant="primary"
+                size="sm"
+                :loading="offlineSaving"
+                :disabled="offlineTesting"
+                @click="handleSaveOffline"
+              >
+                保存下线提醒设置
+              </BaseButton>
             </div>
           </div>
         </div>
