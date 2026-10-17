@@ -78,6 +78,7 @@ const CMD_SHOP_BUY = 1;
 const FIELD_SHOP_BUY = 101;
 
 const STATE_FIELD = 121;    // 主活动状态容器
+const GOLD_ID = 1001;       // 金币
 const MILK_COUPON_ID = 1041; // 奶茶券(活动货币)
 /** 奶茶活动可加工的种子 = **森野系列 8 种**(商店 301~308) →
  *  ⚠ 商店里同时在售的金币果(20522)/经验蘑菇(20523) **不属于本活动**, 不能拿来制作奶茶(用户 2026-10-15 明确)
@@ -360,7 +361,7 @@ const shopBought = new Map();
  *   响应 #172:
  *     #1 日期(时间戳)   #2 奶茶券收益   #3 金币收益   #4 当日总杯数
  *     #5 = repeated {#1 品类, #2 杯数}(今日售卖)     ← 面板"普通奶茶254杯/甜莓750杯…"
- *     #6 = repeated {#1 品类, #2 ?}(产量相关, 暂不懂)
+ *     #6 = repeated {#1 ?, #2 ?}(语义未确认; 各条 #2 合计等于 #4, 不能当作小时销量)
  *     #7 = repeated 雇员记录 { #1 老板{gid,名}, #2 开始时间, #3 时长(秒), #6 班次id,
  *            #8 特长id, #9 特长名, #10 未闭环嵌套字段 }
  *     #8 = repeated 收益物品 {#1 物品id, #2 数量}
@@ -372,11 +373,12 @@ function beijingDayStart(tsSec) {
 
 async function getSalesRecord(dayTs) {
     const st = await getMainStatus().catch(() => null);
-    const base = toInt(dayTs) > 0 ? toInt(dayTs) : beijingDayStart(toInt(st && st.at) || Math.floor(Date.now() / 1000));
+    const requestedAt = toInt(dayTs) > 0 ? toInt(dayTs) : (toInt(st && st.at) || Math.floor(Date.now() / 1000));
+    const base = beijingDayStart(requestedAt);
     const payload = Buffer.concat([encodeVarintField(1, base)]);
     const r = await mainOperate(CMD_SALES_RECORD, 172, payload);
     if (r.errorCode !== 0) return { ok: false, reason: `读取营业记录失败 ${r.reason || `code=${r.errorCode}`}` };
-    const out = { ok: true, day: base, coupon: 0, gold: 0, cups: 0, items: [], hourly: [], currentHourCups: 0, rewards: [], records: [] };
+    const out = { ok: true, day: base, coupon: 0, gold: 0, cups: 0, items: [], rewards: [], records: [] };
     try {
         const rf = parseTop(Buffer.from(r.resultHex || '', 'hex'));
         out.day = toInt((findField(rf, 1) || {}).v) || base;
@@ -388,8 +390,12 @@ async function getSalesRecord(dayTs) {
             if (x.w !== 2) continue;
             const e = parseTop(x.v);
             if (x.f === 5) out.items.push({ id: toInt((findField(e, 1) || {}).v), cups: toInt((findField(e, 2) || {}).v) });
-            else if (x.f === 6) out.hourly.push({ hour: toInt((findField(e, 1) || {}).v), cups: toInt((findField(e, 2) || {}).v) });
-            else if (x.f === 8) out.rewards.push({ id: toInt((findField(e, 1) || {}).v), count: toInt((findField(e, 2) || {}).v) });
+            else if (x.f === 8) {
+                const id = toInt((findField(e, 1) || {}).v);
+                const count = toInt((findField(e, 2) || {}).v);
+                // #2/#3 已分别展示奶茶券和金币；#8 中这两种货币是同一收益的明细，不再重复展示。
+                if (id && id !== GOLD_ID && id !== MILK_COUPON_ID) out.rewards.push({ id, count });
+            }
             else if (x.f === 7) {
                 const info = findField(e, 1);
                 const fi = info && info.w === 2 ? parseTop(info.v) : [];
@@ -399,19 +405,13 @@ async function getSalesRecord(dayTs) {
                     gid: toInt((findField(fi, 1) || {}).v),
                     name: String((findField(fi, 2) || {}).v || ''),
                     startAt: toInt((findField(e, 2) || {}).v),
-                    hours: Math.round((toInt((findField(e, 3) || {}).v) || 0) / 3600),
+                    workSeconds: toInt((findField(e, 3) || {}).v),
                     titleId: toInt((findField(e, 8) || {}).v),
                     titleName: String((findField(e, 9) || {}).v || ''),
                     historyField10: rawFieldSnapshot(w10f),
                 });
             }
         }
-        // 本小时杯数:
-        // ⚠ 实测 20261017-070514(07:05) 的 #6 = [{#1:0, #2:287}, {#1:2, #2:290}] —— 里面**没有 7**,
-        //   所以 #1 不是"几点", 而是"**几小时前**"的索引(0 = 本小时; 缺 1 表示那一小时 0 杯被省略)
-        const hitHour = out.hourly.find((h) => h.hour === 0);
-        out.currentHourCups = hitHour ? hitHour.cups : 0;
-        out.hourly.sort((a, b) => a.hour - b.hour);
         for (const it of out.items) it.name = names.get(it.id) || `品类${it.id}`;
         out.items.sort((a, b) => b.cups - a.cups);
         for (const rw of out.rewards) rw.name = itemLabel(rw.id, rw.count);
@@ -1065,7 +1065,7 @@ function parseWorkFromRefresh(resultHex) {
                     storeName: String((findField(r2, 2) || {}).v || ''),
                     startAt: toInt((findField(r2, 4) || {}).v),
                     endAt: toInt((findField(r2, 5) || {}).v),
-                    hours: Math.round((toInt((findField(r2, 6) || {}).v) || 0) / 3600),
+                    workSeconds: toInt((findField(r2, 6) || {}).v),
                     historyField7: rawFieldSnapshot(w7f),
                     historyField10: rawFieldSnapshot(i10f),
                 });
@@ -1085,10 +1085,6 @@ function parseWorkFromRefresh(resultHex) {
  *   #5 = NPC 店员(101 实习员工 / 102 …)
  * 用途: 雇佣好友时标出可雇佣性(避免 1034140 该雇佣位已有员工在工作)。
  * 注意: #4 列表里包含非本人雇佣的好友, 不能当员工总数。
- */
-/**
- * 菜单(cmd=58) —— 品类 id → 名字(用于营业记录)
- * 结果 #163 = repeated {#1 序号, #2 名称, #4 是否解锁, #5 售价, #6 解锁所需}
  */
 /** 菜单名缓存(品类 → 名字; 5 分钟有效, 减少请求) */
 let menuNamesCache = { at: 0, map: new Map() };

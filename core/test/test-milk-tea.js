@@ -255,6 +255,9 @@ sendImpl = async (service, method, body) => {
         check('刷新历史 #10 保留原始字段',
             history && history.historyField10.field1 === 2
             && history.historyField10.field7 === nestedField7.toString('hex'), history);
+        check('刷新历史工作时长保留真实秒数',
+            history && history.workSeconds === 3600
+            && !Object.prototype.hasOwnProperty.call(history, 'hours'), history);
         check('刷新历史不再产生未证实工资/互动字段',
             history && !Object.prototype.hasOwnProperty.call(history, 'wage')
             && !Object.prototype.hasOwnProperty.call(history, 'interactType')
@@ -270,17 +273,23 @@ sendImpl = async (service, method, body) => {
             varintField(3, 456),
             varintField(4, 789),
             bytesField(5, Buffer.concat([varintField(1, 10), varintField(2, 600)])),
+            bytesField(6, Buffer.concat([varintField(1, 0), varintField(2, 289)])),
+            bytesField(6, Buffer.concat([varintField(1, 2), varintField(2, 500)])),
             bytesField(7, Buffer.concat([
                 bytesField(1, Buffer.concat([
                     varintField(1, 1253397809),
                     bytesField(2, '哈哈'),
                 ])),
                 varintField(2, day + 3600),
-                varintField(3, 7200),
+                varintField(3, 5400),
                 varintField(8, 9001),
                 bytesField(9, '金牌销售'),
                 bytesField(10, Buffer.concat([varintField(1, 40), varintField(2, 40)])),
             ])),
+            bytesField(8, Buffer.concat([varintField(1, 1001), varintField(2, 456)])),
+            bytesField(8, Buffer.concat([varintField(1, 1041), varintField(2, 123)])),
+            bytesField(8, Buffer.concat([varintField(1, 1042), varintField(2, 2)])),
+            bytesField(8, Buffer.concat([varintField(1, 80011), varintField(2, 10)])),
         ]);
         const menu = bytesField(1, Buffer.concat([
             varintField(1, 10),
@@ -302,7 +311,15 @@ sendImpl = async (service, method, body) => {
         check('北京时间当日 00:00 正确写入 #172.#1', toInt((payload && payload.find((x) => x.f === 1) || {}).v) === day);
         check('营业记录解析成功', r.ok === true, r);
         check('收益/杯数解析正确', r.coupon === 123 && r.gold === 456 && r.cups === 789, r);
+        check('不再把未确认的 #6 当作小时销量',
+            !Object.prototype.hasOwnProperty.call(r, 'hourly')
+            && !Object.prototype.hasOwnProperty.call(r, 'currentHourCups'), r);
         check('品类名称由 cmd58 菜单补齐', r.items.length === 1 && r.items[0].name === '普通奶茶', r.items);
+        check('金币和奶茶券不从 #8 重复计入附加奖励',
+            r.rewards.length === 2 && r.rewards.every((x) => x.id !== 1001 && x.id !== 1041), r.rewards);
+        check('雇员工作时长保留真实秒数',
+            r.records.length === 1 && r.records[0].workSeconds === 5400
+            && !Object.prototype.hasOwnProperty.call(r.records[0], 'hours'), r.records[0]);
         check('雇员记录 #10 保留原始字段',
             r.records.length === 1 && r.records[0].historyField10.field1 === 40
             && r.records[0].historyField10.field2 === 40, r.records);
