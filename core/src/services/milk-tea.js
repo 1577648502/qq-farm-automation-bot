@@ -885,14 +885,23 @@ async function interactWithFriend(friendGid, type = WORK_INTERACT_TYPE) {
         }
     }
     const inner = Buffer.concat([encodeVarintField(1, gid), encodeVarintField(2, toInt(type) || WORK_INTERACT_TYPE)]);
-    const payload = Buffer.concat([Buffer.from([0x0a, inner.length]), inner]);
+    // ⚠ 实测抓包(15:46 成功那次): #170 的内容**直接**就是 {#1: gid, #2: type}(8 字节),
+    //   不能再像下面这样多包一层 {#1: <inner>}, 否则服务端收到的是嵌套两层 → 判定异常
+    //   (此前写法: Buffer.concat([Buffer.from([0x0a, inner.length]), inner]) —— 已去掉)
+    const payload = inner;
     // 本班已被服务端拒绝过(1034147) → 记住, 本班内不再尝试
     const shiftKey = toInt((st && st.work && st.work.startAt) || 0);
     const nextTryAt = shiftKey ? (interactCooldown.get(shiftKey) || 0) : 0;
     if (nextTryAt > Date.now()) {
         return { ok: false, skipped: true, reason: `本班暂不可互动(本地冷却中), ${Math.ceil((nextTryAt - Date.now()) / 60000)} 分钟后重试` };
     }
+    log('活动', `奶茶热销中: [互动请求] gid=${gid} type=${toInt(type) || WORK_INTERACT_TYPE} ` +
+        `payload=${payload.toString('hex')} (${payload.length}B)`, { module: 'activity', event: '奶茶热销中', result: 'info' });
     let r = await mainOperate(CMD_WORK_INTERACT, 170, payload);
+    if (!r.ok && r.errorCode !== 0) {
+        log('活动', `奶茶热销中: [互动应答] code=${r.errorCode} reason=${String(r.reason || '').slice(0, 60)} ` +
+            `raw=${String(r.resultHex || '').slice(0, 120) || '(空)'}`, { module: 'activity', event: '奶茶热销中', result: 'warn' });
+    }
     // 自愈: 1034147(本班工作已结束) 通常是"老板/班次在这期间换了" —— 刷新拿新老板重试一次
     if (r.errorCode === 1034147) {
         const st2 = await getMainStatus().catch(() => null);
