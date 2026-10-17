@@ -54,6 +54,21 @@ const employees = ref<any[]>([])
 const sales = ref<any>(null)
 const salesLoading = ref(false)
 const salesDay = ref<number>(0)   // 0 = 今天(由服务端算)
+/** 店铺等级进度(来自 cmd=55: #1 等级 / #2 累计营业额 / #3 下一级所需) */
+const upgradeInfo = ref<any>(null)
+/** 等级进度百分比(0~100) */
+function upgradePercent() {
+  const i = upgradeInfo.value
+  if (!i || !i.ok || !i.required) return 0
+  return Math.max(0, Math.min(100, Math.round((Number(i.revenue) || 0) / Number(i.required) * 100)))
+}
+async function loadUpgradeInfo() {
+  try {
+    const res = await api.post('/api/activity/milk-tea/upgrade-info', {})
+    const d = res.data?.data || {}
+    if (!apiError(res, d)) upgradeInfo.value = d
+  } catch (e: any) { /* 静默: 进度条拿不到不影响主流程 */ }
+}
 const employeesLoading = ref(false)
 /** 我的员工数 —— 取服务端 #161.#1(权威); 列表(#4)含非本人雇佣的好友, 不用于展示员工 */
 const employeeCount = ref(0)
@@ -322,6 +337,7 @@ async function upgradeNow() {
       actionResult.value = `店铺已升级到 Lv${d.level}${d.got && d.got.length ? `，奖励 ${d.got.join('、')}` : ''}`
       toast.success('店铺升级成功')
       await loadStatus()
+      await loadUpgradeInfo()
     } else {
       actionResult.value = d.reason || '升级未成功'
       toast.warning(d.reason || '升级未成功')
@@ -485,6 +501,7 @@ onMounted(() => {
   setTimeout(() => loadHireConfig(), 500)
   setTimeout(() => loadEmployees(), 900)
   setTimeout(() => loadSales(), 1200)
+  setTimeout(() => loadUpgradeInfo(), 1400)
   setTimeout(() => loadShop(), 1000)
 })
 </script>
@@ -557,6 +574,33 @@ onMounted(() => {
           <div class="text-sm text-gray-900 font-medium dark:text-gray-100">{{ fmtTime(status.settleAt) }}</div>
         </div>
         <!-- 顶部只显示员工数量; 员工名单在下方"雇佣好友"卡片里 -->
+        <!-- 店铺等级进度(Lv N → Lv N+1: 累计营业额 / 下一级所需) -->
+        <div class="col-span-2 md:col-span-2">
+          <div class="mb-1 flex items-center justify-between text-xs">
+            <span class="text-gray-500 dark:text-gray-400">
+              店铺等级
+              <span class="ml-1 font-medium text-gray-900 dark:text-gray-100">Lv{{ upgradeInfo && upgradeInfo.ok ? upgradeInfo.level : (status.storeLevel || '—') }}</span>
+              <template v-if="upgradeInfo && upgradeInfo.ok && upgradeInfo.required">
+                <span class="text-gray-400"> → Lv{{ Number(upgradeInfo.level) + 1 }}</span>
+              </template>
+            </span>
+            <span v-if="upgradeInfo && upgradeInfo.ok && upgradeInfo.required" class="text-gray-500 dark:text-gray-400">
+              {{ Number(upgradeInfo.revenue).toLocaleString() }} / {{ Number(upgradeInfo.required).toLocaleString() }}
+              <span class="ml-1 font-medium" :class="upgradePercent() >= 100 ? 'text-emerald-600 dark:text-emerald-400' : 'text-gray-700 dark:text-gray-200'">{{ upgradePercent() }}%</span>
+            </span>
+            <span v-else class="text-gray-400">—</span>
+          </div>
+          <div class="h-2 w-full overflow-hidden rounded bg-gray-200 dark:bg-gray-700">
+            <div
+              class="h-full rounded transition-all"
+              :class="upgradePercent() >= 100 ? 'bg-emerald-500' : 'bg-blue-500'"
+              :style="{ width: upgradePercent() + '%' }"
+            />
+          </div>
+          <div v-if="upgradeInfo && upgradeInfo.ok && upgradeInfo.canUpgrade" class="mt-1 text-[10px] text-emerald-600 dark:text-emerald-400">
+            营业额已达标，可升级（点下方「升级店铺」或等自动升级）
+          </div>
+        </div>
         <div>
           <div class="text-xs text-gray-500 dark:text-gray-400">我雇佣的员工</div>
           <div class="text-sm text-gray-900 font-medium dark:text-gray-100">{{ employeeCount }} 位</div>
