@@ -433,6 +433,15 @@ const byIdx = (i) => FRAMES.find(f => f.idx === i);
             sales.records.slice(0, 2));
     }
 
+    section('4m. 森野黄金芽 = 2×2 作物(缺 size 会触发 1001052)');
+    {
+        const gc2 = require(`${SB}/src/config/gameConfig`);
+        const gold = gc2.getPlantBySeedId(29005);
+        check('森野黄金芽 plant.size = 2', gold && Number(gold.size) === 2, gold && gold.size);
+        const berry = gc2.getPlantBySeedId(20525);
+        check('森野甜莓无 size(按 1×1)', !berry || !berry.size, berry && berry.size);
+    }
+
     section('5. 任务列表');
     {
         const t = await milkTea.getTasks();

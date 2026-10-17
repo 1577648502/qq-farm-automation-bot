@@ -705,7 +705,10 @@ const ACTIVITY_PLANT_FALLBACK = new Map([
     [1020021, { id: 1020021, seed_id: 20021, name: '森野可可豆', fruit: { id: 40021, count: 1 } }],
     [1021435, { id: 1021435, seed_id: 21435, name: '森野柿子', fruit: { id: 41435, count: 1 } }],
     [1020529, { id: 1020529, seed_id: 20529, name: '森野芭乐', fruit: { id: 40529, count: 1 } }],
-    [1029005, { id: 1029005, seed_id: 29005, name: '森野黄金芽', fruit: { id: 49005, count: 1 } }],
+    // ⚠ 森野黄金芽是 **2×2** 作物(用户确认; 同官方表里 黄金·爱心果/黄金·哈哈南瓜 等 size=2 的写法):
+    //    plantSeeds 会读 plant.size → plantSize>1 时 auto_slave=true, 只提交主地块让服务端补齐副地块;
+    //    缺 size 时会按 1×1 提交 → 服务端返回 1001052「选择错误的地块格子」(实际报过)
+    [1029005, { id: 1029005, seed_id: 29005, name: '森野黄金芽', size: 2, fruit: { id: 49005, count: 1 } }],
 ]);
 /** 按种子 id(20525) 找兜底植物 */
 function getFallbackPlantBySeedId(seedId) {
