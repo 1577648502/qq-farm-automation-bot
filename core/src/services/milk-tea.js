@@ -8,18 +8,20 @@
  *     累计营业额达标升级店铺; 奶茶券可买种子/雇人/兑换(消费不减营业额)
  *  3. 好友助力: 雇佣好友得特长加成; 被雇后每班可在「我的工作」互动一次; 班次结束领工资+奖金
  *  4. 宣传加速: 宣传喇叭 → 立即获得基础热卖值对应的 1 小时销售收益(不吃加成)
- * ⚠ 收银台满载会暂停自动营业且**不补发** → 定时领收益(cmd=55)是自动化的核心
+ * ⚠ 收银台满载会暂停自动营业且**不补发** → 定时领收益(cmd=59)是自动化的核心
  *
  * ════════ 协议 (2026-10-15 抓包, 上行已解密实测) ════════
  * 活动组: 2026110101 主活动 / 2026110102 种子商店 / 2026110103 任务 / 2026110104 快乐不独享S4
  * 主活动(0101): **payload 字段 = cmd + 105**, 状态容器 = 活动体 #121.#1
  *   cmd=53 开业     {#158: {#1: "店名"}}
- *   cmd=55 领收益   {#160: ""}            ← 反复使用
- *   cmd=56 工坊加工 {#161: {#1: 1}}
+ *   cmd=55 收银台详情 {#160: ""}
+ *   cmd=56 员工面板 {#161: {#1: selector(普通列表实测=1)}}
  *   cmd=57 雇佣好友 {#162: {#1: {#1: 0, #2: 1, #3: 好友gid}}}
- *   cmd=58 宣传喇叭 {#163: ""}
+ *   cmd=58 配方菜单 {#163: ""}
+ *   cmd=62 制作奶茶 {#167: {#1: packed 果实uid}}
  *   cmd=63 刷新/查询 {#168: ""}
- *   cmd=66 互动     {#171: {#1: 1}}
+ *   cmd=65 互动     {#170: {#1: 好友gid, #2: 互动类型}}
+ *   cmd=66 好友店铺排行 {#171: ""}
  *   cmd=67 班次     {#172: {#1: 时间戳}}
  *   cmd=69 查配方   {#174: {#1: {#1250: 配方id}}}
  *   状态 #121.#1: {#1: 结算时间, #2: 店名, #4: 1, #5: 数值, #15: {#1250: 当前配方}, #16: 时间}
@@ -41,17 +43,16 @@ const SUB_ID = 2026110100;
 
 // 主活动命令
 const CMD_OPEN = 53;        // 确认店名开业
-const CMD_CASHIER = 55;     // 领取收银台收益
-const CMD_CRAFT = 56;       // ⚠ 实际返回「员工列表(好友+NPC店员)」→ 工坊/招募面板(非"加工")
+const CMD_EMPLOYEES = 56;   // 员工列表(好友+NPC店员)
 const CMD_HIRE = 57;        // 雇佣好友(返回班次+特长)
-const CMD_SPEAKER = 58;     // ⚠ 实际返回「9 种配方菜单」→ 菜单查询(非"喇叭")
+const CMD_MENU = 58;        // 配方菜单(9 种配方)
 const CMD_CASHIER_DETAIL = 55;// **收银台详情**(结果 #160: 可领取/明细) —— ⚠ 它**不是领取**, 只是查询
 const CMD_SALES_RECORD = 67;   // **营业记录(按天)**(实测: 字段 #172 = {#1 日期})
 const CMD_UPGRADE_STORE = 61;  // **店铺升级**(实测: 字段 #166, 空 payload)
 const CMD_CLAIM_CASHIER = 59; // **领取收银台收益**(执行) → 响应 #164 = 到账物品(实测 奶茶券×10 + 金币×8648)
 const CMD_CASHIER_INFO = 60;// **收银台查询**: {#1: 容量, #2: 当前待领, #3: 杯数}
 const CMD_REFRESH = 63;     // 刷新/查询
-const CMD_INTERACT = 66;    // ⚠ 实际返回「好友店铺排行(店名+热度)」→ 排行查询(非"互动")
+const CMD_RANKING = 66;     // 好友店铺排行(店名+热度)
 const CMD_WORK_INTERACT = 65;// **互动(我的工作)**: 请求 #170 = {#1: 好友gid, #2: 互动类型}
 const CMD_CLAIM_WAGE = 64;   // **领工资**: 请求 #169 空 → 响应 {#1: {#1: 1041, #2: 120}}(奶茶券×120)
 /**
@@ -152,7 +153,7 @@ function encodeVarint(v) {
 
 /** 解析主活动状态容器 #121.#1 */
 function parseMainState(activityBuf) {
-    const out = { ok: false, storeName: '', value: 0, recipeId: 0, at: 0, nextAt: 0, storeLevel: 0, startAt: 0, endAt: 0, settleAt: 0, workFlag: 0, employed: false };
+    const out = { ok: false, storeName: '', value: 0, recipeId: 0, at: 0, nextAt: 0, storeLevel: 0, startAt: 0, endAt: 0, settleAt: 0 };
     if (!activityBuf || !activityBuf.length) return out;
     try {
         const act = parseTop(activityBuf);
@@ -171,10 +172,6 @@ function parseMainState(activityBuf) {
         out.storeName = nameField && nameField.w === 2 ? nameField.v.toString('utf8') : '';
         out.value = toInt((findField(f, 5) || {}).v);        // 累计营业额
         out.storeLevel = toInt((findField(f, 4) || {}).v);   // 店铺等级(实测 #4; Lv1 时"需等级≥3"的商品点不了)
-        // **受雇标志**(实测 #11): 2026-10-15 晚的抓包(做过互动)里 =1, 早先(未参与员工玩法)的抓包里没有该字段
-        // 说明: 规则里"被雇佣后每班可在【我的工作】互动一次" → 用 #11 作为"是否被雇佣"的判据(待更多样本确认)
-        out.workFlag = toInt((findField(f, 11) || {}).v);
-        out.employed = out.workFlag > 0;
         out.nextAt = toInt((findField(f, 1) || {}).v);
         out.at = toInt((findField(f, 16) || {}).v);
         const recipe = findField(f, 15);
@@ -191,7 +188,6 @@ async function getMainStatus() {
     if (r.errorCode !== 0) return { ok: false, reason: `刷新失败 code=${r.errorCode}` };
     const st = parseMainState(r.activity);
     const work = parseWorkFromRefresh(r.resultHex);
-    if (work.employer && work.employer.gid) lastEmployer = work.employer;
     return { ...st, work, ok: st.ok };
 }
 
@@ -223,28 +219,15 @@ async function claimCashier() {
         } catch (e) { /* 忽略 */ }
     }
     const after = parseMainState(r.activity);
-    const emp = parseEmployerFromCashier(r.resultHex);
-    if (emp && emp.gid) lastEmployer = emp;
     log('活动', `奶茶热销中: 已领取收银台收益${gainedList.length ? ` → ${gainedList.map((x) => x.name).join('、')}` : ''}${after.value ? ` (累计营业额 ${after.value})` : ''}`, {
         module: 'activity', event: '奶茶热销中', result: 'ok',
     });
-    return { ok: true, gained: gainedList, gainedList, value: after.value, before: before && before.value, employer: emp, state: after };
+    return { ok: true, gained: gainedList, gainedList, value: after.value, before: before && before.value, state: after };
 }
 
-/** 工坊加工(把活动果实加工成高级奶茶) */
-async function craft() {
-    const r = await mainOperate(CMD_CRAFT, undefined, encodeUint1(1));
-    if (r.errorCode !== 0) return { ok: false, reason: `加工失败 code=${r.errorCode}` };
-    log('活动', '奶茶热销中: 已提交工坊加工', { module: 'activity', event: '奶茶热销中', result: 'ok' });
-    return { ok: true, state: parseMainState(r.activity) };
-}
-
-/** 宣传喇叭(立即拿 1 小时基础收益) */
+/** 宣传喇叭协议尚未从抓包确认；保留入口，但不发送猜测请求。 */
 async function useSpeaker() {
-    const r = await mainOperate(CMD_SPEAKER, undefined, Buffer.alloc(0));
-    if (r.errorCode !== 0) return { ok: false, reason: `使用宣传喇叭失败 code=${r.errorCode}` };
-    log('活动', '奶茶热销中: 已使用宣传喇叭', { module: 'activity', event: '奶茶热销中', result: 'ok' });
-    return { ok: true, state: parseMainState(r.activity) };
+    return { ok: false, skipped: true, reason: '宣传喇叭协议尚未确认，已禁用' };
 }
 
 /** 开业(确认店名) */
@@ -273,21 +256,13 @@ function encodeVarintField(field, value) {
     return Buffer.concat([Buffer.from([(field << 3) | 0]), encodeVarint(value)]);
 }
 
-/** 我的工作: 每班一次互动 */
-async function interact() {
-    const r = await mainOperate(CMD_INTERACT, undefined, encodeUint1(1));
-    if (r.errorCode !== 0) {
-        // 一行诊断(短): 失败时带上判定依据, 下次直接能看出是"没班次/次数用完/gid不对"哪一种
-        const w0 = (st && st.work) || {};
-        const emp = (w0.employer && w0.employer.gid) || 0;
-        return {
-            ok: false,
-            reason: `互动失败 ${r.reason || `code=${r.errorCode}`}`,
-            diag: `老板${gid}(当前${emp}) 班次${w0.startAt || 0}-${w0.endAt || 0} 次数${w0.interactUsed || 0}/${w0.interactTotal || 0}`,
-        };
+/** 未闭环字段保持原样: varint 转整数, length-delimited 转十六进制。 */
+function rawFieldSnapshot(fields) {
+    const out = {};
+    for (const x of fields || []) {
+        out[`field${x.f}`] = x.w === 0 ? toInt(x.v) : Buffer.from(x.v || []).toString('hex');
     }
-    log('活动', '奶茶热销中: 已完成一次互动', { module: 'activity', event: '奶茶热销中', result: 'ok' });
-    return { ok: true, state: parseMainState(r.activity) };
+    return out;
 }
 
 /** 种子商店列表(0102 cmd=7) */
@@ -387,7 +362,7 @@ const shopBought = new Map();
  *     #5 = repeated {#1 品类, #2 杯数}(今日售卖)     ← 面板"普通奶茶254杯/甜莓750杯…"
  *     #6 = repeated {#1 品类, #2 ?}(产量相关, 暂不懂)
  *     #7 = repeated 雇员记录 { #1 老板{gid,名}, #2 开始时间, #3 时长(秒), #6 班次id,
- *            #8 特长id, #9 特长名, #10 {#1 支付工资, #2 互动售出杯数} }
+ *            #8 特长id, #9 特长名, #10 未闭环嵌套字段 }
  *     #8 = repeated 收益物品 {#1 物品id, #2 数量}
  */
 function beijingDayStart(tsSec) {
@@ -427,8 +402,7 @@ async function getSalesRecord(dayTs) {
                     hours: Math.round((toInt((findField(e, 3) || {}).v) || 0) / 3600),
                     titleId: toInt((findField(e, 8) || {}).v),
                     titleName: String((findField(e, 9) || {}).v || ''),
-                    wage: toInt((findField(w10f, 1) || {}).v),
-                    soldCups: toInt((findField(w10f, 2) || {}).v),
+                    historyField10: rawFieldSnapshot(w10f),
                 });
             }
         }
@@ -714,28 +688,34 @@ function encodePackedVarints(values) {
     return Buffer.concat((Array.isArray(values) ? values : []).map((v) => encodeVarint(v)));
 }
 
-/** 收集背包里所有可加工的果实 uid(只读一次背包) */
+/** 收集背包里所有可加工的果实 uid/count(只读一次背包) */
 async function collectFruitUids() {
     const { getBag, getBagItems } = require('./warehouse');
     const items = getBagItems(await getBag());
     const fruitIds = getCraftableFruitIds();
     const uids = [];
+    const entries = [];
     for (const it of items) {
         if (!fruitIds.includes(toNum(it && it.id))) continue;
         const uid = toNum(it && it.uid);
-        if (uid > 0) uids.push(uid);
+        if (uid > 0) {
+            uids.push(uid);
+            entries.push({ uid, count: toInt(it.count) || 1, itemId: toNum(it.id) });
+        }
     }
-    return { uids, fruitIds };
+    return { uids, entries, fruitIds };
 }
 
 /**
- * 把背包里**所有**活动果实都做成高级奶茶(分批发, 每批 20 个, 批间隔 700ms 防队列打满)
+ * 把背包里**所有**活动果实都做成高级奶茶(分批提交, 批间隔 700ms 防队列打满)
  * @param perBatch 每批提交几个果实 uid
  * @param maxBatches 最多几批(防跑飞)
  */
-// ⚠ 实测客户端(cmd=62 请求)一次只提交 **6 个**果实 uid; 之前用 20 个 → 服务端回 1034149(批次超限/参数错误)
-async function craftAllFruits(perBatch = 6, maxBatches = 50) {
-    let all = { uids: [], fruitIds: [] };
+// 抓包已验证客户端一次提交 8 个果实 uid 并收到 8 条产出；上限仍未知，因此默认按 8 个分批。
+async function craftAllFruits(perBatch = 8, maxBatches = 50) {
+    perBatch = Math.max(1, toInt(perBatch) || 8);
+    maxBatches = Math.max(1, toInt(maxBatches) || 50);
+    let all = { uids: [], entries: [], fruitIds: [] };
     try {
         all = await collectFruitUids();
     } catch (e) {
@@ -743,20 +723,22 @@ async function craftAllFruits(perBatch = 6, maxBatches = 50) {
     }
     if (!all.uids.length) return { ok: false, reason: '背包里没有活动果实(森野系列)，先种再收' };
 
+    const entryByUid = new Map(all.entries.map((x) => [x.uid, x]));
     const made = [];
     let used = 0;         // 投入的"组"数(背包里每个 uid 一组)
     let usedUnits = 0;    // 实际消耗的果实个数
     let batches = 0;
-    let skippedUids = 0;
+    const skippedUids = [];
     for (let i = 0; i < all.uids.length; i += perBatch) {
         if (batches >= maxBatches) break;
         const slice = all.uids.slice(i, i + perBatch);
+        let succeededUids = slice;
         let r = await mainOperateCraft(slice);
         batches += 1;
-        // ⚠ 整批失败时逐个重试: 未解锁的品类会让**整批**被拒(1034149),
-        //   拆成单个提交后, 已解锁的能成功、未解锁的单独失败并跳过
+        // 1034149 的真实触发条件尚未用失败请求/响应闭环确认。
+        // 这里保留整批失败后逐个提交的兜底，用于定位并跳过服务端拒绝的 UID。
         if (r && !r.ok && slice.length > 1) {
-            log('活动', `奶茶热销中: 制作整批失败(${String(r.reason || '').slice(0, 40)}), 改为逐个提交以跳过未解锁品类`, {
+            log('活动', `奶茶热销中: 制作整批失败(${String(r.reason || '').slice(0, 40)}), 改为逐个提交定位失败项`, {
                 module: 'activity', event: '奶茶热销中', result: 'warn',
             });
             const okOnes = [];
@@ -767,21 +749,25 @@ async function craftAllFruits(perBatch = 6, maxBatches = 50) {
                     okOnes.push(one);
                     madeOnes.push(...(r1.made || []));
                 } else {
-                    skippedUids += 1;
+                    skippedUids.push(one);
                 }
                 await sleep(300);
             }
+            succeededUids = okOnes;
             r = okOnes.length
                 ? { ok: true, made: madeOnes, partial: true, okCount: okOnes.length, failCount: slice.length - okOnes.length }
                 : { ok: false, reason: String(r.reason || '全部单个提交均失败') };
         }
         if (!r.ok) {
-            if (batches === 1) return r;            // 第一批就失败 → 直接报错
+            if (slice.length === 1 && !skippedUids.includes(slice[0])) skippedUids.push(slice[0]);
+            if (batches === 1) {
+                return { ...r, used, usedUnits, batches, made, skippedUids };
+            }
             break;                                   // 后续批次失败 → 停手, 但保留已完成的
         }
-        used += slice.length;
+        used += succeededUids.length;
+        usedUnits += succeededUids.reduce((sum, uid) => sum + (entryByUid.get(uid)?.count || 1), 0);
         const batchMade = r.made || [];
-        usedUnits += batchMade.reduce((a, x) => a + (Number(x.count) || 0), 0);
         made.push(...batchMade);
         if (i + perBatch < all.uids.length) await sleep(700);
     }
@@ -794,14 +780,15 @@ async function craftAllFruits(perBatch = 6, maxBatches = 50) {
         agg.set(k, prev);
     }
     const aggText = Array.from(agg.values()).map((x) => `${x.name}×${x.count}`).join('、');
-    log('活动', `奶茶热销中: 已加工 ${used} 组果实(共 ${usedUnits} 个)${aggText ? `: ${aggText}` : ''}`, {
-        module: 'activity', event: '奶茶热销中', result: 'ok', fruits: used, batches,
+    log('活动', `奶茶热销中: 已加工 ${used} 组果实(共 ${usedUnits} 个)${skippedUids.length ? `, 跳过 ${skippedUids.length} 个 UID` : ''}${aggText ? `: ${aggText}` : ''}`, {
+        module: 'activity', event: '奶茶热销中', result: 'ok', fruits: used, batches, skippedUids: skippedUids.length,
     });
-    return { ok: true, used, usedUnits, batches, made, state: null };
+    return { ok: true, used, usedUnits, batches, made, skippedUids, state: null };
 }
 
 /** 提交一批果实 uid 去制作(内部用) */
 async function mainOperateCraft(uids) {
+    await throttle();
     const packed = encodePackedVarints(uids);
     const payload = Buffer.concat([Buffer.from([0x0a, packed.length]), packed]);
     const r = await operateSafe(GROUP_MAIN, CMD_CRAFT_REAL, 167, payload);
@@ -826,17 +813,17 @@ async function mainOperateCraft(uids) {
             }
         } catch (e) { /* 忽略 */ }
     }
-    return { ok: true, made };
+    return { ok: true, made, state: parseMainState(r.activity) };
 }
 
 /**
  * 制作奶茶(cmd=62, 实测 2026-10-15 新抓包):
  *   请求 #167 = {#1: [果实 uid...](packed)} → 响应回产出的高级奶茶 {#1: 物品id, #2: 数量}
  * 果实来源: 背包里 40525/40526/… 这些活动果实(每个实例有独立 uid)
- * @param limit 单次最多提交几个果实(抓包里一次 6 个)
+ * @param limit 单次最多提交几个果实(抓包已验证至少支持 8 个)
  */
-async function craftMilkTea(limit = 10) {
-    await throttle();
+async function craftMilkTea(limit = 8) {
+    limit = Math.max(1, toInt(limit) || 8);
     let items = [];
     try {
         const { getBag, getBagItems } = require('./warehouse');
@@ -847,80 +834,66 @@ async function craftMilkTea(limit = 10) {
     const fruitIds = getCraftableFruitIds();
     const picked = [];
     const usedIds = new Set();
+    let usedUnits = 0;
     for (const it of items) {
         if (picked.length >= limit) break;
         const iid = toNum(it && it.id);
         if (!fruitIds.includes(iid)) continue;
-        usedIds.add(iid);
         const uid = toNum(it && it.uid);
-        if (uid > 0) picked.push(uid);
+        if (uid > 0) {
+            usedIds.add(iid);
+            picked.push(uid);
+            usedUnits += toInt(it.count) || 1;
+        }
     }
     if (!picked.length) return { ok: false, reason: '背包里没有活动果实(森野系列)，先种再收' };
-    const packed = encodePackedVarints(picked);
-    const payload = Buffer.concat([Buffer.from([0x0a, packed.length]), packed]);   // {#1: packed uids}
-    const r = await operateSafe(GROUP_MAIN, CMD_CRAFT_REAL, 167, payload);
-    if (r.errorCode !== 0) return { ok: false, reason: `制作失败 code=${r.errorCode}` };
-    const made = [];
-    if (r.resultHex) {
-        try {
-            const rf = parseTop(Buffer.from(r.resultHex, 'hex'));
-            for (const x of rf) {
-                if (x.f !== 3 || x.w !== 2) continue;
-                const xf = parseTop(x.v);
-                const id = toInt((findField(xf, 1) || {}).v);
-                const count = toInt((findField(xf, 2) || {}).v);
-                if (id) made.push({ id, count, name: itemLabel(id, count) });
-            }
-        } catch (e) { /* 忽略 */ }
-    }
-    log('活动', `奶茶热销中: 已制作奶茶(投入 ${picked.length} 个果实)${made.length ? ` → ${made.map((m) => m.name).join('、')}` : ''}`, {
-        module: 'activity', event: '奶茶热销中', result: 'ok', fruits: picked.length,
+    const r = await mainOperateCraft(picked);
+    if (!r.ok) return { ...r, used: 0, usedUnits: 0, usedFruits: [...usedIds] };
+    const made = r.made || [];
+    log('活动', `奶茶热销中: 已制作奶茶(投入 ${picked.length} 组/共 ${usedUnits} 个果实)${made.length ? ` → ${made.map((m) => m.name).join('、')}` : ''}`, {
+        module: 'activity', event: '奶茶热销中', result: 'ok', fruits: picked.length, usedUnits,
     });
-    return { ok: true, used: picked.length, usedFruits: [...usedIds], made, state: parseMainState(r.activity) };
+    return { ok: true, used: picked.length, usedUnits, usedFruits: [...usedIds], made, state: r.state };
 }
 
 /**
  * 互动(我的工作, cmd=65) —— 被雇佣后每班可互动一次, 影响工资
- * 实测(20261015-211043_互动.jsonl idx=130): 请求 #170 = {#1: 1244632861(好友gid), #2: 5}
- * 响应 = {#1: 5, #2: 1, #4: 90005(称号), #8: {#1: 10000, #3: 40}(工资相关)}
- * 待补: 互动类型(#2)的可选值与各自收益 —— 拿到后按"最优"排序执行
+ * 实测(20261017-154632_互动.jsonl idx=113): 请求 #170 = {#1: 1253397809, #2: 2}
+ * 互动前刷新 #168.#1.#11 = 40, 响应 #8.#3 = 12, 互动后刷新 #11 = 52
+ * ⇒ 当前样本可确认 #8.#3 = 工资变化; #7 / #8.#1 的业务含义仍未确认。
  */
 async function interactWithFriend(friendGid, type = WORK_INTERACT_TYPE) {
     // ⚠ 必须用 toInt 强转成数字: toNum('1229231763') 会**原样返回字符串** → 与数字比较永远不等(踩过)
-    let gid = toInt(friendGid);
-    if (!gid) return { ok: false, reason: '缺少好友 gid(先在页面勾选并保存雇佣好友)' };
-    // ⚠ 前置判断: 互动只属于"**正在进行中的班次**"(【我的工作】的本次兼职)
-    //   —— 判据用刷新(63)结果的 work.active(有当前老板且未到结束时间),
-    //   不要用 #11(它只表示"参与过兼职", 班次结束后仍为 1 → 会误判), 更不能回退到历史记录(会报 本班工作已结束)
+    const requestedGid = toInt(friendGid);
+    // ⚠ 只认刷新(63)结果里的当前雇主；本地结束时间不能作为门槛(服务端曾在 endAt 后仍允许互动)。
     const st = await getMainStatus().catch(() => null);
     if (!st || !st.ok) {
         // 拿不到状态 → 无法确认"是否在被雇佣的班次里" → 不发请求(失败关闭, 别用旧 GID 乱发)
         return { ok: false, skipped: true, reason: '无法确认当前兼职状态(刷新失败), 跳过互动' };
     }
+    let gid = 0;
+    let correctedGid = false;
     {
         const w = st.work || {};
         if (!w.employer || !w.employer.gid) {
-            return { ok: false, skipped: true, reason: '当前没有进行中的兼职(未被雇佣), 不能互动', diag: workDiag(w, gid) };
-        }
-        // ⚠ 不按记录时间窗口拦截(实测窗口过了仍可互动成功), 交给服务端判定 + 冷却兜底
-        if (w.interactTotal > 0 && w.interactUsed >= w.interactTotal) {
-            return { ok: false, skipped: true, reason: `本班互动次数已用完(${w.interactUsed}/${w.interactTotal}), 等下一班`, diag: workDiag(w, gid) };
+            return { ok: false, skipped: true, reason: '当前没有进行中的兼职(未被雇佣), 不能互动', diag: workDiag(w, requestedGid) };
         }
         const liveGid = toInt(w.employer.gid);
-        if (gid !== liveGid) {
-            // 传的 gid 不是当前老板 → 直接纠正为当前老板(避免 1034147)
-            log('活动', `奶茶热销中: 互动目标 gid ${gid} 与当前老板 ${w.employer.gid} 不一致, 已按当前老板执行`, {
-                module: 'activity', event: '奶茶热销中', result: 'warn',
-            });
-            gid = liveGid;
-        }
+        gid = liveGid;
+        correctedGid = !!requestedGid && requestedGid !== liveGid;
+    }
+    if (correctedGid && interactGidCorrection !== `${requestedGid}:${gid}`) {
+        interactGidCorrection = `${requestedGid}:${gid}`;
+        log('活动', `奶茶热销中: 互动目标 gid ${requestedGid} 已纠正为当前老板 ${gid}`, {
+            module: 'activity', event: '奶茶热销中', result: 'warn',
+        });
     }
     const inner = Buffer.concat([encodeVarintField(1, gid), encodeVarintField(2, toInt(type) || WORK_INTERACT_TYPE)]);
     // ⚠ 实测抓包(15:46 成功那次): #170 的内容**直接**就是 {#1: gid, #2: type}(8 字节),
     //   不能再像下面这样多包一层 {#1: <inner>}, 否则服务端收到的是嵌套两层 → 判定异常
     //   (此前写法: Buffer.concat([Buffer.from([0x0a, inner.length]), inner]) —— 已去掉)
     const payload = inner;
-    // 本班已被服务端拒绝过(1034147) → 记住, 本班内不再尝试
+    // 本班已被服务端拒绝过(1034147) → 本地冷却 10 分钟再试
     const shiftKey = toInt((st && st.work && st.work.startAt) || 0);
     const nextTryAt = shiftKey ? (interactCooldown.get(shiftKey) || 0) : 0;
     if (nextTryAt > Date.now()) {
@@ -928,24 +901,10 @@ async function interactWithFriend(friendGid, type = WORK_INTERACT_TYPE) {
     }
     log('活动', `奶茶热销中: [互动请求] gid=${gid} type=${toInt(type) || WORK_INTERACT_TYPE} ` +
         `payload=${payload.toString('hex')} (${payload.length}B)`, { module: 'activity', event: '奶茶热销中', result: 'info' });
-    let r = await mainOperate(CMD_WORK_INTERACT, 170, payload);
+    const r = await mainOperate(CMD_WORK_INTERACT, 170, payload);
     if (!r.ok && r.errorCode !== 0) {
         log('活动', `奶茶热销中: [互动应答] code=${r.errorCode} reason=${String(r.reason || '').slice(0, 60)} ` +
             `raw=${String(r.resultHex || '').slice(0, 120) || '(空)'}`, { module: 'activity', event: '奶茶热销中', result: 'warn' });
-    }
-    // 自愈: 1034147(本班工作已结束) 通常是"老板/班次在这期间换了" —— 刷新拿新老板重试一次
-    if (r.errorCode === 1034147) {
-        const st2 = await getMainStatus().catch(() => null);
-        const newGid = st2 && st2.work && st2.work.employer && st2.work.employer.gid;
-        if (newGid && newGid !== gid) {
-            log('活动', `奶茶热销中: 互动目标已变更(${gid} → ${newGid}), 用新老板重试一次`, {
-                module: 'activity', event: '奶茶热销中', result: 'warn',
-            });
-            gid = newGid;
-            const inner2 = Buffer.concat([encodeVarintField(1, gid), encodeVarintField(2, toInt(type) || WORK_INTERACT_TYPE)]);
-            const payload2 = Buffer.concat([Buffer.from([0x0a, inner2.length]), inner2]);
-            r = await mainOperate(CMD_WORK_INTERACT, 170, payload2);
-        }
     }
     if (r.errorCode === 1034147) {
         if (shiftKey) interactCooldown.set(shiftKey, Date.now() + INTERACT_COOLDOWN_MS);
@@ -953,7 +912,7 @@ async function interactWithFriend(friendGid, type = WORK_INTERACT_TYPE) {
         return {
             ok: false,
             skipped: true,
-            reason: `本班暂不可互动(${r.reason || 'code=1034147'}), 本地冷却 30 分钟后重试`,
+            reason: `本班暂不可互动(${r.reason || 'code=1034147'}), 本地冷却 10 分钟后重试`,
             diag: workDiag((st && st.work) || {}, gid),
         };
     }
@@ -964,24 +923,45 @@ async function interactWithFriend(friendGid, type = WORK_INTERACT_TYPE) {
     if (r.resultHex) {
         try {
             const rf = parseTop(Buffer.from(r.resultHex, 'hex'));
-            const wage = findField(rf, 8);
+            const effect7 = findField(rf, 7);
+            const effect8 = findField(rf, 8);
+            const effect8Fields = effect8 && effect8.w === 2 ? parseTop(effect8.v) : [];
+            const changeField = findField(effect8Fields, 3);
+            const before = toInt((st.work && st.work.wage) || 0);
+            const change = changeField ? toInt(changeField.v) : null;
+            const snapshot = (field) => {
+                if (!field || field.w !== 2) return null;
+                const out = {};
+                for (const x of parseTop(field.v)) {
+                    out[x.f] = x.w === 0 ? toInt(x.v) : Buffer.from(x.v || []).toString('hex');
+                }
+                return out;
+            };
             result = {
                 type: toInt((findField(rf, 1) || {}).v),
                 titleId: toInt((findField(rf, 4) || {}).v),
-                wage: wage && wage.w === 2
-                    ? { base: toInt((findField(parseTop(wage.v), 1) || {}).v), extra: toInt((findField(parseTop(wage.v), 3) || {}).v) }
-                    : null,
+                wage: change === null
+                    ? null
+                    : {
+                        before: before > 0 ? before : null,
+                        after: before > 0 ? before + change : null,
+                        change,
+                    },
+                effects: {
+                    field7: snapshot(effect7),
+                    field8: snapshot(effect8),
+                },
             };
         } catch (e) { /* 忽略 */ }
     }
-    // 互动结果里带工资信息(实测 #170.#8 = {#1 底薪?, #2/#3 工资/加成}) → 日志带上, 便于核对类型效果
-    const wageTxt = result && result.wage
-        ? `, 工资${toInt(result.wage.extra) >= 0 ? '+' : ''}${toInt(result.wage.extra)}`
+    const wageTxt = result && result.wage && result.wage.change !== null
+        ? `, 工资${result.wage.before !== null ? ` ${result.wage.before}→${result.wage.after}` : ''}` +
+          `(${result.wage.change >= 0 ? '+' : ''}${result.wage.change})`
         : '';
     log('活动', `奶茶热销中: 已与好友 ${gid} 互动(${interactNameOf(toInt(type) || WORK_INTERACT_TYPE)}${wageTxt})`, {
         module: 'activity', event: '奶茶热销中', result: 'ok', friendGid: gid, type: toInt(type) || WORK_INTERACT_TYPE,
     });
-    return { ok: true, friendGid: gid, interact: result };
+    return { ok: true, friendGid: gid, correctedGid, interact: result };
 }
 
 /**
@@ -1008,33 +988,16 @@ async function claimWage() {
     return { ok: true, gained, state: parseMainState(r.activity) };
 }
 
-/** 我的工作(兼职)信息: 从收银台结果里解析**雇主**(兼职记录 #1.#9.#11 = {#1: gid, #2: 名字}) */
-function parseEmployerFromCashier(resultHex) {
-    if (!resultHex) return null;
-    try {
-        const rf = parseTop(Buffer.from(resultHex, 'hex'));
-        const box = findField(rf, 1);
-        const inner = box && box.w === 2 ? parseTop(box.v) : rf;
-        const rec = findField(inner, 9);
-        if (!rec || rec.w !== 2) return null;
-        const r2 = parseTop(rec.v);
-        const fr = findField(r2, 11);
-        if (!fr || fr.w !== 2) return null;
-        const f2 = parseTop(fr.v);
-        const gid = toInt((findField(f2, 1) || {}).v);
-        return gid > 0 ? { gid, name: String(((findField(f2, 2) || {}).v || '').toString?.() || '') } : null;
-    } catch (e) { return null; }
-}
-
 /**
  * 解析"我的工作"信息 —— 来自**刷新(cmd=63)的结果 #168**(权威来源, 实测 2026-10-16):
  *   #168.#1 = 本次兼职(进行中): #1 = {gid, 名字} = **当前老板**, #2 店名, #3 班次id,
- *             #4/#5 我的特长, #6/#7 班次起止, #11 工资, #13 = {#1 已完成班次, #2 累计奖金}
+ *             #4/#5 我的特长, #6/#7 班次起止, #11 工资, #12 = 本班最近一次互动记录,
+ *             #13 = {#1 已完成班次, #2 累计奖金}
  *   #168.#2 = 兼职记录(历史, repeated)   #168.#3/#4 = 我的特长 id/名称
  * ⚠ 互动(cmd=65)要传的 gid = 这里 #1.#1.#1(当前老板); 别从收银台详情(55)的历史记录取(踩过, 取到旧班次)
  */
 function parseWorkFromRefresh(resultHex) {
-    const out = { ok: false, employer: null, storeName: '', startAt: 0, endAt: 0, wage: 0, bonus: 0, titleId: 0, titleName: '', records: [], active: false, interactUsed: 0, interactTotal: 0, canInteract: false };
+    const out = { ok: false, employer: null, storeName: '', startAt: 0, endAt: 0, wage: 0, bonus: 0, titleId: 0, titleName: '', records: [], active: false, lastInteraction: null };
     if (!resultHex) return out;
     try {
         const rf = parseTop(Buffer.from(resultHex, 'hex'));
@@ -1057,24 +1020,25 @@ function parseWorkFromRefresh(resultHex) {
             out.startAt = toInt((findField(c, 6) || {}).v);
             out.endAt = toInt((findField(c, 7) || {}).v);
             out.wage = toInt((findField(c, 11) || {}).v);
-            // 本班"工作事项"次数: #12 = {#1 已用, #2 总数} —— 实测互动后才会出现(08:04 无 → 09:04 有 {1,1})
+            // #12 = 本班最近一次互动记录: #1 类型, #2 次数, #3 特长id, #4 时间。
+            // 它不是次数配额；旧包只有 #1=1 时也不能据此拦截后续互动。
             const t12 = findField(c, 12);
             if (t12 && t12.w === 2) {
                 const f12 = parseTop(t12.v);
-                out.interactUsed = toInt((findField(f12, 1) || {}).v);
-                out.interactTotal = toInt((findField(f12, 2) || {}).v);
+                out.lastInteraction = {
+                    type: toInt((findField(f12, 1) || {}).v),
+                    count: toInt((findField(f12, 2) || {}).v),
+                    titleId: toInt((findField(f12, 3) || {}).v),
+                    at: toInt((findField(f12, 4) || {}).v),
+                };
             }
             const t13 = findField(c, 13);
             if (t13 && t13.w === 2) out.bonus = toInt((findField(parseTop(t13.v), 2) || {}).v);
             out.ok = !!out.employer;
             // "进行中的班次" = 有本次兼职 && (没给结束时间 或 现在还没到结束时间)
-            const nowSec = Math.floor(Date.now() / 1000);
             // active = 有当前老板(兼职记录第一条存在) —— ⚠ 不用记录的时间窗口判断:
             // 实测 09:04 那次, 记录的 endAt 已过但互动仍成功(服务端有自己的判定), 用窗口会误杀
             out.active = !!out.employer;
-            // canInteract = 有当前老板 && 本班次数没用完(若服务端回了次数)
-            out.canInteract = out.active && (out.interactTotal <= 0 || out.interactUsed < out.interactTotal);
-            void nowSec;
         }
         const t = findField(rf, 3);
         if (t && t.w === 0) out.titleId = toInt(t.v);
@@ -1089,9 +1053,8 @@ function parseWorkFromRefresh(resultHex) {
             const gid2 = toInt((findField(e2, 1) || {}).v);
             const nm2 = (findField(e2, 2) || {}).v;
             if (gid2 > 0) {
-                // 每条兼职记录: #2 店名 / #4,#5 起止 / #6 工作时长 / #7 = {#1?, #2 支付工资}
-                // #10 = 该班的互动记录(实测 {#1 类型, ..., #7 = {#1?, #2 加成}})
-                // ⚠ 工资取 #7.#1(实测: 记录里 #7 = {40, 80}, 而游戏"雇员记录"显示"支付工资 +40" → #1 才对)
+                // 每条兼职记录: #2 店名 / #4,#5 起止 / #6 工作时长。
+                // #7/#10 的业务语义尚未由抓包闭环，保留原始字段供后续核对。
                 const w7 = findField(r2, 7);
                 const w7f = w7 && w7.w === 2 ? parseTop(w7.v) : [];
                 const i10 = findField(r2, 10);
@@ -1103,24 +1066,25 @@ function parseWorkFromRefresh(resultHex) {
                     startAt: toInt((findField(r2, 4) || {}).v),
                     endAt: toInt((findField(r2, 5) || {}).v),
                     hours: Math.round((toInt((findField(r2, 6) || {}).v) || 0) / 3600),
-                    wage: toInt((findField(w7f, 1) || {}).v),
-                    interactType: toInt((findField(i10f, 1) || {}).v),
-                    interactBonus: toInt((findField(parseTop((findField(i10f, 7) || {}).v || Buffer.from([])) || [], 2) || {}).v),
+                    historyField7: rawFieldSnapshot(w7f),
+                    historyField10: rawFieldSnapshot(i10f),
                 });
             }
         }
     } catch (e) { /* 忽略 */ }
-    // #2 = 兼职历史记录(老板/时长/工资/互动), 仅用于展示"雇员记录", **不覆盖** employer
+    // #2 = 兼职历史记录(老板/时长及未闭环字段), 仅用于展示, **不覆盖** employer
     return out;
 }
 
 /**
  * 员工/雇佣面板(cmd=56) —— 结果 #161:
- *   #1 状态, #2 时薪(40), #3 = 600
+ *   请求 #1 = selector(普通列表实测为 1)
+ *   #1 响应 selector(与请求一致, 抓包见过 1/3), #2/#3 业务语义尚未闭环
  *   #4 = **好友员工列表**(repeated): #1 = {gid, 昵称, 等级}, #3/#4 = 该员工特长(9001 金牌销售…),
  *        #5 状态(1=在岗), #6 换班/下班时间, #7 上一班次
  *   #5 = NPC 店员(101 实习员工 / 102 …)
- * 用途: ①页面展示"我的员工" ②雇佣好友时标出"已雇佣"(避免 1034140 该雇佣位已有员工在工作)
+ * 用途: 雇佣好友时标出可雇佣性(避免 1034140 该雇佣位已有员工在工作)。
+ * 注意: #4 列表里包含非本人雇佣的好友, 不能当员工总数。
  */
 /**
  * 菜单(cmd=58) —— 品类 id → 名字(用于营业记录)
@@ -1132,7 +1096,7 @@ async function getMenuNames(force = false) {
     if (!force && menuNamesCache.at && Date.now() - menuNamesCache.at < 5 * 60 * 1000) return menuNamesCache.map;
     const map = new Map();
     try {
-        const r = await mainOperate(CMD_SPEAKER, 163, Buffer.alloc(0));
+        const r = await mainOperate(CMD_MENU, 163, Buffer.alloc(0));
         if (r.resultHex) {
             for (const x of parseTop(Buffer.from(r.resultHex, 'hex'))) {
                 if (x.w !== 2) continue;
@@ -1147,63 +1111,19 @@ async function getMenuNames(force = false) {
     return map;
 }
 
-/**
- * 营业记录(cmd=55 收银台详情) —— 实测字段(2026-10-16 抓包):
- *   #2 累计营业额   #11 时间   #19 = {货币id, 数量}(余额)   #21 = {0, 累计杯数}
- *   #23 = {货币id, 待领取}    #25 = repeated {品类, 收益}  ← 各品类营业额
- */
-async function getSalesRecords() {
-    const r = await mainOperate(CMD_CASHIER_DETAIL, 160, Buffer.alloc(0));
-    if (!r.ok) {
-        const why = r.reason || `code=${r.errorCode}`;
-        log('活动', `奶茶热销中: 读取营业记录失败 — ${why}`, { module: 'activity', event: '奶茶热销中', result: 'warn' });
-        return { ok: false, reason: why };
-    }
-    const out = { ok: true, value: 0, cups: 0, items: [], cupsByItem: [], balances: [], pending: null, at: 0, records: [] };
-    try {
-        const rf = parseTop(Buffer.from(r.resultHex || '', 'hex'));
-        const box = findField(rf, 1);
-        const inner = box && box.w === 2 ? parseTop(box.v) : rf;
-        const names = await getMenuNames();
-        // 品类名回填(杯数表用菜单名)
-
-        for (const x of inner) {
-            if (x.w !== 2) continue;
-            const sub = parseTop(x.v);
-            const a = toInt((findField(sub, 1) || {}).v);
-            const b = toInt((findField(sub, 2) || {}).v);
-            if (x.f === 25) out.items.push({ id: a, name: names.get(a) || `品类${a}`, revenue: b });
-            else if (x.f === 19) out.balances.push({ id: a, name: itemLabel(a, b), count: b });
-            else if (x.f === 20) out.cupsByItem.push({ id: a, name: `品类${a}`, cups: b });
-            else if (x.f === 23) out.pending = { id: a, name: itemLabel(a, b), count: b };
-        }
-        const flatFields = new Map();
-        for (const x of inner) if (x.w === 0) flatFields.set(x.f, x.v);
-        out.value = toInt(flatFields.get(2));
-        out.at = toInt(flatFields.get(11));
-        const c21 = findField(inner, 21);
-        if (c21 && c21.w === 2) out.cups = toInt((findField(parseTop(c21.v), 2) || {}).v);
-        out.items.sort((p1, p2) => p2.revenue - p1.revenue);
-        for (const c of out.cupsByItem) c.name = names.get(c.id) || `品类${c.id}`;
-        out.cupsByItem.sort((a, b) => b.cups - a.cups);
-        // 雇员记录: 来自刷新(63)的 #168.#2(与游戏"雇员记录"面板一致)
-        const st = await getMainStatus().catch(() => null);
-        if (st && st.work && Array.isArray(st.work.records)) out.records = st.work.records.slice(0, 8);
-    } catch (e) {
-        return { ok: false, reason: `解析营业记录失败: ${e.message}` };
-    }
-    return out;
+/** 兼容旧调用名；营业记录统一走 cmd=67/#172，传入北京时间当日 00:00。 */
+async function getSalesRecords(dayTs) {
+    return getSalesRecord(dayTs);
 }
 
 async function getEmployees() {
-    const r = await mainOperate(CMD_CRAFT, 161, Buffer.alloc(0));
+    const r = await mainOperate(CMD_EMPLOYEES, 161, encodeVarintField(1, 1));
     if (!r.ok && r.errorCode !== 0) return { ok: false, reason: r.reason || `员工列表失败 code=${r.errorCode}` };
     const friends = [];
     const npcs = [];
     if (r.resultHex) {
         try {
             const rf = parseTop(Buffer.from(r.resultHex, 'hex'));
-            const wage = toInt((findField(rf, 2) || {}).v);
             for (const x of rf) {
                 if (x.w !== 2) continue;
                 if (x.f === 4) {
@@ -1232,23 +1152,28 @@ async function getEmployees() {
                     });
                 }
             }
-            return { ok: true, wage, count: toInt((findField(rf, 1) || {}).v), friends, npcs };
+            return {
+                ok: true,
+                selector: toInt((findField(rf, 1) || {}).v),
+                field2: toInt((findField(rf, 2) || {}).v),
+                field3: toInt((findField(rf, 3) || {}).v),
+                friends,
+                npcs,
+            };
         } catch (e) {
             return { ok: false, reason: `解析员工列表失败: ${e.message}` };
         }
     }
-    return { ok: true, wage: 0, count: 0, friends, npcs };
+    return { ok: true, selector: 0, field2: 0, field3: 0, friends, npcs };
 }
 
 /**
- * 收银台详情(cmd=55) —— **查询**用: 结果 #160 内含可领取与**兼职雇主**(#1.#9.#11 = {gid, 名字})
+ * 收银台详情(cmd=55) —— **查询**用: 结果 #160 内含可领取信息
  * 注意: 实测它不会发放任何东西(别当领取用, 踩过)
  */
 async function getCashierDetail() {
     const r = await mainOperate(CMD_CASHIER_DETAIL, 160, Buffer.alloc(0));
     if (r.errorCode !== 0) return { ok: false, reason: `收银台详情失败 code=${r.errorCode}` };
-    const emp = parseEmployerFromCashier(r.resultHex);
-    if (emp && emp.gid) lastEmployer = emp;
     let claimable = null;
     if (r.resultHex) {
         try {
@@ -1262,7 +1187,7 @@ async function getCashierDetail() {
             }
         } catch (e) { /* 忽略 */ }
     }
-    return { ok: true, employer: emp, claimable, at: Date.now() };
+    return { ok: true, claimable, at: Date.now() };
 }
 
 /**
@@ -1409,8 +1334,10 @@ function interactNameOf(type) {
 
 /** 互动判定用的诊断串(短), 用于日志里一眼看清各判据的实际取值 */
 function workDiag(w, gid) {
-    const nowSec = Math.floor(Date.now() / 1000);
-    return `老板${gid}/当前${(w && w.employer && w.employer.gid) || 0} 班次${(w && w.startAt) || 0}-${(w && w.endAt) || 0} now${nowSec} 次数${(w && w.interactUsed) || 0}/${(w && w.interactTotal) || 0}`;
+    const last = w && w.lastInteraction;
+    return `传入${gid || 0}/当前${(w && w.employer && w.employer.gid) || 0} ` +
+        `班次${(w && w.startAt) || 0}-${(w && w.endAt) || 0} ` +
+        `最近互动=${last ? `type${last.type}/count${last.count}/at${last.at}` : '无'}`;
 }
 
 /** 已被服务端判定"本班不能互动"的班次(按班次开始时间记, 本班内不再重试) */
@@ -1431,12 +1358,11 @@ function stepGap() {
 
 let lastSeedBuyDay = '';
 let interactSkipLoggedShift = 0;   // 已记录过"本班暂不可互动"的班次(避免每 10 分钟刷一条)    // 每日兑换种子的日期标记(服务器日期)
-const interactCooldown = new Map();   // 班次key → 下次可尝试时间(30 分钟, 班次资格可能中途变化)
+let interactGidCorrection = '';    // 同一个错误 GID 只提示一次
+const interactCooldown = new Map();   // 班次key → 下次可尝试时间(只在服务端返回 1034147 后写 10 分钟)
 // 实测(2026-10-16 23:05): 同一班次同一 payload, 距班次开始 5 分钟被拒(1034147)、17 分钟成功
 // → 互动需等班次开始一段时间后才解锁(阈值协议里没有字段), 因此用"班次内定期重试"代替猜阈值
 const INTERACT_COOLDOWN_MS = 10 * 60 * 1000;
-/** 最近一次探测到的雇主(兼职记录里的老板) */
-let lastEmployer = null;
 const HIRE_BACKOFF_MS = 30 * 60 * 1000;
 function isHireAlreadyError(msg) {
     const t = String(msg || '');
@@ -1480,10 +1406,6 @@ async function runMilkTea(opts = {}) {
         out.steps.push({ step: 'autoTask', ...r });
         await stepGap();
     }
-    if (opts.fetchEmployer !== false) {
-        const d = await getCashierDetail().catch(() => null);
-        if (d && d.ok) out.steps.push({ step: 'cashierDetail', employer: d.employer, claimable: d.claimable });
-    }
     if (doCashier) {
         const r = await claimCashier();
         out.steps.push({ step: 'cashier', ...r });
@@ -1499,23 +1421,10 @@ async function runMilkTea(opts = {}) {
         out.steps.push({ step: 'speaker', ...r });
         await stepGap();
     }
-    // 互动/领工资都需要"被雇佣": 雇主 GID 优先用配置, 没配就用收银台结果里探测到的(兼职记录里的老板)
-    // ⚠ 雇主只认"当前进行中的班次"(刷新 63 结果的 work.employer) ——
-    //   不回退到收银台历史记录/缓存(那会拿到旧老板 → 服务端报 1034147 本班工作已结束)
+    // 互动/领工资都只认刷新(63)结果里的当前雇主；不回退到配置、收银台历史记录或缓存。
     const curWork = (st && st.work) || {};
-    // ⚠ 当前班次的老板优先级最高: 配置里填的(可能是上一个班次的)旧 GID **不能**覆盖它,
-    //   否则会拿旧老板去互动 → 服务端报 1034147 本班工作已结束(踩过两次)
-    const liveEmployerGid = (curWork.employer && curWork.employer.gid) || 0;
-    const employerGid = liveEmployerGid || opts.employerGid || '';
-    if (liveEmployerGid && opts.employerGid && toNum(opts.employerGid) !== liveEmployerGid) {
-        log('活动', `奶茶热销中: 配置的雇主 GID(${opts.employerGid}) 与当前老板(${liveEmployerGid}) 不一致, 按当前老板执行`, {
-            module: 'activity', event: '奶茶热销中', result: 'warn',
-        });
-    }
-    const inShift = !!employerGid && (!curWork.endAt || Math.floor(Date.now() / 1000) < curWork.endAt);
-    if (opts.autoInteract && inShift && curWork.canInteract === false) {
-        out.steps.push({ step: 'autoInteract', ok: false, skipped: true, reason: `本班互动次数已用完(${curWork.interactUsed}/${curWork.interactTotal})` });
-    }
+    const employerGid = (curWork.employer && curWork.employer.gid) || 0;
+    const hasEmployer = !!employerGid;
     // 每日兑换种子(一天一次; 日期用状态里的服务器时间算, 取不到才用本地)
     if (opts.autoBuySeed) {
         const dayKey = (() => {
@@ -1541,7 +1450,7 @@ async function runMilkTea(opts = {}) {
     }
 
 
-    if (opts.autoInteract && inShift && curWork.canInteract !== false) {
+    if (opts.autoInteract && hasEmployer) {
         const r = await interactWithFriend(employerGid, opts.interactType).catch((e) => ({ ok: false, reason: e.message }));
         out.steps.push({ step: 'autoInteract', ...r });
         if (r.ok) {
@@ -1569,7 +1478,7 @@ async function runMilkTea(opts = {}) {
     }
     // 自动领兼职工资: 独立开关(opts.autoWage) + 必须处于"被雇佣"状态
     if (opts.autoWage !== false) {
-        if (!inShift) {
+        if (!hasEmployer) {
             out.steps.push({ step: 'claimWage', ok: false, skipped: true, reason: '当前没有进行中的班次, 跳过领工资' });
         } else {
             const r = await claimWage().catch((e) => ({ ok: false, reason: e.message }));
@@ -1627,26 +1536,44 @@ module.exports = {
     GROUP_HAPPY,
     SUB_ID,
     CMD_OPEN,
-    CMD_CASHIER,
-    CMD_CRAFT,
+    CMD_EMPLOYEES,
     CMD_HIRE,
-    CMD_SPEAKER,
+    CMD_MENU,
+    CMD_CASHIER_DETAIL,
+    CMD_SALES_RECORD,
+    CMD_UPGRADE_STORE,
+    CMD_CLAIM_CASHIER,
+    CMD_CASHIER_INFO,
     CMD_REFRESH,
-    CMD_INTERACT,
+    CMD_RANKING,
+    CMD_WORK_INTERACT,
+    CMD_CLAIM_WAGE,
     CMD_SHIFT,
     CMD_RECIPE,
     CMD_SHOP_LIST,
     CMD_SHOP_BUY,
-    __testing: { parseMainState, encodeUint1, encodeVarint, encodePackedVarints, shortErr, operateSafe },
+    __testing: {
+        parseMainState,
+        parseWorkFromRefresh,
+        encodeUint1,
+        encodeVarint,
+        encodePackedVarints,
+        shortErr,
+        operateSafe,
+        mainOperateCraft,
+        getSalesRecords,
+        interactWithFriend,
+        craftAllFruits,
+        useSpeaker,
+        getEmployees,
+    },
     getMainStatus,
     claimCashier,
-    craft,
     craftMilkTea,
     craftAllFruits,
     claimWage,
     getCashierDetail,
     parseWorkFromRefresh,
-    parseEmployerFromCashier,
     WORK_INTERACT_OPTIONS,
     interactWithFriend,
     WORK_INTERACT_TYPE,
@@ -1659,11 +1586,9 @@ module.exports = {
     upgradeStore,
     buyDailySeeds,
     getMenuNames,
-    getLastEmployer: () => lastEmployer,
     useSpeaker,
     openStore,
     hireFriend,
-    interact,
     getShopGoods,
     buyShopGoods,
     getFriendList,

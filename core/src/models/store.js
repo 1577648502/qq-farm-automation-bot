@@ -239,13 +239,13 @@ const DEFAULT_ACCOUNT_CONFIG = {
     milkTeaHireGids: [],              // 雇佣好友白名单(可选好友, 参考萌宠游记的选择方式)
     milkTeaAutoHire: false,           // 自动雇佣(从白名单里挑)
     milkTeaAutoTask: false,           // 自动领取任务奖励(领取命令待确认, 默认关)
-    milkTeaAutoInteract: false,       // 自动互动(需"自己被好友雇佣", 每轮一次)
+    milkTeaAutoInteract: false,       // 自动互动(需"自己被好友雇佣")
     milkTeaAutoWage: true,            // 自动领兼职工资(cmd 64, 纯收益; 需被雇佣)
     milkTeaAutoBuySeed: false,        // **每日自动兑换种子**(一天一次, 商店组 cmd=1)
     milkTeaAutoUpgrade: true,         // **自动升级店铺**(营业额达标即升, cmd=61)
     milkTeaSeedBuyCount: 1,           // 每种活动种子每天兑换几份
-    milkTeaInteractType: 5,           // 互动类型(#2), 实测 5
-    milkTeaEmployerGid: '',           // 雇主 GID(互动对象 = 雇佣我的那位好友)
+    milkTeaInteractType: 2,           // 互动类型(#2), 默认推荐 2(花式摇杯)
+    milkTeaEmployerGid: '',           // 旧版配置兼容字段；互动目标只认刷新 #168.#1
     sellGoldenFruit: false,           // 自动卖果实时是否连黄金果实一起卖(默认保留)
     adGiftEnabled: true,              // 每日自动领「看广告礼包」(跳过广告直接领, 化肥×5)
     // 背包种子优先顺序（seedId 数组）
@@ -569,7 +569,7 @@ function normalizeAccountConfig(input, fallback = accountFallbackConfig) {
     if (src.milkTeaAutoBuySeed !== undefined && src.milkTeaAutoBuySeed !== null) cfg.milkTeaAutoBuySeed = !!src.milkTeaAutoBuySeed;
     if (src.milkTeaAutoUpgrade !== undefined && src.milkTeaAutoUpgrade !== null) cfg.milkTeaAutoUpgrade = !!src.milkTeaAutoUpgrade;
     if (src.milkTeaSeedBuyCount !== undefined && src.milkTeaSeedBuyCount !== null) cfg.milkTeaSeedBuyCount = Math.max(1, Number(src.milkTeaSeedBuyCount) || 1);
-    if (src.milkTeaInteractType !== undefined && src.milkTeaInteractType !== null) cfg.milkTeaInteractType = Math.max(1, Number(src.milkTeaInteractType) || 5);
+    if (src.milkTeaInteractType !== undefined && src.milkTeaInteractType !== null) cfg.milkTeaInteractType = Math.max(1, Number(src.milkTeaInteractType) || 2);
     if (typeof src.milkTeaEmployerGid === 'string') cfg.milkTeaEmployerGid = src.milkTeaEmployerGid.trim().slice(0, 32);
     if (src.sellGoldenFruit !== undefined && src.sellGoldenFruit !== null) {
         cfg.sellGoldenFruit = !!src.sellGoldenFruit;
@@ -864,7 +864,7 @@ function getConfigSnapshot(accountId) {
         milkTeaAutoBuySeed: !!cfg.milkTeaAutoBuySeed,
         milkTeaAutoUpgrade: cfg.milkTeaAutoUpgrade !== false,
         milkTeaSeedBuyCount: Math.max(1, Number(cfg.milkTeaSeedBuyCount) || 1),
-        milkTeaInteractType: Math.max(1, Number(cfg.milkTeaInteractType) || 5),
+        milkTeaInteractType: Math.max(1, Number(cfg.milkTeaInteractType) || 2),
         milkTeaEmployerGid: cfg.milkTeaEmployerGid || '',
         sellGoldenFruit: !!cfg.sellGoldenFruit,
         adGiftEnabled: cfg.adGiftEnabled === undefined ? true : !!cfg.adGiftEnabled,
@@ -1039,7 +1039,7 @@ function applyConfigSnapshot(snapshot, options = {}) {
     if (cfg.milkTeaAutoBuySeed !== undefined && cfg.milkTeaAutoBuySeed !== null) next.milkTeaAutoBuySeed = !!cfg.milkTeaAutoBuySeed;
     if (cfg.milkTeaAutoUpgrade !== undefined && cfg.milkTeaAutoUpgrade !== null) next.milkTeaAutoUpgrade = !!cfg.milkTeaAutoUpgrade;
     if (cfg.milkTeaSeedBuyCount !== undefined && cfg.milkTeaSeedBuyCount !== null) next.milkTeaSeedBuyCount = Math.max(1, Number(cfg.milkTeaSeedBuyCount) || 1);
-    if (cfg.milkTeaInteractType !== undefined && cfg.milkTeaInteractType !== null) next.milkTeaInteractType = Math.max(1, Number(cfg.milkTeaInteractType) || 5);
+    if (cfg.milkTeaInteractType !== undefined && cfg.milkTeaInteractType !== null) next.milkTeaInteractType = Math.max(1, Number(cfg.milkTeaInteractType) || 2);
     if (typeof cfg.milkTeaEmployerGid === 'string') next.milkTeaEmployerGid = cfg.milkTeaEmployerGid.trim().slice(0, 32);
     if (cfg.sellGoldenFruit !== undefined && cfg.sellGoldenFruit !== null) {
         next.sellGoldenFruit = !!cfg.sellGoldenFruit;
@@ -1622,8 +1622,7 @@ function getMilkTeaConfig(accountId) {
         autoBuySeed: !!cfg.milkTeaAutoBuySeed,
         autoUpgrade: cfg.milkTeaAutoUpgrade !== false,
         seedBuyCount: Math.max(1, Number(cfg.milkTeaSeedBuyCount) || 1),
-        interactType: Math.max(1, Number(cfg.milkTeaInteractType) || 5),
-        employerGid: cfg.milkTeaEmployerGid || '',
+        interactType: Math.max(1, Number(cfg.milkTeaInteractType) || 2),
     };
 }
 

@@ -4,7 +4,7 @@
  *
  * ① 顶部信息: 店铺/等级/待领取收益/奶茶券余额/累计营业额/下次结算
  * ② 种子商店: 拾物小铺式卡片, 按货币分组, 卡内填数量兑换; 等级不足/已限购置灰
- * ③ 雇佣好友: 可折叠, 支持手动添加 GID + 勾选白名单 + 自动雇佣
+ * ③ 雇佣好友: 可折叠, 支持勾选白名单 + 自动雇佣
  * ④ 任务: 卡片式 + 领取 / 一键领取 / 自动领取
  * 自动化开关与"立即执行"在 设置 → 自动控制
  *
@@ -44,8 +44,21 @@ const INTERACT_OPTIONS = [
   { id: 5, name: '申请涨薪', recommended: false },
 ]
 
-/** 互动(我的工作): 目标好友 + 互动类型(默认 2 花式摇杯) */
-const interactGid = ref('')
+function interactionName(type: any) {
+  return INTERACT_OPTIONS.find((op) => op.id === Number(type))?.name || `类型 ${type || 0}`
+}
+
+function formatWageChange(wage: any) {
+  if (!wage || wage.change === null || wage.change === undefined) return ''
+  const change = Number(wage.change)
+  const signed = `${change >= 0 ? '+' : ''}${change}`
+  if (wage.before !== null && wage.before !== undefined && wage.after !== null && wage.after !== undefined) {
+    return `（工资 ${wage.before} → ${wage.after}，${signed}）`
+  }
+  return `（工资变化 ${signed}）`
+}
+
+/** 互动(我的工作): 目标固定为当前雇主, 互动类型默认 2 花式摇杯 */
 const storeName = ref('奶茶小铺')
 /** 好友列表(cmd=56 的 #161.#4): 含在岗状态/特长/下班时间 —— 用于标记可雇佣性(不是"我雇的人") */
 const employees = ref<any[]>([])
@@ -69,8 +82,6 @@ async function loadUpgradeInfo() {
   } catch (e: any) { /* 静默: 进度条拿不到不影响主流程 */ }
 }
 const employeesLoading = ref(false)
-/** 我的员工数 —— 取服务端 #161.#1(权威); 列表(#4)含非本人雇佣的好友, 不用于展示员工 */
-const employeeCount = ref(0)
 /** 每日自动兑换种子(一天一次) + 每种兑换份数 */
 const autoBuySeed = ref(false)
 const seedBuyCount = ref(1)
@@ -173,7 +184,6 @@ async function loadEmployees() {
     const d = res.data?.data || {}
     if (!apiError(res, d)) {
       employees.value = d.friends || []
-      employeeCount.value = Number(d.count) || 0
     }
   } catch (e: any) { /* 静默: 不影响主流程 */ } finally {
     employeesLoading.value = false
@@ -226,8 +236,7 @@ async function loadHireConfig() {
     hireGids.value = (d.hireGids || []).map((g: any) => String(g))
     autoHire.value = !!d.autoHire
     autoInteract.value = !!d.autoInteract
-    if (d.interactType) interactType.value = Number(d.interactType)
-    if (d.employerGid) interactGid.value = String(d.employerGid)
+    if (d.interactType) interactType.value = Number(d.interactType) || 2
     if (d.storeName) storeName.value = String(d.storeName)
     autoBuySeed.value = !!d.autoBuySeed
     if (d.seedBuyCount) seedBuyCount.value = Number(d.seedBuyCount)
@@ -318,7 +327,7 @@ async function craftNow() {
     const d = res.data?.data || {}
     const err = apiError(res, d)
     if (err) { reportError('制作奶茶', err); return }
-    actionResult.value = d.used ? `已制作奶茶（投入 ${d.used} 个果实）` : '制作奶茶完成'
+    actionResult.value = d.usedUnits ? `已制作奶茶（投入 ${d.usedUnits} 个果实）` : '制作奶茶完成'
     toast.success(actionResult.value)
   } catch (e: any) {
     reportError('制作奶茶', apiError(null, null, e))
@@ -368,37 +377,24 @@ async function claimWageNow() {
   }
 }
 
-/** 互动(我的工作, cmd=65): 每班一次, 影响工资 */
+/** 互动(我的工作, cmd=65): 目标只取当前雇主, 资格由服务端判定 */
 async function interactNow() {
-  if (status.value && status.value.ok && status.value.employed === false) {
-    toast.warning('当前没有被好友雇佣（【我的工作】为空），不能互动')
-    return
-  }
   const w = (status.value && status.value.work) || {}
-  // ⚠ 互动的前提是"当前有进行中的班次"(被好友雇佣): 手填 GID 也不能绕过 —— 否则服务端会回 1034147
-  if (!w.employer || !w.employer.gid) {
+  if (w.active !== true || !w.employer || !w.employer.gid) {
     toast.warning('当前没有进行中的兼职（未被好友雇佣），不能互动')
     return
   }
-  if (w.endAt && Math.floor(Date.now() / 1000) >= w.endAt) {
-    toast.warning('本班工作已结束, 请等新的班次开始后再互动')
-    return
-  }
-  if (w.interactTotal > 0 && w.interactUsed >= w.interactTotal) {
-    toast.warning(`本班互动次数已用完（${w.interactUsed}/${w.interactTotal}），等下一班`)
-    return
-  }
-  // 目标: 手填优先, 否则当前老板(权威)
-  const gid = String(interactGid.value || w.employer.gid).trim()
+  const gid = String(w.employer.gid).trim()
   busy.value = 'interact'
   try {
-    const res = await api.post('/api/activity/milk-tea/interact', { friendGid: gid, type: Number(interactType.value) || 5 })
+    const res = await api.post('/api/activity/milk-tea/interact', { friendGid: gid, type: Number(interactType.value) || 2 })
     const d = res.data?.data || {}
     const err = apiError(res, d)
     if (err) { reportError('互动', err); return }
-    const wage = d.interact && d.interact.wage ? `（底薪 ${d.interact.wage.base} / 加成 ${d.interact.wage.extra}）` : ''
+    const wage = formatWageChange(d.interact && d.interact.wage)
     actionResult.value = `已与好友 ${d.friendGid || gid} 互动${wage}`
     toast.success(actionResult.value)
+    await loadStatus()
   } catch (e: any) {
     reportError('互动', apiError(null, null, e))
   } finally {
@@ -437,8 +433,7 @@ async function saveHireConfig() {
       hireGids: hireGids.value,
       autoHire: autoHire.value,
       autoInteract: autoInteract.value,
-      interactType: Number(interactType.value) || 5,
-      employerGid: String(interactGid.value || ''),
+      interactType: Number(interactType.value) || 2,
       storeName: String(storeName.value || ''),
     })
     const err = apiError(res, res.data?.data)
@@ -558,7 +553,6 @@ onMounted(() => {
           <div class="text-xs text-gray-500 dark:text-gray-400">结算期开始</div>
           <div class="text-sm text-gray-900 font-medium dark:text-gray-100">{{ fmtTime(status.settleAt) }}</div>
         </div>
-        <!-- 顶部只显示员工数量; 员工名单在下方"雇佣好友"卡片里 -->
         <!-- 店铺等级进度(Lv N → Lv N+1: 累计营业额 / 下一级所需) -->
         <div class="col-span-2 md:col-span-2">
           <div class="mb-1 flex items-center justify-between text-xs">
@@ -587,26 +581,24 @@ onMounted(() => {
           </div>
         </div>
         <div>
-          <div class="text-xs text-gray-500 dark:text-gray-400">我雇佣的员工</div>
-          <div class="text-sm text-gray-900 font-medium dark:text-gray-100">{{ employeeCount }} 位</div>
-        </div>
-        <div>
           <div class="text-xs text-gray-500 dark:text-gray-400">受雇状态</div>
           <div
             class="text-sm font-medium"
-            :class="status.employed ? 'text-emerald-600 dark:text-emerald-400' : 'text-gray-500 dark:text-gray-400'"
+            :class="status.work && status.work.active ? 'text-emerald-600 dark:text-emerald-400' : 'text-gray-500 dark:text-gray-400'"
           >
-            {{ status.employed ? '已被雇佣（可互动）' : '未受雇' }}
+            {{ status.work && status.work.active ? '已被雇佣（可互动）' : '未受雇' }}
             <span
-              v-if="(status.work && status.work.employer) || (status.employer && status.employer.gid)"
+              v-if="status.work && status.work.active && status.work.employer"
               class="ml-1 text-xs text-gray-500 font-normal"
             >
-              老板 {{ (status.work && status.work.employer ? status.work.employer.name : status.employer.name) || '' }}
-              {{ status.work && status.work.employer ? status.work.employer.gid : status.employer.gid }}
+              老板 {{ status.work.employer.name || '' }}
+              {{ status.work.employer.gid }}
               <template v-if="status.work && status.work.wage"> · 工资 {{ status.work.wage }}</template>
               <template v-if="status.work && status.work.titleName"> · 特长 {{ status.work.titleName }}</template>
-              <template v-if="status.work && status.work.interactTotal > 0">
-                · 互动 {{ status.work.interactUsed }}/{{ status.work.interactTotal }}{{ status.work.canInteract ? '（可互动）' : '（已用完）' }}
+              <template v-if="status.work.lastInteraction">
+                · 最近一次互动：{{ interactionName(status.work.lastInteraction.type) }}
+                <template v-if="status.work.lastInteraction.count"> · {{ status.work.lastInteraction.count }} 次</template>
+                <template v-if="status.work.lastInteraction.at"> · {{ fmtTime(status.work.lastInteraction.at) }}</template>
               </template>
             </span>
           </div>
@@ -670,8 +662,6 @@ onMounted(() => {
               <span class="rounded bg-sky-50 px-1 text-sky-700 dark:bg-sky-900/30 dark:text-sky-300">{{ r.titleName }}</span>
               <span class="text-gray-900 font-medium dark:text-gray-100">{{ r.name }}</span>
               <span class="text-gray-500">工作时长 {{ r.hours }}小时</span>
-              <span class="text-gray-500">支付工资 +{{ r.wage }}</span>
-              <span v-if="r.soldCups" class="text-gray-500">互动售出 {{ r.soldCups }} 杯</span>
             </div>
           </div>
           <div v-else class="text-xs text-gray-500 dark:text-gray-400">暂无记录</div>
@@ -778,14 +768,14 @@ onMounted(() => {
         <span class="text-sm text-gray-900 font-medium dark:text-white">
           员工与雇佣
           <span class="ml-2 text-xs text-gray-500 font-normal">
-            员工 {{ employeeCount }} 位 · 已勾选 {{ hireGids.length }} 位{{ autoHire ? ' · 自动雇佣已开' : '' }}
+            已勾选 {{ hireGids.length }} 位{{ autoHire ? ' · 自动雇佣已开' : '' }}
           </span>
         </span>
       </div>
       <div class="border-t border-gray-100 px-4 py-3 dark:border-gray-700/60">
         <div class="mb-2 flex flex-wrap items-center gap-3">
           <BaseSwitch v-model="autoHire" label="自动雇佣（按白名单依次尝试）" />
-          <BaseSwitch v-model="autoInteract" label="自动互动（被雇佣后每轮一次）" />
+          <BaseSwitch v-model="autoInteract" label="自动互动（被雇佣后）" />
           <BaseButton variant="secondary" size="sm" :loading="busy === 'hire-auto'" @click="hireNow">
             立即雇佣一个
           </BaseButton>
@@ -815,7 +805,7 @@ onMounted(() => {
           <BaseButton variant="secondary" size="sm" :loading="busy === 'upgrade'" @click="upgradeNow">升级店铺</BaseButton>
       </div>
       <div v-if="actionResult" class="mb-2 rounded bg-gray-50 px-2 py-1 text-xs text-gray-700 dark:bg-gray-900/40 dark:text-gray-200">{{ actionResult }}</div>
-        <!-- 参数: 互动事项 / 店名(雇主 GID 已改为自动探测, 不再手填) -->
+        <!-- 参数: 互动事项 / 店名(互动目标自动使用当前雇主) -->
         <div class="mb-2 flex flex-wrap items-center gap-2 rounded border border-gray-200 px-2.5 py-2 dark:border-gray-700">
           <label class="flex items-center gap-1 text-xs text-gray-600 dark:text-gray-300">
             店名
@@ -844,7 +834,7 @@ onMounted(() => {
           </span>
         </div>
         <div v-if="!friends.length" v-show="friendsOpen" class="text-xs text-gray-500 dark:text-gray-400">
-          {{ friendsBusy ? '读取中…' : '未读到好友列表（账号需在线；QQ 端可用上面的输入框手动添加 GID）' }}
+          {{ friendsBusy ? '读取中…' : '未读到好友列表（账号需在线后重试）' }}
         </div>
         <div v-else v-show="friendsOpen" class="grid grid-cols-2 gap-1 md:grid-cols-3 xl:grid-cols-4">
           <label

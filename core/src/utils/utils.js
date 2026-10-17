@@ -151,6 +151,17 @@ function randomDelay(minMs, maxMs) {
  */
 function toInt(value) {
     if (value === null || value === undefined || value === '') return 0;
+    const UINT64_MOD = 18446744073709551616n;
+    const INT64_MAX = 9223372036854775807n;
+    const normalizeInteger = (big) => {
+        const signed = big > INT64_MAX ? big - UINT64_MOD : big;
+        return Number(signed);
+    };
+    if (typeof value === 'bigint') return normalizeInteger(value);
+    if (Long.isLong(value)) return normalizeInteger(BigInt(value.toString()));
+    if (typeof value === 'string' && /^-?\d+$/.test(value.trim())) {
+        try { return normalizeInteger(BigInt(value.trim())); } catch {}
+    }
     const n = Number(value);
     return Number.isFinite(n) ? n : 0;
 }

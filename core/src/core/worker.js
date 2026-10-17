@@ -322,7 +322,6 @@ async function runMilkTea(reason = 'interval') {
             seedBuyCount: cfg.seedBuyCount,
             claimWage: true,   // 兼容旧字段(实际以 autoWage 为准)
             interactType: cfg.interactType,
-            employerGid: cfg.employerGid,
             // 制作奶茶已确认 = cmd 62(果实→高级奶茶), 由 cfg.craft 开关控制(原来误写成 false 导致自动化不生效)
             craft: cfg.craft,
             speaker: false,
@@ -1406,7 +1405,7 @@ async function handleApiCall(msg) {
                 const main = await milkTea.getMainStatus();
                 const cashier = await milkTea.getCashierStatus().catch(() => null);
                 const coupon = await milkTea.getMilkCouponBalance().catch(() => 0);
-                result = { ...main, cashier, milkCoupon: coupon, employer: milkTea.getLastEmployer ? milkTea.getLastEmployer() : null };
+                result = { ...main, cashier, milkCoupon: coupon };
                 break;
             }
             case 'claimMilkTeaCashier':
@@ -1719,4 +1718,3 @@ function syncStatus() {
         sendToMaster({ type: 'status_sync', data: fullStats });
     }
 }
-

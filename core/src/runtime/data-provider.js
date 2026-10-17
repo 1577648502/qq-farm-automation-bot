@@ -245,7 +245,7 @@ function createDataProvider(options) {
                 milkTeaAutoUpgrade: body.milkTeaAutoUpgrade,
                 milkTeaSeedBuyCount: body.milkTeaSeedBuyCount,
                 milkTeaInteractType: body.milkTeaInteractType,
-                milkTeaEmployerGid: body.milkTeaEmployerGid,
+                milkTeaEmployerGid: body.milkTeaEmployerGid, // 仅兼容旧版前端配置
                 adGiftEnabled: body.adGiftEnabled,
                 sellGoldenFruit: body.sellGoldenFruit
             };
@@ -579,4 +579,3 @@ function createDataProvider(options) {
 module.exports = {
     createDataProvider,
 };
-

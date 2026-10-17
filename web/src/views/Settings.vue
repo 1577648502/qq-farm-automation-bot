@@ -638,8 +638,7 @@ const localAutomationSettings = ref({
   milkTeaAutoWage: true,
   milkTeaAutoBuySeed: false,
   milkTeaAutoUpgrade: true,
-  milkTeaInteractType: 5,
-  milkTeaEmployerGid: '',
+  milkTeaInteractType: 2,
   sellGoldenFruit: false,
   adGiftEnabled: true,
   // 防封号(低调)模式
@@ -944,8 +943,7 @@ function syncLocalAutomationSettings() {
   localAutomationSettings.value.milkTeaAutoWage = settings.value.milkTeaAutoWage !== false
   localAutomationSettings.value.milkTeaAutoBuySeed = !!settings.value.milkTeaAutoBuySeed
   localAutomationSettings.value.milkTeaAutoUpgrade = settings.value.milkTeaAutoUpgrade !== false
-  localAutomationSettings.value.milkTeaInteractType = settings.value.milkTeaInteractType ?? 5
-  localAutomationSettings.value.milkTeaEmployerGid = settings.value.milkTeaEmployerGid ?? ''
+  localAutomationSettings.value.milkTeaInteractType = settings.value.milkTeaInteractType ?? 2
   localAutomationSettings.value.sellGoldenFruit = settings.value.sellGoldenFruit ?? false
   localAutomationSettings.value.adGiftEnabled = settings.value.adGiftEnabled ?? true
     localAutomationSettings.value.fertilizerBuyOrganicCount = settings.value.fertilizerBuyOrganicCount ?? 10
@@ -1152,7 +1150,6 @@ async function saveAutomationSettings() {
       milkTeaAutoBuySeed: localAutomationSettings.value.milkTeaAutoBuySeed,
       milkTeaAutoUpgrade: localAutomationSettings.value.milkTeaAutoUpgrade,
       milkTeaInteractType: localAutomationSettings.value.milkTeaInteractType,
-      milkTeaEmployerGid: localAutomationSettings.value.milkTeaEmployerGid,
       sellGoldenFruit: localAutomationSettings.value.sellGoldenFruit,
       adGiftEnabled: localAutomationSettings.value.adGiftEnabled,
       fertilizerBuyOrganicCount: localAutomationSettings.value.fertilizerBuyOrganicCount,
@@ -2125,13 +2122,13 @@ async function onBackupFileChange(ev: Event) {
                   <div class="flex flex-wrap items-center gap-3 rounded border border-gray-200 px-2.5 py-2 dark:border-gray-700">
                     <BaseSwitch v-model="localAutomationSettings.milkTeaCashier" label="自动领收银台收益（核心）" />
                     <BaseSwitch v-model="localAutomationSettings.milkTeaCraft" label="自动制作奶茶（全部果实）" />
-                    <BaseSwitch v-model="localAutomationSettings.milkTeaAutoInteract" label="自动互动（被雇佣后每轮一次）" />
+                    <BaseSwitch v-model="localAutomationSettings.milkTeaAutoInteract" label="自动互动（被雇佣后）" />
                     <BaseSwitch v-model="localAutomationSettings.milkTeaAutoWage" label="自动领兼职工资（被雇佣后）" />
                     <BaseSwitch v-model="localAutomationSettings.milkTeaAutoBuySeed" label="每日自动购买森野黄金芽种子（1份/天）" />
                     <BaseSwitch v-model="localAutomationSettings.milkTeaAutoUpgrade" label="自动升级店铺（营业额达标即升）" />
                   </div>
                   <template #note>
-                    手动操作（领收益 / 制作奶茶 / 领工资 / 互动一次）和参数（店名、互动事项、雇主 GID）都在左侧栏「奶茶热销中」页面。
+                    手动操作（领收益 / 制作奶茶 / 领工资 / 互动一次）和参数（店名、互动事项）都在左侧栏「奶茶热销中」页面。
                   </template>
                 </AutoTaskCard>
 

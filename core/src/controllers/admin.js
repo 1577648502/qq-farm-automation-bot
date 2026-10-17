@@ -2140,7 +2140,7 @@ app.use('/api', (req, res, next) => {
                 : true;
             const milkTeaCfg = (id && typeof store.getMilkTeaConfig === 'function')
                 ? store.getMilkTeaConfig(id)
-                : { enabled: true, cashier: true, craft: true, speaker: false, storeName: '奶茶小铺', hireGids: [], autoHire: false, autoTask: false, autoInteract: false, autoWage: true, autoBuySeed: false, autoUpgrade: true, interactType: 5, employerGid: '' };
+                : { enabled: true, cashier: true, craft: true, speaker: false, storeName: '奶茶小铺', hireGids: [], autoHire: false, autoTask: false, autoInteract: false, autoWage: true, autoBuySeed: false, autoUpgrade: true, interactType: 2 };
             const happyShareEnabled = (id && typeof store.getHappyShareEnabled === 'function')
                 ? store.getHappyShareEnabled(id)
                 : true;
@@ -2213,8 +2213,7 @@ app.use('/api', (req, res, next) => {
                     milkTeaAutoWage: milkTeaCfg.autoWage !== false,
                     milkTeaAutoBuySeed: !!milkTeaCfg.autoBuySeed,
                     milkTeaAutoUpgrade: milkTeaCfg.autoUpgrade !== false,
-                    milkTeaInteractType: milkTeaCfg.interactType || 5,
-                    milkTeaEmployerGid: milkTeaCfg.employerGid || '',
+                    milkTeaInteractType: milkTeaCfg.interactType || 2,
                     // 看广告礼包(跳过广告直接领)
                     adGiftEnabled,
                     // 自动卖果实时是否连黄金果实一起卖
@@ -3658,8 +3657,7 @@ app.use('/api', (req, res, next) => {
                 autoHire: !!cfg.autoHire,
                 autoTask: !!cfg.autoTask,
                 autoInteract: !!cfg.autoInteract,
-                interactType: cfg.interactType || 5,
-                employerGid: cfg.employerGid || '',
+                interactType: cfg.interactType || 2,
                 storeName: cfg.storeName || '奶茶小铺',
                 autoBuySeed: !!cfg.autoBuySeed,
                 seedBuyCount: cfg.seedBuyCount || 1,
@@ -3679,7 +3677,6 @@ app.use('/api', (req, res, next) => {
                 milkTeaAutoTask: typeof body.autoTask === 'boolean' ? body.autoTask : undefined,
                 milkTeaAutoInteract: typeof body.autoInteract === 'boolean' ? body.autoInteract : undefined,
                 milkTeaInteractType: body.interactType !== undefined ? body.interactType : undefined,
-                milkTeaEmployerGid: typeof body.employerGid === 'string' ? body.employerGid : undefined,
                 milkTeaStoreName: typeof body.storeName === 'string' ? body.storeName : undefined,
                 milkTeaAutoBuySeed: typeof body.autoBuySeed === 'boolean' ? body.autoBuySeed : undefined,
                 milkTeaSeedBuyCount: body.seedBuyCount !== undefined ? body.seedBuyCount : undefined,
@@ -3689,8 +3686,7 @@ app.use('/api', (req, res, next) => {
                 autoHire: !!body.autoHire,
                 autoTask: !!body.autoTask,
                 autoInteract: !!body.autoInteract,
-                interactType: body.interactType || 5,
-                employerGid: body.employerGid || '',
+                interactType: body.interactType || 2,
             } });
         } catch (e) { res.json({ ok: false, error: e.message }); }
     });
@@ -4059,6 +4055,5 @@ module.exports = {
     emitRealtimeLog,
     emitRealtimeAccountLog,
 };
-
 
 
