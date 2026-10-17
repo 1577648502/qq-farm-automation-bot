@@ -5,9 +5,15 @@ import { onMounted, onUnmounted } from 'vue'
 import { useRoute } from 'vue-router'
 import Sidebar from '@/components/Sidebar.vue'
 import { useAppStore } from '@/stores/app'
+import { useAccountStore } from '@/stores/account'
 
 const appStore = useAppStore()
 const { sidebarOpen } = storeToRefs(appStore)
+
+// 切账号时让当前页面**整体重建**(重新走 onMounted 拉数据):
+// 原来 key 只有 route.path, 切账号不换路由 → 所有页面都不会重新挂载(萌宠/奶茶等都有这个问题)
+const accountStore = useAccountStore()
+const { currentAccountId } = storeToRefs(accountStore)
 
 onMounted(() => {
   // 移除了强制警告弹窗
@@ -54,7 +60,7 @@ watch(() => r.path, () => {
         <div class="custom-scrollbar flex flex-1 flex-col overflow-y-auto p-3 sm:p-4 md:p-6">
           <RouterView v-slot="{ Component, route }">
             <Transition name="slide-fade" mode="out-in">
-              <component :is="Component" :key="route.path" />
+              <component :is="Component" :key="`${route.path}::${currentAccountId}`" />
             </Transition>
           </RouterView>
         </div>
