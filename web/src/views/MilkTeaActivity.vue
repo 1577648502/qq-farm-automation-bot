@@ -33,7 +33,7 @@ const friendsBusy = ref(false)
 const hireGids = ref<string[]>([])
 const autoHire = ref(false)
 const autoInteract = ref(false)
-const hireOpen = ref(false)
+const friendsOpen = ref(false)   // 只折叠「好友列表」
 const hireSaving = ref(false)
 const newGid = ref('')
 /** 互动事项(与后端一致) */
@@ -484,17 +484,9 @@ async function refreshAll() {
   await new Promise((r) => setTimeout(r, 400))
   await loadHireConfig()
   // 好友列表首次会做重同步(约 6 个请求) → 只在展开"雇佣好友"时按需拉
-  if (hireOpen.value) await loadFriends()
+  if (friendsOpen.value) await loadFriends()
 }
 
-/** 展开雇佣好友时才去拉好友(重请求) */
-async function toggleHire() {
-  hireOpen.value = !hireOpen.value
-  if (hireOpen.value && !friends.value.length) {
-    await new Promise((r) => setTimeout(r, 300))
-    await loadFriends()
-  }
-}
 
 onMounted(() => {
   loadStatus()
@@ -781,19 +773,15 @@ onMounted(() => {
 
     <!-- ③ 雇佣好友（可折叠） -->
     <div class="rounded-lg border border-gray-200 bg-white shadow-sm dark:border-gray-700 dark:bg-gray-800">
-      <button
-        class="flex w-full items-center justify-between px-4 py-3 text-left"
-        @click="toggleHire"
-      >
+      <div class="flex w-full items-center justify-between px-4 py-3 text-left">
         <span class="text-sm text-gray-900 font-medium dark:text-white">
           员工与雇佣
           <span class="ml-2 text-xs text-gray-500 font-normal">
-            员工 {{ employees.length }} 位 · 已勾选 {{ hireGids.length }} 位{{ autoHire ? ' · 自动雇佣已开' : '' }}
+            员工 {{ employeeCount }} 位 · 已勾选 {{ hireGids.length }} 位{{ autoHire ? ' · 自动雇佣已开' : '' }}
           </span>
         </span>
-        <span class="text-xs text-gray-400">{{ hireOpen ? '收起 ▲' : '展开 ▼' }}</span>
-      </button>
-      <div v-show="hireOpen" class="border-t border-gray-100 px-4 py-3 dark:border-gray-700/60">
+      </div>
+      <div class="border-t border-gray-100 px-4 py-3 dark:border-gray-700/60">
         <div class="mb-2 flex flex-wrap items-center gap-3">
           <BaseSwitch v-model="autoHire" label="自动雇佣（按白名单依次尝试）" />
           <BaseSwitch v-model="autoInteract" label="自动互动（被雇佣后每轮一次）" />
@@ -852,13 +840,16 @@ onMounted(() => {
         </div>
         <div class="mb-2 flex flex-wrap items-center gap-2">
           <BaseButton variant="secondary" size="sm" :loading="employeesLoading" @click="loadEmployees">刷新好友</BaseButton>
+          <BaseButton variant="secondary" size="sm" @click="friendsOpen = !friendsOpen; if (friendsOpen && !friends.length) loadFriends()">
+            {{ friendsOpen ? '收起好友列表 ▲' : '展开好友列表 ▼' }}
+          </BaseButton>
           <span class="text-xs text-gray-500 dark:text-gray-400">
             好友列表（勾选后用于雇佣/自动雇佣）；「在岗」= 该好友正在上班（谁的班不确定），在岗的雇不了(会被跳过)
             <template v-if="employees.length">：{{ employees.map((e: any) => `${e.name}(${e.titleName || '—'})`).join('、') }}</template>
             <template v-else>（暂无好友员工）</template>
           </span>
         </div>
-        <div v-if="friends.length" class="mb-2 flex flex-wrap items-center gap-2">
+        <div v-if="friends.length" v-show="friendsOpen" class="mb-2 flex flex-wrap items-center gap-2">
           <BaseButton variant="secondary" size="sm" @click="selectAllFriends">全选</BaseButton>
           <BaseButton variant="secondary" size="sm" @click="clearAllFriends">清空</BaseButton>
           <BaseButton variant="secondary" size="sm" @click="invertFriends">反选</BaseButton>
@@ -866,10 +857,10 @@ onMounted(() => {
             共 {{ friends.length }} 位好友，已勾选 {{ hireGids.length }} 位（改完记得点「保存设置」）
           </span>
         </div>
-        <div v-if="!friends.length" class="text-xs text-gray-500 dark:text-gray-400">
+        <div v-if="!friends.length" v-show="friendsOpen" class="text-xs text-gray-500 dark:text-gray-400">
           {{ friendsBusy ? '读取中…' : '未读到好友列表（账号需在线；QQ 端可用上面的输入框手动添加 GID）' }}
         </div>
-        <div v-else class="grid grid-cols-2 gap-1 md:grid-cols-3 xl:grid-cols-4">
+        <div v-else v-show="friendsOpen" class="grid grid-cols-2 gap-1 md:grid-cols-3 xl:grid-cols-4">
           <label
             v-for="f in friends"
             :key="f.gid"
@@ -885,7 +876,7 @@ onMounted(() => {
             <span v-if="f.level" class="ml-auto shrink-0 text-[10px] text-gray-400">Lv{{ f.level }}</span>
           </label>
         </div>
-        <div v-if="hireGids.length" class="mt-2 flex flex-wrap gap-1">
+        <div v-if="hireGids.length" v-show="friendsOpen" class="mt-2 flex flex-wrap gap-1">
           <span
             v-for="gid in hireGids"
             :key="gid"
