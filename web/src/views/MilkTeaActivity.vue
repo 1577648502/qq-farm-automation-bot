@@ -35,7 +35,6 @@ const autoHire = ref(false)
 const autoInteract = ref(false)
 const friendsOpen = ref(false)   // 只折叠「好友列表」
 const hireSaving = ref(false)
-const newGid = ref('')
 /** 互动事项(与后端一致) */
 const INTERACT_OPTIONS = [
   { id: 1, name: '宣传推广', recommended: false },
@@ -430,12 +429,6 @@ function toggleGid(gid: string) {
   else hireGids.value.push(gid)
 }
 
-function addGid() {
-  const v = String(newGid.value || '').trim()
-  if (!/^\d{5,}$/.test(v)) { toast.warning('请输入正确的好友 GID（纯数字）'); return }
-  if (!hireGids.value.includes(v)) hireGids.value.push(v)
-  newGid.value = ''
-}
 
 async function saveHireConfig() {
   hireSaving.value = true
@@ -805,16 +798,6 @@ onMounted(() => {
             保存设置
           </BaseButton>
         </div>
-        <div class="mb-2 flex flex-wrap items-center gap-2">
-          <input
-            v-model="newGid"
-            type="text"
-            placeholder="手动添加好友 GID"
-            class="w-48 rounded border border-gray-300 bg-white px-2 py-1 text-xs dark:border-gray-600 dark:bg-gray-900"
-          >
-          <BaseButton variant="secondary" size="sm" @click="addGid">添加</BaseButton>
-          <span class="text-xs text-gray-400">GID 可在「好友」页面查看</span>
-        </div>
         <!-- 手动操作 -->
       <div class="mb-2 grid grid-cols-2 gap-2 sm:flex sm:flex-wrap sm:items-center">
         <BaseButton variant="secondary" size="sm" :loading="busy === 'cashier'" @click="claimCashierNow">领收银台收益</BaseButton>
@@ -843,11 +826,6 @@ onMounted(() => {
           <BaseButton variant="secondary" size="sm" @click="friendsOpen = !friendsOpen; if (friendsOpen && !friends.length) loadFriends()">
             {{ friendsOpen ? '收起好友列表 ▲' : '展开好友列表 ▼' }}
           </BaseButton>
-          <span class="text-xs text-gray-500 dark:text-gray-400">
-            好友列表（勾选后用于雇佣/自动雇佣）；「在岗」= 该好友正在上班（谁的班不确定），在岗的雇不了(会被跳过)
-            <template v-if="employees.length">：{{ employees.map((e: any) => `${e.name}(${e.titleName || '—'})`).join('、') }}</template>
-            <template v-else>（暂无好友员工）</template>
-          </span>
         </div>
         <div v-if="friends.length" v-show="friendsOpen" class="mb-2 flex flex-wrap items-center gap-2">
           <BaseButton variant="secondary" size="sm" @click="selectAllFriends">全选</BaseButton>
