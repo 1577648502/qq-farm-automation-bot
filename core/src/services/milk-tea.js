@@ -924,33 +924,65 @@ async function autoHire(hireGids, opts = {}) {
             ...publicAutoHireState(hiring),
         };
     }
-    const result = await autoHireInner(todo, duration, hiring.available);
+    const result = await autoHireInner(todo, duration, hiring.available, hiring.employeeCount);
     const { finalHiring, ...publicResult } = result;
     return { ...publicResult, ...publicAutoHireState(finalHiring || hiring, result.hired, hiring) };
 }
 
+// cmd57 成功后 cmd55 偶尔还会返回上一帧；有界轮询确认新 GID 已落到员工列表，
+// 没确认前绝不再发下一单，避免第二个员工位撞上 1034140。
+const HIRE_SYNC_RETRY_DELAYS_MS = [0, 500, 1000];
+
+async function confirmHiredEmployee(gid, previousEmployeeCount) {
+    const expectedGid = toInt(gid);
+    const previousCount = Math.max(0, toInt(previousEmployeeCount));
+    let latest = null;
+    let lastError = '';
+    for (const delay of HIRE_SYNC_RETRY_DELAYS_MS) {
+        if (delay > 0) await sleep(delay);
+        latest = await getHiringAvailability().catch((e) => ({ ok: false, reason: e.message }));
+        if (!latest.ok) {
+            lastError = latest.reason || '员工状态查询失败';
+            continue;
+        }
+        if (latest.employeeCount > previousCount && latest.currentGids.has(expectedGid)) {
+            return { ok: true, hiring: latest };
+        }
+    }
+    const reason = latest && latest.ok
+        ? `cmd55 尚未确认好友 ${expectedGid} 入店(${latest.employeeCount}/${latest.employeeCapacity})`
+        : `员工状态刷新失败: ${shortErr(lastError)}`;
+    return { ok: false, reason, hiring: latest && latest.ok ? latest : null };
+}
+
 /** autoHire 实际执行体 */
-async function autoHireInner(list, duration = 1, maxHires = 1) {
+async function autoHireInner(list, duration = 1, maxHires = 1, initialEmployeeCount = 0) {
     const errors = [];
     const hired = [];
     const results = [];
     const hireLimit = Math.max(1, toInt(maxHires));
+    let confirmedEmployeeCount = Math.max(0, toInt(initialEmployeeCount));
     let finalHiring = null;
+    let stateSyncPending = false;
+    let syncReason = '';
     for (const gid of list) {
         if (hired.length >= hireLimit) break;
         const r = await hireFriend(gid, duration, { skipCapacityCheck: true }).catch((e) => ({ ok: false, reason: e.message }));
         results.push({ gid, ok: !!(r && r.ok && !r.skipped), reason: (r && r.reason) || '', skipped: !!(r && r.skipped) });
         if (r && r.ok && !r.skipped) {
             hired.push(gid);
-            // cmd57 应答后服务端状态已经可读；每次成功后重新查询，
-            // 避免把雇佣前的快照继续用于下一个员工位。
-            const latest = await getHiringAvailability().catch((e) => ({ ok: false, reason: e.message }));
-            if (!latest.ok) {
-                errors.push(`已雇佣 ${gid}，但员工状态刷新失败: ${shortErr(latest.reason)}`);
+            const confirmed = await confirmHiredEmployee(gid, confirmedEmployeeCount);
+            if (!confirmed.ok) {
+                errors.push(`已雇佣 ${gid}，但${confirmed.reason}`);
+                finalHiring = confirmed.hiring;
+                stateSyncPending = true;
+                syncReason = confirmed.reason;
+                results[results.length - 1].stateSyncPending = true;
                 break;
             }
-            finalHiring = latest;
-            if (latest.available <= 0) break;
+            finalHiring = confirmed.hiring;
+            confirmedEmployeeCount = confirmed.hiring.employeeCount;
+            if (confirmed.hiring.available <= 0) break;
             continue;
         }
         errors.push(shortErr((r && r.reason) || '失败'));
@@ -964,6 +996,10 @@ async function autoHireInner(list, duration = 1, maxHires = 1) {
             friendGids: hired,
             results,
             finalHiring,
+            stateSyncPending,
+            ...(stateSyncPending
+                ? { reason: `已雇佣 ${hired.join('、')}，${syncReason}；本轮停止继续雇佣` }
+                : {}),
         };
     }
     // 日志别太长: 只给"尝试了几个 + 第一条原因"
@@ -2088,24 +2124,42 @@ async function hireAll(hireGids, limit = 10, duration = 1) {
     }
     const dur = normalizeHireDuration(duration);
     const results = [];
+    let currentHiring = hiring;
     let okCount = 0;
+    let stateSyncPending = false;
+    let syncReason = '';
     for (const gid of candidates) {
-        if (okCount >= hiring.available) break;
+        if (okCount >= hiring.available || currentHiring.available <= 0) break;
         const r = await hireFriend(gid, dur, { skipCapacityCheck: true }).catch((e) => ({ ok: false, reason: e.message }));
         results.push({ gid, ok: !!(r && r.ok), reason: (r && r.reason) || '' });
-        if (r && r.ok) okCount += 1;
+        if (r && r.ok) {
+            okCount += 1;
+            const confirmed = await confirmHiredEmployee(gid, currentHiring.employeeCount);
+            if (!confirmed.ok) {
+                stateSyncPending = true;
+                syncReason = confirmed.reason;
+                if (confirmed.hiring) currentHiring = confirmed.hiring;
+                results[results.length - 1].stateSyncPending = true;
+                break;
+            }
+            currentHiring = confirmed.hiring;
+        }
         await sleep(700);   // 节流: 避免把游戏请求队列打满(满了会心跳异常掉线)
     }
-    log('活动', `奶茶热销中: 批量雇佣 ${okCount}/${candidates.length} 成功（员工 ${hiring.employeeCount + okCount}/${hiring.employeeCapacity}）`, {
-        module: 'activity', event: '奶茶热销中', result: okCount ? 'ok' : 'warn',
+    const staff = stateSyncPending
+        ? '，员工列表状态待同步'
+        : `（员工 ${currentHiring.employeeCount}/${currentHiring.employeeCapacity}）`;
+    log('活动', `奶茶热销中: 批量雇佣 ${okCount}/${candidates.length} 成功${staff}`, {
+        module: 'activity', event: '奶茶热销中', result: okCount ? (stateSyncPending ? 'warn' : 'ok') : 'warn',
     });
     return {
         ok: okCount > 0,
         hired: okCount,
         total: candidates.length,
         results,
-        employeeCapacity: hiring.employeeCapacity,
-        employeeCount: hiring.employeeCount + okCount,
+        stateSyncPending,
+        ...(stateSyncPending ? { reason: `已雇佣 ${okCount} 人，但${syncReason}；本轮停止继续雇佣` } : {}),
+        ...publicHiringState(currentHiring),
     };
 }
 
@@ -2338,22 +2392,28 @@ async function runMilkTea(opts = {}) {
         if (!r.ok && isHireAlreadyError(r.reason)) {
             const nowSec = Math.floor(Date.now() / 1000);
             if (r.nextAt && r.nextAt > nowSec) {
-                // 真实时间: 按"现有员工最晚下班时间"退避
                 hireBackoffUntil = r.nextAt * 1000 + 60000;
                 const mins = Math.ceil((r.nextAt - nowSec) / 60);
                 const hhmm = new Date(r.nextAt * 1000).toTimeString().slice(0, 5);
-                log('活动', `奶茶热销中: 雇佣位被占(最近 ${hhmm} 空出, 约 ${mins} 分钟), 到点后自动重试`, {
+                log('活动', `奶茶热销中: 雇佣请求暂未通过(${shortErr(r.reason)}，员工最近 ${hhmm} 下班，约 ${mins} 分钟后重试)`, {
                     module: 'activity', event: '奶茶热销中', result: 'skip',
                 });
             } else {
                 hireBackoffUntil = Date.now() + HIRE_BACKOFF_MS;
-                log('活动', `奶茶热销中: 雇佣位已有员工/已满(未取到空出时间, 本地暂缓 30 分钟)`, {
+                log('活动', `奶茶热销中: 雇佣请求暂未通过(${shortErr(r.reason)}，本地暂缓 30 分钟)`, {
                     module: 'activity', event: '奶茶热销中', result: 'skip',
                 });
             }
             return out;
         }
-        if (r.ok && !r.skipped && r.friendGid) {
+        if (r.ok && !r.skipped && r.friendGid && r.stateSyncPending) {
+            const gids = (Array.isArray(r.friendGids) && r.friendGids.length ? r.friendGids : [r.friendGid])
+                .map((gid) => toNum(gid))
+                .filter((gid) => gid > 0);
+            log('活动', `奶茶热销中: 已自动补位 ${gids.join('、')}；${r.reason}`, {
+                module: 'activity', event: '奶茶热销中', result: 'warn',
+            });
+        } else if (r.ok && !r.skipped && r.friendGid) {
             const gids = (Array.isArray(r.friendGids) && r.friendGids.length ? r.friendGids : [r.friendGid])
                 .map((gid) => toNum(gid))
                 .filter((gid) => gid > 0);

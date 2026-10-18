@@ -1465,6 +1465,101 @@ sendImpl = async (service, method, body) => {
         check('首次雇佣成功后先刷新 cmd55，再提交第二个 cmd57',
             twoVacancyCommands.join(',') === '55,57,55,57,55', twoVacancyCommands);
 
+        let laggingEmployees = [];
+        let lastHireNeedsStalePoll = false;
+        let stalePolls = 0;
+        router = async (req) => {
+            if (req.cmd === 55) {
+                let visible = laggingEmployees;
+                if (lastHireNeedsStalePoll && stalePolls === 0) {
+                    stalePolls += 1;
+                    visible = laggingEmployees.slice(0, -1);
+                } else {
+                    lastHireNeedsStalePoll = false;
+                    stalePolls = 0;
+                }
+                return operateReply(55, {
+                    result: cashierDetailResult({ level: 3, employees: visible }),
+                    resultField: 160,
+                });
+            }
+            if (req.cmd === 57) {
+                const outer = mg.parseTop(req.payload);
+                const innerBox = outer.find((x) => x.f === 1 && x.w === 2);
+                const inner = innerBox && mg.parseTop(innerBox.v);
+                const gid = toInt((inner && inner.find((x) => x.f === 3) || {}).v);
+                laggingEmployees.push(employee(gid, true, nowSec, nowSec + 3600));
+                lastHireNeedsStalePoll = true;
+                stalePolls = 0;
+                return operateReply(57, { result: Buffer.alloc(0), resultField: 162 });
+            }
+            throw new Error(`状态滞后用例收到 cmd=${req.cmd}`);
+        };
+        sent.length = 0;
+        const lagging = await milkTea.autoHire([1300000005, 1300000006], { duration: 1 });
+        const laggingCommands = sent.map((x) => x.cmd);
+        check('cmd55 首帧滞后时轮询确认后仍可补满第二人',
+            lagging.ok === true && lagging.hired === 2 && lagging.finalEmployeeCount === 2
+            && laggingCommands.join(',') === '55,57,55,55,57,55,55', {
+                result: lagging,
+                sent: laggingCommands,
+            });
+
+        let hiddenEmployees = [];
+        router = async (req) => {
+            if (req.cmd === 55) {
+                // 模拟 cmd57 已成功但 cmd55 持续返回雇佣前旧状态。
+                return operateReply(55, {
+                    result: cashierDetailResult({ level: 3, employees: [] }),
+                    resultField: 160,
+                });
+            }
+            if (req.cmd === 57) {
+                const outer = mg.parseTop(req.payload);
+                const innerBox = outer.find((x) => x.f === 1 && x.w === 2);
+                const inner = innerBox && mg.parseTop(innerBox.v);
+                const gid = toInt((inner && inner.find((x) => x.f === 3) || {}).v);
+                hiddenEmployees.push(employee(gid, true, nowSec, nowSec + 3600));
+                return operateReply(57, { result: Buffer.alloc(0), resultField: 162 });
+            }
+            throw new Error(`持续滞后用例收到 cmd=${req.cmd}`);
+        };
+        sent.length = 0;
+        const unsynced = await milkTea.autoHire([1300000007, 1300000008], { duration: 1 });
+        check('cmd55 持续滞后时只雇佣一人并停止第二次 cmd57',
+            unsynced.ok === true && unsynced.hired === 1
+            && unsynced.stateSyncPending === true
+            && sent.filter((x) => x.cmd === 57).length === 1, {
+                result: unsynced,
+                sent: sent.map((x) => x.cmd),
+                hidden: hiddenEmployees,
+            });
+
+        router = async (req) => {
+            if (req.cmd === 55) {
+                return operateReply(55, {
+                    result: cashierDetailResult({ level: 3, employees: [] }),
+                    resultField: 160,
+                });
+            }
+            if (req.cmd === 57) {
+                return operateReply(57, {
+                    errorCode: 1034140,
+                    result: Buffer.alloc(0),
+                    resultField: 162,
+                });
+            }
+            if (req.cmd === 56) {
+                return operateReply(56, { result: Buffer.alloc(0), resultField: 161 });
+            }
+            throw new Error(`拒绝原因用例收到 cmd=${req.cmd}`);
+        };
+        sent.length = 0;
+        const rejected = await milkTea.autoHire([1300000009], { duration: 1 });
+        check('cmd55 有空位但 cmd57 返回 1034140 时保留真实请求错误',
+            rejected.ok === false && /code=1034140/.test(rejected.reason)
+            && !/员工已满/.test(rejected.reason), rejected);
+
         const oneEmployee = [
             // 普通店员同样占一个员工位，剩下一个空位只能补一名好友。
             employee(1216569456, false, nowSec - 3600, nowSec + 3600),
@@ -1486,6 +1581,35 @@ sendImpl = async (service, method, body) => {
             && sent.filter((x) => x.cmd === 57).length === 1, {
                 result: partial,
                 sent: sent.map((x) => x.cmd),
+            });
+
+        let hireAllHiddenEmployees = [...oneEmployee];
+        router = async (req) => {
+            if (req.cmd === 55) {
+                return operateReply(55, {
+                    result: cashierDetailResult({ level: 3, employees: oneEmployee }),
+                    resultField: 160,
+                });
+            }
+            if (req.cmd === 57) {
+                const outer = mg.parseTop(req.payload);
+                const innerBox = outer.find((x) => x.f === 1 && x.w === 2);
+                const inner = innerBox && mg.parseTop(innerBox.v);
+                const gid = toInt((inner && inner.find((x) => x.f === 3) || {}).v);
+                hireAllHiddenEmployees.push(employee(gid, true, nowSec, nowSec + 3600));
+                return operateReply(57, { result: Buffer.alloc(0), resultField: 162 });
+            }
+            throw new Error(`批量状态滞后用例收到 cmd=${req.cmd}`);
+        };
+        sent.length = 0;
+        const partialUnsynced = await milkTea.hireAll([1300000010, 1300000011]);
+        check('批量雇佣也会等待状态确认，未同步时不补第二人',
+            partialUnsynced.ok === true && partialUnsynced.hired === 1
+            && partialUnsynced.stateSyncPending === true
+            && sent.filter((x) => x.cmd === 57).length === 1, {
+                result: partialUnsynced,
+                sent: sent.map((x) => x.cmd),
+                hidden: hireAllHiddenEmployees,
             });
 
         const autoEmployees = [...oneEmployee];
