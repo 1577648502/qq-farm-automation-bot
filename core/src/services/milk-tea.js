@@ -86,6 +86,12 @@ const WORK_INTERACT_OPTIONS = [
     { id: 5, name: '申请涨薪', desc: '60% 概率工资翻倍，40% 概率工资减半（实测亏损过）' },
 ];
 const WORK_INTERACT_TYPE = 2;// 默认互动类型(推荐值: 花式摇杯, 稳定 +30%)
+
+function normalizeInteractType(type) {
+    const id = toInt(type);
+    return WORK_INTERACT_OPTIONS.some((op) => op.id === id) ? id : WORK_INTERACT_TYPE;
+}
+
 const CMD_SHIFT = 67;       // 班次(带时间戳)
 const CMD_RECIPE = 69;      // 查询配方
 const FIELD_OFFSET = 105;   // 主活动 payload 字段 = cmd + 105
@@ -1142,21 +1148,28 @@ async function craftMilkTea(limit = 8) {
 let interactInFlight = null;
 
 async function interactWithFriend(type = WORK_INTERACT_TYPE) {
-    if (interactInFlight) return interactInFlight;
-    const task = interactWithFriendOnce(type);
-    interactInFlight = task;
+    const requestedType = normalizeInteractType(type);
+    if (interactInFlight) {
+        if (interactInFlight.type === requestedType) return interactInFlight.task;
+        return {
+            ok: false,
+            skipped: true,
+            reason: '另一项互动正在提交, 本次不重复发送',
+            inFlight: true,
+        };
+    }
+    const task = interactWithFriendOnce(requestedType);
+    const current = { type: requestedType, task };
+    interactInFlight = current;
     try {
         return await task;
     } finally {
-        if (interactInFlight === task) interactInFlight = null;
+        if (interactInFlight === current) interactInFlight = null;
     }
 }
 
 async function interactWithFriendOnce(type = WORK_INTERACT_TYPE) {
-    const requestedType = toInt(type);
-    const interactType = WORK_INTERACT_OPTIONS.some((op) => op.id === requestedType)
-        ? requestedType
-        : WORK_INTERACT_TYPE;
+    const interactType = normalizeInteractType(type);
     // 互动目标只能来自动作发生前的实时 cmd63/#168，绝不接受页面缓存或配置里的 GID。
     const w = await getWorkStatus().catch(() => null);
     if (!w || !w.ok) {
@@ -1211,7 +1224,7 @@ async function interactWithFriendOnce(type = WORK_INTERACT_TYPE) {
     log('活动', `奶茶热销中: [互动请求] gid=${gid} type=${interactType} ` +
         `payload=${payload.toString('hex')} (${payload.length}B)`, { module: 'activity', event: '奶茶热销中', result: 'info' });
     const r = await mainOperate(CMD_WORK_INTERACT, 170, payload);
-    if (!r.ok && r.errorCode !== 0) {
+    if (!r.ok) {
         log('活动', `奶茶热销中: [互动应答] code=${r.errorCode} reason=${String(r.reason || '').slice(0, 60)} ` +
             `raw=${String(r.resultHex || '').slice(0, 120) || '(空)'}`, { module: 'activity', event: '奶茶热销中', result: 'warn' });
     }
@@ -1227,10 +1240,10 @@ async function interactWithFriendOnce(type = WORK_INTERACT_TYPE) {
             shiftKey,
         };
     }
-    if (r.errorCode !== 0) {
+    if (!r.ok) {
         return {
             ok: false,
-            reason: `互动失败 code=${r.errorCode}`,
+            reason: `互动失败 ${r.reason || `code=${r.errorCode}`}`,
             diag: workDiag(w),
             hasEmployer: true,
             shiftKey,
@@ -1290,16 +1303,30 @@ async function interactWithFriendOnce(type = WORK_INTERACT_TYPE) {
 }
 
 /**
- * 领工资(cmd=64) —— 兼职(被雇佣)班次结束后在【我的工作】里领
+ * 领工资(cmd=64) —— 当前班次有可领取工资时在【我的工作】里领取
  * 实测(20261016-080455 idx=127): 请求 #169 = ""; 响应 = {#1: {#1: 1041(奶茶券), #2: 120}, #2: 2}
+ * 另有多笔班次仍在进行中的成功记录，因此不能用 #168.#1.#7(endAt) 阻止领取。
  */
+let claimWageInFlight = null;
+
 async function claimWage() {
+    if (claimWageInFlight) return claimWageInFlight;
+    const task = claimWageOnce();
+    claimWageInFlight = task;
+    try {
+        return await task;
+    } finally {
+        if (claimWageInFlight === task) claimWageInFlight = null;
+    }
+}
+
+async function claimWageOnce() {
     const work = await getWorkStatus().catch(() => null);
     if (!work || !work.ok) {
         return {
             ok: false,
             skipped: true,
-            reason: '无法确认当前兼职状态(cmd63 查询失败), 跳过领工资',
+            reason: `无法确认当前兼职状态(cmd63 查询失败), 跳过领工资${work && work.reason ? `: ${work.reason}` : ''}`,
             hasEmployer: false,
             shiftKey: 0,
         };
@@ -1314,7 +1341,7 @@ async function claimWage() {
         };
     }
     const r = await mainOperate(CMD_CLAIM_WAGE, 169, Buffer.alloc(0));
-    if (r.errorCode !== 0) return { ok: false, reason: `领工资失败 code=${r.errorCode}` };
+    if (!r.ok) return { ok: false, reason: `领工资失败 ${r.reason || `code=${r.errorCode}`}` };
     let gained = null;
     if (r.resultHex) {
         try {
@@ -1399,9 +1426,10 @@ function parseWorkFromRefresh(resultHex) {
             const t13 = findField(c, 13);
             if (t13 && t13.w === 2) out.bonus = toInt((findField(parseTop(t13.v), 2) || {}).v);
             // 抓包闭环: 本班互动前 #9 缺省/0；互动成功后 #9=1 且写入 #12；
-            // 班次进入历史后 #9=2。当前 #9>0 或已有 #12 都表示本班动作已完成。
+            // 班次进入历史后 #9=2。当前只能确认 #12 是互动记录，不能把 #9 的
+            // 生命周期值直接当成“已互动”，否则 #9=2 的已结束班次会被误显示为已互动。
             out.interactionStatus = toInt((findField(c, 9) || {}).v);
-            out.interactionCompleted = out.interactionStatus > 0 || !!out.lastInteraction;
+            out.interactionCompleted = !!out.lastInteraction;
             // "进行中的班次" = 有本次兼职 && (没给结束时间 或 现在还没到结束时间)
             // active = 有当前老板(兼职记录第一条存在) —— ⚠ 不用记录的时间窗口判断:
             // 实测 09:04 那次, 记录的 endAt 已过但互动仍成功(服务端有自己的判定), 用窗口会误杀
@@ -1449,11 +1477,11 @@ function parseWorkFromRefresh(resultHex) {
 async function getWorkStatus() {
     await throttle();
     const r = await operateSafe(GROUP_MAIN, CMD_REFRESH, 168, Buffer.alloc(0));
-    if (r.errorCode !== 0) {
+    if (!r.ok) {
         return {
             ...parseWorkFromRefresh(''),
             ok: false,
-            reason: `查询兼职状态失败 code=${r.errorCode}`,
+            reason: `查询兼职状态失败 ${r.reason || `code=${r.errorCode}`}`,
         };
     }
     const work = parseWorkFromRefresh(r.resultHex);
@@ -1738,7 +1766,7 @@ function stepGap() {
 let lastSeedBuyDay = '';
 let interactSkipLoggedKey = '';   // 已记录过"本班暂不可互动"的班次(避免每 10 分钟刷一条)
 const interactCooldown = new Map();   // 班次key → 下次可尝试时间(只在服务端返回 1034147 后写 10 分钟)
-const interactCompletedShifts = new Set(); // 成功互动后的进程内兜底；权威状态仍以 #168.#1.#9/#12 为准
+const interactCompletedShifts = new Set(); // 成功互动后的进程内兜底；权威状态以 #168.#1.#12 为准
 // 实测(2026-10-16 23:05): 同一班次同一 payload, 距班次开始 5 分钟被拒(1034147)、17 分钟成功
 // → 互动需等班次开始一段时间后才解锁(阈值协议里没有字段), 因此用"班次内定期重试"代替猜阈值
 const INTERACT_COOLDOWN_MS = 10 * 60 * 1000;

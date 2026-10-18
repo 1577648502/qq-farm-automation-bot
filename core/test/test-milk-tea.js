@@ -265,8 +265,30 @@ sendImpl = async (service, method, body) => {
             !Object.prototype.hasOwnProperty.call(work, 'interactTotal')
             && !Object.prototype.hasOwnProperty.call(work, 'interactUsed')
             && !Object.prototype.hasOwnProperty.call(work, 'canInteract'));
-        check('刷新 #168.#1.#9/#12 识别本班互动已完成',
+        check('刷新 #168.#1.#12 识别本班互动已完成',
             work.interactionStatus === 1 && work.interactionCompleted === true, work);
+
+        const statusOnly1 = milkTea.__testing.parseWorkFromRefresh(workRefreshResult({
+            employerGid: 1253397809,
+            interactionStatus: 1,
+        }).toString('hex'));
+        check('#9=1 但没有 #12 不能单独判定本班已互动',
+            statusOnly1.interactionStatus === 1 && statusOnly1.interactionCompleted === false, statusOnly1);
+
+        const statusOnly2 = milkTea.__testing.parseWorkFromRefresh(workRefreshResult({
+            employerGid: 1253397809,
+            interactionStatus: 2,
+        }).toString('hex'));
+        check('当前班次 #9=2 但没有 #12 仍不能判定已互动',
+            statusOnly2.interactionStatus === 2 && statusOnly2.interactionCompleted === false, statusOnly2);
+
+        const recordOnly = milkTea.__testing.parseWorkFromRefresh(workRefreshResult({
+            employerGid: 1253397809,
+            interactionStatus: 0,
+            lastInteraction: { type: 2, count: 1, titleId: 90002, at: 1792223221 },
+        }).toString('hex'));
+        check('#12 是当前已确认的互动完成标志',
+            recordOnly.interactionStatus === 0 && recordOnly.interactionCompleted === true, recordOnly);
 
         const notInteracted = milkTea.__testing.parseWorkFromRefresh(workRefreshResult({
             employerGid: 1253397809,
@@ -462,6 +484,20 @@ sendImpl = async (service, method, body) => {
     }
 
     {
+        router = async (req) => {
+            if (req.cmd === 63) throw new Error('网络连接已断开');
+            throw new Error(`cmd63 网络异常用例不应发送 cmd=${req.cmd}`);
+        };
+
+        sent.length = 0;
+        const failedQuery = await milkTea.getWorkStatus();
+        check('cmd63 抛网络异常时返回查询失败而不是未受雇',
+            failedQuery.ok === false && failedQuery.hasEmployer === false
+            && failedQuery.reason.includes('查询兼职状态失败')
+            && failedQuery.reason.includes('网络连接已断开'), failedQuery);
+    }
+
+    {
         const noEmployer = workRefreshResult({ employerGid: 0 });
         router = async (req) => {
             if (req.cmd === 63) return operateReply(63, { activity: mainActivity(), result: noEmployer, resultField: 168 });
@@ -550,6 +586,30 @@ sendImpl = async (service, method, body) => {
     }
 
     {
+        const interactFailureShift = 1792320000;
+        const current = workRefreshResult({
+            employerGid: 1253397809,
+            startAt: interactFailureShift,
+        });
+        router = async (req) => {
+            if (req.cmd === 63) return operateReply(63, { result: current, resultField: 168 });
+            if (req.cmd === 65) throw new Error('网络连接已断开');
+            throw new Error(`互动网络异常用例收到 cmd=${req.cmd}`);
+        };
+
+        sent.length = 0;
+        const failed = await milkTea.__testing.interactWithFriend(2);
+        check('cmd65 抛网络异常时不能返回互动成功',
+            failed.ok === false && failed.interactionCompleted !== true
+            && failed.reason.includes('互动失败') && failed.reason.includes('网络连接已断开'), failed);
+        const afterFailure = await milkTea.getWorkStatus();
+        check('cmd65 抛网络异常时不能写入本班完成兜底',
+            afterFailure.interactionCompleted === false, afterFailure);
+        check('互动网络异常只发送一次 cmd65',
+            sent.filter((x) => x.cmd === 65).length === 1, sent.map((x) => x.cmd));
+    }
+
+    {
         const concurrentShift = 1792350000;
         const current = workRefreshResult({
             employerGid: 1253397809,
@@ -590,6 +650,43 @@ sendImpl = async (service, method, body) => {
         check('进程内完成兜底可阻止同班再次发送 cmd65',
             repeated.skipped === true && repeated.interactionCompleted === true
             && sent.filter((x) => x.cmd === 65).length === 1, repeated);
+    }
+
+    {
+        const differentTypeShift = 1792360000;
+        const current = workRefreshResult({
+            employerGid: 1253397809,
+            startAt: differentTypeShift,
+        });
+        let releaseInteract;
+        let markInteractStarted;
+        const interactGate = new Promise((resolve) => { releaseInteract = resolve; });
+        const interactStarted = new Promise((resolve) => { markInteractStarted = resolve; });
+        router = async (req) => {
+            if (req.cmd === 63) return operateReply(63, { result: current, resultField: 168 });
+            if (req.cmd === 65) {
+                markInteractStarted();
+                await interactGate;
+                return operateReply(65, {
+                    result: Buffer.concat([varintField(1, 2), varintField(4, 90002)]),
+                    resultField: 170,
+                });
+            }
+            throw new Error(`不同互动类型并发用例收到 cmd=${req.cmd}`);
+        };
+
+        sent.length = 0;
+        const first = milkTea.__testing.interactWithFriend(2);
+        const different = milkTea.__testing.interactWithFriend(5);
+        await interactStarted;
+        releaseInteract();
+        const [firstResult, differentResult] = await Promise.all([first, different]);
+        check('不同互动类型并发时只提交先到的类型',
+            firstResult.ok === true && firstResult.interact && firstResult.interact.type === 2
+            && sent.filter((x) => x.cmd === 65).length === 1, [firstResult, sent.map((x) => x.cmd)]);
+        check('不同互动类型并发时不会串用前一个请求结果',
+            differentResult.ok === false && differentResult.skipped === true
+            && differentResult.inFlight === true, differentResult);
     }
 
     {
@@ -641,6 +738,55 @@ sendImpl = async (service, method, body) => {
             sent.length === 2 && sent[0].cmd === 63 && sent[1].cmd === 64, sent.map((x) => x.cmd));
         check('领工资成功返回奶茶券数量',
             wage.ok === true && wage.gained && wage.gained.id === 1041 && wage.gained.count === 120, wage);
+    }
+
+    {
+        const claimFailureShift = 1792330000;
+        const current = workRefreshResult({ employerGid: 1253397809, startAt: claimFailureShift });
+        router = async (req) => {
+            if (req.cmd === 63) return operateReply(63, { result: current, resultField: 168 });
+            if (req.cmd === 64) throw new Error('网络连接已断开');
+            throw new Error(`领工资网络异常用例收到 cmd=${req.cmd}`);
+        };
+
+        sent.length = 0;
+        const failed = await milkTea.claimWage();
+        check('cmd64 抛网络异常时不能返回领工资成功',
+            failed.ok === false && !failed.gained
+            && failed.reason.includes('领工资失败') && failed.reason.includes('网络连接已断开'), failed);
+    }
+
+    {
+        const concurrentClaimShift = 1792340000;
+        const current = workRefreshResult({ employerGid: 1253397809, startAt: concurrentClaimShift });
+        let releaseClaim;
+        let markClaimStarted;
+        const claimGate = new Promise((resolve) => { releaseClaim = resolve; });
+        const claimStarted = new Promise((resolve) => { markClaimStarted = resolve; });
+        router = async (req) => {
+            if (req.cmd === 63) return operateReply(63, { result: current, resultField: 168 });
+            if (req.cmd === 64) {
+                markClaimStarted();
+                await claimGate;
+                const result = bytesField(1, Buffer.concat([varintField(1, 1041), varintField(2, 120)]));
+                return operateReply(64, { result, resultField: 169 });
+            }
+            throw new Error(`并发领工资用例收到 cmd=${req.cmd}`);
+        };
+
+        sent.length = 0;
+        const first = milkTea.claimWage();
+        const duplicate = milkTea.claimWage();
+        await claimStarted;
+        releaseClaim();
+        const [firstResult, duplicateResult] = await Promise.all([first, duplicate]);
+        check('并发领工资只发送一次 cmd63 和 cmd64',
+            sent.filter((x) => x.cmd === 63).length === 1
+            && sent.filter((x) => x.cmd === 64).length === 1, sent.map((x) => x.cmd));
+        check('并发领工资共享同一成功结果',
+            firstResult.ok === true && duplicateResult.ok === true
+            && firstResult.gained && firstResult.gained.count === 120
+            && duplicateResult.gained && duplicateResult.gained.count === 120, [firstResult, duplicateResult]);
     }
 
     section('8. 宣传喇叭在协议未确认前不发请求');

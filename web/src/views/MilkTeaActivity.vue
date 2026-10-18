@@ -10,7 +10,7 @@
  *
  * 协议见 core/src/services/milk-tea.js
  */
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref } from 'vue'
 import api from '@/api'
 import BaseButton from '@/components/ui/BaseButton.vue'
 import BaseSwitch from '@/components/ui/BaseSwitch.vue'
@@ -24,6 +24,9 @@ const statusBusy = ref(false)
 const actionResult = ref('')
 const busy = ref('')
 const refreshing = ref(false)
+let statusRequestId = 0
+let activeStatusLoadId = 0
+let workRefreshTimer: ReturnType<typeof setInterval> | null = null
 
 const shop = ref<any[]>([])
 const shopBusy = ref(false)
@@ -196,23 +199,36 @@ function fmtHoursAgo(hoursAgo: any) {
 }
 
 async function loadStatus() {
+  const requestId = ++statusRequestId
+  activeStatusLoadId = requestId
   statusBusy.value = true
   try {
     const res = await api.get('/api/activity/milk-tea/status')
+    if (requestId !== statusRequestId) return
     const d = res.data?.data || {}
     const err = apiError(res, d)
     if (err) { reportError('读取经营状态', err); status.value = null; return }
     status.value = d
   } catch (e: any) {
+    if (requestId !== statusRequestId) return
     reportError('读取经营状态', apiError(null, null, e))
   } finally {
-    statusBusy.value = false
+    if (activeStatusLoadId === requestId) {
+      activeStatusLoadId = 0
+      statusBusy.value = false
+    }
   }
 }
 
 async function loadWorkStatus() {
+  const requestId = ++statusRequestId
+  if (activeStatusLoadId) {
+    activeStatusLoadId = 0
+    statusBusy.value = false
+  }
   try {
     const res = await api.get('/api/activity/milk-tea/work')
+    if (requestId !== statusRequestId) return
     const d = res.data?.data || {}
     const err = apiError(res, d)
     if (err) {
@@ -221,6 +237,7 @@ async function loadWorkStatus() {
     }
     status.value = { ...(status.value || {}), work: d }
   } catch (e: any) {
+    if (requestId !== statusRequestId) return
     status.value = {
       ...(status.value || {}),
       work: { ok: false, hasEmployer: false, reason: apiError(null, null, e) },
@@ -580,6 +597,15 @@ async function refreshAll() {
 
 onMounted(() => {
   void refreshAll()
+  workRefreshTimer = setInterval(() => {
+    if (document.hidden || statusBusy.value || busy.value || isSettling.value) return
+    void loadWorkStatus()
+  }, 60_000)
+})
+
+onUnmounted(() => {
+  if (workRefreshTimer) clearInterval(workRefreshTimer)
+  workRefreshTimer = null
 })
 </script>
 
