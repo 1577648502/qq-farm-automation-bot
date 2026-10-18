@@ -20,7 +20,9 @@
  *   cmd=53 开业     {#158: {#1: "店名"}}
  *   cmd=55 收银台详情 {#160: ""}
  *   cmd=56 员工面板 {#161: {#1: selector(普通列表实测=1)}}
- *   cmd=57 雇佣好友 {#162: {#1: {#1: 1, #2: 1, #3: 好友gid}}}
+ *   cmd=57 雇佣好友 {#162: {#1: {#1: 1, #2: 班次档位, #3: 好友gid}}}
+ *        ⚠ 全部 3 个字段必发: 抓包只有 #1=1 的实测(#2=1), 缺任一字段服务端会拒。
+ *        #2 只对 #1=1 有证据(班次 = #9.#5-#9.#4 = 14400s = 4h); 12/24h 档位值未抓到, 不猜。
  *   cmd=58 配方菜单 {#163: ""}
  *   cmd=59 领取收银台收益 {#164: ""}
  *   cmd=60 查询 {#165: {#1: 1}} → {#1,#2,#3} 业务语义未闭环
@@ -40,9 +42,16 @@
  * 任务(0103): List 子活动 #122 = {#2 汇总, #3(repeated) 任务}
  *   任务: {#1 ID, #2 条件, #3 repeated 奖励, #4 状态(1进行中/2可领/3已领)}
  *   领取协议尚未抓到, claimTask/claimAllTasks 一律禁用, 不发送候选请求。
- * 收银台(cmd55/#160): #1 等级, #2 累计营业额, #3 下一级门槛, #9 当前在岗员工,
- *   #10 当日品类销量, #19 待领取收益, #23 长期累计收益, #25 累计品类销量。
- *   领取前必须先查 #19; 无待领取不得发送 cmd59。
+ * 收银台(cmd55/#160): #1 等级, #2 累计营业额, #3 下一级门槛, #4=172800, #9 当前在岗员工,
+ *   #10 当日品类销量, #19 repeated 待领取收益, #22/#24 当日累计杯数(两侧同值),
+ *   #23 repeated 长期累计收益, #25 repeated 累计品类销量。
+ *   #9 员工: #3 班次UID(17位,必须字符串), #4 开始, #5 结束, #6 工资,
+ *           #7 特长id, #8 特长名, #11 {#1 gid, #2 昵称, #4 等级}
+ *   领取前必须先查 #19(2026-10-18 逐帧对照: 领取前 #19=[券585,金837609], 领取后 #19=[],
+ *     #164 到账正好是 券585+金837609; #23 一直不动 = 长期累计, 不是待领取)。
+ *   无 #19 时不得发送 cmd59。
+ * cmd60/#165 = {#1: 50, #2: 2250, #3: 2908400} 与 #160.#23 完全同值 → 是"长期累计"视图,
+ *   用它判断"有无待领取"是错的(它不随待领取变化)。
  * 排行榜(cmd66/#171): 条目 {#1 身份, #2 店名, #3 等级, #4 营业额, #5 排名},
  *   外层 #3 时间 / #4 页码 / #5 是否有下一页。
  * 营业记录(cmd67/#172): 员工记录 #6 是 17 位班次 UID, 必须按字符串保存。
@@ -198,8 +207,17 @@ function encodeUint1(n) {
 }
 function encodeVarint(v) {
     const out = [];
-    let n = Math.max(0, toInt(v));
-    do { out.push(n & 0x7f); n = Math.floor(n / 128); } while (n > 0);
+    let n;
+    if (typeof v === 'bigint') n = v;
+    else if (typeof v === 'string' && /^\d+$/.test(v.trim())) n = BigInt(v.trim());
+    else n = BigInt(Math.max(0, Math.trunc(Number(v) || 0)));
+    n = n < 0n ? 0n : n;
+    do {
+        let byte = Number(n & 0x7fn);
+        n >>= 7n;
+        if (n > 0n) byte |= 0x80;
+        out.push(byte);
+    } while (n > 0n);
     return Buffer.from(out.map((b, i) => (i === out.length - 1 ? b : b | 0x80)));
 }
 
@@ -304,20 +322,41 @@ async function getMainStatus(force = false) {
     }
 }
 
+let claimCashierInFlight = null;
+
 /** 领取收银台收益(核心: 满载会暂停营业且不补发) */
 async function claimCashier() {
+    if (claimCashierInFlight) return claimCashierInFlight;
+    const task = claimCashierOnce();
+    claimCashierInFlight = task;
+    try {
+        return await task;
+    } finally {
+        if (claimCashierInFlight === task) claimCashierInFlight = null;
+    }
+}
+
+async function claimCashierOnce() {
     const before = await getMainStatus().catch(() => null);
     if (before && before.ok && isSettling(before)) {
         return { ok: false, skipped: true, reason: '结算期, 不能领取收银台收益' };
     }
-    // 先看有没有可领(收银台查询 #2 = 待领取), 没有就不发领取请求(避免无意义请求/报错)
-    const info = await getCashierStatus().catch(() => null);
-    if (info && info.ok && info.pending <= 0) {
+    // ⚠ 待领取的唯一权威来源是 cmd55/#160 的 #19(2026-10-18 逐帧对照)。
+    //   之前用 cmd60/#165.#2 判断是错的: 它是长期累计值, 不随待领取变化(实测恒为 2250)。
+    const detail = await getCashierDetail().catch((e) => ({ ok: false, reason: e.message }));
+    if (!detail || !detail.ok) {
+        return {
+            ok: false,
+            skipped: true,
+            reason: `无法确认收银台收益, 跳过领取${detail && detail.reason ? `: ${detail.reason}` : ''}`,
+        };
+    }
+    if (!detail.pending.length) {
         return { ok: true, skipped: true, reason: '收银台暂无可领取收益' };
     }
     // ⚠ 真正的"领取"是 cmd=59(实测: 响应 #164 = 到账物品); cmd=55 只是收银台详情(踩过)
     const r = await mainOperate(CMD_CLAIM_CASHIER, 164, Buffer.alloc(0));
-    if (r.errorCode !== 0) return { ok: false, reason: `领取收银台收益失败 code=${r.errorCode}` };
+    if (!r.ok) return { ok: false, reason: `领取收银台收益失败 ${r.reason || `code=${r.errorCode}`}` };
     // 结果 #164 = 重复的 #1 {物品id, 数量} = 本次到账
     const gainedList = [];
     if (r.resultHex) {
@@ -354,11 +393,32 @@ async function openStore(storeName) {
     return { ok: true, storeName: name, state: parseMainState(r.activity) };
 }
 
-/** 雇佣好友(#1: 0, #2: 1, #3: 好友gid 实测) */
-async function hireFriend(friendGid) {
+/** 雇佣好友: #162.#1 = {#1: 1, #2: 班次档位, #3: 好友gid}(2026-10-18 抓包实测) */
+async function hireFriend(friendGid, duration = 1, opts = {}) {
     const gid = toNum(friendGid);
     if (!gid) return { ok: false, reason: '缺少好友 gid' };
-    const inner = Buffer.concat([encodeVarintField(1, 0), encodeVarintField(2, 1), encodeVarintField(3, gid)]);
+    if (!opts.skipCapacityCheck) {
+        const hiring = await getHiringAvailability().catch((e) => ({ ok: false, reason: e.message }));
+        if (!hiring.ok) {
+            return { ok: false, skipped: true, reason: `无法确认员工容量，跳过雇佣: ${hiring.reason}` };
+        }
+        if (hiring.available <= 0) {
+            return {
+                ok: true,
+                skipped: true,
+                reason: `员工已满(${hiring.employeeCount}/${hiring.employeeCapacity})`,
+                ...publicHiringState(hiring),
+            };
+        }
+        if (hiring.currentGids.has(gid)) {
+            return { ok: true, skipped: true, reason: `好友 ${gid} 已是当前员工`, ...publicHiringState(hiring) };
+        }
+    }
+    const inner = Buffer.concat([
+        encodeVarintField(1, 1),
+        encodeVarintField(2, normalizeHireDuration(duration)),
+        encodeVarintField(3, gid),
+    ]);
     const payload = Buffer.concat([Buffer.from([0x0a, inner.length]), inner]);
     const r = await mainOperate(CMD_HIRE, undefined, payload);
     if (r.errorCode !== 0) return { ok: false, reason: `雇佣失败 code=${r.errorCode}` };
@@ -366,7 +426,7 @@ async function hireFriend(friendGid) {
     return { ok: true, friendGid: gid, state: parseMainState(r.activity) };
 }
 function encodeVarintField(field, value) {
-    return Buffer.concat([Buffer.from([(field << 3) | 0]), encodeVarint(value)]);
+    return Buffer.concat([encodeVarint(field << 3), encodeVarint(value)]);
 }
 
 /** 未闭环字段保持原样: varint 转整数, length-delimited 转十六进制。 */
@@ -747,21 +807,23 @@ async function getFriendList() {
 async function autoHire(hireGids, opts = {}) {
     const list = (Array.isArray(hireGids) ? hireGids : []).map((g) => toInt(g)).filter((g) => g > 0);
     if (!list.length) return { ok: false, reason: '未配置可雇佣好友(先在页面里勾选)' };
-    // 先在岗好友跳过(否则必报 1034140 该雇佣位已有员工在工作)
-    // ⚠ 在岗判定不能只看"是否在 #4 列表里": 实测列表里有人**没有状态字段**(已下班/历史条目)
-    //    真在岗 = state === 1, 或(按真实时间)下班时间 #6 还没到
-    const emp = await getEmployees().catch(() => null);
-    const nowSec = Math.floor(Date.now() / 1000);
-    const workingNames = [];
-    const working = new Set();
+    const duration = normalizeHireDuration(opts.duration);
+    const hiring = await getHiringAvailability().catch((e) => ({ ok: false, reason: e.message }));
+    if (!hiring.ok) {
+        return { ok: false, skipped: true, reason: `无法确认员工容量，跳过雇佣: ${hiring.reason}` };
+    }
+    if (hiring.available <= 0) {
+        return {
+            ok: true,
+            skipped: true,
+            reason: `员工已满(${hiring.employeeCount}/${hiring.employeeCapacity})`,
+            ...publicHiringState(hiring),
+        };
+    }
+    const currentNames = [];
     const skillOf = new Map();
-    for (const f of (emp && emp.friends) || []) {
-        // ⚠ 在岗只看真实下班时间(实测 #5=1 更像是"已签约", 不能当在岗)
-        const onDuty = toInt(f.offAt) > nowSec;
-        if (onDuty) {
-            working.add(toInt(f.gid));
-            workingNames.push(`${f.name || `GID:${f.gid}`}(${EMPLOYEE_SKILLS[toInt(f.titleId)] || '?'})`);
-        }
+    for (const f of hiring.currentEmployees) {
+        currentNames.push(`${f.name || `GID:${f.gid}`}(${EMPLOYEE_SKILLS[toInt(f.titleId)] || '?'})`);
         skillOf.set(toInt(f.gid), toInt(f.titleId));
     }
     // 按"特长加成"排序: 先生命里带的高加成特长(默认 9001 销售 > 9002 宣传 > 9003 服务), 未知放最后
@@ -771,25 +833,44 @@ async function autoHire(hireGids, opts = {}) {
         const i = order.indexOf(sid);
         return i >= 0 ? i : order.length + 1;
     };
-    const todo = list.filter((g) => !working.has(g)).sort((a, b) => rank(a) - rank(b));
+    const todo = [...new Set(list)]
+        .filter((g) => !hiring.currentGids.has(g))
+        .sort((a, b) => rank(a) - rank(b));
     if (!todo.length) {
         return {
             ok: true,
             skipped: true,
-            reason: `白名单 ${list.length} 位都已在岗(${workingNames.slice(0, 4).join('、')}${workingNames.length > 4 ? ' 等' : ''})`,
+            reason: `白名单 ${list.length} 位已是当前员工(${currentNames.slice(0, 4).join('、')}${currentNames.length > 4 ? ' 等' : ''})`,
+            ...publicHiringState(hiring),
         };
     }
-    return autoHireInner(todo);
+    return autoHireInner(todo, duration, hiring.available);
 }
 
 /** autoHire 实际执行体 */
-async function autoHireInner(list) {
+async function autoHireInner(list, duration = 1, maxHires = 1) {
     const errors = [];
+    const hired = [];
+    const results = [];
     for (const gid of list) {
-        const r = await hireFriend(gid).catch((e) => ({ ok: false, reason: e.message }));
-        if (r && r.ok) return { ok: true, friendGid: gid };
+        if (hired.length >= Math.max(1, toInt(maxHires))) break;
+        const r = await hireFriend(gid, duration, { skipCapacityCheck: true }).catch((e) => ({ ok: false, reason: e.message }));
+        results.push({ gid, ok: !!(r && r.ok && !r.skipped), reason: (r && r.reason) || '', skipped: !!(r && r.skipped) });
+        if (r && r.ok && !r.skipped) {
+            hired.push(gid);
+            continue;
+        }
         errors.push(shortErr((r && r.reason) || '失败'));
         await sleep(600);
+    }
+    if (hired.length) {
+        return {
+            ok: true,
+            hired: hired.length,
+            friendGid: hired[0],
+            friendGids: hired,
+            results,
+        };
     }
     // 日志别太长: 只给"尝试了几个 + 第一条原因"
     const first = errors[0] || '未知错误';
@@ -942,12 +1023,14 @@ async function collectFruitUids(limit = Number.MAX_SAFE_INTEGER) {
 
 /**
  * 把背包里**所有**活动果实都做成高级奶茶(分批提交, 批间隔 700ms 防队列打满)
- * @param perBatch 每批提交几个果实 uid
+ * @param perBatch 每批提交几个果实 uid(0/负数 = 用默认值)
  * @param maxBatches 最多几批(防跑飞)
  */
-// 抓包已验证客户端一次提交 8 个果实 uid 并收到 8 条产出；上限仍未知，因此默认按 8 个分批。
-async function craftAllFruits(perBatch = 8, maxBatches = 50) {
-    perBatch = Math.max(1, toInt(perBatch) || 8);
+// 抓包已验证客户端一次提交 15 个果实 uid(20261018-095056, payload 45B = 15 个 varint)。
+const CRAFT_BATCH_SIZE = 15;
+async function craftAllFruits(perBatch = CRAFT_BATCH_SIZE, maxBatches = 50) {
+    const pb = toInt(perBatch);
+    perBatch = Math.min(CRAFT_BATCH_SIZE, pb > 0 ? pb : CRAFT_BATCH_SIZE);
     maxBatches = Math.max(1, toInt(maxBatches) || 50);
     let all = { uids: [], entries: [], fruitIds: [], recipes: [], skipped: [] };
     try {
@@ -1045,7 +1128,7 @@ async function craftAllFruits(perBatch = 8, maxBatches = 50) {
 async function mainOperateCraft(uids) {
     await throttle();
     const packed = encodePackedVarints(uids);
-    const payload = Buffer.concat([Buffer.from([0x0a, packed.length]), packed]);
+    const payload = Buffer.concat([encodeVarint(0x0a), encodeVarint(packed.length), packed]);
     const r = await operateSafe(GROUP_MAIN, CMD_CRAFT_REAL, 167, payload);
     if (r.errorCode !== 0) {
         return {
@@ -1075,10 +1158,11 @@ async function mainOperateCraft(uids) {
  * 制作奶茶(cmd=62, 实测 2026-10-15 新抓包):
  *   请求 #167 = {#1: [果实 uid...](packed)} → 响应回产出的高级奶茶 {#1: 物品id, #2: 数量}
  * 果实来源: 背包里 40525/40526/… 这些活动果实(每个实例有独立 uid)
- * @param limit 单次最多提交几个果实(抓包已验证至少支持 8 个)
+ * @param limit 单次最多提交几个果实(抓包已验证至少 15 个)
  */
-async function craftMilkTea(limit = 8) {
-    limit = Math.max(1, toInt(limit) || 8);
+async function craftMilkTea(limit = CRAFT_BATCH_SIZE) {
+    const lm = toInt(limit);
+    limit = Math.min(CRAFT_BATCH_SIZE, lm > 0 ? lm : CRAFT_BATCH_SIZE);
     let all;
     try {
         all = await collectFruitUids(limit);
@@ -1529,12 +1613,17 @@ async function getEmployees() {
                     const fi = info && info.w === 2 ? parseTop(info.v) : [];
                     const gid = toInt((findField(fi, 1) || {}).v);
                     const nm = (findField(fi, 2) || {}).v;
+                    // ⚠ 昵称可能是特殊字符(emoji 等), toString('utf8') 必须加 encoding 参数
+                    //    (踩过: Buffer→String 不传 encoding 会按 latin1 解, 昵称变乱码)
+                    const name = nm ? Buffer.from(nm).toString('utf8') : `GID:${gid}`;
+                    const titleId = toInt((findField(e, 3) || {}).v);
+                    const title = (findField(e, 4) || {}).v;
                     friends.push({
                         gid,
-                        name: nm ? String(nm) : `GID:${gid}`,
+                        name,
                         level: toInt((findField(fi, 4) || {}).v),
-                        titleId: toInt((findField(e, 3) || {}).v),
-                        titleName: String((findField(e, 4) || {}).v || ''),
+                        titleId,
+                        titleName: title ? Buffer.from(title).toString('utf8') : (EMPLOYEE_SKILLS[titleId] || ''),
                         state: toInt((findField(e, 5) || {}).v),
                         offAt: toInt((findField(e, 6) || {}).v),
                     });
@@ -1542,10 +1631,12 @@ async function getEmployees() {
                     const e = parseTop(x.v);
                     const info = findField(e, 1);
                     const fi = info && info.w === 2 ? parseTop(info.v) : [];
+                    const npcTitle = (findField(e, 4) || {}).v;
+                    const npcName = (findField(fi, 2) || {}).v;
                     npcs.push({
                         id: toInt((findField(fi, 1) || {}).v),
-                        name: String((findField(fi, 2) || {}).v || ''),
-                        titleName: String((findField(e, 4) || {}).v || ''),
+                        name: npcName ? Buffer.from(npcName).toString('utf8') : '',
+                        titleName: npcTitle ? Buffer.from(npcTitle).toString('utf8') : '',
                     });
                 }
             }
@@ -1564,27 +1655,195 @@ async function getEmployees() {
     return { ok: true, selector: 0, field2: 0, field3: 0, friends, npcs };
 }
 
+/** 等级 3 起有两个员工位；低等级只有 1 个。 */
+function employeeCapacityForLevel(level) {
+    return toInt(level) >= 3 ? 2 : 1;
+}
+
+/** 收银台 #160.#9 的当前员工记录，附带按真实时间计算的在岗状态。 */
+async function getHiringAvailability() {
+    const detail = await getCashierDetail();
+    if (!detail || !detail.ok) {
+        return { ok: false, reason: (detail && detail.reason) || '收银台详情不可用', currentEmployees: [] };
+    }
+    const currentEmployees = Array.isArray(detail.currentEmployees)
+        ? detail.currentEmployees
+        : decorateCashierEmployees(detail.employees || []);
+    const employeeCapacity = detail.employeeCapacity || employeeCapacityForLevel(detail.level);
+    return {
+        ok: true,
+        level: detail.level,
+        employeeCapacity,
+        employeeCount: currentEmployees.length,
+        available: Math.max(0, employeeCapacity - currentEmployees.length),
+        currentEmployees,
+        currentGids: new Set(currentEmployees.map((e) => toInt(e.gid)).filter((gid) => gid > 0)),
+        at: detail.at,
+    };
+}
+
+function publicHiringState(hiring) {
+    return {
+        level: hiring.level,
+        employeeCapacity: hiring.employeeCapacity,
+        employeeCount: hiring.employeeCount,
+        available: hiring.available,
+        currentEmployees: hiring.currentEmployees || [],
+        at: hiring.at,
+    };
+}
+
+/** 兼容旧调用: 返回当前员工全量；onDuty 字段区分在岗/已下班。 */
+async function getOnDutyEmployees(detail) {
+    const d = arguments.length > 0 ? detail : await getCashierDetail();
+    if (!d || !d.ok) return { ok: false, reason: (d && d.reason) || '收银台详情不可用', employees: [] };
+    const employees = Array.isArray(d.currentEmployees)
+        ? d.currentEmployees
+        : decorateCashierEmployees(d.employees || []);
+    const onDutyEmployees = employees.filter((x) => x.onDuty);
+    const employeeCapacity = d.employeeCapacity || employeeCapacityForLevel(d.level);
+    return {
+        ok: true,
+        employees,
+        currentEmployees: employees,
+        onDutyEmployees,
+        employeeCapacity,
+        employeeCount: employees.length,
+        onDutyEmployeeCount: onDutyEmployees.length,
+        at: d.at,
+    };
+}
+
+/** 从 repeated {#1 物品id, #2 数量} 里取出全部条目(带物品名) */
+function parseItemEntries(inner, fieldNo) {
+    const out = [];
+    for (const x of inner || []) {
+        if (x.f !== fieldNo || x.w !== 2) continue;
+        const e = parseTop(x.v);
+        const id = toInt((findField(e, 1) || {}).v);
+        if (!id) continue;
+        const count = toInt((findField(e, 2) || {}).v);
+        out.push({ id, count, name: itemLabel(id, count) });
+    }
+    return out;
+}
+
+/** 解析 #160.#1 里的员工(#9): 17 位班次 UID 必须按字符串保存, 否则 JS number 会丢精度 */
+function parseCashierEmployees(inner) {
+    const out = [];
+    for (const x of inner || []) {
+        if (x.f !== 9 || x.w !== 2) continue;
+        const e = parseTop(x.v);
+        const info = findField(e, 11);
+        const fi = info && info.w === 2 ? parseTop(info.v) : [];
+        const gid = toInt((findField(fi, 1) || {}).v);
+        const nm = (findField(fi, 2) || {}).v;
+        const shiftUid = (findField(e, 3) || {}).v;
+        const titleId = toInt((findField(e, 7) || {}).v);
+        const titleName = (findField(e, 8) || {}).v;
+        const typeField = findField(e, 1);
+        const typeValue = typeField ? toInt(typeField.v) : null;
+        const isFriend = typeValue === 1;
+        const isNpc = typeValue === 0;
+        out.push({
+            // ⚠ 17 位 UID 直接 toInt 会丢精度; 存字符串 + 数字各一份(比较用字符串)
+            shiftUid: shiftUid === undefined ? '' : String(shiftUid),
+            gid,
+            name: nm ? Buffer.from(nm).toString('utf8') : `GID:${gid}`,
+            level: toInt((findField(fi, 4) || {}).v),
+            startAt: toInt((findField(e, 4) || {}).v),
+            endAt: toInt((findField(e, 5) || {}).v),
+            wage: toInt((findField(e, 6) || {}).v),
+            titleId,
+            titleName: titleName ? Buffer.from(titleName).toString('utf8') : (EMPLOYEE_SKILLS[titleId] || ''),
+            // 抓包里另一条已下班好友同样缺少 #1；缺失时只能记为 unknown。
+            employeeType: isFriend ? 'friend' : (isNpc ? 'npc' : 'unknown'),
+            isFriend,
+            isNpc,
+        });
+    }
+    return out;
+}
+
+function decorateCashierEmployees(employees) {
+    const nowSec = Math.floor(Date.now() / 1000);
+    return (employees || []).map((x) => ({
+        ...x,
+        remainSeconds: x.endAt > nowSec ? x.endAt - nowSec : 0,
+        onDuty: x.endAt > nowSec,
+    }));
+}
+
 /**
- * 收银台详情(cmd=55) —— **查询**用: 结果 #160 内含可领取信息
- * 注意: 实测它不会发放任何东西(别当领取用, 踩过)
+ * 收银台详情(cmd=55) —— **查询**用, 它不会发放任何东西(别当领取用, 踩过)
+ * #160.#1: #1 等级, #2 累计营业额, #3 下一级门槛, #4=172800, #22/#24 当日累计杯数,
+ *          #9 repeated 当前在岗员工, #10 repeated 当日品类销量,
+ *          #19 repeated **待领取**收益, #23 repeated **长期累计**收益, #25 repeated 累计品类销量
+ * 2026-10-18 逐帧对照: 领取前 #19=[券585,金837609] → cmd59 到账 #164=[券585,金837609]
+ *   → 领取后 #19=[]; 期间 #23 恒为 [券2250,金2908400](= cmd60/#165 的 #2/#3)。
  */
 async function getCashierDetail() {
     const r = await mainOperate(CMD_CASHIER_DETAIL, 160, Buffer.alloc(0));
-    if (r.errorCode !== 0) return { ok: false, reason: `收银台详情失败 code=${r.errorCode}` };
-    let claimable = null;
-    if (r.resultHex) {
-        try {
-            const rf = parseTop(Buffer.from(r.resultHex, 'hex'));
-            const box = findField(rf, 1);
-            const inner = box && box.w === 2 ? parseTop(box.v) : rf;
-            const c23 = findField(inner, 23);
-            if (c23 && c23.w === 2) {
-                const f = parseTop(c23.v);
-                claimable = { id: toInt((findField(f, 1) || {}).v), count: toInt((findField(f, 2) || {}).v) };
-            }
-        } catch (e) { /* 忽略 */ }
+    if (!r.ok) return { ok: false, reason: `收银台详情失败 ${r.reason || `code=${r.errorCode}`}` };
+    if (!r.resultHex) return { ok: false, reason: '收银台详情无结果体' };
+    const out = {
+        ok: true,
+        level: 0,
+        revenue: 0,
+        nextLevelRevenue: 0,
+        field4: 0,
+        referenceValue: 0,
+        todayCups: 0,
+        pending: [],
+        pendingCount: 0,
+        total: [],
+        employees: [],
+        todaySales: [],
+        totalSales: [],
+        at: Date.now(),
+    };
+    try {
+        const rf = parseTop(Buffer.from(r.resultHex, 'hex'));
+        const box = findField(rf, 1);
+        if (!box || box.w !== 2) throw new Error('缺少 #160.#1 容器');
+        const inner = parseTop(box.v);
+        if (!findField(inner, 1)) throw new Error('缺少 #160.#1.#1 等级字段');
+        out.level = toInt((findField(inner, 1) || {}).v);
+        out.revenue = toInt((findField(inner, 2) || {}).v);
+        out.nextLevelRevenue = toInt((findField(inner, 3) || {}).v);
+        out.field4 = toInt((findField(inner, 4) || {}).v);
+        out.referenceValue = out.field4;
+        out.todayCups = toInt((findField(inner, 22) || {}).v) || toInt((findField(inner, 24) || {}).v);
+        out.pending = parseItemEntries(inner, 19);
+        out.total = parseItemEntries(inner, 23);
+        out.employees = decorateCashierEmployees(parseCashierEmployees(inner));
+        out.pendingCount = out.pending.length;
+        out.todaySales = parseSalesByKind(inner, 10);
+        out.totalSales = parseSalesByKind(inner, 25);
+    } catch (e) {
+        return { ok: false, reason: `解析收银台详情失败: ${e.message}` };
     }
-    return { ok: true, claimable, at: Date.now() };
+    out.pendingRewards = out.pending;
+    out.longTermRewards = out.total;
+    out.hasPending = out.pending.length > 0;
+    out.currentEmployees = out.employees;
+    out.employeeCapacity = employeeCapacityForLevel(out.level);
+    out.employeeCount = out.currentEmployees.length;
+    out.onDutyEmployeeCount = out.currentEmployees.filter((x) => x.onDuty).length;
+    return out;
+}
+
+/** #10 当日品类销量 / #25 累计品类销量: {#1 品类id, #2 杯数} */
+function parseSalesByKind(inner, fieldNo) {
+    const out = [];
+    for (const x of inner || []) {
+        if (x.f !== fieldNo || x.w !== 2) continue;
+        const e = parseTop(x.v);
+        const id = toInt((findField(e, 1) || {}).v);
+        const cups = toInt((findField(e, 2) || {}).v);
+        if (id) out.push({ id, cups });
+    }
+    return out;
 }
 
 /**
@@ -1592,16 +1851,18 @@ async function getCashierDetail() {
  * 实测结果 #1 = {#1: 容量(40), #2: 当前待领(253), #3: 累计杯数(164312)}
  */
 async function getCashierStatus() {
-    const r = await mainOperate(CMD_CASHIER_INFO, undefined, Buffer.alloc(0));
-    if (r.errorCode !== 0) return { ok: false, reason: `收银台查询失败 code=${r.errorCode}` };
-    const out = { ok: true, capacity: 0, pending: 0, cups: 0 };
+    const r = await mainOperate(CMD_CASHIER_INFO, undefined, encodeUint1(1));
+    if (!r.ok) return { ok: false, reason: `收银台查询失败 ${r.reason || `code=${r.errorCode}`}` };
+    const out = { ok: true, todayCups: 0, couponTotal: 0, goldTotal: 0 };
     if (r.resultHex) {
         try {
             const rf = parseTop(Buffer.from(r.resultHex, 'hex'));
-            out.capacity = toInt((findField(rf, 1) || {}).v);
-            out.pending = toInt((findField(rf, 2) || {}).v);
-            out.cups = toInt((findField(rf, 3) || {}).v);
-        } catch (e) { /* 忽略 */ }
+            out.todayCups = toInt((findField(rf, 1) || {}).v);
+            out.couponTotal = toInt((findField(rf, 2) || {}).v);
+            out.goldTotal = toInt((findField(rf, 3) || {}).v);
+        } catch (e) {
+            return { ok: false, reason: `解析收银台查询失败: ${e.message}` };
+        }
     }
     return out;
 }
@@ -1682,19 +1943,60 @@ async function claimAllTasks() {
     return { ok: true, claimed };
 }
 
-/** 批量雇佣: 逐个尝试(带节流, 默认最多 10 个); 已雇过的会失败并跳过 */
-async function hireAll(hireGids, limit = 10) {
-    const list = (Array.isArray(hireGids) ? hireGids : []).map((g) => toNum(g)).filter((g) => g > 0).slice(0, Math.max(1, limit));
+/** 批量雇佣: 只补当前空位；满员时不发送 cmd57。 */
+async function hireAll(hireGids, limit = 10, duration = 1) {
+    const list = [...new Set((Array.isArray(hireGids) ? hireGids : []).map((g) => toNum(g)).filter((g) => g > 0))];
     if (!list.length) return { ok: false, reason: '未选择好友' };
+    const hiring = await getHiringAvailability().catch((e) => ({ ok: false, reason: e.message }));
+    if (!hiring.ok) {
+        return { ok: false, skipped: true, reason: `无法确认员工容量，跳过雇佣: ${hiring.reason}` };
+    }
+    if (hiring.available <= 0) {
+        return {
+            ok: true,
+            skipped: true,
+            hired: 0,
+            total: 0,
+            results: [],
+            reason: `员工已满(${hiring.employeeCount}/${hiring.employeeCapacity})`,
+            ...publicHiringState(hiring),
+        };
+    }
+    const candidates = list
+        .filter((gid) => !hiring.currentGids.has(gid))
+        .slice(0, Math.min(Math.max(1, toInt(limit) || 10), hiring.available));
+    if (!candidates.length) {
+        return {
+            ok: true,
+            skipped: true,
+            hired: 0,
+            total: 0,
+            results: [],
+            reason: '白名单中的好友已是当前员工',
+            ...publicHiringState(hiring),
+        };
+    }
+    const dur = normalizeHireDuration(duration);
     const results = [];
-    for (const gid of list) {
-        const r = await hireFriend(gid).catch((e) => ({ ok: false, reason: e.message }));
+    let okCount = 0;
+    for (const gid of candidates) {
+        if (okCount >= hiring.available) break;
+        const r = await hireFriend(gid, dur, { skipCapacityCheck: true }).catch((e) => ({ ok: false, reason: e.message }));
         results.push({ gid, ok: !!(r && r.ok), reason: (r && r.reason) || '' });
+        if (r && r.ok) okCount += 1;
         await sleep(700);   // 节流: 避免把游戏请求队列打满(满了会心跳异常掉线)
     }
-    const okCount = results.filter((x) => x.ok).length;
-    log('活动', `奶茶热销中: 批量雇佣 ${okCount}/${results.length} 成功`, { module: 'activity', event: '奶茶热销中', result: okCount ? 'ok' : 'warn' });
-    return { ok: okCount > 0, hired: okCount, total: results.length, results };
+    log('活动', `奶茶热销中: 批量雇佣 ${okCount}/${candidates.length} 成功（员工 ${hiring.employeeCount + okCount}/${hiring.employeeCapacity}）`, {
+        module: 'activity', event: '奶茶热销中', result: okCount ? 'ok' : 'warn',
+    });
+    return {
+        ok: okCount > 0,
+        hired: okCount,
+        total: candidates.length,
+        results,
+        employeeCapacity: hiring.employeeCapacity,
+        employeeCount: hiring.employeeCount + okCount,
+    };
 }
 
 /**
@@ -1754,6 +2056,19 @@ function workDiag(w) {
  */
 const EMPLOYEE_SKILLS = { 9001: '金牌销售', 9002: '金牌宣传', 9003: '金牌服务', 9004: '默默搬砖' };
 const DEFAULT_HIRE_SKILL_ORDER = [9001, 9002, 9003];
+
+/**
+ * 雇佣班次档位(请求 #162.#1.#2, 2026-10-18 抓包)
+ * 只有 #2=1 有证据: 雇佣应答 #162.#1.#5 的 #5-#4 = 1792302712-1792288312 = 14400s = 4 小时。
+ * 12/24 小时档位值**没有抓到**, 不猜 → 非法值一律回落 1。
+ */
+const HIRE_DURATIONS = [
+    { id: 1, label: '4 小时', seconds: 14400, confirmed: true },
+];
+function normalizeHireDuration(d) {
+    const id = toInt(d);
+    return HIRE_DURATIONS.some((x) => x.id === id) ? id : 1;
+}
 
 /** 步骤之间的固定间隔(实测: 客户端每个动作之间都有明显间隔; 统一 1.2~1.8s 抖动) */
 const STEP_GAP_MIN_MS = 1200;
@@ -1970,6 +2285,7 @@ module.exports = {
         parseWorkFromRefresh,
         encodeUint1,
         encodeVarint,
+        encodeVarintField,
         encodePackedVarints,
         shortErr,
         operateSafe,
@@ -1983,8 +2299,14 @@ module.exports = {
         craftAllFruits,
         useSpeaker,
         getEmployees,
+        getCashierDetail,
+        getOnDutyEmployees,
+        getHiringAvailability,
+        employeeCapacityForLevel,
         getWorkStatus,
         clearMainStatusCache,
+        HIRE_DURATIONS,
+        CRAFT_BATCH_SIZE,
     },
     getMainStatus,
     claimCashier,
@@ -2002,6 +2324,9 @@ module.exports = {
     getEmployees,
     getSalesRecords,
     getSalesRecord,
+    getOnDutyEmployees,
+    getCashierEmployees: getOnDutyEmployees,
+    HIRE_DURATIONS,
     markShopGoodsSoldOut,
     getUpgradeInfo,
     upgradeStore,

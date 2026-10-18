@@ -110,6 +110,19 @@ function parsePackedVarints(buf) {
     return out;
 }
 
+function readVarint(buf, offset = 0) {
+    let value = 0n;
+    let shift = 0n;
+    let pos = offset;
+    while (pos < buf.length) {
+        const byte = buf[pos++];
+        value |= BigInt(byte & 0x7f) << shift;
+        if (!(byte & 0x80)) return { value, offset: pos };
+        shift += 7n;
+    }
+    throw new Error('varint 被截断');
+}
+
 function craftResult(uids) {
     return Buffer.concat((uids || []).map((uid, i) => bytesField(3, Buffer.concat([
         varintField(1, 50001 + i),
@@ -132,6 +145,81 @@ function menuResult(recipes) {
         if (recipe.field7 !== undefined) fields.push(varintField(7, recipe.field7));
         return bytesField(1, Buffer.concat(fields));
     }));
+}
+
+function itemEntries(fieldNo, entries) {
+    return Buffer.concat((entries || []).map((entry) => bytesField(fieldNo, Buffer.concat([
+        varintField(1, entry.id),
+        varintField(2, entry.count),
+    ]))));
+}
+
+function cashierEmployee({
+    friend = false,
+    shiftUid,
+    gid,
+    name,
+    level = 1,
+    startAt,
+    endAt,
+    wage,
+    titleId,
+    titleName,
+} = {}) {
+    const fields = [];
+    if (friend) fields.push(varintField(1, 1));
+    fields.push(
+        varintField(3, shiftUid),
+        varintField(4, startAt),
+        varintField(5, endAt),
+        varintField(6, wage),
+        varintField(7, titleId),
+        bytesField(8, titleName),
+        bytesField(11, Buffer.concat([
+            varintField(1, gid),
+            bytesField(2, name),
+            varintField(4, level),
+        ])),
+    );
+    return bytesField(9, Buffer.concat(fields));
+}
+
+function cashierDetailResult({
+    level = 3,
+    revenue = 33706,
+    nextLevelRevenue = 53000,
+    capacity = 172800,
+    todayCups = 50,
+    pending = [],
+    total = [],
+    todaySales = [],
+    totalSales = [],
+    employees = [],
+} = {}) {
+    const fields = [
+        varintField(1, level),
+        varintField(2, revenue),
+        varintField(3, nextLevelRevenue),
+        varintField(4, capacity),
+        varintField(22, todayCups),
+        varintField(24, todayCups),
+    ];
+    if (pending.length) fields.push(itemEntries(19, pending));
+    if (total.length) fields.push(itemEntries(23, total));
+    for (const sale of todaySales) {
+        fields.push(bytesField(10, Buffer.concat([
+            varintField(1, sale.id),
+            varintField(2, sale.cups),
+        ])));
+    }
+    for (const sale of totalSales) {
+        fields.push(bytesField(25, Buffer.concat([
+            varintField(1, sale.id),
+            varintField(2, sale.cups),
+        ])));
+    }
+    fields.push(...employees);
+    return bytesField(1, Buffer.concat(fields));
 }
 
 function workRefreshResult({
@@ -409,7 +497,11 @@ sendImpl = async (service, method, body) => {
 
     section('5. 制作奶茶 cmd62/#167');
     {
-        const uids = [54428, 54535, 54536, 54537, 54501, 54492, 54500, 54483];
+        const uids = [
+            54428, 54535, 54536, 54537, 54501,
+            54492, 54500, 54483, 54490, 54491,
+            54493, 54494, 54495, 54496, 54497,
+        ];
         router = async (req) => {
             if (req.cmd !== 62) throw new Error(`制作用例收到 cmd=${req.cmd}`);
             const payload = mg.parseTop(req.payload);
@@ -424,8 +516,8 @@ sendImpl = async (service, method, body) => {
         const packed = payload && (payload.find((x) => x.f === 1) || {}).v;
         check('制作请求只发一次 cmd62', sent.filter((x) => x.cmd === 62).length === 1, sent.map((x) => x.cmd));
         check('制作 payload 字段为 #167', req && req.payloadField === 167, req && req.payloadField);
-        check('八个果实 UID 完整打包', packed && parsePackedVarints(packed).join(',') === uids.join(','), packed && Array.from(packed));
-        check('制作结果解析八条产出', r.ok === true && r.made.length === 8, r.made && r.made.length);
+        check('十五个果实 UID 完整打包', packed && parsePackedVarints(packed).join(',') === uids.join(','), packed && Array.from(packed));
+        check('制作结果解析十五条产出', r.ok === true && r.made.length === 15, r.made && r.made.length);
     }
 
     section('6. 制作参数防跑飞');
@@ -871,6 +963,528 @@ sendImpl = async (service, method, body) => {
         const r = await milkTea.__testing.craftAllFruits(2, 1);
         check('返回跳过而不是制作失败', r.ok === false && r.skipped === true && r.used === 0, r);
         check('没有发送 cmd62', !sent.some((x) => x.cmd === 62), sent.map((x) => x.cmd));
+        warehouse.getBag = originalGetBag;
+        warehouse.getBagItems = originalGetBagItems;
+        milkTea.__testing.clearMenuCache();
+    }
+
+    section('11. 收银台详情 cmd55/#160 字段分离与员工身份');
+    {
+        const nowSec = Math.floor(Date.now() / 1000);
+        const friendShiftUid = '30069608145587714';
+        const npcShiftUid = '30069573064429059';
+        const detailResult = cashierDetailResult({
+            pending: [
+                { id: 1041, count: 585 },
+                { id: 1001, count: 837609 },
+            ],
+            total: [
+                { id: 1041, count: 2250 },
+                { id: 1001, count: 2908400 },
+            ],
+            todaySales: [
+                { id: 2, cups: 6794 },
+                { id: 9, cups: 46 },
+            ],
+            totalSales: [
+                { id: 2, cups: 8721 },
+                { id: 9, cups: 58168 },
+            ],
+            employees: [
+                cashierEmployee({
+                    friend: true,
+                    shiftUid: friendShiftUid,
+                    gid: 1253397809,
+                    name: '哈哈🍵',
+                    level: 108,
+                    startAt: nowSec - 3600,
+                    endAt: nowSec + 3600,
+                    wage: 40,
+                    titleId: 9001,
+                    titleName: '金牌销售',
+                }),
+                cashierEmployee({
+                    friend: false,
+                    shiftUid: npcShiftUid,
+                    gid: 1216569456,
+                    name: '不想内卷.',
+                    level: 82,
+                    startAt: nowSec - 7200,
+                    endAt: nowSec - 3600,
+                    wage: 40,
+                    titleId: 9003,
+                    titleName: '金牌服务',
+                }),
+            ],
+        });
+        router = async (req) => {
+            if (req.cmd === 55) return operateReply(55, { result: detailResult, resultField: 160 });
+            throw new Error(`收银台详情用例收到 cmd=${req.cmd}`);
+        };
+
+        sent.length = 0;
+        const detail = await milkTea.__testing.getCashierDetail();
+        const req = sent.find((x) => x.cmd === 55);
+        check('收银台详情发送 cmd55/#160 空 payload',
+            sent.filter((x) => x.cmd === 55).length === 1
+            && req.payloadField === 160 && req.payload.length === 0, req);
+        check('#4=172800 映射为 referenceValue/field4',
+            detail.ok === true && detail.referenceValue === 172800 && detail.field4 === 172800, detail);
+        check('#4 不再使用误导性的 capacity 字段',
+            !Object.prototype.hasOwnProperty.call(detail, 'capacity'), detail);
+        check('#19 只映射待领取 pending',
+            Array.isArray(detail.pending) && detail.pending.length === 2
+            && detail.pending[0].id === 1041 && detail.pending[0].count === 585
+            && detail.pending[1].id === 1001 && detail.pending[1].count === 837609, detail.pending);
+        check('#23 只映射长期累计 total',
+            Array.isArray(detail.total) && detail.total.length === 2
+            && detail.total[0].id === 1041 && detail.total[0].count === 2250
+            && detail.total[1].id === 1001 && detail.total[1].count === 2908400, detail.total);
+        check('pendingCount 是 #19 条目数而不是收益数量求和', detail.pendingCount === 2, detail.pendingCount);
+        check('#22/#24 映射 todayCups', detail.todayCups === 50, detail.todayCups);
+        check('#10/#25 分别映射今日与累计品类销量',
+            Array.isArray(detail.todaySales) && detail.todaySales.length === 2
+            && detail.todaySales[0].cups === 6794
+            && Array.isArray(detail.totalSales) && detail.totalSales.length === 2
+            && detail.totalSales[1].cups === 58168,
+            { todaySales: detail.todaySales, totalSales: detail.totalSales });
+
+        const employees = Array.isArray(detail.employees) ? detail.employees : [];
+        const friend = employees.find((x) => x.shiftUid === friendShiftUid);
+        const npc = employees.find((x) => x.shiftUid === npcShiftUid);
+        check('17 位班次 UID 精确保留为字符串',
+            friend && typeof friend.shiftUid === 'string' && friend.shiftUid === friendShiftUid
+            && npc && typeof npc.shiftUid === 'string' && npc.shiftUid === npcShiftUid,
+            detail.employees);
+        check('好友员工由 #9.#1=1 标记为 isFriend',
+            friend && friend.isFriend === true && friend.isNpc === false, friend);
+        check('缺少 #9.#1 的员工标记为 unknown，不再武断判成 NPC',
+            npc && npc.isFriend === false && npc.isNpc === false
+            && npc.employeeType === 'unknown', npc);
+        check('员工中文与 emoji 昵称按 UTF-8 精确保留',
+            friend && friend.name === '哈哈🍵' && npc && npc.name === '不想内卷.',
+            employees.map((x) => x.name));
+        check('员工 gid/等级/起止时间/工资/特长完整映射',
+            friend && friend.gid === 1253397809 && friend.level === 108
+            && friend.startAt === nowSec - 3600 && friend.endAt === nowSec + 3600
+            && friend.wage === 40 && friend.titleId === 9001 && friend.titleName === '金牌销售',
+            friend);
+        check('Lv3 收银台返回两名员工容量、全量员工数和在岗数',
+            detail.employeeCapacity === 2 && detail.employeeCount === 2
+            && detail.currentEmployees.length === 2 && detail.onDutyEmployeeCount === 1,
+            {
+                employeeCapacity: detail.employeeCapacity,
+                employeeCount: detail.employeeCount,
+                onDutyEmployeeCount: detail.onDutyEmployeeCount,
+            });
+
+        router = async (req) => {
+            if (req.cmd === 55) return operateReply(55, { resultField: 160 });
+            throw new Error(`无结果体用例收到 cmd=${req.cmd}`);
+        };
+        sent.length = 0;
+        const noBody = await milkTea.__testing.getCashierDetail();
+        check('cmd55 无结果体时 ok:false', noBody.ok === false, noBody);
+
+        router = async (req) => {
+            if (req.cmd === 55) {
+                return operateReply(55, {
+                    result: bytesField(1, Buffer.from([0x0a, 0x05, 0x08])),
+                    resultField: 160,
+                });
+            }
+            throw new Error(`解析异常用例收到 cmd=${req.cmd}`);
+        };
+        sent.length = 0;
+        const malformed = await milkTea.__testing.getCashierDetail();
+        check('cmd55/#160 解析异常时 ok:false', malformed.ok === false, malformed);
+    }
+
+    section('12. 领取收银台收益必须先确认 #19 且网络异常不成功');
+    {
+        const listOnly = (req) => {
+            if (req.method === 'List') return activityListReply();
+            return null;
+        };
+        const pendingDetail = cashierDetailResult({
+            pending: [
+                { id: 1041, count: 585 },
+                { id: 1001, count: 837609 },
+            ],
+        });
+        const claimReply = operateReply(59, {
+            result: Buffer.concat([
+                bytesField(1, Buffer.concat([varintField(1, 1041), varintField(2, 585)])),
+                bytesField(1, Buffer.concat([varintField(1, 1001), varintField(2, 837609)])),
+            ]),
+            resultField: 164,
+        });
+
+        milkTea.__testing.clearMainStatusCache();
+        router = async (req) => {
+            const list = listOnly(req);
+            if (list) return list;
+            if (req.cmd === 55) return operateReply(55, { errorCode: 1034149 });
+            throw new Error(`查询失败保护用例不应发送 cmd=${req.cmd}`);
+        };
+        sent.length = 0;
+        const queryFailed = await milkTea.claimCashier();
+        check('cmd55 业务失败时返回 ok:false/skipped',
+            queryFailed.ok === false && queryFailed.skipped === true, queryFailed);
+        check('cmd55 业务失败时不发送 cmd59',
+            !sent.some((x) => x.cmd === 59), sent.map((x) => x.method || x.cmd));
+
+        milkTea.__testing.clearMainStatusCache();
+        router = async (req) => {
+            const list = listOnly(req);
+            if (list) return list;
+            if (req.cmd === 55) throw new Error('网络连接已断开');
+            throw new Error(`查询异常保护用例不应发送 cmd=${req.cmd}`);
+        };
+        sent.length = 0;
+        const queryThrown = await milkTea.claimCashier();
+        check('cmd55 网络异常时返回 ok:false/skipped',
+            queryThrown.ok === false && queryThrown.skipped === true, queryThrown);
+        check('cmd55 网络异常时不发送 cmd59',
+            !sent.some((x) => x.cmd === 59), sent.map((x) => x.method || x.cmd));
+
+        milkTea.__testing.clearMainStatusCache();
+        router = async (req) => {
+            const list = listOnly(req);
+            if (list) return list;
+            if (req.cmd === 55) {
+                return operateReply(55, {
+                    result: cashierDetailResult({ pending: [] }),
+                    resultField: 160,
+                });
+            }
+            throw new Error(`无待领取用例不应发送 cmd=${req.cmd}`);
+        };
+        sent.length = 0;
+        const empty = await milkTea.claimCashier();
+        check('无 #19 时返回 skipped 而不是成功领取',
+            empty.ok === true && empty.skipped === true, empty);
+        check('无 #19 时绝不发送 cmd59',
+            !sent.some((x) => x.cmd === 59), sent.map((x) => x.method || x.cmd));
+
+        milkTea.__testing.clearMainStatusCache();
+        router = async (req) => {
+            const list = listOnly(req);
+            if (list) return list;
+            if (req.cmd === 55) return operateReply(55, { result: pendingDetail, resultField: 160 });
+            if (req.cmd === 59) return claimReply;
+            throw new Error(`有 #19 用例收到 cmd=${req.cmd}`);
+        };
+        sent.length = 0;
+        const claimed = await milkTea.claimCashier();
+        check('有 #19 时只发送一次 cmd59',
+            sent.filter((x) => x.cmd === 59).length === 1, sent.map((x) => x.method || x.cmd));
+        check('有 #19 时成功返回到账明细',
+            claimed.ok === true && Array.isArray(claimed.gainedList) && claimed.gainedList.length === 2
+            && claimed.gainedList[1].count === 837609, claimed);
+
+        milkTea.__testing.clearMainStatusCache();
+        router = async (req) => {
+            const list = listOnly(req);
+            if (list) return list;
+            if (req.cmd === 55) return operateReply(55, { result: pendingDetail, resultField: 160 });
+            if (req.cmd === 59) throw new Error('网络连接已断开');
+            throw new Error(`领取网络异常用例收到 cmd=${req.cmd}`);
+        };
+        sent.length = 0;
+        const claimThrown = await milkTea.claimCashier();
+        check('cmd59 网络异常时必须 ok:false',
+            claimThrown.ok === false && claimThrown.skipped !== true, claimThrown);
+        check('cmd59 网络异常时保留已发送的领取请求',
+            sent.filter((x) => x.cmd === 59).length === 1, sent.map((x) => x.method || x.cmd));
+    }
+
+    section('13. getOnDutyEmployees(detail) 不重复查询 cmd55');
+    {
+        const nowSec = Math.floor(Date.now() / 1000);
+        const detail = {
+            ok: true,
+            at: nowSec,
+            employees: [
+                {
+                    shiftUid: '30069608145587714',
+                    gid: 1253397809,
+                    name: '哈哈🍵',
+                    startAt: nowSec - 3600,
+                    endAt: nowSec + 3600,
+                    isFriend: true,
+                    isNpc: false,
+                },
+                {
+                    shiftUid: '30069573064429059',
+                    gid: 1216569456,
+                    name: '不想内卷.',
+                    startAt: nowSec - 7200,
+                    endAt: nowSec - 3600,
+                    isFriend: false,
+                    isNpc: true,
+                },
+            ],
+        };
+        router = async (req) => {
+            throw new Error(`显式 detail 不应查询 cmd=${req.cmd}`);
+        };
+
+        sent.length = 0;
+        const explicit = await milkTea.__testing.getOnDutyEmployees(detail);
+        check('显式传入 detail 时不发送 cmd55', sent.length === 0, sent.map((x) => x.cmd));
+        check('显式 detail 计算在岗剩余秒数和过期状态',
+            explicit.ok === true && Array.isArray(explicit.employees) && explicit.employees.length === 2
+            && explicit.employees[0].onDuty === true
+            && explicit.employees[0].remainSeconds > 0
+            && explicit.employees[1].onDuty === false
+            && explicit.employees[1].remainSeconds === 0
+            && explicit.employeeCount === 2 && explicit.onDutyEmployeeCount === 1, explicit);
+
+        sent.length = 0;
+        const nullDetail = await milkTea.__testing.getOnDutyEmployees(null);
+        check('显式传 null 时不发送 cmd55', sent.length === 0, sent.map((x) => x.cmd));
+        check('显式传 null 时返回空员工列表', Array.isArray(nullDetail.employees)
+            && nullDetail.employees.length === 0, nullDetail);
+
+        router = async (req) => {
+            if (req.cmd === 55) {
+                return operateReply(55, {
+                    result: cashierDetailResult({
+                        employees: [
+                            cashierEmployee({
+                                friend: true,
+                                shiftUid: '30069608145587714',
+                                gid: 1253397809,
+                                name: '哈哈🍵',
+                                level: 108,
+                                startAt: nowSec - 3600,
+                                endAt: nowSec + 3600,
+                                wage: 40,
+                                titleId: 9001,
+                                titleName: '金牌销售',
+                            }),
+                        ],
+                    }),
+                    resultField: 160,
+                });
+            }
+            throw new Error(`未传 detail 用例收到 cmd=${req.cmd}`);
+        };
+        sent.length = 0;
+        const queried = await milkTea.__testing.getOnDutyEmployees();
+        check('未传 detail 时只查询一次 cmd55',
+            sent.filter((x) => x.cmd === 55).length === 1, sent.map((x) => x.cmd));
+        check('未传 detail 时正常返回在岗员工',
+            queried.ok === true && Array.isArray(queried.employees) && queried.employees.length === 1
+            && queried.employees[0].name === '哈哈🍵'
+            && queried.employees[0].onDuty === true, queried);
+    }
+
+    section('14. 收银台查询 cmd60/#165 请求与长期累计映射');
+    {
+        router = async (req) => {
+            if (req.cmd === 60) {
+                return operateReply(60, {
+                    result: Buffer.concat([
+                        varintField(1, 50),
+                        varintField(2, 2250),
+                        varintField(3, 2908400),
+                    ]),
+                    resultField: 165,
+                });
+            }
+            throw new Error(`cmd60 用例收到 cmd=${req.cmd}`);
+        };
+
+        sent.length = 0;
+        const status = await milkTea.getCashierStatus();
+        const req = sent.find((x) => x.cmd === 60);
+        const payload = req && mg.parseTop(req.payload);
+        check('cmd60/#165 请求 payload 精确为 #1=1',
+            req && req.payloadField === 165 && req.payload.toString('hex') === '0801'
+            && payload && payload.length === 1 && toInt(payload[0].v) === 1,
+            req && { field: req.payloadField, payload: req.payload.toString('hex') });
+        check('#165.#1/#2/#3 映射 todayCups/couponTotal/goldTotal',
+            status.ok === true && status.todayCups === 50
+            && status.couponTotal === 2250 && status.goldTotal === 2908400, status);
+        check('cmd60 不再把长期累计误命名为容量/待领取/杯数',
+            !Object.prototype.hasOwnProperty.call(status, 'capacity')
+            && !Object.prototype.hasOwnProperty.call(status, 'pending')
+            && !Object.prototype.hasOwnProperty.call(status, 'cups'), status);
+    }
+
+    section('15. 雇佣好友 cmd57/#162 精确字段与非法档位回落');
+    {
+        const gid = 1253397809;
+        router = async (req) => {
+            if (req.cmd === 57) return operateReply(57, { result: Buffer.alloc(0), resultField: 162 });
+            throw new Error(`雇佣用例收到 cmd=${req.cmd}`);
+        };
+
+        sent.length = 0;
+        const hired = await milkTea.hireFriend(gid, 1, { skipCapacityCheck: true });
+        const req = sent.find((x) => x.cmd === 57);
+        const outer = req && mg.parseTop(req.payload);
+        const innerBox = outer && outer.find((x) => x.f === 1 && x.w === 2);
+        const inner = innerBox && mg.parseTop(innerBox.v);
+        check('cmd57 外层只有 #162.#1 嵌套体',
+            req && req.payloadField === 162 && outer && outer.length === 1 && inner, outer);
+        check('cmd57/#162.#1 精确包含 #1=1/#2=1/#3=gid',
+            hired.ok === true && inner.length === 3
+            && toInt((inner.find((x) => x.f === 1) || {}).v) === 1
+            && toInt((inner.find((x) => x.f === 2) || {}).v) === 1
+            && toInt((inner.find((x) => x.f === 3) || {}).v) === gid, inner);
+
+        sent.length = 0;
+        const invalid = await milkTea.hireFriend(gid, 99, { skipCapacityCheck: true });
+        const invalidReq = sent.find((x) => x.cmd === 57);
+        const invalidOuter = invalidReq && mg.parseTop(invalidReq.payload);
+        const invalidBox = invalidOuter && invalidOuter.find((x) => x.f === 1 && x.w === 2);
+        const invalidInner = invalidBox && mg.parseTop(invalidBox.v);
+        check('非法 hireDuration 回落到 #2=1',
+            invalid.ok === true
+            && toInt((invalidInner.find((x) => x.f === 2) || {}).v) === 1, invalidInner);
+    }
+
+    section('16. 三级店铺两个员工位、满员跳过与已下班员工占位');
+    {
+        const nowSec = Math.floor(Date.now() / 1000);
+        const employee = (gid, friend, startAt, endAt) => cashierEmployee({
+            friend,
+            shiftUid: String(`3006960814558${String(gid).slice(-4)}`),
+            gid,
+            name: friend ? '好友员工' : '普通员工',
+            level: 100,
+            startAt,
+            endAt,
+            wage: 40,
+            titleId: 9001,
+            titleName: '金牌销售',
+        });
+
+        check('三级店铺员工上限为 2，低等级为 1',
+            milkTea.__testing.employeeCapacityForLevel(3) === 2
+            && milkTea.__testing.employeeCapacityForLevel(2) === 1, {
+                level2: milkTea.__testing.employeeCapacityForLevel(2),
+                level3: milkTea.__testing.employeeCapacityForLevel(3),
+            });
+
+        const fullEmployees = [
+            employee(1253397809, true, nowSec - 3600, nowSec + 3600),
+            // 已下班员工仍是当前员工，不能因此再开一个雇佣位。
+            employee(1216569456, false, nowSec - 7200, nowSec - 3600),
+        ];
+        router = async (req) => {
+            if (req.cmd === 55) {
+                return operateReply(55, {
+                    result: cashierDetailResult({ level: 3, employees: fullEmployees }),
+                    resultField: 160,
+                });
+            }
+            throw new Error(`满员用例收到 cmd=${req.cmd}`);
+        };
+        sent.length = 0;
+        const full = await milkTea.hireAll([1300000001, 1300000002]);
+        check('三级店铺已有两名员工时不再发送 cmd57',
+            full.ok === true && full.skipped === true && full.employeeCapacity === 2
+            && full.employeeCount === 2 && !sent.some((x) => x.cmd === 57), {
+                result: full,
+                sent: sent.map((x) => x.cmd),
+            });
+
+        const oneEmployee = [
+            employee(1253397809, true, nowSec - 3600, nowSec + 3600),
+        ];
+        router = async (req) => {
+            if (req.cmd === 55) {
+                return operateReply(55, {
+                    result: cashierDetailResult({ level: 3, employees: oneEmployee }),
+                    resultField: 160,
+                });
+            }
+            if (req.cmd === 57) return operateReply(57, { result: Buffer.alloc(0), resultField: 162 });
+            throw new Error(`补位用例收到 cmd=${req.cmd}`);
+        };
+        sent.length = 0;
+        const partial = await milkTea.hireAll([1300000001, 1300000002]);
+        check('三级店铺只补一个空位且最多发送一次 cmd57',
+            partial.ok === true && partial.hired === 1
+            && sent.filter((x) => x.cmd === 57).length === 1, {
+                result: partial,
+                sent: sent.map((x) => x.cmd),
+            });
+
+        sent.length = 0;
+        const auto = await milkTea.autoHire([1300000003, 1300000004], { duration: 1 });
+        check('自动雇佣同样受空位上限约束，只雇佣一人',
+            auto.ok === true && auto.hired === 1
+            && sent.filter((x) => x.cmd === 57).length === 1, {
+                result: auto,
+                sent: sent.map((x) => x.cmd),
+            });
+    }
+
+    section('17. cmd62 十五 UID 上限、16 条拆分与多字节 packed 长度');
+    {
+        const originalGetBag = warehouse.getBag;
+        const originalGetBagItems = warehouse.getBagItems;
+        const bagUids = Array.from({ length: 16 }, (_, i) => 71001 + i);
+        warehouse.getBag = async () => ({});
+        warehouse.getBagItems = () => bagUids.map((uid) => ({ id: 40525, uid, count: 1 }));
+        milkTea.__testing.clearMenuCache();
+        const batches = [];
+        router = async (req) => {
+            if (req.cmd === 58) {
+                return operateReply(58, {
+                    result: menuResult([{ id: 2, name: '甜莓奶茶', unlocked: true }]),
+                    resultField: 163,
+                });
+            }
+            if (req.cmd === 62) {
+                const payload = mg.parseTop(req.payload);
+                const packed = (payload.find((x) => x.f === 1) || {}).v;
+                const uids = parsePackedVarints(packed);
+                batches.push(uids);
+                return operateReply(62, { result: craftResult(uids), resultField: 167 });
+            }
+            throw new Error(`批量边界用例收到 cmd=${req.cmd}`);
+        };
+
+        const all = await milkTea.__testing.craftAllFruits(16, 10);
+        check('perBatch=16 时仍按 15+1 拆分两批',
+            batches.length === 2 && batches[0].length === 15 && batches[1].length === 1, batches);
+        check('16 个果实全部制作并返回两批',
+            all.ok === true && all.used === 16 && all.batches === 2, all);
+
+        sent.length = 0;
+        batches.length = 0;
+        const single = await milkTea.craftMilkTea(16);
+        check('craftMilkTea(16) 单次最多提交 15 个 UID',
+            batches.length === 1 && batches[0].length === 15
+            && single.ok === true && single.used === 15, { batches, single });
+
+        const longUids = Array.from(
+            { length: 15 },
+            (_, i) => String(80000000000000000n + BigInt(i)),
+        );
+        sent.length = 0;
+        await milkTea.__testing.mainOperateCraft(longUids);
+        const packedReq = sent.find((x) => x.cmd === 62);
+        const packedPayload = packedReq && packedReq.payload ? mg.parseTop(packedReq.payload) : [];
+        const packed = (packedPayload.find((x) => x.f === 1) || {}).v;
+        let tag = null;
+        let length = null;
+        try {
+            tag = packedReq && readVarint(packedReq.payload, 0);
+            length = tag && readVarint(packedReq.payload, tag.offset);
+        } catch (e) { /* 由下方断言报告 */ }
+        check('packed length >=128 时使用标准多字节 varint 长度',
+            packed && tag && Number(tag.value) === 0x0a
+            && length && Number(length.value) >= 128
+            && Number(length.value) === packed.length,
+            packed && { hex: packed.toString('hex'), tag, length });
+
         warehouse.getBag = originalGetBag;
         warehouse.getBagItems = originalGetBagItems;
         milkTea.__testing.clearMenuCache();

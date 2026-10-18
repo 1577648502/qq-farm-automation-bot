@@ -1409,7 +1409,22 @@ async function handleApiCall(msg) {
                 }));
                 const cashier = await milkTea.getCashierStatus().catch(() => null);
                 const coupon = await milkTea.getMilkCouponBalance().catch(() => 0);
-                result = { ...main, work, cashier, milkCoupon: coupon };
+                // ⚠ 待领取的权威来源是 cmd55/#160.#19; cmd60/#165.#2 是长期累计值, 只作兜底
+                const cashierDetail = await milkTea.getCashierDetail().catch(() => null);
+                // getCashierDetail 已包含 #160.#9 全量员工；复用快照，避免重复发送 cmd55。
+                const employees = await milkTea.getOnDutyEmployees(cashierDetail).catch(() => null);
+                result = {
+                    ...main,
+                    work,
+                    cashier,
+                    cashierDetail,
+                    employees,
+                    currentEmployees: (cashierDetail && cashierDetail.currentEmployees) || [],
+                    employeeCapacity: (cashierDetail && cashierDetail.employeeCapacity) || 0,
+                    employeeCount: (cashierDetail && cashierDetail.employeeCount) || 0,
+                    onDutyEmployeeCount: (cashierDetail && cashierDetail.onDutyEmployeeCount) || 0,
+                    milkCoupon: coupon,
+                };
                 break;
             }
             case 'getMilkTeaWork': {
@@ -1433,7 +1448,7 @@ async function handleApiCall(msg) {
                 result = await milkTea.openStore(args[0] && args[0].storeName);
                 break;
             case 'hireMilkTea':
-                result = await milkTea.hireFriend(args[0] && args[0].friendGid);
+                result = await milkTea.hireFriend((args[0] && args[0].friendGid), (args[0] && args[0].duration));
                 break;
             case 'interactMilkTea': {
                 // 互动目标由服务端 #168 当前老板决定，页面只选择互动类型。
@@ -1469,16 +1484,22 @@ async function handleApiCall(msg) {
             case 'getMilkTeaEmployees':
                 result = await milkTea.getEmployees();
                 break;
+            case 'getMilkTeaOnDuty':
+                result = await milkTea.getOnDutyEmployees();
+                break;
+            case 'getMilkTeaCashierDetail':
+                result = await milkTea.getCashierDetail();
+                break;
             case 'hireMilkTeaAll': {
                 const ho = args[0] || {};
-                result = await milkTea.hireAll(ho.hireGids, ho.limit);
+                result = await milkTea.hireAll(ho.hireGids, ho.limit, ho.duration);
                 break;
             }
             case 'getMilkTeaFriends':
                 result = await milkTea.getFriendList();
                 break;
             case 'hireMilkTeaAuto':
-                result = await milkTea.autoHire((args[0] && args[0].hireGids) || getMilkTeaConfig().hireGids);
+                result = await milkTea.autoHire((args[0] && args[0].hireGids) || getMilkTeaConfig().hireGids, args[0] || {});
                 break;
             case 'getMilkTeaShop':
                 result = await milkTea.getShopGoods();
