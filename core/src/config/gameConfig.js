@@ -513,7 +513,7 @@ function getPlantNameBySeedId(seedId) {
     const plant = seedToPlant.get(id) || getFallbackPlantBySeedId(id);
     if (plant && plant.name) return plant.name;
     // 图鉴用的是果实id(4xxxx)，按果实id反查植物名
-    const byFruit = fruitToPlant.get(id);
+    const byFruit = getPlantByFruitId(id);
     if (byFruit && byFruit.name) return byFruit.name;
     const seedItem = seedItemMap.get(id);
     if (seedItem && seedItem.name) return String(seedItem.name).replace(/种子$/, '');
@@ -568,7 +568,7 @@ function getPlantExp(plantId) {
  * @param {number} fruitId - 果实ID
  */
 function getFruitName(fruitId) {
-    const plant = fruitToPlant.get(fruitId);
+    const plant = getPlantByFruitId(fruitId);
     return plant ? plant.name : `果实${fruitId}`;
 }
 
@@ -577,7 +577,13 @@ function getFruitName(fruitId) {
  * @param {number} fruitId - 果实ID
  */
 function getPlantByFruitId(fruitId) {
-    return fruitToPlant.get(fruitId);
+    const id = Number(fruitId) || 0;
+    const configured = fruitToPlant.get(id);
+    if (configured) return configured;
+
+    const fallback = getFallbackPlantByFruitId(id);
+    if (fallback) fruitToPlant.set(id, fallback);
+    return fallback;
 }
 
 /**
@@ -755,6 +761,25 @@ function getFallbackPlantBySeedId(seedId) {
     const id = Number(seedId) || 0;
     if (!id) return undefined;
     return getFallbackPlantById(id + 1000000);
+}
+
+/**
+ * Plant.json 缺新植物时，按 ItemInfo 的果实/种子类型做严格反查。
+ * 果实 id(4xxxx) -> 种子 id(2xxxx) -> 植物 id(10xxxxx)，且必须能形成完整映射。
+ */
+function getFallbackPlantByFruitId(fruitId) {
+    const id = Number(fruitId) || 0;
+    if (!id) return undefined;
+
+    const fruitItem = getItemById(id);
+    if (!fruitItem || Number(fruitItem.type) !== 6) return undefined;
+
+    const seedId = id - 20000;
+    if (seedId <= 0) return undefined;
+    const plant = getFallbackPlantById(seedId + 1000000);
+    if (!plant || Number(plant.seed_id) !== seedId) return undefined;
+    if (!plant.fruit || Number(plant.fruit.id) !== id) return undefined;
+    return plant;
 }
 
 function getItemById(itemId) {

@@ -19,14 +19,13 @@ isolateDataDir(SB, 'sell-fruit-test');
 (async () => {
     const { types } = require(`${SB}/src/utils/proto`);
     await require(`${SB}/src/utils/proto`).loadProto();
-    const mg = require(`${SB}/src/services/mengchong`);
-
     // 背包内容: 普通果实 / 黄金果(名字含黄金) / 黄金_天工变异果实 / 月华变异果实(非黄金) / 非果实道具
     const BAG = [
         { id: 40002, count: 10 },                       // 白萝卜(普通果实)
         { id: 40304, count: 2 },                        // 黄金果(名字含黄金)
         { id: 40065, count: 3, mutant_types: [5] },     // 大蒜 + 黄金_天工
         { id: 40064, count: 4, mutant_types: [10] },    // 大葱 + 月华(非黄金品质变异)
+        { id: 40165, count: 5 },                        // 茱萸(Plant.json 缺条目, 由 ItemInfo 兜底)
         { id: 80001, count: 9 },                        // 化肥(非果实, type 7)
     ];
 
@@ -44,7 +43,7 @@ isolateDataDir(SB, 'sell-fruit-test');
             soldBatches.push((req.items || []).map(x => ({ id: Number(x.id), count: Number(x.count) })));
             return { body: types.SellReply.encode(types.SellReply.create({})).finish() };
         }
-        throw new Error('未 stub 的接口: ' + key);
+        throw new Error(`未 stub 的接口: ${key}`);
     };
 
     const store = require(`${SB}/src/models/store`);
@@ -60,13 +59,11 @@ isolateDataDir(SB, 'sell-fruit-test');
     const soldIds = () => soldBatches.flat().map(x => x.id).sort((a, b) => a - b);
 
     section('1. 识别"黄金果实"');
-    {
-        check('黄金果(名字含黄金)', wh.isGoldenFruitItem({ id: 40304 }, 40304) === true);
-        check('黄金_天工变异(枚举5)', wh.isGoldenFruitItem({ id: 40065, mutant_types: [5] }, 40065) === true);
-        check('黄金_珍品变异(枚举6)', wh.isGoldenFruitItem({ id: 40065, mutant_types: [6] }, 40065) === true);
-        check('月华变异(枚举10)不是黄金', wh.isGoldenFruitItem({ id: 40064, mutant_types: [10] }, 40064) === false);
-        check('普通果实不是黄金', wh.isGoldenFruitItem({ id: 40002 }, 40002) === false);
-    }
+    check('黄金果(名字含黄金)', wh.isGoldenFruitItem({ id: 40304 }, 40304) === true);
+    check('黄金_天工变异(枚举5)', wh.isGoldenFruitItem({ id: 40065, mutant_types: [5] }, 40065) === true);
+    check('黄金_珍品变异(枚举6)', wh.isGoldenFruitItem({ id: 40065, mutant_types: [6] }, 40065) === true);
+    check('月华变异(枚举10)不是黄金', wh.isGoldenFruitItem({ id: 40064, mutant_types: [10] }, 40064) === false);
+    check('普通果实不是黄金', wh.isGoldenFruitItem({ id: 40002 }, 40002) === false);
 
     section('2. 未勾选: 黄金果实全部保留, 普通果实照卖');
     {
@@ -75,6 +72,7 @@ isolateDataDir(SB, 'sell-fruit-test');
         await wh.sellAllFruits();
         const ids = soldIds();
         check('普通果实(白萝卜)被卖出', ids.includes(40002), ids);
+        check('新果实(茱萸)被卖出', ids.includes(40165), ids);
         check('黄金果(40304)被保留', !ids.includes(40304), ids);
         check('黄金_天工果实被保留', !ids.includes(40065), ids);
         check('月华变异果实被保留', !ids.includes(40064), ids);
@@ -88,6 +86,7 @@ isolateDataDir(SB, 'sell-fruit-test');
         await wh.sellAllFruits();
         const ids = soldIds();
         check('普通果实被卖出', ids.includes(40002), ids);
+        check('新果实(茱萸)仍被卖出', ids.includes(40165), ids);
         check('黄金果(40304)也卖出', ids.includes(40304), ids);
         check('黄金_天工果实也卖出', ids.includes(40065), ids);
         check('月华变异仍保留(非黄金)', !ids.includes(40064), ids);
@@ -95,12 +94,10 @@ isolateDataDir(SB, 'sell-fruit-test');
     }
 
     section('4. 自动卖果实关闭时, 勾了黄金也不卖(尊重总开关)');
-    {
-        store.applyConfigSnapshot({ automation: { sell: false }, sellGoldenFruit: true }, { persist: false, accountId: process.env.FARM_ACCOUNT_ID });
-        soldBatches.length = 0;
-        await wh.sellAllFruits();
-        check('一个都没卖', soldBatches.length === 0, soldBatches);
-    }
+    store.applyConfigSnapshot({ automation: { sell: false }, sellGoldenFruit: true }, { persist: false, accountId: process.env.FARM_ACCOUNT_ID });
+    soldBatches.length = 0;
+    await wh.sellAllFruits();
+    check('一个都没卖', soldBatches.length === 0, soldBatches);
 
     finish();
 })().catch(e => { console.log('测试异常:', e && e.message); process.exit(1); });
