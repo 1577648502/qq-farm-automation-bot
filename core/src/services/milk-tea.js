@@ -20,9 +20,9 @@
  *   cmd=53 开业     {#158: {#1: "店名"}}
  *   cmd=55 收银台详情 {#160: ""}
  *   cmd=56 员工面板 {#161: {#1: selector(普通列表实测=1)}}
- *   cmd=57 雇佣好友 {#162: {#1: {#1: 1, #2: 班次档位, #3: 好友gid}}}
- *        ⚠ 全部 3 个字段必发: 抓包只有 #1=1 的实测(#2=1), 缺任一字段服务端会拒。
- *        #2 只对 #1=1 有证据(班次 = #9.#5-#9.#4 = 14400s = 4h); 12/24h 档位值未抓到, 不猜。
+ *   cmd=57 雇佣好友 {#162: {#1: {#1: 目标员工位, #2: 班次档位, #3: 好友gid}}}
+ *        ⚠ 全部 3 个字段必发; #1 必须选择当前空位(0/1), 重复占位会被服务端拒绝。
+ *        两个成功抓包覆盖员工位 0/1, 且均为 #2=1(班次 = #9.#5-#9.#4 = 14400s = 4h); 12/24h 档位值未抓到, 不猜。
  *   cmd=58 配方菜单 {#163: ""}
  *   cmd=59 领取收银台收益 {#164: ""}
  *   cmd=60 查询 {#165: {#1: 1}} → {#1,#2,#3} 业务语义未闭环
@@ -45,7 +45,7 @@
  * 收银台(cmd55/#160): #1 等级, #2 累计营业额, #3 下一级门槛, #4=172800, #9 当前在岗员工,
  *   #10 当日品类销量, #19 repeated 待领取收益, #22/#24 当日累计杯数(两侧同值),
  *   #23 repeated 长期累计收益, #25 repeated 累计品类销量。
- *   #9 员工: #3 班次UID(17位,必须字符串), #4 开始, #5 结束, #6 工资,
+ *   #9 员工: #1 员工位(缺省=0), #3 班次UID(17位,必须字符串), #4 开始, #5 结束, #6 工资,
  *           #7 特长id, #8 特长名, #11 {#1 gid, #2 昵称, #4 等级}
  *   领取前必须先查 #19(2026-10-18 逐帧对照: 领取前 #19=[券585,金837609], 领取后 #19=[],
  *     #164 到账正好是 券585+金837609; #23 一直不动 = 长期累计, 不是待领取)。
@@ -395,12 +395,15 @@ async function openStore(storeName) {
 }
 
 /**
- * 雇佣好友: #162.#1 = {#1: 1, #2: 班次档位, #3: 好友gid}(2026-10-18 抓包实测)。
+ * 雇佣好友: #162.#1 = {#1: 目标员工位, #2: 班次档位, #3: 好友gid}。
+ * 最新成功抓包中 1 号位已有员工, cmd57 发送 #1=0; 旧成功抓包中 0 号位已有员工, 发送 #1=1。
  * 成功抓包在 cmd57 前固定带有 cmd56/#161 员工面板刷新，自动和手动雇佣都走同一序列。
  */
 async function hireFriend(friendGid, duration = 1, opts = {}) {
     const gid = toNum(friendGid);
     if (!gid) return { ok: false, reason: '缺少好友 gid' };
+    const hasTargetSlot = Object.prototype.hasOwnProperty.call(opts, 'slot');
+    let targetSlot = hasTargetSlot ? toInt(opts.slot) : -1;
     if (!opts.skipCapacityCheck) {
         const hiring = await getHiringAvailability().catch((e) => ({ ok: false, reason: e.message }));
         if (!hiring.ok) {
@@ -417,6 +420,20 @@ async function hireFriend(friendGid, duration = 1, opts = {}) {
         if (hiring.currentGids.has(gid)) {
             return { ok: true, skipped: true, reason: `好友 ${gid} 已是当前员工`, ...publicHiringState(hiring) };
         }
+        if (!hasTargetSlot) {
+            targetSlot = hiring.availableSlots.length ? toInt(hiring.availableSlots[0]) : -1;
+        }
+        if (targetSlot < 0 || !hiring.availableSlots.includes(targetSlot)) {
+            return {
+                ok: false,
+                skipped: true,
+                reason: `目标员工位 ${targetSlot} 不是当前空位`,
+                ...publicHiringState(hiring),
+            };
+        }
+    }
+    if (targetSlot < 0) {
+        return { ok: false, skipped: true, reason: '无法确定目标员工位' };
     }
     const panel = await mainOperate(CMD_EMPLOYEES, 161, encodeVarintField(1, 1));
     if (!panel.ok) {
@@ -428,7 +445,7 @@ async function hireFriend(friendGid, duration = 1, opts = {}) {
         };
     }
     const inner = Buffer.concat([
-        encodeVarintField(1, 1),
+        encodeVarintField(1, targetSlot),
         encodeVarintField(2, normalizeHireDuration(duration)),
         encodeVarintField(3, gid),
     ]);
@@ -442,8 +459,10 @@ async function hireFriend(friendGid, duration = 1, opts = {}) {
             rawReason: r.rawReason || r.reason || `code=${r.errorCode}`,
         };
     }
-    log('活动', `奶茶热销中: 已雇佣好友 ${gid}`, { module: 'activity', event: '奶茶热销中', result: 'ok', friendGid: gid });
-    return { ok: true, friendGid: gid, state: parseMainState(r.activity) };
+    log('活动', `奶茶热销中: 已雇佣好友 ${gid}（员工位 ${targetSlot + 1}）`, {
+        module: 'activity', event: '奶茶热销中', result: 'ok', friendGid: gid, employeeSlot: targetSlot,
+    });
+    return { ok: true, friendGid: gid, employeeSlot: targetSlot, state: parseMainState(r.activity) };
 }
 function encodeVarintField(field, value) {
     return Buffer.concat([encodeVarint(field << 3), encodeVarint(value)]);
@@ -943,7 +962,7 @@ async function autoHire(hireGids, opts = {}) {
             ...publicAutoHireState(hiring),
         };
     }
-    const result = await autoHireInner(todo, duration, hiring.available, hiring.employeeCount);
+    const result = await autoHireInner(todo, duration, hiring.available, hiring.employeeCount, hiring);
     const { finalHiring, ...publicResult } = result;
     return { ...publicResult, ...publicAutoHireState(finalHiring || hiring, result.hired, hiring) };
 }
@@ -975,20 +994,27 @@ async function confirmHiredEmployee(gid, previousEmployeeCount) {
 }
 
 /** autoHire 实际执行体 */
-async function autoHireInner(list, duration = 1, maxHires = 1, initialEmployeeCount = 0) {
+async function autoHireInner(list, duration = 1, maxHires = 1, initialEmployeeCount = 0, initialHiring = null) {
     const errors = [];
     const hired = [];
     const results = [];
     const hireLimit = Math.max(1, toInt(maxHires));
     let confirmedEmployeeCount = Math.max(0, toInt(initialEmployeeCount));
-    let finalHiring = null;
+    let finalHiring = initialHiring;
     let stateSyncPending = false;
     let syncReason = '';
     for (const gid of list) {
         if (hired.length >= hireLimit) break;
-        const r = await hireFriend(gid, duration, { skipCapacityCheck: true }).catch((e) => ({ ok: false, reason: e.message }));
+        const availableSlots = finalHiring && Array.isArray(finalHiring.availableSlots)
+            ? finalHiring.availableSlots
+            : [];
+        const targetSlot = availableSlots.length ? toInt(availableSlots[0]) : -1;
+        if (targetSlot < 0) break;
+        const r = await hireFriend(gid, duration, { skipCapacityCheck: true, slot: targetSlot })
+            .catch((e) => ({ ok: false, reason: e.message }));
         results.push({
             gid,
+            slot: targetSlot,
             ok: !!(r && r.ok && !r.skipped),
             reason: (r && r.reason) || '',
             skipped: !!(r && r.skipped),
@@ -1007,7 +1033,7 @@ async function autoHireInner(list, duration = 1, maxHires = 1, initialEmployeeCo
             }
             finalHiring = confirmed.hiring;
             confirmedEmployeeCount = confirmed.hiring.employeeCount;
-            if (confirmed.hiring.available <= 0) break;
+            if (!confirmed.hiring || confirmed.hiring.available <= 0) break;
             continue;
         }
         errors.push(shortErr((r && r.reason) || '失败'));
@@ -1832,6 +1858,10 @@ async function getHiringAvailability() {
         employeeCapacity,
         employeeCount: currentEmployees.length,
         available: Math.max(0, employeeCapacity - currentEmployees.length),
+        availableSlots: employeeCapacity === currentEmployees.length
+            ? []
+            : Array.from({ length: employeeCapacity }, (_, slot) => slot)
+                .filter((slot) => !currentEmployees.some((employee) => toInt(employee.slot) === slot)),
         currentEmployees,
         currentGids: new Set(currentEmployees.map((e) => toInt(e.gid)).filter((gid) => gid > 0)),
         at: detail.at,
@@ -1844,6 +1874,7 @@ function publicHiringState(hiring) {
         employeeCapacity: hiring.employeeCapacity,
         employeeCount: hiring.employeeCount,
         available: hiring.available,
+        availableSlots: hiring.availableSlots || [],
         currentEmployees: hiring.currentEmployees || [],
         at: hiring.at,
     };
@@ -1900,7 +1931,7 @@ function parseItemEntries(inner, fieldNo) {
     return out;
 }
 
-/** 解析 #160.#1 里的员工(#9): 17 位班次 UID 必须按字符串保存, 否则 JS number 会丢精度 */
+/** 解析 #160.#1 里的员工(#9): #1 是员工位, 17 位班次 UID 必须按字符串保存。 */
 function parseCashierEmployees(inner) {
     const out = [];
     for (const x of inner || []) {
@@ -1913,10 +1944,7 @@ function parseCashierEmployees(inner) {
         const shiftUid = (findField(e, 3) || {}).v;
         const titleId = toInt((findField(e, 7) || {}).v);
         const titleName = (findField(e, 8) || {}).v;
-        const typeField = findField(e, 1);
-        const typeValue = typeField ? toInt(typeField.v) : null;
-        const isFriend = typeValue === 1;
-        const isNpc = typeValue === 0;
+        const slot = toInt((findField(e, 1) || { v: 0 }).v);
         out.push({
             // ⚠ 17 位 UID 直接 toInt 会丢精度; 存字符串 + 数字各一份(比较用字符串)
             shiftUid: shiftUid === undefined ? '' : String(shiftUid),
@@ -1928,10 +1956,11 @@ function parseCashierEmployees(inner) {
             wage: toInt((findField(e, 6) || {}).v),
             titleId,
             titleName: titleName ? Buffer.from(titleName).toString('utf8') : (EMPLOYEE_SKILLS[titleId] || ''),
-            // 抓包里另一条已下班好友同样缺少 #1；缺失时只能记为 unknown。
-            employeeType: isFriend ? 'friend' : (isNpc ? 'npc' : 'unknown'),
-            isFriend,
-            isNpc,
+            slot,
+            // 收银台员工记录未提供可靠的好友/NPC 类型字段；缺失时记为 unknown。
+            employeeType: 'unknown',
+            isFriend: false,
+            isNpc: false,
         });
     }
     return out;
@@ -2159,9 +2188,14 @@ async function hireAll(hireGids, limit = 10, duration = 1) {
     let failureRawReason = '';
     for (const gid of candidates) {
         if (okCount >= hiring.available || currentHiring.available <= 0) break;
-        const r = await hireFriend(gid, dur, { skipCapacityCheck: true }).catch((e) => ({ ok: false, reason: e.message }));
+        const availableSlots = currentHiring.availableSlots || [];
+        const targetSlot = availableSlots.length ? toInt(availableSlots[0]) : -1;
+        if (targetSlot < 0) break;
+        const r = await hireFriend(gid, dur, { skipCapacityCheck: true, slot: targetSlot })
+            .catch((e) => ({ ok: false, reason: e.message }));
         results.push({
             gid,
+            slot: targetSlot,
             ok: !!(r && r.ok),
             reason: (r && r.reason) || '',
             ...(r && r.errorCode ? { errorCode: r.errorCode, rawReason: r.rawReason || '' } : {}),
@@ -2188,7 +2222,8 @@ async function hireAll(hireGids, limit = 10, duration = 1) {
     const staff = stateSyncPending
         ? '，员工列表状态待同步'
         : `（员工 ${currentHiring.employeeCount}/${currentHiring.employeeCapacity}）`;
-    log('活动', `奶茶热销中: 批量雇佣尝试 ${results.length}/${candidates.length}，成功 ${okCount} 人${staff}`, {
+    const failureText = failureReason ? `：${shortErr(failureReason)}` : '';
+    log('活动', `奶茶热销中: 批量雇佣尝试 ${results.length}/${candidates.length}，成功 ${okCount} 人${staff}${failureText}`, {
         module: 'activity', event: '奶茶热销中', result: okCount ? (stateSyncPending ? 'warn' : 'ok') : 'warn',
     });
     const stopReason = failureReason

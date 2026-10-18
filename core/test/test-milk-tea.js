@@ -92,6 +92,17 @@ function parseOperateRequest(body) {
     return { group, cmd, payloadField: payload && payload.f, payload: payload && Buffer.from(payload.v), fields };
 }
 
+function hireRequestInner(req) {
+    const outer = req && req.payload && mg.parseTop(req.payload);
+    const innerBox = outer && outer.find((x) => x.f === 1 && x.w === 2);
+    return innerBox ? mg.parseTop(innerBox.v) : null;
+}
+
+function hireRequestSlot(req) {
+    const inner = hireRequestInner(req);
+    return toInt((inner && inner.find((x) => x.f === 1) || {}).v);
+}
+
 function parsePackedVarints(buf) {
     const out = [];
     let value = 0n;
@@ -155,7 +166,7 @@ function itemEntries(fieldNo, entries) {
 }
 
 function cashierEmployee({
-    friend = false,
+    slot,
     shiftUid,
     gid,
     name,
@@ -167,7 +178,7 @@ function cashierEmployee({
     titleName,
 } = {}) {
     const fields = [];
-    if (friend) fields.push(varintField(1, 1));
+    if (slot !== undefined && slot !== null) fields.push(varintField(1, slot));
     fields.push(
         varintField(3, shiftUid),
         varintField(4, startAt),
@@ -1001,11 +1012,11 @@ sendImpl = async (service, method, body) => {
         milkTea.__testing.clearMenuCache();
     }
 
-    section('11. 收银台详情 cmd55/#160 字段分离与员工身份');
+    section('11. 收银台详情 cmd55/#160 字段分离与员工位');
     {
         const nowSec = Math.floor(Date.now() / 1000);
-        const friendShiftUid = '30069608145587714';
-        const npcShiftUid = '30069573064429059';
+        const slotOneShiftUid = '30069608145587714';
+        const slotZeroShiftUid = '30069573064429059';
         const detailResult = cashierDetailResult({
             pending: [
                 { id: 1041, count: 585 },
@@ -1025,8 +1036,8 @@ sendImpl = async (service, method, body) => {
             ],
             employees: [
                 cashierEmployee({
-                    friend: true,
-                    shiftUid: friendShiftUid,
+                    slot: 1,
+                    shiftUid: slotOneShiftUid,
                     gid: 1253397809,
                     name: '哈哈🍵',
                     level: 108,
@@ -1037,8 +1048,8 @@ sendImpl = async (service, method, body) => {
                     titleName: '金牌销售',
                 }),
                 cashierEmployee({
-                    friend: false,
-                    shiftUid: npcShiftUid,
+                    // 旧抓包里 0 号位省略 #1；解析时按 protobuf 默认值记为 slot=0。
+                    shiftUid: slotZeroShiftUid,
                     gid: 1216569456,
                     name: '不想内卷.',
                     level: 82,
@@ -1083,25 +1094,24 @@ sendImpl = async (service, method, body) => {
             { todaySales: detail.todaySales, totalSales: detail.totalSales });
 
         const employees = Array.isArray(detail.employees) ? detail.employees : [];
-        const friend = employees.find((x) => x.shiftUid === friendShiftUid);
-        const npc = employees.find((x) => x.shiftUid === npcShiftUid);
+        const slotOne = employees.find((x) => x.shiftUid === slotOneShiftUid);
+        const slotZero = employees.find((x) => x.shiftUid === slotZeroShiftUid);
         check('17 位班次 UID 精确保留为字符串',
-            friend && typeof friend.shiftUid === 'string' && friend.shiftUid === friendShiftUid
-            && npc && typeof npc.shiftUid === 'string' && npc.shiftUid === npcShiftUid,
+            slotOne && typeof slotOne.shiftUid === 'string' && slotOne.shiftUid === slotOneShiftUid
+            && slotZero && typeof slotZero.shiftUid === 'string' && slotZero.shiftUid === slotZeroShiftUid,
             detail.employees);
-        check('好友员工由 #9.#1=1 标记为 isFriend',
-            friend && friend.isFriend === true && friend.isNpc === false, friend);
-        check('缺少 #9.#1 的员工标记为 unknown，不再武断判成 NPC',
-            npc && npc.isFriend === false && npc.isNpc === false
-            && npc.employeeType === 'unknown', npc);
+        check('#9.#1 映射为员工位，缺省记录按 0 号位处理',
+            slotOne && slotOne.slot === 1 && slotZero && slotZero.slot === 0
+            && slotOne.employeeType === 'unknown' && slotZero.employeeType === 'unknown',
+            { slotOne, slotZero });
         check('员工中文与 emoji 昵称按 UTF-8 精确保留',
-            friend && friend.name === '哈哈🍵' && npc && npc.name === '不想内卷.',
+            slotOne && slotOne.name === '哈哈🍵' && slotZero && slotZero.name === '不想内卷.',
             employees.map((x) => x.name));
         check('员工 gid/等级/起止时间/工资/特长完整映射',
-            friend && friend.gid === 1253397809 && friend.level === 108
-            && friend.startAt === nowSec - 3600 && friend.endAt === nowSec + 3600
-            && friend.wage === 40 && friend.titleId === 9001 && friend.titleName === '金牌销售',
-            friend);
+            slotOne && slotOne.gid === 1253397809 && slotOne.level === 108
+            && slotOne.startAt === nowSec - 3600 && slotOne.endAt === nowSec + 3600
+            && slotOne.wage === 40 && slotOne.titleId === 9001 && slotOne.titleName === '金牌销售',
+            slotOne);
         check('Lv3 收银台返回两名员工容量、全量员工数和在岗数',
             detail.employeeCapacity === 2 && detail.employeeCount === 2
             && detail.currentEmployees.length === 2 && detail.onDutyEmployeeCount === 1,
@@ -1286,7 +1296,7 @@ sendImpl = async (service, method, body) => {
                     result: cashierDetailResult({
                         employees: [
                             cashierEmployee({
-                                friend: true,
+                                slot: 1,
                                 shiftUid: '30069608145587714',
                                 gid: 1253397809,
                                 name: '哈哈🍵',
@@ -1347,7 +1357,7 @@ sendImpl = async (service, method, body) => {
             && !Object.prototype.hasOwnProperty.call(status, 'cups'), status);
     }
 
-    section('15. 雇佣好友 cmd57/#162 精确字段与非法档位回落');
+    section('15. 雇佣好友 cmd57/#162 目标员工位与非法档位回落');
     {
         const gid = 1253397809;
         router = async (req) => {
@@ -1357,7 +1367,7 @@ sendImpl = async (service, method, body) => {
         };
 
         sent.length = 0;
-        const hired = await milkTea.hireFriend(gid, 1, { skipCapacityCheck: true });
+        const hired = await milkTea.hireFriend(gid, 1, { skipCapacityCheck: true, slot: 1 });
         const req = sent.find((x) => x.cmd === 57);
         check('雇佣前按成功抓包先发送 cmd56/#161',
             sent.map((x) => x.cmd).join(',') === '56,57'
@@ -1365,18 +1375,17 @@ sendImpl = async (service, method, body) => {
             && sent[0].payload.toString('hex') === '0801',
             sent.map((x) => ({ cmd: x.cmd, field: x.payloadField, payload: x.payload.toString('hex') })));
         const outer = req && mg.parseTop(req.payload);
-        const innerBox = outer && outer.find((x) => x.f === 1 && x.w === 2);
-        const inner = innerBox && mg.parseTop(innerBox.v);
+        const inner = hireRequestInner(req);
         check('cmd57 外层只有 #162.#1 嵌套体',
             req && req.payloadField === 162 && outer && outer.length === 1 && inner, outer);
-        check('cmd57/#162.#1 精确包含 #1=1/#2=1/#3=gid',
+        check('cmd57/#162.#1 精确包含目标位 #1=1/#2=1/#3=gid',
             hired.ok === true && inner.length === 3
             && toInt((inner.find((x) => x.f === 1) || {}).v) === 1
             && toInt((inner.find((x) => x.f === 2) || {}).v) === 1
             && toInt((inner.find((x) => x.f === 3) || {}).v) === gid, inner);
 
         sent.length = 0;
-        const invalid = await milkTea.hireFriend(gid, 99, { skipCapacityCheck: true });
+        const invalid = await milkTea.hireFriend(gid, 99, { skipCapacityCheck: true, slot: 1 });
         const invalidReq = sent.find((x) => x.cmd === 57);
         const invalidOuter = invalidReq && mg.parseTop(invalidReq.payload);
         const invalidBox = invalidOuter && invalidOuter.find((x) => x.f === 1 && x.w === 2);
@@ -1384,16 +1393,65 @@ sendImpl = async (service, method, body) => {
         check('非法 hireDuration 回落到 #2=1',
             invalid.ok === true
             && toInt((invalidInner.find((x) => x.f === 2) || {}).v) === 1, invalidInner);
+
+        const nowSec = Math.floor(Date.now() / 1000);
+        const latestCaptureGid = 1226530474;
+        const employees = [cashierEmployee({
+            slot: 1,
+            shiftUid: '30070362835095071',
+            gid: 1244632861,
+            name: '南桉',
+            level: 109,
+            startAt: nowSec - 3600,
+            endAt: nowSec + 3600,
+            wage: 40,
+            titleId: 9003,
+            titleName: '金牌服务',
+        })];
+        router = async (req) => {
+            if (req.cmd === 55) {
+                return operateReply(55, {
+                    result: cashierDetailResult({ level: 3, employees }),
+                    resultField: 160,
+                });
+            }
+            if (req.cmd === 56) return operateReply(56, { result: Buffer.alloc(0), resultField: 161 });
+            if (req.cmd === 57) {
+                const slot = hireRequestSlot(req);
+                employees.push(cashierEmployee({
+                    slot,
+                    shiftUid: '30070362835095072',
+                    gid: latestCaptureGid,
+                    name: '最新抓包好友',
+                    level: 100,
+                    startAt: nowSec,
+                    endAt: nowSec + 14400,
+                    wage: 40,
+                    titleId: 9001,
+                    titleName: '金牌销售',
+                }));
+                return operateReply(57, { result: Buffer.alloc(0), resultField: 162 });
+            }
+            throw new Error(`最新抓包手动雇佣用例收到 cmd=${req.cmd}`);
+        };
+        sent.length = 0;
+        const latestCaptureHire = await milkTea.hireFriend(latestCaptureGid, 1);
+        const latestCaptureReq = sent.find((x) => x.cmd === 57);
+        check('最新成功抓包: 1 号位已占用时手动雇佣自动选择 0 号位',
+            latestCaptureHire.ok === true && latestCaptureHire.employeeSlot === 0
+            && hireRequestSlot(latestCaptureReq) === 0
+            && sent.map((x) => x.cmd).join(',') === '55,56,57',
+            { result: latestCaptureHire, sent: sent.map((x) => ({ cmd: x.cmd, slot: hireRequestSlot(x) })) });
     }
 
     section('16. 三级店铺两个员工位、满员跳过与已下班员工占位');
     {
         const nowSec = Math.floor(Date.now() / 1000);
-        const employee = (gid, friend, startAt, endAt) => cashierEmployee({
-            friend,
+        const employee = (gid, slot, startAt, endAt) => cashierEmployee({
+            slot,
             shiftUid: String(`3006960814558${String(gid).slice(-4)}`),
             gid,
-            name: friend ? '好友员工' : '普通员工',
+            name: '雇佣员工',
             level: 100,
             startAt,
             endAt,
@@ -1410,9 +1468,9 @@ sendImpl = async (service, method, body) => {
             });
 
         const fullEmployees = [
-            employee(1253397809, true, nowSec - 3600, nowSec + 3600),
+            employee(1253397809, 0, nowSec - 3600, nowSec + 3600),
             // 已下班员工仍是当前员工，不能因此再开一个雇佣位。
-            employee(1216569456, false, nowSec - 7200, nowSec - 3600),
+            employee(1216569456, 1, nowSec - 7200, nowSec - 3600),
         ];
         router = async (req) => {
             if (req.cmd === 55) {
@@ -1451,7 +1509,7 @@ sendImpl = async (service, method, body) => {
                 const innerBox = outer.find((x) => x.f === 1 && x.w === 2);
                 const inner = innerBox && mg.parseTop(innerBox.v);
                 const gid = toInt((inner && inner.find((x) => x.f === 3) || {}).v);
-                twoVacanciesEmployees.push(employee(gid, true, nowSec, nowSec + 3600));
+                twoVacanciesEmployees.push(employee(gid, hireRequestSlot(req), nowSec, nowSec + 3600));
                 hireSettled = false;
                 return operateReply(57, { result: Buffer.alloc(0), resultField: 162 });
             }
@@ -1469,6 +1527,9 @@ sendImpl = async (service, method, body) => {
                 result: twoVacancies,
                 sent: twoVacancyCommands,
             });
+        check('两个空位按 0、1 号位依次提交 cmd57',
+            sent.filter((x) => x.cmd === 57).map(hireRequestSlot).join(',') === '0,1',
+            sent.filter((x) => x.cmd === 57).map((x) => ({ slot: hireRequestSlot(x), gid: toInt((hireRequestInner(x).find((f) => f.f === 3) || {}).v) })));
         check('首次雇佣成功后先刷新 cmd55，再提交第二个 cmd57',
             twoVacancyCommands.join(',') === '55,56,57,55,56,57,55', twoVacancyCommands);
 
@@ -1495,7 +1556,7 @@ sendImpl = async (service, method, body) => {
                 const innerBox = outer.find((x) => x.f === 1 && x.w === 2);
                 const inner = innerBox && mg.parseTop(innerBox.v);
                 const gid = toInt((inner && inner.find((x) => x.f === 3) || {}).v);
-                laggingEmployees.push(employee(gid, true, nowSec, nowSec + 3600));
+                laggingEmployees.push(employee(gid, hireRequestSlot(req), nowSec, nowSec + 3600));
                 lastHireNeedsStalePoll = true;
                 stalePolls = 0;
                 return operateReply(57, { result: Buffer.alloc(0), resultField: 162 });
@@ -1527,7 +1588,7 @@ sendImpl = async (service, method, body) => {
                 const innerBox = outer.find((x) => x.f === 1 && x.w === 2);
                 const inner = innerBox && mg.parseTop(innerBox.v);
                 const gid = toInt((inner && inner.find((x) => x.f === 3) || {}).v);
-                hiddenEmployees.push(employee(gid, true, nowSec, nowSec + 3600));
+                hiddenEmployees.push(employee(gid, hireRequestSlot(req), nowSec, nowSec + 3600));
                 return operateReply(57, { result: Buffer.alloc(0), resultField: 162 });
             }
             if (req.cmd === 56) return operateReply(56, { result: Buffer.alloc(0), resultField: 161 });
@@ -1601,7 +1662,7 @@ sendImpl = async (service, method, body) => {
 
         const oneEmployee = [
             // 普通店员同样占一个员工位，剩下一个空位只能补一名好友。
-            employee(1216569456, false, nowSec - 3600, nowSec + 3600),
+            employee(1216569456, 0, nowSec - 3600, nowSec + 3600),
         ];
         router = async (req) => {
             if (req.cmd === 55) {
@@ -1618,9 +1679,10 @@ sendImpl = async (service, method, body) => {
         const partial = await milkTea.hireAll([1300000001, 1300000002]);
         check('三级店铺只补一个空位且最多发送一次 cmd57',
             partial.ok === true && partial.hired === 1
-            && sent.filter((x) => x.cmd === 57).length === 1, {
+            && sent.filter((x) => x.cmd === 57).length === 1
+            && hireRequestSlot(sent.find((x) => x.cmd === 57)) === 1, {
                 result: partial,
-                sent: sent.map((x) => x.cmd),
+                sent: sent.map((x) => ({ cmd: x.cmd, slot: hireRequestSlot(x) })),
             });
 
         let hireAllHiddenEmployees = [...oneEmployee];
@@ -1636,7 +1698,7 @@ sendImpl = async (service, method, body) => {
                 const innerBox = outer.find((x) => x.f === 1 && x.w === 2);
                 const inner = innerBox && mg.parseTop(innerBox.v);
                 const gid = toInt((inner && inner.find((x) => x.f === 3) || {}).v);
-                hireAllHiddenEmployees.push(employee(gid, true, nowSec, nowSec + 3600));
+                hireAllHiddenEmployees.push(employee(gid, hireRequestSlot(req), nowSec, nowSec + 3600));
                 return operateReply(57, { result: Buffer.alloc(0), resultField: 162 });
             }
             if (req.cmd === 56) return operateReply(56, { result: Buffer.alloc(0), resultField: 161 });
@@ -1653,7 +1715,10 @@ sendImpl = async (service, method, body) => {
                 hidden: hireAllHiddenEmployees,
             });
 
-        const autoEmployees = [...oneEmployee];
+        const autoEmployees = [
+            // 最新成功抓包场景: 1 号位已有人，自动补位应选择 0 号位。
+            employee(1244632861, 1, nowSec - 3600, nowSec + 3600),
+        ];
         let autoHireSettled = true;
         router = async (req) => {
             if (req.cmd === 55) {
@@ -1671,7 +1736,7 @@ sendImpl = async (service, method, body) => {
                 const innerBox = outer.find((x) => x.f === 1 && x.w === 2);
                 const inner = innerBox && mg.parseTop(innerBox.v);
                 const gid = toInt((inner && inner.find((x) => x.f === 3) || {}).v);
-                autoEmployees.push(employee(gid, true, nowSec, nowSec + 3600));
+                autoEmployees.push(employee(gid, hireRequestSlot(req), nowSec, nowSec + 3600));
                 autoHireSettled = false;
                 return operateReply(57, { result: Buffer.alloc(0), resultField: 162 });
             }
@@ -1680,14 +1745,15 @@ sendImpl = async (service, method, body) => {
         };
         sent.length = 0;
         const auto = await milkTea.autoHire([1300000003, 1300000004], { duration: 1 });
-        check('已有普通店员时自动雇佣只补一名并返回完整员工占位',
+        check('1 号位已有员工时自动雇佣只补一名到 0 号位并返回完整员工占位',
             auto.ok === true && auto.hired === 1
             && Array.isArray(auto.friendGids) && auto.friendGids.length === 1
             && auto.initialEmployeeCount === 1 && auto.finalEmployeeCount === 2
             && auto.employeeCount === 2 && auto.employeeCapacity === 2
-            && sent.filter((x) => x.cmd === 57).length === 1, {
+            && sent.filter((x) => x.cmd === 57).length === 1
+            && hireRequestSlot(sent.find((x) => x.cmd === 57)) === 0, {
                 result: auto,
-                sent: sent.map((x) => x.cmd),
+                sent: sent.map((x) => ({ cmd: x.cmd, slot: hireRequestSlot(x) })),
             });
 
         router = async (req) => {
