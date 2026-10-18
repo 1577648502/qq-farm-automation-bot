@@ -484,7 +484,7 @@ function getLevelExpProgress(level, totalExp) {
  * @param {number} plantId - 植物ID
  */
 function getPlantById(plantId) {
-    return plantMap.get(plantId) || ACTIVITY_PLANT_FALLBACK.get(Number(plantId) || 0);
+    return plantMap.get(plantId) || getFallbackPlantById(plantId);
 }
 
 /**
@@ -500,7 +500,7 @@ function getPlantBySeedId(seedId) {
  * @param {number} plantId - 植物ID
  */
 function getPlantName(plantId) {
-    const plant = plantMap.get(plantId) || ACTIVITY_PLANT_FALLBACK.get(Number(plantId) || 0);
+    const plant = plantMap.get(plantId) || getFallbackPlantById(plantId);
     return plant ? plant.name : `植物${plantId}`;
 }
 
@@ -527,7 +527,7 @@ function getPlantNameBySeedId(seedId) {
  * @param {number} plantId - 植物ID
  */
 function getPlantGrowTime(plantId) {
-    const plant = plantMap.get(plantId);
+    const plant = plantMap.get(plantId) || getFallbackPlantById(plantId);
     if (!plant || !plant.grow_phases) return 0;
     
     // 解析 "种子:30;发芽:30;成熟:0;" 格式
@@ -559,8 +559,8 @@ function formatGrowTime(seconds) {
  * @param {number} plantId - 植物ID
  */
 function getPlantExp(plantId) {
-    const plant = plantMap.get(plantId);
-    return plant ? plant.exp : 0;
+    const plant = plantMap.get(plantId) || getFallbackPlantById(plantId);
+    return plant ? (Number(plant.exp) || 0) : 0;
 }
 
 /**
@@ -709,12 +709,52 @@ const ACTIVITY_PLANT_FALLBACK = new Map([
     //    plantSeeds 会读 plant.size → plantSize>1 时 auto_slave=true, 只提交主地块让服务端补齐副地块;
     //    缺 size 时会按 1×1 提交 → 服务端返回 1001052「选择错误的地块格子」(实际报过)
     [1029005, { id: 1029005, seed_id: 29005, name: '森野黄金芽', size: 2, fruit: { id: 49005, count: 1 } }],
+    // 官方 ItemInfo 已收录种子，但 Plant.json 仍缺条目；字段取自游戏配置缓存。
+    [1020165, {
+        id: 1020165,
+        mutant_effect_plant: '5:1120165:1',
+        name: '茱萸',
+        seed_id: 20165,
+        seasons: 1,
+        grow_phases: '种子:8640;发芽:8640;小叶子:8640;大叶子:8640;初熟:8640;成熟:0;',
+        exp: 1680,
+        size: 1,
+        fruit: { id: 40165, count: 48 },
+    }],
 ]);
+
+/**
+ * 部分新植物的 ItemInfo 已更新、Plant.json 仍滞后。
+ * 按既有 id 规则从种子物品生成最小展示配置，避免农场页退化成"植物N"且无图标。
+ */
+function getFallbackPlantById(plantId) {
+    const id = Number(plantId) || 0;
+    if (!id) return undefined;
+
+    const configured = ACTIVITY_PLANT_FALLBACK.get(id);
+    if (configured) return configured;
+
+    const seedId = id >= 1000000 ? id - 1000000 : 0;
+    const seedItem = seedItemMap.get(seedId);
+    if (!seedId || !seedItem || Number(seedItem.type) !== 5) return undefined;
+
+    const fruitId = seedId + 20000;
+    const fruitItem = itemInfoMap.get(fruitId);
+    const hasFruit = fruitItem && Number(fruitItem.type) === 6;
+    return {
+        id,
+        seed_id: seedId,
+        name: String(seedItem.name || '').replace(/种子$/, '') || `植物${id}`,
+        size: 1,
+        ...(hasFruit ? { fruit: { id: fruitId, count: 1 } } : {}),
+    };
+}
+
 /** 按种子 id(20525) 找兜底植物 */
 function getFallbackPlantBySeedId(seedId) {
     const id = Number(seedId) || 0;
     if (!id) return undefined;
-    return ACTIVITY_PLANT_FALLBACK.get(id + 1000000);
+    return getFallbackPlantById(id + 1000000);
 }
 
 function getItemById(itemId) {
