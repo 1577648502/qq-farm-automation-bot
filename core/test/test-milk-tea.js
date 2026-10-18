@@ -1351,6 +1351,7 @@ sendImpl = async (service, method, body) => {
     {
         const gid = 1253397809;
         router = async (req) => {
+            if (req.cmd === 56) return operateReply(56, { result: Buffer.alloc(0), resultField: 161 });
             if (req.cmd === 57) return operateReply(57, { result: Buffer.alloc(0), resultField: 162 });
             throw new Error(`雇佣用例收到 cmd=${req.cmd}`);
         };
@@ -1358,6 +1359,11 @@ sendImpl = async (service, method, body) => {
         sent.length = 0;
         const hired = await milkTea.hireFriend(gid, 1, { skipCapacityCheck: true });
         const req = sent.find((x) => x.cmd === 57);
+        check('雇佣前按成功抓包先发送 cmd56/#161',
+            sent.map((x) => x.cmd).join(',') === '56,57'
+            && sent[0].payloadField === 161
+            && sent[0].payload.toString('hex') === '0801',
+            sent.map((x) => ({ cmd: x.cmd, field: x.payloadField, payload: x.payload.toString('hex') })));
         const outer = req && mg.parseTop(req.payload);
         const innerBox = outer && outer.find((x) => x.f === 1 && x.w === 2);
         const inner = innerBox && mg.parseTop(innerBox.v);
@@ -1449,6 +1455,7 @@ sendImpl = async (service, method, body) => {
                 hireSettled = false;
                 return operateReply(57, { result: Buffer.alloc(0), resultField: 162 });
             }
+            if (req.cmd === 56) return operateReply(56, { result: Buffer.alloc(0), resultField: 161 });
             throw new Error(`双空位用例收到 cmd=${req.cmd}`);
         };
         sent.length = 0;
@@ -1463,7 +1470,7 @@ sendImpl = async (service, method, body) => {
                 sent: twoVacancyCommands,
             });
         check('首次雇佣成功后先刷新 cmd55，再提交第二个 cmd57',
-            twoVacancyCommands.join(',') === '55,57,55,57,55', twoVacancyCommands);
+            twoVacancyCommands.join(',') === '55,56,57,55,56,57,55', twoVacancyCommands);
 
         let laggingEmployees = [];
         let lastHireNeedsStalePoll = false;
@@ -1493,6 +1500,7 @@ sendImpl = async (service, method, body) => {
                 stalePolls = 0;
                 return operateReply(57, { result: Buffer.alloc(0), resultField: 162 });
             }
+            if (req.cmd === 56) return operateReply(56, { result: Buffer.alloc(0), resultField: 161 });
             throw new Error(`状态滞后用例收到 cmd=${req.cmd}`);
         };
         sent.length = 0;
@@ -1500,7 +1508,7 @@ sendImpl = async (service, method, body) => {
         const laggingCommands = sent.map((x) => x.cmd);
         check('cmd55 首帧滞后时轮询确认后仍可补满第二人',
             lagging.ok === true && lagging.hired === 2 && lagging.finalEmployeeCount === 2
-            && laggingCommands.join(',') === '55,57,55,55,57,55,55', {
+            && laggingCommands.join(',') === '55,56,57,55,55,56,57,55,55', {
                 result: lagging,
                 sent: laggingCommands,
             });
@@ -1522,6 +1530,7 @@ sendImpl = async (service, method, body) => {
                 hiddenEmployees.push(employee(gid, true, nowSec, nowSec + 3600));
                 return operateReply(57, { result: Buffer.alloc(0), resultField: 162 });
             }
+            if (req.cmd === 56) return operateReply(56, { result: Buffer.alloc(0), resultField: 161 });
             throw new Error(`持续滞后用例收到 cmd=${req.cmd}`);
         };
         sent.length = 0;
@@ -1558,7 +1567,37 @@ sendImpl = async (service, method, body) => {
         const rejected = await milkTea.autoHire([1300000009], { duration: 1 });
         check('cmd55 有空位但 cmd57 返回 1034140 时保留真实请求错误',
             rejected.ok === false && /code=1034140/.test(rejected.reason)
-            && !/员工已满/.test(rejected.reason), rejected);
+            && rejected.errorCode === 1034140
+            && rejected.attempted === 1
+            && sent.map((x) => x.cmd).join(',') === '55,56,57'
+            && !/员工已满|位置已存在|员工最近/.test(rejected.reason), { rejected, sent: sent.map((x) => x.cmd) });
+
+        let manyHireAttempts = 0;
+        router = async (req) => {
+            if (req.cmd === 55) {
+                return operateReply(55, {
+                    result: cashierDetailResult({ level: 3, employees: [] }),
+                    resultField: 160,
+                });
+            }
+            if (req.cmd === 56) return operateReply(56, { result: Buffer.alloc(0), resultField: 161 });
+            if (req.cmd === 57) {
+                manyHireAttempts += 1;
+                return operateReply(57, { errorCode: 1034140, result: Buffer.alloc(0), resultField: 162 });
+            }
+            throw new Error(`多好友拒绝用例收到 cmd=${req.cmd}`);
+        };
+        sent.length = 0;
+        const manyGids = Array.from({ length: 49 }, (_, i) => 1301000000 + i);
+        const manyRejected = await milkTea.autoHire(manyGids, { duration: 1 });
+        check('49 位好友遇到首个明确拒绝后只发送一次 cmd57',
+            manyRejected.ok === false && manyRejected.attempted === 1
+            && manyHireAttempts === 1
+            && sent.filter((x) => x.cmd === 57).length === 1
+            && sent.map((x) => x.cmd).join(',') === '55,56,57', {
+                result: manyRejected,
+                sent: sent.map((x) => x.cmd),
+            });
 
         const oneEmployee = [
             // 普通店员同样占一个员工位，剩下一个空位只能补一名好友。
@@ -1572,6 +1611,7 @@ sendImpl = async (service, method, body) => {
                 });
             }
             if (req.cmd === 57) return operateReply(57, { result: Buffer.alloc(0), resultField: 162 });
+            if (req.cmd === 56) return operateReply(56, { result: Buffer.alloc(0), resultField: 161 });
             throw new Error(`补位用例收到 cmd=${req.cmd}`);
         };
         sent.length = 0;
@@ -1599,6 +1639,7 @@ sendImpl = async (service, method, body) => {
                 hireAllHiddenEmployees.push(employee(gid, true, nowSec, nowSec + 3600));
                 return operateReply(57, { result: Buffer.alloc(0), resultField: 162 });
             }
+            if (req.cmd === 56) return operateReply(56, { result: Buffer.alloc(0), resultField: 161 });
             throw new Error(`批量状态滞后用例收到 cmd=${req.cmd}`);
         };
         sent.length = 0;
@@ -1634,6 +1675,7 @@ sendImpl = async (service, method, body) => {
                 autoHireSettled = false;
                 return operateReply(57, { result: Buffer.alloc(0), resultField: 162 });
             }
+            if (req.cmd === 56) return operateReply(56, { result: Buffer.alloc(0), resultField: 161 });
             throw new Error(`自动补位用例收到 cmd=${req.cmd}`);
         };
         sent.length = 0;
@@ -1645,6 +1687,30 @@ sendImpl = async (service, method, body) => {
             && auto.employeeCount === 2 && auto.employeeCapacity === 2
             && sent.filter((x) => x.cmd === 57).length === 1, {
                 result: auto,
+                sent: sent.map((x) => x.cmd),
+            });
+
+        router = async (req) => {
+            if (req.cmd === 55) {
+                return operateReply(55, {
+                    result: cashierDetailResult({ level: 3, employees: [] }),
+                    resultField: 160,
+                });
+            }
+            if (req.cmd === 56) return operateReply(56, { result: Buffer.alloc(0), resultField: 161 });
+            if (req.cmd === 57) {
+                return operateReply(57, { errorCode: 1034140, result: Buffer.alloc(0), resultField: 162 });
+            }
+            throw new Error(`批量首错用例收到 cmd=${req.cmd}`);
+        };
+        sent.length = 0;
+        const batchRejected = await milkTea.hireAll([1300000012, 1300000013]);
+        check('批量雇佣遇到首个明确拒绝后停止并保留错误码',
+            batchRejected.ok === false && batchRejected.hired === 0
+            && batchRejected.attempted === 1 && batchRejected.errorCode === 1034140
+            && sent.filter((x) => x.cmd === 57).length === 1
+            && /code=1034140/.test(batchRejected.reason || ''), {
+                result: batchRejected,
                 sent: sent.map((x) => x.cmd),
             });
     }

@@ -394,7 +394,10 @@ async function openStore(storeName) {
     return { ok: true, storeName: name, state: parseMainState(r.activity) };
 }
 
-/** 雇佣好友: #162.#1 = {#1: 1, #2: 班次档位, #3: 好友gid}(2026-10-18 抓包实测) */
+/**
+ * 雇佣好友: #162.#1 = {#1: 1, #2: 班次档位, #3: 好友gid}(2026-10-18 抓包实测)。
+ * 成功抓包在 cmd57 前固定带有 cmd56/#161 员工面板刷新，自动和手动雇佣都走同一序列。
+ */
 async function hireFriend(friendGid, duration = 1, opts = {}) {
     const gid = toNum(friendGid);
     if (!gid) return { ok: false, reason: '缺少好友 gid' };
@@ -415,6 +418,15 @@ async function hireFriend(friendGid, duration = 1, opts = {}) {
             return { ok: true, skipped: true, reason: `好友 ${gid} 已是当前员工`, ...publicHiringState(hiring) };
         }
     }
+    const panel = await mainOperate(CMD_EMPLOYEES, 161, encodeVarintField(1, 1));
+    if (!panel.ok) {
+        return {
+            ok: false,
+            reason: `员工面板刷新失败 ${panel.reason || `code=${panel.errorCode}`}`,
+            errorCode: panel.errorCode,
+            rawReason: panel.rawReason || panel.reason || '',
+        };
+    }
     const inner = Buffer.concat([
         encodeVarintField(1, 1),
         encodeVarintField(2, normalizeHireDuration(duration)),
@@ -422,7 +434,14 @@ async function hireFriend(friendGid, duration = 1, opts = {}) {
     ]);
     const payload = Buffer.concat([Buffer.from([0x0a, inner.length]), inner]);
     const r = await mainOperate(CMD_HIRE, undefined, payload);
-    if (r.errorCode !== 0) return { ok: false, reason: `雇佣失败 code=${r.errorCode}` };
+    if (r.errorCode !== 0) {
+        return {
+            ok: false,
+            reason: `雇佣失败 code=${r.errorCode}`,
+            errorCode: r.errorCode,
+            rawReason: r.rawReason || r.reason || `code=${r.errorCode}`,
+        };
+    }
     log('活动', `奶茶热销中: 已雇佣好友 ${gid}`, { module: 'activity', event: '奶茶热销中', result: 'ok', friendGid: gid });
     return { ok: true, friendGid: gid, state: parseMainState(r.activity) };
 }
@@ -881,7 +900,7 @@ async function getFriendList() {
 }
 
 /**
- * 自动雇佣: 从白名单里挑一个去雇佣(服务端对已雇佣/不可雇佣会报错, 失败就换下一个)
+ * 自动雇佣: 从白名单里挑好友补位；cmd57 首次明确拒绝后停止本轮。
  * @param hireGids 白名单(账号配置里的 milkTeaHireGids)
  */
 async function autoHire(hireGids, opts = {}) {
@@ -930,7 +949,7 @@ async function autoHire(hireGids, opts = {}) {
 }
 
 // cmd57 成功后 cmd55 偶尔还会返回上一帧；有界轮询确认新 GID 已落到员工列表，
-// 没确认前绝不再发下一单，避免第二个员工位撞上 1034140。
+// 没确认前绝不再发下一单，避免状态尚未同步就提交第二个员工位。
 const HIRE_SYNC_RETRY_DELAYS_MS = [0, 500, 1000];
 
 async function confirmHiredEmployee(gid, previousEmployeeCount) {
@@ -968,7 +987,13 @@ async function autoHireInner(list, duration = 1, maxHires = 1, initialEmployeeCo
     for (const gid of list) {
         if (hired.length >= hireLimit) break;
         const r = await hireFriend(gid, duration, { skipCapacityCheck: true }).catch((e) => ({ ok: false, reason: e.message }));
-        results.push({ gid, ok: !!(r && r.ok && !r.skipped), reason: (r && r.reason) || '', skipped: !!(r && r.skipped) });
+        results.push({
+            gid,
+            ok: !!(r && r.ok && !r.skipped),
+            reason: (r && r.reason) || '',
+            skipped: !!(r && r.skipped),
+            ...(r && r.errorCode ? { errorCode: r.errorCode, rawReason: r.rawReason || '' } : {}),
+        });
         if (r && r.ok && !r.skipped) {
             hired.push(gid);
             const confirmed = await confirmHiredEmployee(gid, confirmedEmployeeCount);
@@ -986,7 +1011,8 @@ async function autoHireInner(list, duration = 1, maxHires = 1, initialEmployeeCo
             continue;
         }
         errors.push(shortErr((r && r.reason) || '失败'));
-        await sleep(600);
+        // cmd57 已明确拒绝时继续换好友只会放大错误并拖过上层 RPC 时限。
+        break;
     }
     if (hired.length) {
         return {
@@ -1002,17 +1028,17 @@ async function autoHireInner(list, duration = 1, maxHires = 1, initialEmployeeCo
                 : {}),
         };
     }
-    // 日志别太长: 只给"尝试了几个 + 第一条原因"
     const first = errors[0] || '未知错误';
-    const same = errors.every((x) => x === first);
-    // ⚠ 真实时间: 雇佣位何时空出 = 现有员工里最晚的下班时间(#6), 用它做退避结束点(而不是本地硬记 30 分钟)
-    let nextAt = 0;
-    try {
-        const emp2 = await getEmployees();
-        const offs = (emp2.friends || []).map((f) => toInt(f.offAt)).filter((x) => x > 0);
-        if (offs.length) nextAt = Math.max.apply(null, offs);
-    } catch (e) { /* 拿不到就退回本地冷却 */ }
-    return { ok: false, reason: `${list.length} 位好友均雇佣失败: ${first}${same ? '' : ' 等'}`, nextAt };
+    const firstResult = results[0] || null;
+    return {
+        ok: false,
+        reason: `首次雇佣未通过，已停止继续尝试: ${first}`,
+        attempted: results.length,
+        errorCode: firstResult && firstResult.errorCode,
+        rawReason: firstResult && firstResult.rawReason,
+        results,
+        finalHiring,
+    };
 }
 
 /**
@@ -1713,7 +1739,7 @@ async function getWorkStatus() {
  *   #4 = **好友员工列表**(repeated): #1 = {gid, 昵称, 等级}, #3/#4 = 该员工特长(9001 金牌销售…),
  *        #5 状态(1=在岗), #6 换班/下班时间, #7 上一班次
  *   #5 = NPC 店员(101 实习员工 / 102 …)
- * 用途: 雇佣好友时标出可雇佣性(避免 1034140 该雇佣位已有员工在工作)。
+ * 用途: 雇佣好友时刷新员工面板并标出可雇佣性。
  * 注意: #4 列表里包含非本人雇佣的好友, 不能当员工总数。
  */
 /** 兼容销量页：复用配方菜单缓存，返回"品类 id → 名字"。 */
@@ -2128,10 +2154,18 @@ async function hireAll(hireGids, limit = 10, duration = 1) {
     let okCount = 0;
     let stateSyncPending = false;
     let syncReason = '';
+    let failureReason = '';
+    let failureCode = 0;
+    let failureRawReason = '';
     for (const gid of candidates) {
         if (okCount >= hiring.available || currentHiring.available <= 0) break;
         const r = await hireFriend(gid, dur, { skipCapacityCheck: true }).catch((e) => ({ ok: false, reason: e.message }));
-        results.push({ gid, ok: !!(r && r.ok), reason: (r && r.reason) || '' });
+        results.push({
+            gid,
+            ok: !!(r && r.ok),
+            reason: (r && r.reason) || '',
+            ...(r && r.errorCode ? { errorCode: r.errorCode, rawReason: r.rawReason || '' } : {}),
+        });
         if (r && r.ok) {
             okCount += 1;
             const confirmed = await confirmHiredEmployee(gid, currentHiring.employeeCount);
@@ -2143,22 +2177,33 @@ async function hireAll(hireGids, limit = 10, duration = 1) {
                 break;
             }
             currentHiring = confirmed.hiring;
+        } else {
+            failureReason = (r && r.reason) || '失败';
+            failureCode = toInt(r && r.errorCode);
+            failureRawReason = (r && r.rawReason) || '';
+            break;
         }
         await sleep(700);   // 节流: 避免把游戏请求队列打满(满了会心跳异常掉线)
     }
     const staff = stateSyncPending
         ? '，员工列表状态待同步'
         : `（员工 ${currentHiring.employeeCount}/${currentHiring.employeeCapacity}）`;
-    log('活动', `奶茶热销中: 批量雇佣 ${okCount}/${candidates.length} 成功${staff}`, {
+    log('活动', `奶茶热销中: 批量雇佣尝试 ${results.length}/${candidates.length}，成功 ${okCount} 人${staff}`, {
         module: 'activity', event: '奶茶热销中', result: okCount ? (stateSyncPending ? 'warn' : 'ok') : 'warn',
     });
+    const stopReason = failureReason
+        ? `第 ${results.length} 位雇佣失败: ${shortErr(failureReason)}；本轮停止继续尝试`
+        : '';
     return {
         ok: okCount > 0,
         hired: okCount,
         total: candidates.length,
+        attempted: results.length,
         results,
         stateSyncPending,
+        ...(failureCode ? { errorCode: failureCode, rawReason: failureRawReason } : {}),
         ...(stateSyncPending ? { reason: `已雇佣 ${okCount} 人，但${syncReason}；本轮停止继续雇佣` } : {}),
+        ...(!stateSyncPending && stopReason ? { reason: stopReason } : {}),
         ...publicHiringState(currentHiring),
     };
 }
@@ -2197,7 +2242,7 @@ function shortErr(msg, maxLen = 40) {
     return t.length > maxLen ? `${t.slice(0, maxLen)}…` : t;
 }
 
-/** 自动雇佣的退避: 遇到"位置已存在/已达上限"这类错误, 冷却一段时间不再尝试(避免一直刷报错) */
+/** 自动雇佣请求失败后的通用退避；不推断服务端错误码的业务含义。 */
 let hireBackoffUntil = 0;
 /** 互动类型名(与 WORK_INTERACT_OPTIONS 一致) */
 function interactNameOf(type) {
@@ -2264,12 +2309,6 @@ function rememberCompletedShift(shiftKey) {
     interactCompletedShifts.add(shiftKey);
     trimOldestEntries(interactCompletedShifts, 50);
 }
-function isHireAlreadyError(msg) {
-    const t = String(msg || '');
-    // 关键词 或 错误码(1034140 = 该雇佣位已有员工在工作; 压短后中文可能丢失, 所以必须匹配码)
-    return /已存在|已有|上限|已满|只能|重复|1034140/.test(t);
-}
-
 /**
  * 自动流程(每次调用都幂等):
  *   ① 刷新状态(顺带确认活动还在)  ② 未开业则开业  ③ 领收银台收益  ④ 用工坊加工  ⑤ 用宣传喇叭
@@ -2383,27 +2422,17 @@ async function runMilkTea(opts = {}) {
     }
     if (opts.autoHire && Array.isArray(opts.hireGids) && opts.hireGids.length) {
         if (Date.now() < hireBackoffUntil) {
-            out.steps.push({ step: 'autoHire', ok: false, skipped: true, reason: '上次提示雇佣位置已存在, 退避中' });
+            out.steps.push({ step: 'autoHire', ok: false, skipped: true, reason: '上次雇佣请求失败, 通用退避中' });
             return out;
         }
         const r = await autoHire(opts.hireGids, opts);
         out.steps.push({ step: 'autoHire', ...r });
         await stepGap();
-        if (!r.ok && isHireAlreadyError(r.reason)) {
-            const nowSec = Math.floor(Date.now() / 1000);
-            if (r.nextAt && r.nextAt > nowSec) {
-                hireBackoffUntil = r.nextAt * 1000 + 60000;
-                const mins = Math.ceil((r.nextAt - nowSec) / 60);
-                const hhmm = new Date(r.nextAt * 1000).toTimeString().slice(0, 5);
-                log('活动', `奶茶热销中: 雇佣请求暂未通过(${shortErr(r.reason)}，员工最近 ${hhmm} 下班，约 ${mins} 分钟后重试)`, {
-                    module: 'activity', event: '奶茶热销中', result: 'skip',
-                });
-            } else {
-                hireBackoffUntil = Date.now() + HIRE_BACKOFF_MS;
-                log('活动', `奶茶热销中: 雇佣请求暂未通过(${shortErr(r.reason)}，本地暂缓 30 分钟)`, {
-                    module: 'activity', event: '奶茶热销中', result: 'skip',
-                });
-            }
+        if (!r.ok && !r.skipped && toInt(r.errorCode) > 0) {
+            hireBackoffUntil = Date.now() + HIRE_BACKOFF_MS;
+            log('活动', `奶茶热销中: 雇佣请求未通过(${shortErr(r.reason)}，本轮已停止，30 分钟后重试)`, {
+                module: 'activity', event: '奶茶热销中', result: 'skip',
+            });
             return out;
         }
         if (r.ok && !r.skipped && r.friendGid && r.stateSyncPending) {
