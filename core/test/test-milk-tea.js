@@ -1426,25 +1426,44 @@ sendImpl = async (service, method, body) => {
                 sent: sent.map((x) => x.cmd),
             });
 
+        let twoVacanciesEmployees = [];
+        let hireSettled = true;
         router = async (req) => {
             if (req.cmd === 55) {
+                hireSettled = true;
                 return operateReply(55, {
-                    result: cashierDetailResult({ level: 3, employees: [] }),
+                    result: cashierDetailResult({ level: 3, employees: twoVacanciesEmployees }),
                     resultField: 160,
                 });
             }
-            if (req.cmd === 57) return operateReply(57, { result: Buffer.alloc(0), resultField: 162 });
+            if (req.cmd === 57) {
+                if (!hireSettled) {
+                    // 模拟真实服务端：前一单未通过 cmd55 确认结算时，下一单会被拒绝。
+                    return operateReply(57, { errorCode: 1034140, result: Buffer.alloc(0), resultField: 162 });
+                }
+                const outer = mg.parseTop(req.payload);
+                const innerBox = outer.find((x) => x.f === 1 && x.w === 2);
+                const inner = innerBox && mg.parseTop(innerBox.v);
+                const gid = toInt((inner && inner.find((x) => x.f === 3) || {}).v);
+                twoVacanciesEmployees.push(employee(gid, true, nowSec, nowSec + 3600));
+                hireSettled = false;
+                return operateReply(57, { result: Buffer.alloc(0), resultField: 162 });
+            }
             throw new Error(`双空位用例收到 cmd=${req.cmd}`);
         };
         sent.length = 0;
         const twoVacancies = await milkTea.autoHire([1300000001, 1300000002], { duration: 1 });
+        const twoVacancyCommands = sent.map((x) => x.cmd);
         check('三级店铺有两个空位时自动雇佣连续补满两人',
             twoVacancies.ok === true && twoVacancies.hired === 2
             && Array.isArray(twoVacancies.friendGids) && twoVacancies.friendGids.length === 2
-            && sent.filter((x) => x.cmd === 57).length === 2, {
+            && twoVacancies.finalEmployeeCount === 2 && twoVacancies.currentEmployees.length === 2
+            && twoVacancyCommands.filter((cmd) => cmd === 57).length === 2, {
                 result: twoVacancies,
-                sent: sent.map((x) => x.cmd),
+                sent: twoVacancyCommands,
             });
+        check('首次雇佣成功后先刷新 cmd55，再提交第二个 cmd57',
+            twoVacancyCommands.join(',') === '55,57,55,57,55', twoVacancyCommands);
 
         const oneEmployee = [
             // 普通店员同样占一个员工位，剩下一个空位只能补一名好友。
@@ -1469,6 +1488,30 @@ sendImpl = async (service, method, body) => {
                 sent: sent.map((x) => x.cmd),
             });
 
+        const autoEmployees = [...oneEmployee];
+        let autoHireSettled = true;
+        router = async (req) => {
+            if (req.cmd === 55) {
+                autoHireSettled = true;
+                return operateReply(55, {
+                    result: cashierDetailResult({ level: 3, employees: autoEmployees }),
+                    resultField: 160,
+                });
+            }
+            if (req.cmd === 57) {
+                if (!autoHireSettled) {
+                    return operateReply(57, { errorCode: 1034140, result: Buffer.alloc(0), resultField: 162 });
+                }
+                const outer = mg.parseTop(req.payload);
+                const innerBox = outer.find((x) => x.f === 1 && x.w === 2);
+                const inner = innerBox && mg.parseTop(innerBox.v);
+                const gid = toInt((inner && inner.find((x) => x.f === 3) || {}).v);
+                autoEmployees.push(employee(gid, true, nowSec, nowSec + 3600));
+                autoHireSettled = false;
+                return operateReply(57, { result: Buffer.alloc(0), resultField: 162 });
+            }
+            throw new Error(`自动补位用例收到 cmd=${req.cmd}`);
+        };
         sent.length = 0;
         const auto = await milkTea.autoHire([1300000003, 1300000004], { duration: 1 });
         check('已有普通店员时自动雇佣只补一名并返回完整员工占位',

@@ -925,7 +925,8 @@ async function autoHire(hireGids, opts = {}) {
         };
     }
     const result = await autoHireInner(todo, duration, hiring.available);
-    return { ...result, ...publicAutoHireState(hiring, result.hired) };
+    const { finalHiring, ...publicResult } = result;
+    return { ...publicResult, ...publicAutoHireState(finalHiring || hiring, result.hired, hiring) };
 }
 
 /** autoHire 实际执行体 */
@@ -933,12 +934,23 @@ async function autoHireInner(list, duration = 1, maxHires = 1) {
     const errors = [];
     const hired = [];
     const results = [];
+    const hireLimit = Math.max(1, toInt(maxHires));
+    let finalHiring = null;
     for (const gid of list) {
-        if (hired.length >= Math.max(1, toInt(maxHires))) break;
+        if (hired.length >= hireLimit) break;
         const r = await hireFriend(gid, duration, { skipCapacityCheck: true }).catch((e) => ({ ok: false, reason: e.message }));
         results.push({ gid, ok: !!(r && r.ok && !r.skipped), reason: (r && r.reason) || '', skipped: !!(r && r.skipped) });
         if (r && r.ok && !r.skipped) {
             hired.push(gid);
+            // cmd57 应答后服务端状态已经可读；每次成功后重新查询，
+            // 避免把雇佣前的快照继续用于下一个员工位。
+            const latest = await getHiringAvailability().catch((e) => ({ ok: false, reason: e.message }));
+            if (!latest.ok) {
+                errors.push(`已雇佣 ${gid}，但员工状态刷新失败: ${shortErr(latest.reason)}`);
+                break;
+            }
+            finalHiring = latest;
+            if (latest.available <= 0) break;
             continue;
         }
         errors.push(shortErr((r && r.reason) || '失败'));
@@ -951,6 +963,7 @@ async function autoHireInner(list, duration = 1, maxHires = 1) {
             friendGid: hired[0],
             friendGids: hired,
             results,
+            finalHiring,
         };
     }
     // 日志别太长: 只给"尝试了几个 + 第一条原因"
@@ -1775,11 +1788,12 @@ function publicHiringState(hiring) {
 }
 
 /** 自动雇佣返回补位前后的员工占位，界面和任务日志可直接展示最终状态。 */
-function publicAutoHireState(hiring, hiredCount = 0) {
-    const initialEmployeeCount = toInt(hiring.employeeCount);
+function publicAutoHireState(hiring, hiredCount = 0, initialHiring = hiring) {
+    const initialEmployeeCount = toInt(initialHiring.employeeCount);
     const employeeCapacity = toInt(hiring.employeeCapacity);
     const hired = Math.max(0, toInt(hiredCount));
-    const finalEmployeeCount = Math.min(employeeCapacity, initialEmployeeCount + hired);
+    const expectedEmployeeCount = Math.min(employeeCapacity, initialEmployeeCount + hired);
+    const finalEmployeeCount = hiring.ok ? toInt(hiring.employeeCount) : expectedEmployeeCount;
     return {
         ...publicHiringState(hiring),
         initialEmployeeCount,
