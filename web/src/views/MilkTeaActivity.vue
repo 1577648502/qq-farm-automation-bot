@@ -45,7 +45,7 @@ const rankings = ref<any[]>([])
 const rankingsLoading = ref(false)
 const rankingsError = ref('')
 const rankingCurrentPage = ref(1)
-const rankingTotal = ref(0)
+const rankingMyRank = ref(0)
 const rankingHasNext = ref(false)
 const rankingServerTime = ref(0)
 let rankingsRequestId = 0
@@ -448,25 +448,23 @@ async function loadRankings(page = rankingCurrentPage.value) {
     if (err) {
       rankings.value = []
       rankingsError.value = err
-      rankingTotal.value = 0
+      rankingMyRank.value = 0
       rankingHasNext.value = false
       rankingServerTime.value = 0
       return
     }
     rankings.value = Array.isArray(d.entries) ? d.entries : []
-    rankingTotal.value = Math.max(0, Number(d.total) || rankings.value.length)
+    rankingMyRank.value = Math.max(0, Number(d.myRank) || 0)
     rankingCurrentPage.value = Math.max(1, Number(d.currentPage) || targetPage)
     rankingHasNext.value = d.hasNext === true
     rankingServerTime.value = Number(d.serverTime) || 0
   } catch (e: any) {
     if (requestId !== rankingsRequestId) return
     rankings.value = []
-    rankingTotal.value = 0
+    rankingMyRank.value = 0
     rankingHasNext.value = false
     rankingServerTime.value = 0
-    rankingsError.value = Number(e?.response?.status) === 404
-      ? '排行榜接口尚未接入后台（HTTP 404）'
-      : (apiError(null, null, e) || '排行榜读取失败')
+    rankingsError.value = apiError(null, null, e) || '排行榜读取失败'
   } finally {
     if (requestId === rankingsRequestId) rankingsLoading.value = false
   }
@@ -556,17 +554,12 @@ function salesHourLabel(hoursAgo: any) {
   return `${hours} 小时前`
 }
 
-function rankingIdentityText(entry: any) {
-  const identity = entry?.identity ?? entry?.gid ?? entry?.nickname
-  if (identity === null || identity === undefined || identity === '') return ''
-  if (typeof identity === 'object') {
-    return String(identity.nickname || identity.name || identity.gid || identity.id || '')
-  }
-  return String(identity)
+function rankingNickname(entry: any) {
+  return String(entry?.nickname || '').trim() || String(entry?.gid || '未知玩家')
 }
 
 function rankingKey(entry: any, index: number) {
-  return `${entry?.rank ?? index}-${rankingIdentityText(entry) || index}`
+  return `${entry?.rank ?? index}-${entry?.gid || rankingNickname(entry) || index}`
 }
 
 function rankingLevel(entry: any) {
@@ -1586,7 +1579,8 @@ onUnmounted(() => {
         <div class="min-w-0">
           <h3 class="text-sm text-gray-900 font-medium dark:text-white">店铺排行榜</h3>
           <p class="mt-0.5 break-words text-xs text-gray-500 dark:text-gray-400">
-            共 {{ rankingTotal.toLocaleString() }} 家店铺
+            <span v-if="rankingMyRank">我的排名第 {{ rankingMyRank }} 名</span>
+            <span v-else>我的排名暂未上榜</span>
             <span v-if="rankingServerTime"> · 服务器 {{ fmtTime(rankingServerTime) }}</span>
           </p>
         </div>
@@ -1628,12 +1622,23 @@ onUnmounted(() => {
                 <span class="shrink-0 rounded bg-sky-50 px-1.5 py-0.5 text-[10px] text-sky-700 dark:bg-sky-900/30 dark:text-sky-300">
                   Lv{{ rankingLevel(entry) || '—' }}
                 </span>
-              </div>
-              <div class="mt-1 flex min-w-0 flex-wrap gap-x-2 gap-y-1 text-[11px] text-gray-500 dark:text-gray-400">
-                <span v-if="rankingIdentityText(entry)" class="min-w-0 break-all">
-                  身份 {{ rankingIdentityText(entry) }}
+                <span
+                  v-if="entry.isSelf"
+                  class="shrink-0 rounded bg-emerald-50 px-1.5 py-0.5 text-[10px] text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300"
+                >
+                  我的店铺
                 </span>
-                <span v-else class="min-w-0 break-all">身份未提供</span>
+                <span
+                  v-else-if="entry.isFriend"
+                  class="shrink-0 rounded bg-amber-50 px-1.5 py-0.5 text-[10px] text-amber-700 dark:bg-amber-900/30 dark:text-amber-300"
+                >
+                  好友
+                </span>
+              </div>
+              <div class="mt-1 flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-1 text-[11px] text-gray-500 dark:text-gray-400">
+                <span class="min-w-0 break-words">{{ rankingNickname(entry) }}</span>
+                <span v-if="entry.playerLevel" class="shrink-0">玩家 Lv{{ entry.playerLevel }}</span>
+                <span v-if="entry.gid" class="min-w-0 break-all text-gray-400">GID {{ entry.gid }}</span>
               </div>
             </div>
             <div class="max-w-[38%] shrink-0 text-right">

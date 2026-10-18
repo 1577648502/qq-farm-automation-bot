@@ -222,6 +222,39 @@ function cashierDetailResult({
     return bytesField(1, Buffer.concat(fields));
 }
 
+function rankingResult({
+    myRank = 0,
+    serverTime = 1792288328,
+    currentPage = 1,
+    hasNext = false,
+    entries = [],
+} = {}) {
+    const fields = [];
+    for (const entry of entries) {
+        const profile = [
+            varintField(1, entry.gid),
+            bytesField(2, entry.nickname || ''),
+            varintField(4, entry.playerLevel || 0),
+        ];
+        const item = [
+            bytesField(1, Buffer.concat(profile)),
+            bytesField(2, entry.storeName || ''),
+            varintField(3, entry.storeLevel || 0),
+            varintField(4, entry.revenue || 0),
+            varintField(5, entry.rank),
+        ];
+        if (entry.isFriend) item.push(varintField(6, 1));
+        fields.push(bytesField(1, Buffer.concat(item)));
+    }
+    fields.push(
+        varintField(2, myRank),
+        varintField(3, serverTime),
+        varintField(4, currentPage),
+        varintField(5, hasNext ? 1 : 0),
+    );
+    return Buffer.concat(fields);
+}
+
 function workRefreshResult({
     employerGid = 0,
     employerName = '',
@@ -1512,6 +1545,125 @@ sendImpl = async (service, method, body) => {
         warehouse.getBag = originalGetBag;
         warehouse.getBagItems = originalGetBagItems;
         milkTea.__testing.clearMenuCache();
+    }
+
+    section('18. 店铺排行榜 cmd66/#171 页码、本人排名与好友标记');
+    {
+        const makeEntries = (startRank, count) => Array.from({ length: count }, (_, i) => {
+            const rank = startRank + i;
+            return {
+                gid: 1200000000 + rank,
+                nickname: rank === 29 ? '北栎🍵' : `玩家${rank}`,
+                playerLevel: rank === 29 ? 72 : 60,
+                storeName: rank === 29 ? '奶茶小铺' : `测试店铺${rank}`,
+                storeLevel: rank === 29 ? 3 : 2,
+                revenue: rank === 29 ? 33706 : 100000 - rank,
+                rank,
+                isFriend: rank >= 30,
+            };
+        });
+
+        router = async (req) => {
+            if (req.cmd !== 66) throw new Error(`排行榜用例收到 cmd=${req.cmd}`);
+            const payload = mg.parseTop(req.payload || Buffer.alloc(0));
+            const page = toInt((payload.find((x) => x.f === 1) || {}).v);
+            if (page === 1) {
+                return operateReply(66, {
+                    result: rankingResult({
+                        myRank: 29,
+                        currentPage: 1,
+                        hasNext: true,
+                        entries: makeEntries(1, 20),
+                    }),
+                    resultField: 171,
+                });
+            }
+            if (page === 2) {
+                return operateReply(66, {
+                    result: rankingResult({
+                        myRank: 29,
+                        currentPage: 2,
+                        hasNext: true,
+                        entries: makeEntries(21, 20),
+                    }),
+                    resultField: 171,
+                });
+            }
+            if (page === 3) {
+                return operateReply(66, {
+                    result: rankingResult({
+                        myRank: 29,
+                        currentPage: 3,
+                        hasNext: false,
+                        entries: makeEntries(41, 12),
+                    }),
+                    resultField: 171,
+                });
+            }
+            return operateReply(66, {
+                result: rankingResult({ myRank: 29, currentPage: page, hasNext: false }),
+                resultField: 171,
+            });
+        };
+
+        sent.length = 0;
+        const page1 = await milkTea.getStoreRankings(1);
+        const req1 = sent.find((x) => x.cmd === 66);
+        const payload1 = req1 && mg.parseTop(req1.payload || Buffer.alloc(0));
+        check('cmd66 使用 #171，请求体只有 #1=页码',
+            req1 && req1.payloadField === 171 && payload1 && payload1.length === 1
+            && toInt(payload1[0].v) === 1, req1 && {
+                field: req1.payloadField,
+                payload: req1.payload && req1.payload.toString('hex'),
+            });
+        check('第一页 20 条且外层 #5=1 表示还有下一页',
+            page1.ok === true && page1.entries.length === 20
+            && page1.currentPage === 1 && page1.hasNext === true && page1.myRank === 29, page1);
+        check('排行榜昵称、店名、玩家/店铺等级和营业额按抓包字段解析',
+            page1.entries[0].gid === 1200000001
+            && page1.entries[0].nickname === '玩家1'
+            && page1.entries[0].storeName === '测试店铺1'
+            && page1.entries[0].playerLevel === 60
+            && page1.entries[0].storeLevel === 2
+            && page1.entries[0].revenue === 99999, page1.entries[0]);
+
+        const page2 = await milkTea.getStoreRankings(2);
+        const self = page2.entries.find((entry) => entry.rank === 29);
+        check('第二页按 rank===myRank 识别本人，并正确解析中文/emoji',
+            self && self.isSelf === true && page2.containsSelf === true
+            && self.nickname === '北栎🍵' && self.gid === 1200000029, self);
+        check('好友标记 #6=1 映射为 isFriend',
+            page2.entries.find((entry) => entry.rank === 30).isFriend === true
+            && page2.entries.find((entry) => entry.rank === 29).isFriend === false, page2.entries.slice(8, 11));
+        check('第二页 20 条时 #5=1，hasNext 仍为 true',
+            page2.entries.length === 20 && page2.hasNext === true, page2);
+
+        const page3 = await milkTea.getStoreRankings(3);
+        check('最后一页 12 条且外层 #5=0 时 hasNext=false',
+            page3.ok === true && page3.entries.length === 12
+            && page3.currentPage === 3 && page3.hasNext === false, page3);
+
+        const empty = await milkTea.getStoreRankings(4);
+        check('空页安全返回空数组和非本人状态',
+            empty.ok === true && empty.entries.length === 0
+            && empty.containsSelf === false && empty.hasNext === false, empty);
+
+        router = async (req) => {
+            if (req.cmd === 66) {
+                return operateReply(66, {
+                    errorCode: 1034149,
+                    result: null,
+                    resultField: 171,
+                });
+            }
+            throw new Error(`排行榜错误用例收到 cmd=${req.cmd}`);
+        };
+        const failed = await milkTea.getStoreRankings(1);
+        check('排行榜业务错误安全返回完整空状态',
+            failed.ok === false && failed.entries.length === 0
+            && failed.myRank === 0 && failed.currentPage === 1
+            && failed.hasNext === false && failed.containsSelf === false
+            && /1034149|排行榜读取失败/.test(failed.reason), failed);
     }
 
     finish();

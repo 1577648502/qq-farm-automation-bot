@@ -52,8 +52,9 @@
  *   无 #19 时不得发送 cmd59。
  * cmd60/#165 = {#1: 50, #2: 2250, #3: 2908400} 与 #160.#23 完全同值 → 是"长期累计"视图,
  *   用它判断"有无待领取"是错的(它不随待领取变化)。
- * 排行榜(cmd66/#171): 条目 {#1 身份, #2 店名, #3 等级, #4 营业额, #5 排名},
- *   外层 #3 时间 / #4 页码 / #5 是否有下一页。
+ * 排行榜(cmd66/#171): 请求 {#1 页码}; 条目 {#1 身份, #2 店名, #3 等级, #4 营业额, #5 排名, #6 好友标记},
+ *   外层 #2 我的排名 / #3 服务器时间 / #4 当前页码 / #5 是否还有下一页。
+ *   实测第 1/2/3 页的 #5 依次为 1/1/0。
  * 营业记录(cmd67/#172): 员工记录 #6 是 17 位班次 UID, 必须按字符串保存。
  */
 const { log, toNum, toInt, sleep } = require('../utils/utils');
@@ -611,6 +612,85 @@ async function getSalesRecord(dayTs) {
         return { ok: false, reason: `解析营业记录失败: ${e.message}` };
     }
     return out;
+}
+
+/**
+ * 店铺排行榜(cmd=66/#171)。
+ * 抓包确认: 第 1/2 页各 20 条, 第 3 页 12 条; 本人在第 2 页第 29 名。
+ */
+async function getStoreRankings(page = 1) {
+    const requestedPage = Math.max(1, Math.min(999, toInt(page) || 1));
+    const r = await mainOperate(CMD_RANKING, 171, encodeVarintField(1, requestedPage));
+    if (r.errorCode !== 0) {
+        return {
+            ok: false,
+            reason: `读取店铺排行榜失败 ${r.reason || `code=${r.errorCode}`}`,
+            entries: [],
+            myRank: 0,
+            serverTime: 0,
+            currentPage: requestedPage,
+            containsSelf: false,
+            hasNext: false,
+        };
+    }
+
+    try {
+        const rf = parseTop(Buffer.from(r.resultHex || '', 'hex'));
+        const myRank = toInt((findField(rf, 2) || {}).v);
+        const serverTime = toInt((findField(rf, 3) || {}).v);
+        const currentPage = toInt((findField(rf, 4) || {}).v) || requestedPage;
+        const hasNextField = toInt((findField(rf, 5) || {}).v);
+        const entries = [];
+
+        for (const x of rf) {
+            if (x.f !== 1 || x.w !== 2) continue;
+            const item = parseTop(x.v);
+            const profileField = findField(item, 1);
+            const profile = profileField && profileField.w === 2 ? parseTop(profileField.v) : [];
+            const nicknameField = findField(profile, 2);
+            const nickname = nicknameField && nicknameField.w === 2
+                ? Buffer.from(nicknameField.v).toString('utf8')
+                : '';
+            const storeNameField = findField(item, 2);
+            const storeName = storeNameField && storeNameField.w === 2
+                ? Buffer.from(storeNameField.v).toString('utf8')
+                : '';
+            const rank = toInt((findField(item, 5) || {}).v)
+                || ((currentPage - 1) * 20 + entries.length + 1);
+            entries.push({
+                gid: toInt((findField(profile, 1) || {}).v),
+                nickname,
+                playerLevel: toInt((findField(profile, 4) || {}).v),
+                storeName,
+                storeLevel: toInt((findField(item, 3) || {}).v),
+                revenue: toInt((findField(item, 4) || {}).v),
+                rank,
+                isFriend: toInt((findField(item, 6) || {}).v) === 1,
+                isSelf: myRank > 0 && rank === myRank,
+            });
+        }
+
+        return {
+            ok: true,
+            entries,
+            myRank,
+            serverTime,
+            currentPage,
+            containsSelf: entries.some((entry) => entry.isSelf),
+            hasNext: hasNextField === 1,
+        };
+    } catch (e) {
+        return {
+            ok: false,
+            reason: `解析店铺排行榜失败: ${e.message}`,
+            entries: [],
+            myRank: 0,
+            serverTime: 0,
+            currentPage: requestedPage,
+            containsSelf: false,
+            hasNext: false,
+        };
+    }
 }
 
 async function getUpgradeInfo() {
@@ -2317,6 +2397,7 @@ module.exports = {
         getCraftableFruitRecipeMap,
         collectFruitUids,
         getSalesRecords,
+        getStoreRankings,
         interactWithFriend,
         craftAllFruits,
         useSpeaker,
@@ -2346,6 +2427,7 @@ module.exports = {
     getEmployees,
     getSalesRecords,
     getSalesRecord,
+    getStoreRankings,
     getOnDutyEmployees,
     getCashierEmployees: getOnDutyEmployees,
     HIRE_DURATIONS,

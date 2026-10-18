@@ -1481,6 +1481,11 @@ async function handleApiCall(msg) {
             case 'getMilkTeaSales':
                 result = await milkTea.getSalesRecords();
                 break;
+            case 'getMilkTeaStoreRankings': {
+                const ro = args[0] || {};
+                result = await milkTea.getStoreRankings(ro.page);
+                break;
+            }
             case 'getMilkTeaEmployees':
                 result = await milkTea.getEmployees();
                 break;

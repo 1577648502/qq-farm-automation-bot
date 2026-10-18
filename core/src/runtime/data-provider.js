@@ -520,6 +520,7 @@ function createDataProvider(options) {
         upgradeMilkTeaStore: (accountRef) => callWorkerApi(resolveAccountRefId(accountRef), 'upgradeMilkTeaStore'),
         getMilkTeaUpgrade: (accountRef) => callWorkerApi(resolveAccountRefId(accountRef), 'getMilkTeaUpgrade'),
         getMilkTeaSales: (accountRef) => callWorkerApi(resolveAccountRefId(accountRef), 'getMilkTeaSales'),
+        getMilkTeaStoreRankings: (accountRef, opts) => callWorkerApi(resolveAccountRefId(accountRef), 'getMilkTeaStoreRankings', opts || {}),
         getMilkTeaEmployees: (accountRef) => callWorkerApi(resolveAccountRefId(accountRef), 'getMilkTeaEmployees'),
         hireMilkTeaAll: (accountRef, opts) => callWorkerApi(resolveAccountRefId(accountRef), 'hireMilkTeaAll', opts || {}),
         getMilkTeaFriends: (accountRef) => callWorkerApi(resolveAccountRefId(accountRef), 'getMilkTeaFriends'),
