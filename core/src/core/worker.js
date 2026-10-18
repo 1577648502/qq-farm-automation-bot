@@ -314,7 +314,6 @@ async function runMilkTea(reason = 'interval') {
             storeName: cfg.storeName,
             autoHire: cfg.autoHire,
             hireGids: cfg.hireGids,
-            autoTask: false,   // 任务需充值激活, 功能已移除(不再自动领取)
             autoInteract: cfg.autoInteract,
             autoWage: cfg.autoWage,
             autoBuySeed: cfg.autoBuySeed,
@@ -1403,9 +1402,18 @@ async function handleApiCall(msg) {
                 // 页面顶部要展示: 店铺/等级/累计营业额/待领取收益/奶茶券余额
                 // ⚠ 串行执行(不并发): 并发会把游戏请求队列打满 → "队列已满" + 心跳异常掉线
                 const main = await milkTea.getMainStatus();
+                const work = await milkTea.getWorkStatus().catch((e) => ({
+                    ok: false,
+                    hasEmployer: false,
+                    reason: e && e.message ? e.message : '读取兼职状态失败',
+                }));
                 const cashier = await milkTea.getCashierStatus().catch(() => null);
                 const coupon = await milkTea.getMilkCouponBalance().catch(() => 0);
-                result = { ...main, cashier, milkCoupon: coupon };
+                result = { ...main, work, cashier, milkCoupon: coupon };
+                break;
+            }
+            case 'getMilkTeaWork': {
+                result = await milkTea.getWorkStatus();
                 break;
             }
             case 'claimMilkTeaCashier':
@@ -1428,9 +1436,9 @@ async function handleApiCall(msg) {
                 result = await milkTea.hireFriend(args[0] && args[0].friendGid);
                 break;
             case 'interactMilkTea': {
-                // 互动(我的工作): cmd=65, 需要好友 gid + 互动类型
+                // 互动目标由服务端 #168 当前老板决定，页面只选择互动类型。
                 const io2 = args[0] || {};
-                result = await milkTea.interactWithFriend(io2.friendGid, io2.type);
+                result = await milkTea.interactWithFriend(io2.type);
                 break;
             }
             case 'claimMilkTeaWage':

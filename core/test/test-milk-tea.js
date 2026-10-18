@@ -54,9 +54,16 @@ function bytesField(field, value) {
     return Buffer.concat([encodeVarint((field << 3) | 2), encodeVarint(data.length), data]);
 }
 
-/** 最小活动体: 只需让 parseMainState 识别出主活动组并返回 ok=true。 */
-function mainActivity() {
-    return bytesField(1, varintField(1, GROUP_MAIN));
+/** 合成主活动体: #1 活动头 / #121.#1 店铺状态。 */
+function mainActivity(state = null) {
+    const fields = [bytesField(1, varintField(1, GROUP_MAIN))];
+    if (state) fields.push(bytesField(121, bytesField(1, state)));
+    return Buffer.concat(fields);
+}
+
+/** 合成 ActivityService.List 根组: 根 #1 → repeated #2 活动体。 */
+function activityListReply(activities = [mainActivity()]) {
+    return bytesField(1, Buffer.concat(activities.map((activity) => bytesField(2, activity))));
 }
 
 /** 合成 ActivityService.Operate 响应体。 */
@@ -131,6 +138,8 @@ function workRefreshResult({
     employerGid = 0,
     employerName = '',
     startAt = 1792200000,
+    wage = 40,
+    interactionStatus = 0,
     lastInteraction = null,
     historyRecord = null,
     titleId = 9001,
@@ -143,7 +152,8 @@ function workRefreshResult({
             bytesField(2, employerName),
         ])));
     }
-    if (startAt) current.push(varintField(6, startAt), varintField(7, startAt + 3600), varintField(11, 40));
+    if (startAt) current.push(varintField(6, startAt), varintField(7, startAt + 3600), varintField(11, wage));
+    if (interactionStatus) current.push(varintField(9, interactionStatus));
     if (lastInteraction) {
         current.push(bytesField(12, Buffer.concat([
             varintField(1, lastInteraction.type),
@@ -174,12 +184,18 @@ function workRefreshResult({
 
 const sent = [];
 let router = async () => {
-    throw new Error('测试未设置 Operate 应答');
+    throw new Error('测试未设置网络应答');
 };
 sendImpl = async (service, method, body) => {
-    if (service !== ACTIVITY_SERVICE || method !== 'Operate') {
+    if (service !== ACTIVITY_SERVICE) {
         throw new Error(`未预期的网络调用: ${service}.${method}`);
     }
+    if (method === 'List') {
+        const req = { service, method, body: Buffer.from(body || []) };
+        sent.push(req);
+        return { body: await router(req) };
+    }
+    if (method !== 'Operate') throw new Error(`未预期的网络调用: ${service}.${method}`);
     const req = parseOperateRequest(body);
     sent.push(req);
     return { body: await router(req) };
@@ -237,6 +253,7 @@ sendImpl = async (service, method, body) => {
         const work = milkTea.__testing.parseWorkFromRefresh(workRefreshResult({
             employerGid: 1253397809,
             employerName: '哈哈',
+            interactionStatus: 1,
             lastInteraction: { type: 2, count: 1, titleId: 90002, at: 1792223221 },
         }).toString('hex'));
         check('刷新 #168.#1 解析当前雇主', work.employer && work.employer.gid === 1253397809 && work.employer.name === '哈哈', work.employer);
@@ -248,6 +265,14 @@ sendImpl = async (service, method, body) => {
             !Object.prototype.hasOwnProperty.call(work, 'interactTotal')
             && !Object.prototype.hasOwnProperty.call(work, 'interactUsed')
             && !Object.prototype.hasOwnProperty.call(work, 'canInteract'));
+        check('刷新 #168.#1.#9/#12 识别本班互动已完成',
+            work.interactionStatus === 1 && work.interactionCompleted === true, work);
+
+        const notInteracted = milkTea.__testing.parseWorkFromRefresh(workRefreshResult({
+            employerGid: 1253397809,
+        }).toString('hex'));
+        check('本班互动前 #9=0 且无 #12 时仍可互动',
+            notInteracted.interactionStatus === 0 && notInteracted.interactionCompleted === false, notInteracted);
 
         const noEmployer = milkTea.__testing.parseWorkFromRefresh(workRefreshResult({ employerGid: 0 }).toString('hex'));
         check('没有当前雇主时 employer=null', noEmployer.employer === null);
@@ -318,10 +343,10 @@ sendImpl = async (service, method, body) => {
             field7: 7,
         }]);
         router = async (req) => {
-            if (req.cmd === 63) return operateReply(63, { activity: mainActivity(), result: Buffer.alloc(0), resultField: 168 });
+            if (req.method === 'List') return activityListReply();
             if (req.cmd === 67) return operateReply(67, { result: sales, resultField: 172 });
             if (req.cmd === 58) return operateReply(58, { result: menu, resultField: 163 });
-            throw new Error(`营业记录用例收到 cmd=${req.cmd}`);
+            throw new Error(`营业记录用例收到 ${req.method || `cmd=${req.cmd}`}`);
         };
 
         sent.length = 0;
@@ -412,7 +437,30 @@ sendImpl = async (service, method, body) => {
         milkTea.__testing.clearMenuCache();
     }
 
-    section('7. 互动只认刷新 #168.#1');
+    section('7. 主店状态与互动协议');
+    {
+        milkTea.__testing.clearMainStatusCache();
+        const state = Buffer.concat([
+            varintField(1, 1792200000),
+            bytesField(2, '测试奶茶铺'),
+            varintField(4, 3),
+            varintField(5, 45678),
+            varintField(16, 1792203600),
+        ]);
+        router = async (req) => {
+            if (req.method === 'List') return activityListReply([mainActivity(state)]);
+            throw new Error(`主店状态用例不应发送 ${req.method || `cmd=${req.cmd}`}`);
+        };
+
+        sent.length = 0;
+        const main = await milkTea.getMainStatus(true);
+        check('主店状态只调用 ActivityService.List', sent.length === 1 && sent[0].method === 'List', sent.map((x) => x.method || x.cmd));
+        check('主店状态不再调用 cmd63', !sent.some((x) => x.cmd === 63), sent.map((x) => x.method || x.cmd));
+        check('活动列表正确解析店名/等级/累计营业额',
+            main.ok === true && main.storeName === '测试奶茶铺'
+            && main.storeLevel === 3 && main.value === 45678, main);
+    }
+
     {
         const noEmployer = workRefreshResult({ employerGid: 0 });
         router = async (req) => {
@@ -421,15 +469,31 @@ sendImpl = async (service, method, body) => {
         };
 
         sent.length = 0;
-        const skipped = await milkTea.__testing.interactWithFriend(999999, 2);
+        const skipped = await milkTea.__testing.interactWithFriend(2);
         check('没有当前雇主时跳过互动', skipped.ok === false && skipped.skipped === true, skipped);
-        check('旧 employerGid 没有机会触发 cmd65', !sent.some((x) => x.cmd === 65), sent.map((x) => x.cmd));
+        check('没有当前雇主时只发送 cmd63', sent.length === 1 && sent[0].cmd === 63, sent.map((x) => x.cmd));
+        check('没有当前雇主时绝不发送 cmd65', !sent.some((x) => x.cmd === 65), sent.map((x) => x.cmd));
 
         const liveGid = 1253397809;
-        const current = workRefreshResult({ employerGid: liveGid, employerName: '哈哈' });
+        const firstShift = 1792410000;
+        const nextShift = firstShift + 14400;
+        let activeShift = firstShift;
+        let completed = false;
         router = async (req) => {
-            if (req.cmd === 63) return operateReply(63, { activity: mainActivity(), result: current, resultField: 168 });
+            if (req.cmd === 63) {
+                const current = workRefreshResult({
+                    employerGid: liveGid,
+                    employerName: '哈哈',
+                    startAt: activeShift,
+                    interactionStatus: completed ? 1 : 0,
+                    lastInteraction: completed
+                        ? { type: 2, count: 1, titleId: 90002, at: activeShift + 60 }
+                        : null,
+                });
+                return operateReply(63, { activity: mainActivity(), result: current, resultField: 168 });
+            }
             if (req.cmd === 65) {
+                completed = true;
                 const effect7 = Buffer.concat([varintField(1, 1000), varintField(2, 148)]);
                 const effect8 = Buffer.concat([varintField(1, 3000), varintField(3, 12)]);
                 const result = Buffer.concat([
@@ -444,24 +508,139 @@ sendImpl = async (service, method, body) => {
         };
 
         sent.length = 0;
-        const corrected = await milkTea.__testing.interactWithFriend(123456, 2);
+        const interacted = await milkTea.__testing.interactWithFriend(2);
         const interactReq = sent.find((x) => x.cmd === 65);
         const payload = interactReq && mg.parseTop(interactReq.payload);
         const gidField = payload && payload.find((x) => x.f === 1);
         const typeField = payload && payload.find((x) => x.f === 2);
-        check('错误 GID 被刷新结果纠正', corrected.ok === true && corrected.friendGid === liveGid && corrected.correctedGid === true, corrected);
+        check('互动目标来自实时 #168.#1', interacted.ok === true && interacted.friendGid === liveGid, interacted);
+        check('互动接口不再接受或返回客户端 GID 修正',
+            !Object.prototype.hasOwnProperty.call(interacted, 'correctedGid'), interacted);
         check('cmd65 payload 字段为 #170', interactReq && interactReq.payloadField === 170, interactReq && interactReq.payloadField);
         check('#170 直接包含 #1 当前雇主 GID', gidField && gidField.w === 0 && toInt(gidField.v) === liveGid, gidField);
         check('#170 直接包含 #2 互动类型', typeField && typeField.w === 0 && toInt(typeField.v) === 2, typeField);
         check('#170 没有多余嵌套 #1', payload.length === 2 && payload.filter((x) => x.f === 1).length === 1, payload);
-        check('互动结果按刷新工资与 #8.#3 返回工资变化', corrected.interact && corrected.interact.wage
-            && corrected.interact.wage.before === 40 && corrected.interact.wage.after === 52
-            && corrected.interact.wage.change === 12, corrected.interact);
-        check('未确认字段保留原始结构且不命名底薪/加成', corrected.interact
-            && corrected.interact.effects.field7[1] === 1000 && corrected.interact.effects.field7[2] === 148
-            && corrected.interact.effects.field8[1] === 3000 && corrected.interact.effects.field8[3] === 12
-            && !Object.prototype.hasOwnProperty.call(corrected.interact.wage, 'base')
-            && !Object.prototype.hasOwnProperty.call(corrected.interact.wage, 'extra'), corrected.interact);
+        check('互动结果按刷新工资与 #8.#3 返回工资变化', interacted.interact && interacted.interact.wage
+            && interacted.interact.wage.before === 40 && interacted.interact.wage.after === 52
+            && interacted.interact.wage.change === 12, interacted.interact);
+        check('未确认字段保留原始结构且不命名底薪/加成', interacted.interact
+            && interacted.interact.effects.field7[1] === 1000 && interacted.interact.effects.field7[2] === 148
+            && interacted.interact.effects.field8[1] === 3000 && interacted.interact.effects.field8[3] === 12
+            && !Object.prototype.hasOwnProperty.call(interacted.interact.wage, 'base')
+            && !Object.prototype.hasOwnProperty.call(interacted.interact.wage, 'extra'), interacted.interact);
+        check('互动成功返回本班已完成状态',
+            interacted.interactionCompleted === true && interacted.shiftKey === firstShift, interacted);
+
+        const workAfter = await milkTea.getWorkStatus();
+        check('同班次实时状态返回 interactionCompleted=true',
+            workAfter.ok === true && workAfter.interactionCompleted === true
+            && workAfter.interactionStatus === 1, workAfter);
+
+        const repeated = await milkTea.__testing.interactWithFriend(2);
+        check('同班次第二次互动不再发送 cmd65',
+            repeated.skipped === true && repeated.interactionCompleted === true
+            && sent.filter((x) => x.cmd === 65).length === 1, repeated);
+
+        activeShift = nextShift;
+        completed = false;
+        const next = await milkTea.__testing.interactWithFriend(2);
+        check('班次变化后允许新的本班互动',
+            next.ok === true && next.shiftKey === nextShift
+            && sent.filter((x) => x.cmd === 65).length === 2, next);
+    }
+
+    {
+        const concurrentShift = 1792350000;
+        const current = workRefreshResult({
+            employerGid: 1253397809,
+            startAt: concurrentShift,
+            interactionStatus: 0,
+            lastInteraction: null,
+        });
+        let releaseInteract;
+        let markInteractStarted;
+        const interactGate = new Promise((resolve) => { releaseInteract = resolve; });
+        const interactStarted = new Promise((resolve) => { markInteractStarted = resolve; });
+        router = async (req) => {
+            if (req.cmd === 63) return operateReply(63, { result: current, resultField: 168 });
+            if (req.cmd === 65) {
+                markInteractStarted();
+                await interactGate;
+                return operateReply(65, { result: Buffer.alloc(0), resultField: 170 });
+            }
+            throw new Error(`并发互动用例收到 cmd=${req.cmd}`);
+        };
+
+        sent.length = 0;
+        const first = milkTea.__testing.interactWithFriend(2);
+        const duplicate = milkTea.__testing.interactWithFriend(2);
+        await interactStarted;
+        releaseInteract();
+        const [firstResult, duplicateResult] = await Promise.all([first, duplicate]);
+        check('并发互动只发送一次 cmd65',
+            sent.filter((x) => x.cmd === 65).length === 1, sent.map((x) => x.cmd));
+        check('并发互动共享同一成功结果',
+            firstResult.ok === true && duplicateResult.ok === true
+            && firstResult.shiftKey === concurrentShift, [firstResult, duplicateResult]);
+
+        const fallback = await milkTea.getWorkStatus();
+        check('互动成功后即使服务端 #168 暂未刷新也立即标记本班已完成',
+            fallback.interactionStatus === 0 && fallback.interactionCompleted === true, fallback);
+        const repeated = await milkTea.__testing.interactWithFriend(2);
+        check('进程内完成兜底可阻止同班再次发送 cmd65',
+            repeated.skipped === true && repeated.interactionCompleted === true
+            && sent.filter((x) => x.cmd === 65).length === 1, repeated);
+    }
+
+    {
+        const cooldownShift = 1792300000;
+        const current = workRefreshResult({ employerGid: 1253397809, startAt: cooldownShift });
+        router = async (req) => {
+            if (req.cmd === 63) return operateReply(63, { result: current, resultField: 168 });
+            if (req.cmd === 65) return operateReply(65, { errorCode: 1034147 });
+            throw new Error(`冷却用例收到 cmd=${req.cmd}`);
+        };
+
+        sent.length = 0;
+        const first = await milkTea.__testing.interactWithFriend(2);
+        const second = await milkTea.__testing.interactWithFriend(2);
+        check('只有服务端 1034147 才进入本班冷却',
+            first.ok === false && first.skipped === true && first.shiftKey === cooldownShift, first);
+        check('冷却中仍会实时查询 cmd63 确认当前老板',
+            sent.filter((x) => x.cmd === 63).length === 2, sent.map((x) => x.cmd));
+        check('冷却中不再发送第二次 cmd65',
+            sent.filter((x) => x.cmd === 65).length === 1 && second.skipped === true, sent.map((x) => x.cmd));
+    }
+
+    {
+        const noEmployer = workRefreshResult({ employerGid: 0 });
+        router = async (req) => {
+            if (req.cmd === 63) return operateReply(63, { result: noEmployer, resultField: 168 });
+            throw new Error(`无老板领工资用例不应发送 cmd=${req.cmd}`);
+        };
+
+        sent.length = 0;
+        const skipped = await milkTea.claimWage();
+        check('无老板时领工资返回 skipped', skipped.ok === false && skipped.skipped === true, skipped);
+        check('无老板时只查询 cmd63, 不发送 cmd64',
+            sent.length === 1 && sent[0].cmd === 63 && !sent.some((x) => x.cmd === 64), sent.map((x) => x.cmd));
+
+        const current = workRefreshResult({ employerGid: 1253397809, startAt: 1792400000 });
+        router = async (req) => {
+            if (req.cmd === 63) return operateReply(63, { result: current, resultField: 168 });
+            if (req.cmd === 64) {
+                const result = bytesField(1, Buffer.concat([varintField(1, 1041), varintField(2, 120)]));
+                return operateReply(64, { result, resultField: 169 });
+            }
+            throw new Error(`领工资用例收到 cmd=${req.cmd}`);
+        };
+
+        sent.length = 0;
+        const wage = await milkTea.claimWage();
+        check('领工资前先实时查询 cmd63',
+            sent.length === 2 && sent[0].cmd === 63 && sent[1].cmd === 64, sent.map((x) => x.cmd));
+        check('领工资成功返回奶茶券数量',
+            wage.ok === true && wage.gained && wage.gained.id === 1041 && wage.gained.count === 120, wage);
     }
 
     section('8. 宣传喇叭在协议未确认前不发请求');

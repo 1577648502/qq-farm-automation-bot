@@ -3400,6 +3400,13 @@ app.use('/api', (req, res, next) => {
         try { res.json({ ok: true, data: await provider.getMilkTeaStatus(id) }); }
         catch (e) { res.json({ ok: false, error: e.message }); }
     });
+    app.get('/api/activity/milk-tea/work', async (req, res) => {
+        const id = getAccId(req);
+        if (!id) return res.status(400).json({ ok: false, error: '缺少账号 ID' });
+        if (!checkAccountAccess(req, id)) return res.status(403).json({ ok: false, error: '无权访问此账号' });
+        try { res.json({ ok: true, data: await provider.getMilkTeaWork(id) }); }
+        catch (e) { res.json({ ok: false, error: e.message }); }
+    });
     // 雇佣白名单读写(页面上的"可选好友"): 直接走 store + saveSettings, 不必经 worker
     app.get('/api/activity/milk-tea/hire-config', (req, res) => {
         const id = getAccId(req);
@@ -3475,7 +3482,7 @@ app.use('/api', (req, res, next) => {
     milkTeaRoute('/api/activity/milk-tea/speaker', (id) => provider.useMilkTeaSpeaker(id));
     milkTeaRoute('/api/activity/milk-tea/open', (id) => provider.openMilkTeaStore(id));
     milkTeaRoute('/api/activity/milk-tea/hire', (id, body) => provider.hireMilkTea(id, { friendGid: body.friendGid }));
-    milkTeaRoute('/api/activity/milk-tea/interact', (id, body) => provider.interactMilkTea(id, { friendGid: body.friendGid, type: body.type }));
+    milkTeaRoute('/api/activity/milk-tea/interact', (id, body) => provider.interactMilkTea(id, { type: body.type }));
     milkTeaRoute('/api/activity/milk-tea/sales-record', (id, body) => provider.getMilkTeaSalesRecord(id, { day: body && body.day }));
     milkTeaRoute('/api/activity/milk-tea/upgrade-store', (id) => provider.upgradeMilkTeaStore(id));
     milkTeaRoute('/api/activity/milk-tea/upgrade-info', (id) => provider.getMilkTeaUpgrade(id));
@@ -3786,4 +3793,3 @@ module.exports = {
     emitRealtimeLog,
     emitRealtimeAccountLog,
 };
-

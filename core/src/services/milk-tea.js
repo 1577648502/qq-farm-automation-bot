@@ -10,31 +10,49 @@
  *  4. 宣传加速: 宣传喇叭 → 立即获得基础热卖值对应的 1 小时销售收益(不吃加成)
  * ⚠ 收银台满载会暂停自动营业且**不补发** → 定时领收益(cmd=59)是自动化的核心
  *
- * ════════ 协议 (2026-10-15 抓包, 上行已解密实测) ════════
- * 活动组: 2026110101 主活动 / 2026110102 种子商店 / 2026110103 任务 / 2026110104 快乐不独享S4
+ * ════════ 协议 (2026-10-18 三级解锁抓包复核) ════════
+ * 活动组: 2026110100 根组 / 2026110101 主活动 / 2026110102 商店 /
+ *         2026110103 任务 / 2026110104 快乐不独享S4
+ * 活动列表: gamepb.activitypb.ActivityService.List(空请求)
+ *   根组 #1=活动头, #2=repeated 子活动; 活动头 #6 开始 / #7 结束 / #24 结算期开始。
+ *   商店和任务以 List 快照为准, 服务端约有 20~30 秒缓存, 购买/升级后主动失效本地缓存。
  * 主活动(0101): **payload 字段 = cmd + 105**, 状态容器 = 活动体 #121.#1
  *   cmd=53 开业     {#158: {#1: "店名"}}
  *   cmd=55 收银台详情 {#160: ""}
  *   cmd=56 员工面板 {#161: {#1: selector(普通列表实测=1)}}
- *   cmd=57 雇佣好友 {#162: {#1: {#1: 0, #2: 1, #3: 好友gid}}}
+ *   cmd=57 雇佣好友 {#162: {#1: {#1: 1, #2: 1, #3: 好友gid}}}
  *   cmd=58 配方菜单 {#163: ""}
+ *   cmd=59 领取收银台收益 {#164: ""}
+ *   cmd=60 查询 {#165: {#1: 1}} → {#1,#2,#3} 业务语义未闭环
+ *   cmd=61 店铺升级 {#166: ""}
  *   cmd=62 制作奶茶 {#167: {#1: packed 果实uid}}
  *   cmd=63 刷新/查询 {#168: ""}
  *   cmd=65 互动     {#170: {#1: 好友gid, #2: 互动类型}}
- *   cmd=66 好友店铺排行 {#171: ""}
+ *   cmd=66 好友店铺排行 {#171: {#1: 页码}}
  *   cmd=67 班次     {#172: {#1: 时间戳}}
  *   cmd=69 查配方   {#174: {#1: {#1250: 配方id}}}
- *   状态 #121.#1: {#1: 结算时间, #2: 店名, #4: 1, #5: 数值, #15: {#1250: 当前配方}, #16: 时间}
- * 种子商店(0102): cmd=7 列表(结果在活动体 #102) / **cmd=1 购买 {#101: {#1: 商品ID, #2: 数量}}**
- *   商品: {#1: 商品ID, #2: {物品ID, 数量}, #3: {货币ID, 单价}, #7: 名称, #12: 'seed',
- *          #13: 解锁条件(如 "2026110101_奶茶店等级_3")}
- *   实测: 301「森野甜莓种子」单价 1001(金币)×10000, 买 108 个 → 扣 1080000 金币, 到账 20525×108
- * 任务(0103): cmd=7 列表(活动体 #122) = {#2: 累计奖励?, #3(repeated): {#1: 序号, #2: 条件, #3(repeated): {物品,数量}, #4: 状态}}
+ *   状态 #121.#1: {#1: 开业时间, #2: 店名, #4: 店铺等级, #5: 累计营业额,
+ *                  #15: {#1250: 当前配方}, #16: 刷新时间}
+ * 商店(0102): List 子活动 #102 / **cmd=1 购买 {#101: {#1: 商品ID, #2: 数量}}**
+ *   商品: {#1 ID, #2 repeated 内容物, #3 repeated 价格, #4 限购, #5 已购,
+ *          #7/#8 名称/描述, #11 限购类型, #12 类型, #13 解锁条件}
+ *   解锁只认 #13.#3===1; 无 #13 表示无限制。#13.#5 可展示需求等级。
+ * 任务(0103): List 子活动 #122 = {#2 汇总, #3(repeated) 任务}
+ *   任务: {#1 ID, #2 条件, #3 repeated 奖励, #4 状态(1进行中/2可领/3已领)}
+ *   领取协议尚未抓到, claimTask/claimAllTasks 一律禁用, 不发送候选请求。
+ * 收银台(cmd55/#160): #1 等级, #2 累计营业额, #3 下一级门槛, #9 当前在岗员工,
+ *   #10 当日品类销量, #19 待领取收益, #23 长期累计收益, #25 累计品类销量。
+ *   领取前必须先查 #19; 无待领取不得发送 cmd59。
+ * 排行榜(cmd66/#171): 条目 {#1 身份, #2 店名, #3 等级, #4 营业额, #5 排名},
+ *   外层 #3 时间 / #4 页码 / #5 是否有下一页。
+ * 营业记录(cmd67/#172): 员工记录 #6 是 17 位班次 UID, 必须按字符串保存。
  */
 const { log, toNum, toInt, sleep } = require('../utils/utils');
 const { getItemById, getItemImageById, getPlantBySeedId } = require('../config/gameConfig');
 const { operateRaw, parseTop, findField } = require('./mengchong');
+const { sendMsgAsync } = require('../utils/network');
 
+const ACTIVITY_SERVICE = 'gamepb.activitypb.ActivityService';
 const GROUP_MAIN = 2026110101;
 const GROUP_SHOP = 2026110102;
 const GROUP_TASK = 2026110103;
@@ -50,8 +68,8 @@ const CMD_CASHIER_DETAIL = 55;// **收银台详情**(结果 #160: 可领取/明�
 const CMD_SALES_RECORD = 67;   // **营业记录(按天)**(实测: 字段 #172 = {#1 日期})
 const CMD_UPGRADE_STORE = 61;  // **店铺升级**(实测: 字段 #166, 空 payload)
 const CMD_CLAIM_CASHIER = 59; // **领取收银台收益**(执行) → 响应 #164 = 到账物品(实测 奶茶券×10 + 金币×8648)
-const CMD_CASHIER_INFO = 60;// **收银台查询**: {#1: 容量, #2: 当前待领, #3: 杯数}
-const CMD_REFRESH = 63;     // 刷新/查询
+const CMD_CASHIER_INFO = 60;// 查询: 请求 {#1: 1}; 响应 #1/#2/#3 业务语义未闭环
+const CMD_REFRESH = 63;     // 刷新/查询兼职状态(只用于 #168)
 const CMD_RANKING = 66;     // 好友店铺排行(店名+热度)
 const CMD_WORK_INTERACT = 65;// **互动(我的工作)**: 请求 #170 = {#1: 好友gid, #2: 互动类型}
 const CMD_CLAIM_WAGE = 64;   // **领工资**: 请求 #169 空 → 响应 {#1: {#1: 1041, #2: 120}}(奶茶券×120)
@@ -72,8 +90,8 @@ const CMD_SHIFT = 67;       // 班次(带时间戳)
 const CMD_RECIPE = 69;      // 查询配方
 const FIELD_OFFSET = 105;   // 主活动 payload 字段 = cmd + 105
 
-// 商店命令(payload/结果字段 = cmd + 100)
-const CMD_SHOP_LIST = 7;
+// 商店购买命令(payload/结果字段 = cmd + 100)
+const CMD_SHOP_LIST = 7;    // 旧版列表命令, 仅为兼容导出保留
 const CMD_SHOP_BUY = 1;
 const FIELD_SHOP_BUY = 101;
 
@@ -163,7 +181,9 @@ async function throttle() {
 /** 主活动请求(串行节流) */
 async function mainOperate(cmd, payloadField, payloadBytes) {
     await throttle();
-    return operateSafe(GROUP_MAIN, cmd, payloadField === undefined ? cmd + FIELD_OFFSET : payloadField, payloadBytes || Buffer.alloc(0));
+    const r = await operateSafe(GROUP_MAIN, cmd, payloadField === undefined ? cmd + FIELD_OFFSET : payloadField, payloadBytes || Buffer.alloc(0));
+    if (MAIN_STATUS_MUTATING_CMDS.has(toInt(cmd))) clearMainStatusCache();
+    return r;
 }
 
 /** 把 varint 编成 payload: {#1: n} */
@@ -208,13 +228,74 @@ function parseMainState(activityBuf) {
     return out;
 }
 
-/** 刷新并读取主活动状态 */
-async function getMainStatus() {
-    const r = await mainOperate(CMD_REFRESH, undefined, Buffer.alloc(0));
-    if (r.errorCode !== 0) return { ok: false, reason: `刷新失败 code=${r.errorCode}` };
-    const st = parseMainState(r.activity);
-    const work = parseWorkFromRefresh(r.resultHex);
-    return { ...st, work, ok: st.ok };
+const MAIN_STATUS_CACHE_MS = 20 * 1000;
+const MAIN_STATUS_MUTATING_CMDS = new Set([
+    CMD_OPEN,
+    CMD_HIRE,
+    CMD_CLAIM_CASHIER,
+    CMD_UPGRADE_STORE,
+    CMD_CRAFT_REAL,
+    CMD_CLAIM_WAGE,
+    CMD_WORK_INTERACT,
+]);
+let mainStatusCache = null;
+let mainStatusInFlight = null;
+let mainStatusGeneration = 0;
+
+function clearMainStatusCache() {
+    mainStatusCache = null;
+    // 让已经发出的旧 List 请求回来后不能重新写入缓存。
+    mainStatusGeneration += 1;
+}
+
+/** 从 ActivityService.List 的根组里取出指定活动体。 */
+function findActivityBody(replyBody, groupId = GROUP_MAIN) {
+    for (const groupField of parseTop(replyBody)) {
+        if (groupField.f !== 1 || groupField.w !== 2) continue;
+        for (const activityField of parseTop(groupField.v)) {
+            if (activityField.f !== 2 || activityField.w !== 2) continue;
+            const body = Buffer.from(activityField.v);
+            const head = findField(parseTop(body), 1);
+            const headFields = head && head.w === 2 ? parseTop(head.v) : [];
+            if (toInt((findField(headFields, 1) || {}).v) === toInt(groupId)) return body;
+        }
+    }
+    return null;
+}
+
+async function fetchMainStatus() {
+    try {
+        await throttle();
+        const { body: replyBody } = await sendMsgAsync(ACTIVITY_SERVICE, 'List', Buffer.alloc(0));
+        const activity = findActivityBody(replyBody, GROUP_MAIN);
+        if (!activity) return { ok: false, reason: '活动列表未返回奶茶主活动' };
+        const st = parseMainState(activity);
+        return st.ok ? st : { ...st, ok: false, reason: '奶茶主活动状态解析失败' };
+    } catch (e) {
+        return { ok: false, reason: `读取活动列表失败: ${shortErr(e && e.message)}` };
+    }
+}
+
+/** 读取主店状态: 权威来源是 ActivityService.List，短暂缓存并合并并发请求。 */
+async function getMainStatus(force = false) {
+    if (!force && mainStatusCache && Date.now() - mainStatusCache.at < MAIN_STATUS_CACHE_MS) {
+        return mainStatusCache.value;
+    }
+    if (!force && mainStatusInFlight) return mainStatusInFlight;
+    const generation = mainStatusGeneration;
+    const task = (async () => {
+        const value = await fetchMainStatus();
+        if (value && value.ok && generation === mainStatusGeneration) {
+            mainStatusCache = { at: Date.now(), value };
+        }
+        return value;
+    })();
+    if (!force) mainStatusInFlight = task;
+    try {
+        return await task;
+    } finally {
+        if (mainStatusInFlight === task) mainStatusInFlight = null;
+    }
 }
 
 /** 领取收银台收益(核心: 满载会暂停营业且不补发) */
@@ -1058,44 +1139,76 @@ async function craftMilkTea(limit = 8) {
  * 互动前刷新 #168.#1.#11 = 40, 响应 #8.#3 = 12, 互动后刷新 #11 = 52
  * ⇒ 当前样本可确认 #8.#3 = 工资变化; #7 / #8.#1 的业务含义仍未确认。
  */
-async function interactWithFriend(friendGid, type = WORK_INTERACT_TYPE) {
-    // ⚠ 必须用 toInt 强转成数字: toNum('1229231763') 会**原样返回字符串** → 与数字比较永远不等(踩过)
-    const requestedGid = toInt(friendGid);
-    // ⚠ 只认刷新(63)结果里的当前雇主；本地结束时间不能作为门槛(服务端曾在 endAt 后仍允许互动)。
-    const st = await getMainStatus().catch(() => null);
-    if (!st || !st.ok) {
-        // 拿不到状态 → 无法确认"是否在被雇佣的班次里" → 不发请求(失败关闭, 别用旧 GID 乱发)
-        return { ok: false, skipped: true, reason: '无法确认当前兼职状态(刷新失败), 跳过互动' };
+let interactInFlight = null;
+
+async function interactWithFriend(type = WORK_INTERACT_TYPE) {
+    if (interactInFlight) return interactInFlight;
+    const task = interactWithFriendOnce(type);
+    interactInFlight = task;
+    try {
+        return await task;
+    } finally {
+        if (interactInFlight === task) interactInFlight = null;
     }
-    let gid = 0;
-    let correctedGid = false;
-    {
-        const w = st.work || {};
-        if (!w.employer || !w.employer.gid) {
-            return { ok: false, skipped: true, reason: '当前没有进行中的兼职(未被雇佣), 不能互动', diag: workDiag(w, requestedGid) };
-        }
-        const liveGid = toInt(w.employer.gid);
-        gid = liveGid;
-        correctedGid = !!requestedGid && requestedGid !== liveGid;
+}
+
+async function interactWithFriendOnce(type = WORK_INTERACT_TYPE) {
+    const requestedType = toInt(type);
+    const interactType = WORK_INTERACT_OPTIONS.some((op) => op.id === requestedType)
+        ? requestedType
+        : WORK_INTERACT_TYPE;
+    // 互动目标只能来自动作发生前的实时 cmd63/#168，绝不接受页面缓存或配置里的 GID。
+    const w = await getWorkStatus().catch(() => null);
+    if (!w || !w.ok) {
+        return {
+            ok: false,
+            skipped: true,
+            reason: '无法确认当前兼职状态(cmd63 查询失败), 跳过互动',
+            hasEmployer: false,
+            shiftKey: 0,
+        };
     }
-    if (correctedGid && interactGidCorrection !== `${requestedGid}:${gid}`) {
-        interactGidCorrection = `${requestedGid}:${gid}`;
-        log('活动', `奶茶热销中: 互动目标 gid ${requestedGid} 已纠正为当前老板 ${gid}`, {
-            module: 'activity', event: '奶茶热销中', result: 'warn',
-        });
+    if (!w.hasEmployer || !w.employer || !w.employer.gid) {
+        return {
+            ok: false,
+            skipped: true,
+            reason: '当前没有进行中的兼职(未被雇佣), 不能互动',
+            hasEmployer: false,
+            shiftKey: 0,
+        };
     }
-    const inner = Buffer.concat([encodeVarintField(1, gid), encodeVarintField(2, toInt(type) || WORK_INTERACT_TYPE)]);
+    const gid = toInt(w.employer.gid);
+    const shiftKey = toInt(w.startAt) || 0;
+    const interactionCompleted = w.interactionCompleted === true
+        || (shiftKey > 0 && interactCompletedShifts.has(shiftKey));
+    if (interactionCompleted) {
+        return {
+            ok: false,
+            skipped: true,
+            reason: '本班已完成互动, 不再重复提交',
+            diag: workDiag(w),
+            hasEmployer: true,
+            shiftKey,
+            interactionCompleted: true,
+        };
+    }
+    const inner = Buffer.concat([encodeVarintField(1, gid), encodeVarintField(2, interactType)]);
     // ⚠ 实测抓包(15:46 成功那次): #170 的内容**直接**就是 {#1: gid, #2: type}(8 字节),
     //   不能再像下面这样多包一层 {#1: <inner>}, 否则服务端收到的是嵌套两层 → 判定异常
     //   (此前写法: Buffer.concat([Buffer.from([0x0a, inner.length]), inner]) —— 已去掉)
     const payload = inner;
     // 本班已被服务端拒绝过(1034147) → 本地冷却 10 分钟再试
-    const shiftKey = toInt((st && st.work && st.work.startAt) || 0);
     const nextTryAt = shiftKey ? (interactCooldown.get(shiftKey) || 0) : 0;
     if (nextTryAt > Date.now()) {
-        return { ok: false, skipped: true, reason: `本班暂不可互动(本地冷却中), ${Math.ceil((nextTryAt - Date.now()) / 60000)} 分钟后重试` };
+        return {
+            ok: false,
+            skipped: true,
+            reason: `本班暂不可互动(本地冷却中), ${Math.ceil((nextTryAt - Date.now()) / 60000)} 分钟后重试`,
+            hasEmployer: true,
+            shiftKey,
+        };
     }
-    log('活动', `奶茶热销中: [互动请求] gid=${gid} type=${toInt(type) || WORK_INTERACT_TYPE} ` +
+    log('活动', `奶茶热销中: [互动请求] gid=${gid} type=${interactType} ` +
         `payload=${payload.toString('hex')} (${payload.length}B)`, { module: 'activity', event: '奶茶热销中', result: 'info' });
     const r = await mainOperate(CMD_WORK_INTERACT, 170, payload);
     if (!r.ok && r.errorCode !== 0) {
@@ -1104,16 +1217,24 @@ async function interactWithFriend(friendGid, type = WORK_INTERACT_TYPE) {
     }
     if (r.errorCode === 1034147) {
         if (shiftKey) interactCooldown.set(shiftKey, Date.now() + INTERACT_COOLDOWN_MS);
-        if (interactCooldown.size > 50) interactCooldown.clear();
+        trimOldestEntries(interactCooldown, 50);
         return {
             ok: false,
             skipped: true,
             reason: `本班暂不可互动(${r.reason || 'code=1034147'}), 本地冷却 10 分钟后重试`,
-            diag: workDiag((st && st.work) || {}, gid),
+            diag: workDiag(w),
+            hasEmployer: true,
+            shiftKey,
         };
     }
     if (r.errorCode !== 0) {
-        return { ok: false, reason: `互动失败 code=${r.errorCode}`, diag: workDiag((st && st.work) || {}, gid) };
+        return {
+            ok: false,
+            reason: `互动失败 code=${r.errorCode}`,
+            diag: workDiag(w),
+            hasEmployer: true,
+            shiftKey,
+        };
     }
     let result = null;
     if (r.resultHex) {
@@ -1123,7 +1244,7 @@ async function interactWithFriend(friendGid, type = WORK_INTERACT_TYPE) {
             const effect8 = findField(rf, 8);
             const effect8Fields = effect8 && effect8.w === 2 ? parseTop(effect8.v) : [];
             const changeField = findField(effect8Fields, 3);
-            const before = toInt((st.work && st.work.wage) || 0);
+            const before = toInt(w.wage) || 0;
             const change = changeField ? toInt(changeField.v) : null;
             const snapshot = (field) => {
                 if (!field || field.w !== 2) return null;
@@ -1154,10 +1275,18 @@ async function interactWithFriend(friendGid, type = WORK_INTERACT_TYPE) {
         ? `, 工资${result.wage.before !== null ? ` ${result.wage.before}→${result.wage.after}` : ''}` +
           `(${result.wage.change >= 0 ? '+' : ''}${result.wage.change})`
         : '';
-    log('活动', `奶茶热销中: 已与好友 ${gid} 互动(${interactNameOf(toInt(type) || WORK_INTERACT_TYPE)}${wageTxt})`, {
-        module: 'activity', event: '奶茶热销中', result: 'ok', friendGid: gid, type: toInt(type) || WORK_INTERACT_TYPE,
+    log('活动', `奶茶热销中: 已与好友 ${gid} 互动(${interactNameOf(interactType)}${wageTxt})`, {
+        module: 'activity', event: '奶茶热销中', result: 'ok', friendGid: gid, type: interactType,
     });
-    return { ok: true, friendGid: gid, correctedGid, interact: result };
+    rememberCompletedShift(shiftKey);
+    return {
+        ok: true,
+        friendGid: gid,
+        interact: result,
+        hasEmployer: true,
+        shiftKey,
+        interactionCompleted: true,
+    };
 }
 
 /**
@@ -1165,6 +1294,25 @@ async function interactWithFriend(friendGid, type = WORK_INTERACT_TYPE) {
  * 实测(20261016-080455 idx=127): 请求 #169 = ""; 响应 = {#1: {#1: 1041(奶茶券), #2: 120}, #2: 2}
  */
 async function claimWage() {
+    const work = await getWorkStatus().catch(() => null);
+    if (!work || !work.ok) {
+        return {
+            ok: false,
+            skipped: true,
+            reason: '无法确认当前兼职状态(cmd63 查询失败), 跳过领工资',
+            hasEmployer: false,
+            shiftKey: 0,
+        };
+    }
+    if (!work.hasEmployer) {
+        return {
+            ok: false,
+            skipped: true,
+            reason: '当前没有进行中的兼职(未被雇佣), 跳过领工资',
+            hasEmployer: false,
+            shiftKey: 0,
+        };
+    }
     const r = await mainOperate(CMD_CLAIM_WAGE, 169, Buffer.alloc(0));
     if (r.errorCode !== 0) return { ok: false, reason: `领工资失败 code=${r.errorCode}` };
     let gained = null;
@@ -1193,8 +1341,28 @@ async function claimWage() {
  * ⚠ 互动(cmd=65)要传的 gid = 这里 #1.#1.#1(当前老板); 别从收银台详情(55)的历史记录取(踩过, 取到旧班次)
  */
 function parseWorkFromRefresh(resultHex) {
-    const out = { ok: false, employer: null, storeName: '', startAt: 0, endAt: 0, wage: 0, bonus: 0, titleId: 0, titleName: '', records: [], active: false, lastInteraction: null };
-    if (!resultHex) return out;
+    const out = {
+        ok: false,
+        hasEmployer: false,
+        employer: null,
+        storeName: '',
+        startAt: 0,
+        endAt: 0,
+        wage: 0,
+        bonus: 0,
+        titleId: 0,
+        titleName: '',
+        records: [],
+        active: false,
+        lastInteraction: null,
+        interactionStatus: 0,
+        interactionCompleted: false,
+    };
+    if (!resultHex) {
+        // cmd63 成功但 #168 为空 = 当前没有兼职，不是查询失败。
+        out.ok = true;
+        return out;
+    }
     try {
         const rf = parseTop(Buffer.from(resultHex, 'hex'));
         const cur = findField(rf, 1);
@@ -1216,8 +1384,8 @@ function parseWorkFromRefresh(resultHex) {
             out.startAt = toInt((findField(c, 6) || {}).v);
             out.endAt = toInt((findField(c, 7) || {}).v);
             out.wage = toInt((findField(c, 11) || {}).v);
-            // #12 = 本班最近一次互动记录: #1 类型, #2 次数, #3 特长id, #4 时间。
-            // 它不是次数配额；旧包只有 #1=1 时也不能据此拦截后续互动。
+            // #12 = 本班互动记录: #1 类型, #2 次数(部分响应缺省), #3 特长id, #4 时间。
+            // 每班只能互动一次，因此当前班次只要出现 #12 就按已完成处理。
             const t12 = findField(c, 12);
             if (t12 && t12.w === 2) {
                 const f12 = parseTop(t12.v);
@@ -1230,11 +1398,15 @@ function parseWorkFromRefresh(resultHex) {
             }
             const t13 = findField(c, 13);
             if (t13 && t13.w === 2) out.bonus = toInt((findField(parseTop(t13.v), 2) || {}).v);
-            out.ok = !!out.employer;
+            // 抓包闭环: 本班互动前 #9 缺省/0；互动成功后 #9=1 且写入 #12；
+            // 班次进入历史后 #9=2。当前 #9>0 或已有 #12 都表示本班动作已完成。
+            out.interactionStatus = toInt((findField(c, 9) || {}).v);
+            out.interactionCompleted = out.interactionStatus > 0 || !!out.lastInteraction;
             // "进行中的班次" = 有本次兼职 && (没给结束时间 或 现在还没到结束时间)
             // active = 有当前老板(兼职记录第一条存在) —— ⚠ 不用记录的时间窗口判断:
             // 实测 09:04 那次, 记录的 endAt 已过但互动仍成功(服务端有自己的判定), 用窗口会误杀
-            out.active = !!out.employer;
+            out.hasEmployer = !!out.employer;
+            out.active = out.hasEmployer;
         }
         const t = findField(rf, 3);
         if (t && t.w === 0) out.titleId = toInt(t.v);
@@ -1267,9 +1439,29 @@ function parseWorkFromRefresh(resultHex) {
                 });
             }
         }
+        out.ok = true;
     } catch (e) { /* 忽略 */ }
     // #2 = 兼职历史记录(老板/时长及未闭环字段), 仅用于展示, **不覆盖** employer
     return out;
+}
+
+/** 实时查询“我的工作”状态；唯一权威来源是 cmd63/#168。 */
+async function getWorkStatus() {
+    await throttle();
+    const r = await operateSafe(GROUP_MAIN, CMD_REFRESH, 168, Buffer.alloc(0));
+    if (r.errorCode !== 0) {
+        return {
+            ...parseWorkFromRefresh(''),
+            ok: false,
+            reason: `查询兼职状态失败 code=${r.errorCode}`,
+        };
+    }
+    const work = parseWorkFromRefresh(r.resultHex);
+    if (!work.ok) return { ...work, reason: '兼职状态为空或解析失败' };
+    if (work.hasEmployer && work.startAt && interactCompletedShifts.has(work.startAt)) {
+        work.interactionCompleted = true;
+    }
+    return work;
 }
 
 /**
@@ -1520,9 +1712,9 @@ function interactNameOf(type) {
 }
 
 /** 互动判定用的诊断串(短), 用于日志里一眼看清各判据的实际取值 */
-function workDiag(w, gid) {
+function workDiag(w) {
     const last = w && w.lastInteraction;
-    return `传入${gid || 0}/当前${(w && w.employer && w.employer.gid) || 0} ` +
+    return `当前${(w && w.employer && w.employer.gid) || 0} ` +
         `班次${(w && w.startAt) || 0}-${(w && w.endAt) || 0} ` +
         `最近互动=${last ? `type${last.type}/count${last.count}/at${last.at}` : '无'}`;
 }
@@ -1544,13 +1736,27 @@ function stepGap() {
 }
 
 let lastSeedBuyDay = '';
-let interactSkipLoggedShift = 0;   // 已记录过"本班暂不可互动"的班次(避免每 10 分钟刷一条)    // 每日兑换种子的日期标记(服务器日期)
-let interactGidCorrection = '';    // 同一个错误 GID 只提示一次
+let interactSkipLoggedKey = '';   // 已记录过"本班暂不可互动"的班次(避免每 10 分钟刷一条)
 const interactCooldown = new Map();   // 班次key → 下次可尝试时间(只在服务端返回 1034147 后写 10 分钟)
+const interactCompletedShifts = new Set(); // 成功互动后的进程内兜底；权威状态仍以 #168.#1.#9/#12 为准
 // 实测(2026-10-16 23:05): 同一班次同一 payload, 距班次开始 5 分钟被拒(1034147)、17 分钟成功
 // → 互动需等班次开始一段时间后才解锁(阈值协议里没有字段), 因此用"班次内定期重试"代替猜阈值
 const INTERACT_COOLDOWN_MS = 10 * 60 * 1000;
 const HIRE_BACKOFF_MS = 30 * 60 * 1000;
+
+function trimOldestEntries(map, maxSize) {
+    while (map.size > maxSize) {
+        const oldest = map.keys().next();
+        if (oldest.done) break;
+        map.delete(oldest.value);
+    }
+}
+
+function rememberCompletedShift(shiftKey) {
+    if (!shiftKey) return;
+    interactCompletedShifts.add(shiftKey);
+    trimOldestEntries(interactCompletedShifts, 50);
+}
 function isHireAlreadyError(msg) {
     const t = String(msg || '');
     // 关键词 或 错误码(1034140 = 该雇佣位已有员工在工作; 压短后中文可能丢失, 所以必须匹配码)
@@ -1588,11 +1794,6 @@ async function runMilkTea(opts = {}) {
         await stepGap();
         st = await getMainStatus().catch(() => st);
     }
-    if (opts.autoTask) {
-        const r = await claimAllTasks().catch((e) => ({ ok: false, reason: e.message }));
-        out.steps.push({ step: 'autoTask', ...r });
-        await stepGap();
-    }
     if (doCashier) {
         const r = await claimCashier();
         out.steps.push({ step: 'cashier', ...r });
@@ -1608,10 +1809,6 @@ async function runMilkTea(opts = {}) {
         out.steps.push({ step: 'speaker', ...r });
         await stepGap();
     }
-    // 互动/领工资都只认刷新(63)结果里的当前雇主；不回退到配置、收银台历史记录或缓存。
-    const curWork = (st && st.work) || {};
-    const employerGid = (curWork.employer && curWork.employer.gid) || 0;
-    const hasEmployer = !!employerGid;
     // 每日兑换种子(一天一次; 日期用状态里的服务器时间算, 取不到才用本地)
     if (opts.autoBuySeed) {
         const dayKey = (() => {
@@ -1637,17 +1834,22 @@ async function runMilkTea(opts = {}) {
     }
 
 
-    if (opts.autoInteract && hasEmployer) {
-        const r = await interactWithFriend(employerGid, opts.interactType).catch((e) => ({ ok: false, reason: e.message }));
+    // 互动/领工资都由各自函数在动作前实时查询 cmd63/#168；这里不再使用初始化状态里的旧班次。
+    if (opts.autoInteract) {
+        const r = await interactWithFriend(opts.interactType).catch((e) => ({ ok: false, reason: e.message }));
         out.steps.push({ step: 'autoInteract', ...r });
         if (r.ok) {
-            log('活动', `奶茶热销中: 已自动互动(雇主 ${employerGid}, 类型 ${opts.interactType || WORK_INTERACT_TYPE})`, { module: 'activity', event: '奶茶热销中', result: 'ok' });
+            interactSkipLoggedKey = '';
+        } else if (r.skipped && r.interactionCompleted) {
+            // 本班成功互动后，后续轮次会持续返回该状态；成功日志已经记录过，不再重复提示。
         } else if (r.skipped) {
             // 每个班次只记一条(之后安静重试), 避免每 10 分钟刷一条
-            const sk = toInt(curWork.startAt) || 0;
-            if (sk !== interactSkipLoggedShift) {
-                interactSkipLoggedShift = sk;
-                log('活动', `奶茶热销中: 本班互动暂不可用(将每 10 分钟重试, 班次内只提示这一次)${r.diag ? ` [${r.diag}]` : ''}`, { module: 'activity', event: '奶茶热销中', result: 'skip' });
+            const key = r.shiftKey ? `shift:${r.shiftKey}` : (r.hasEmployer ? 'active-unknown' : 'no-employer');
+            if (key !== interactSkipLoggedKey) {
+                interactSkipLoggedKey = key;
+                log('活动', `奶茶热销中: 自动互动暂不可用 — ${r.reason}${r.diag ? ` [${r.diag}]` : ''}`, {
+                    module: 'activity', event: '奶茶热销中', result: 'skip',
+                });
             }
         } else {
             log('活动', `奶茶热销中: 自动互动未执行 — ${r.reason}${r.diag ? ` (${r.diag})` : ''}`, { module: 'activity', event: '奶茶热销中', result: 'warn' });
@@ -1663,18 +1865,14 @@ async function runMilkTea(opts = {}) {
         }
         await stepGap();
     }
-    // 自动领兼职工资: 独立开关(opts.autoWage) + 必须处于"被雇佣"状态
+    // 自动领兼职工资: 独立开关(opts.autoWage); claimWage 自己实时查询当前班次。
     if (opts.autoWage !== false) {
-        if (!hasEmployer) {
-            out.steps.push({ step: 'claimWage', ok: false, skipped: true, reason: '当前没有进行中的班次, 跳过领工资' });
-        } else {
-            const r = await claimWage().catch((e) => ({ ok: false, reason: e.message }));
-            out.steps.push({ step: 'claimWage', ...r });
-            if (!r.ok && !/没有|不存在|无/.test(String(r.reason))) {
-                log('活动', `奶茶热销中: 领工资未成功 — ${r.reason}`, { module: 'activity', event: '奶茶热销中', result: 'warn' });
-            }
-            await stepGap();
+        const r = await claimWage().catch((e) => ({ ok: false, reason: e.message }));
+        out.steps.push({ step: 'claimWage', ...r });
+        if (!r.ok && !r.skipped) {
+            log('活动', `奶茶热销中: 领工资未成功 — ${r.reason}`, { module: 'activity', event: '奶茶热销中', result: 'warn' });
         }
+        await stepGap();
     }
     if (opts.autoHire && Array.isArray(opts.hireGids) && opts.hireGids.length) {
         if (Date.now() < hireBackoffUntil) {
@@ -1757,12 +1955,15 @@ module.exports = {
         craftAllFruits,
         useSpeaker,
         getEmployees,
+        getWorkStatus,
+        clearMainStatusCache,
     },
     getMainStatus,
     claimCashier,
     craftMilkTea,
     craftAllFruits,
     claimWage,
+    getWorkStatus,
     getCashierDetail,
     parseWorkFromRefresh,
     WORK_INTERACT_OPTIONS,

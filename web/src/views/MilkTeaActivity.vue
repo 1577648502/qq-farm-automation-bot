@@ -127,6 +127,17 @@ const storeLevel = computed(() => Number(status.value?.storeLevel) || 0)
 const pending = computed(() => Number(status.value?.cashier?.pending) || 0)
 const capacity = computed(() => Number(status.value?.cashier?.capacity) || 0)
 const milkCoupon = computed(() => Number(status.value?.milkCoupon) || 0)
+const work = computed(() => status.value?.work || {})
+const hasEmployer = computed(() => work.value.hasEmployer === true
+  && Number(work.value.employer?.gid) > 0)
+const interactionCompleted = computed(() => work.value.interactionCompleted === true)
+const canInteract = computed(() => hasEmployer.value && !interactionCompleted.value)
+const workStateText = computed(() => {
+  if (!status.value || !status.value.work) return '未读取'
+  if (work.value.ok === false) return '读取失败'
+  if (!hasEmployer.value) return '未受雇'
+  return interactionCompleted.value ? '已受雇，本班已互动' : '已受雇，可互动'
+})
 const selectedSalesDay = computed(() => Number(salesDay.value) || Number(todayStart.value))
 const isTodaySales = computed(() => Number(selectedSalesDay.value) === Number(todayStart.value))
 const canGoNextSalesDay = computed(() => {
@@ -196,6 +207,24 @@ async function loadStatus() {
     reportError('读取经营状态', apiError(null, null, e))
   } finally {
     statusBusy.value = false
+  }
+}
+
+async function loadWorkStatus() {
+  try {
+    const res = await api.get('/api/activity/milk-tea/work')
+    const d = res.data?.data || {}
+    const err = apiError(res, d)
+    if (err) {
+      status.value = { ...(status.value || {}), work: { ok: false, hasEmployer: false, reason: err } }
+      return
+    }
+    status.value = { ...(status.value || {}), work: d }
+  } catch (e: any) {
+    status.value = {
+      ...(status.value || {}),
+      work: { ok: false, hasEmployer: false, reason: apiError(null, null, e) },
+    }
   }
 }
 
@@ -402,8 +431,16 @@ async function claimWageNow() {
     const d = res.data?.data || {}
     const err = apiError(res, d)
     if (err) { reportError('领工资', err); return }
+    if (d.skipped) {
+      actionResult.value = d.reason || '当前不能领取工资'
+      toast.warning(actionResult.value)
+      await loadWorkStatus()
+      return
+    }
+    if (d.ok === false) { reportError('领工资', d.reason || '领工资未成功'); return }
     actionResult.value = d.gained ? `已领工资 ${d.gained.count} 奶茶券` : '领工资完成'
     toast.success(actionResult.value)
+    await loadStatus()
   } catch (e: any) {
     reportError('领工资', apiError(null, null, e))
   } finally {
@@ -413,22 +450,29 @@ async function claimWageNow() {
 
 /** 互动(我的工作, cmd=65): 目标只取当前雇主, 资格由服务端判定 */
 async function interactNow() {
-  const w = (status.value && status.value.work) || {}
-  if (w.active !== true || !w.employer || !w.employer.gid) {
-    toast.warning('当前没有进行中的兼职（未被好友雇佣），不能互动')
+  if (!canInteract.value) {
+    toast.warning(hasEmployer.value
+      ? '本班已经互动过，不能重复互动'
+      : '当前没有进行中的兼职（未被好友雇佣），不能互动')
     return
   }
-  const gid = String(w.employer.gid).trim()
   busy.value = 'interact'
   try {
-    const res = await api.post('/api/activity/milk-tea/interact', { friendGid: gid, type: Number(interactType.value) || 2 })
+    const res = await api.post('/api/activity/milk-tea/interact', { type: Number(interactType.value) || 2 })
     const d = res.data?.data || {}
     const err = apiError(res, d)
     if (err) { reportError('互动', err); return }
+    if (d.skipped) {
+      actionResult.value = d.reason || '当前不能互动'
+      toast.warning(actionResult.value)
+      await loadWorkStatus()
+      return
+    }
+    if (d.ok === false) { reportError('互动', d.reason || '互动未成功'); return }
     const wage = formatWageChange(d.interact && d.interact.wage)
-    actionResult.value = `已与好友 ${d.friendGid || gid} 互动${wage}`
+    actionResult.value = `已与好友 ${d.friendGid || '当前老板'} 互动${wage}`
     toast.success(actionResult.value)
-    await loadStatus()
+    await loadWorkStatus()
   } catch (e: any) {
     reportError('互动', apiError(null, null, e))
   } finally {
@@ -645,24 +689,26 @@ onMounted(() => {
             <div class="text-xs text-gray-500 dark:text-gray-400">受雇状态</div>
             <div
               class="mt-0.5 text-sm font-medium"
-              :class="status.work && status.work.active ? 'text-emerald-600 dark:text-emerald-400' : 'text-gray-500 dark:text-gray-400'"
+              :class="hasEmployer
+                ? 'text-emerald-600 dark:text-emerald-400'
+                : (work.ok === false ? 'text-amber-600 dark:text-amber-400' : 'text-gray-500 dark:text-gray-400')"
             >
-              {{ status.work && status.work.active ? '已受雇，可互动' : '未受雇' }}
+              {{ workStateText }}
             </div>
             <div
-              v-if="status.work && status.work.active && status.work.employer"
+              v-if="hasEmployer && work.employer"
               class="mt-1 flex flex-wrap gap-x-2 gap-y-1 text-xs text-gray-500 dark:text-gray-400"
             >
               <span class="min-w-0 break-all">
-                老板 {{ status.work.employer.name || status.work.employer.gid }}
-                <span v-if="status.work.employer.name" class="text-gray-400">({{ status.work.employer.gid }})</span>
+                老板 {{ work.employer.name || work.employer.gid }}
+                <span v-if="work.employer.name" class="text-gray-400">({{ work.employer.gid }})</span>
               </span>
-              <span v-if="status.work.wage">工资 {{ Number(status.work.wage).toLocaleString() }}</span>
-              <span v-if="status.work.titleName">特长 {{ status.work.titleName }}</span>
-              <span v-if="status.work.lastInteraction">
-                最近互动 {{ interactionName(status.work.lastInteraction.type) }}
-                <template v-if="status.work.lastInteraction.count">×{{ status.work.lastInteraction.count }}</template>
-                <template v-if="status.work.lastInteraction.at"> · {{ fmtTime(status.work.lastInteraction.at) }}</template>
+              <span v-if="work.wage">工资 {{ Number(work.wage).toLocaleString() }}</span>
+              <span v-if="work.titleName">特长 {{ work.titleName }}</span>
+              <span v-if="work.lastInteraction">
+                最近互动 {{ interactionName(work.lastInteraction.type) }}
+                <template v-if="work.lastInteraction.count">×{{ work.lastInteraction.count }}</template>
+                <template v-if="work.lastInteraction.at"> · {{ fmtTime(work.lastInteraction.at) }}</template>
               </span>
             </div>
           </div>
@@ -710,11 +756,27 @@ onMounted(() => {
           <BaseButton variant="secondary" size="sm" block :loading="busy === 'craft'" @click="craftNow">
             制作全部果实
           </BaseButton>
-          <BaseButton variant="secondary" size="sm" block :loading="busy === 'wage'" @click="claimWageNow">
+          <BaseButton
+            variant="secondary"
+            size="sm"
+            block
+            :disabled="!hasEmployer"
+            :loading="busy === 'wage'"
+            :title="hasEmployer ? '' : '当前没有进行中的兼职'"
+            @click="claimWageNow"
+          >
             领工资
           </BaseButton>
-          <BaseButton variant="secondary" size="sm" block :loading="busy === 'interact'" @click="interactNow">
-            互动一次
+          <BaseButton
+            variant="secondary"
+            size="sm"
+            block
+            :disabled="!canInteract"
+            :loading="busy === 'interact'"
+            :title="!hasEmployer ? '当前没有进行中的兼职' : (interactionCompleted ? '本班已互动' : '')"
+            @click="interactNow"
+          >
+            {{ interactionCompleted ? '本班已互动' : '互动一次' }}
           </BaseButton>
           <BaseButton variant="secondary" size="sm" block :loading="busy === 'upgrade'" @click="upgradeNow">
             升级店铺
