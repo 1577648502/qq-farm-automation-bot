@@ -1393,8 +1393,29 @@ sendImpl = async (service, method, body) => {
                 sent: sent.map((x) => x.cmd),
             });
 
+        router = async (req) => {
+            if (req.cmd === 55) {
+                return operateReply(55, {
+                    result: cashierDetailResult({ level: 3, employees: [] }),
+                    resultField: 160,
+                });
+            }
+            if (req.cmd === 57) return operateReply(57, { result: Buffer.alloc(0), resultField: 162 });
+            throw new Error(`双空位用例收到 cmd=${req.cmd}`);
+        };
+        sent.length = 0;
+        const twoVacancies = await milkTea.autoHire([1300000001, 1300000002], { duration: 1 });
+        check('三级店铺有两个空位时自动雇佣连续补满两人',
+            twoVacancies.ok === true && twoVacancies.hired === 2
+            && Array.isArray(twoVacancies.friendGids) && twoVacancies.friendGids.length === 2
+            && sent.filter((x) => x.cmd === 57).length === 2, {
+                result: twoVacancies,
+                sent: sent.map((x) => x.cmd),
+            });
+
         const oneEmployee = [
-            employee(1253397809, true, nowSec - 3600, nowSec + 3600),
+            // 普通店员同样占一个员工位，剩下一个空位只能补一名好友。
+            employee(1216569456, false, nowSec - 3600, nowSec + 3600),
         ];
         router = async (req) => {
             if (req.cmd === 55) {
@@ -1417,8 +1438,11 @@ sendImpl = async (service, method, body) => {
 
         sent.length = 0;
         const auto = await milkTea.autoHire([1300000003, 1300000004], { duration: 1 });
-        check('自动雇佣同样受空位上限约束，只雇佣一人',
+        check('已有普通店员时自动雇佣只补一名并返回完整员工占位',
             auto.ok === true && auto.hired === 1
+            && Array.isArray(auto.friendGids) && auto.friendGids.length === 1
+            && auto.initialEmployeeCount === 1 && auto.finalEmployeeCount === 2
+            && auto.employeeCount === 2 && auto.employeeCapacity === 2
             && sent.filter((x) => x.cmd === 57).length === 1, {
                 result: auto,
                 sent: sent.map((x) => x.cmd),

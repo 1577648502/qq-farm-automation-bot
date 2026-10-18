@@ -859,11 +859,19 @@ async function hireNow() {
       toast.warning(actionResult.value)
       return
     }
-    if (!d.friendGid) {
+    const hiredGids = (Array.isArray(d.friendGids) && d.friendGids.length
+      ? d.friendGids
+      : (d.friendGid ? [d.friendGid] : []))
+      .map((gid: any) => String(gid))
+      .filter(Boolean)
+    if (!hiredGids.length) {
       reportError('雇佣好友', d.reason || '接口未返回被雇佣好友')
       return
     }
-    actionResult.value = `已雇佣好友 ${d.friendGid}`
+    const staff = d.employeeCapacity
+      ? `（员工 ${Number(d.finalEmployeeCount ?? d.employeeCount) || 0}/${Number(d.employeeCapacity)}）`
+      : ''
+    actionResult.value = `已自动补位 ${hiredGids.join('、')}${staff}`
     toast.success(actionResult.value)
     await loadStatus()
   } catch (e: any) {
@@ -1153,7 +1161,7 @@ onUnmounted(() => {
             :title="employeesFull ? `员工已满（${employeeCount}/${employeeCapacity}）` : ''"
             @click="hireNow"
           >
-            雇佣一位
+            自动补位
           </BaseButton>
         </div>
       </div>

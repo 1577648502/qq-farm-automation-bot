@@ -817,7 +817,7 @@ async function autoHire(hireGids, opts = {}) {
             ok: true,
             skipped: true,
             reason: `员工已满(${hiring.employeeCount}/${hiring.employeeCapacity})`,
-            ...publicHiringState(hiring),
+            ...publicAutoHireState(hiring),
         };
     }
     const currentNames = [];
@@ -841,10 +841,11 @@ async function autoHire(hireGids, opts = {}) {
             ok: true,
             skipped: true,
             reason: `白名单 ${list.length} 位已是当前员工(${currentNames.slice(0, 4).join('、')}${currentNames.length > 4 ? ' 等' : ''})`,
-            ...publicHiringState(hiring),
+            ...publicAutoHireState(hiring),
         };
     }
-    return autoHireInner(todo, duration, hiring.available);
+    const result = await autoHireInner(todo, duration, hiring.available);
+    return { ...result, ...publicAutoHireState(hiring, result.hired) };
 }
 
 /** autoHire 实际执行体 */
@@ -1693,6 +1694,21 @@ function publicHiringState(hiring) {
     };
 }
 
+/** 自动雇佣返回补位前后的员工占位，界面和任务日志可直接展示最终状态。 */
+function publicAutoHireState(hiring, hiredCount = 0) {
+    const initialEmployeeCount = toInt(hiring.employeeCount);
+    const employeeCapacity = toInt(hiring.employeeCapacity);
+    const hired = Math.max(0, toInt(hiredCount));
+    const finalEmployeeCount = Math.min(employeeCapacity, initialEmployeeCount + hired);
+    return {
+        ...publicHiringState(hiring),
+        initialEmployeeCount,
+        employeeCount: finalEmployeeCount,
+        finalEmployeeCount,
+        available: Math.max(0, employeeCapacity - finalEmployeeCount),
+    };
+}
+
 /** 兼容旧调用: 返回当前员工全量；onDuty 字段区分在岗/已下班。 */
 async function getOnDutyEmployees(detail) {
     const d = arguments.length > 0 ? detail : await getCashierDetail();
@@ -2244,7 +2260,13 @@ async function runMilkTea(opts = {}) {
             return out;
         }
         if (r.ok && !r.skipped && r.friendGid) {
-            log('活动', `奶茶热销中: 已自动雇佣好友 ${r.friendGid}`, { module: 'activity', event: '奶茶热销中', result: 'ok' });
+            const gids = (Array.isArray(r.friendGids) && r.friendGids.length ? r.friendGids : [r.friendGid])
+                .map((gid) => toNum(gid))
+                .filter((gid) => gid > 0);
+            const staff = r.initialEmployeeCount !== undefined && r.finalEmployeeCount !== undefined && r.employeeCapacity
+                ? ` (员工 ${r.initialEmployeeCount}/${r.employeeCapacity} → ${r.finalEmployeeCount}/${r.employeeCapacity})`
+                : '';
+            log('活动', `奶茶热销中: 已自动补位 ${gids.join('、')}${staff}`, { module: 'activity', event: '奶茶热销中', result: 'ok' });
         } else {
             if (r.skipped) {
                 log('活动', `奶茶热销中: 雇佣跳过(${r.reason})`, { module: 'activity', event: '奶茶热销中', result: 'skip' });
