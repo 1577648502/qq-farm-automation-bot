@@ -83,6 +83,10 @@ const CMD_REFRESH = 63;     // 刷新/查询兼职状态(只用于 #168)
 const CMD_RANKING = 66;     // 好友店铺排行(店名+热度)
 const CMD_WORK_INTERACT = 65;// **互动(我的工作)**: 请求 #170 = {#1: 好友gid, #2: 互动类型}
 const CMD_CLAIM_WAGE = 64;   // **领工资**: 请求 #169 空 → 响应 {#1: {#1: 1041, #2: 120}}(奶茶券×120)
+// 该错误码只说明当前候选好友未通过请求，业务含义尚未从失败抓包闭环。
+// 每个待补员工位只额外尝试 1 位候选，避免重新退化成一次扫完白名单。
+const HIRE_CANDIDATE_RETRY_CODE = 1034130;
+const HIRE_EXTRA_CANDIDATE_ATTEMPTS = 1;
 /**
  * 互动(工作事项)5 选 1 —— 名称/效果取自游戏「工作事项」界面(2026-10-16 截图)
  * ⚠ 实测 type=5 会造成工资 -20(带"工资减半"风险的那档), 所以默认改成 2
@@ -993,17 +997,25 @@ async function confirmHiredEmployee(gid, previousEmployeeCount) {
     return { ok: false, reason, hiring: latest && latest.ok ? latest : null };
 }
 
+function canRetryHireCandidate(result) {
+    return !!(result && !result.ok && toInt(result.errorCode) === HIRE_CANDIDATE_RETRY_CODE);
+}
+
 /** autoHire 实际执行体 */
 async function autoHireInner(list, duration = 1, maxHires = 1, initialEmployeeCount = 0, initialHiring = null) {
     const errors = [];
     const hired = [];
     const results = [];
     const hireLimit = Math.max(1, toInt(maxHires));
+    const candidateAttemptLimit = Math.min(
+        list.length,
+        hireLimit * (HIRE_EXTRA_CANDIDATE_ATTEMPTS + 1)
+    );
     let confirmedEmployeeCount = Math.max(0, toInt(initialEmployeeCount));
     let finalHiring = initialHiring;
     let stateSyncPending = false;
     let syncReason = '';
-    for (const gid of list) {
+    for (const gid of list.slice(0, candidateAttemptLimit)) {
         if (hired.length >= hireLimit) break;
         const availableSlots = finalHiring && Array.isArray(finalHiring.availableSlots)
             ? finalHiring.availableSlots
@@ -1037,7 +1049,10 @@ async function autoHireInner(list, duration = 1, maxHires = 1, initialEmployeeCo
             continue;
         }
         errors.push(shortErr((r && r.reason) || '失败'));
-        // cmd57 已明确拒绝时继续换好友只会放大错误并拖过上层 RPC 时限。
+        if (canRetryHireCandidate(r) && results.length < candidateAttemptLimit) {
+            await sleep(700);
+            continue;
+        }
         break;
     }
     if (hired.length) {
@@ -1047,6 +1062,7 @@ async function autoHireInner(list, duration = 1, maxHires = 1, initialEmployeeCo
             friendGid: hired[0],
             friendGids: hired,
             results,
+            attempted: results.length,
             finalHiring,
             stateSyncPending,
             ...(stateSyncPending
@@ -1058,7 +1074,7 @@ async function autoHireInner(list, duration = 1, maxHires = 1, initialEmployeeCo
     const firstResult = results[0] || null;
     return {
         ok: false,
-        reason: `首次雇佣未通过，已停止继续尝试: ${first}`,
+        reason: `尝试 ${results.length} 位好友仍未雇佣成功: ${first}`,
         attempted: results.length,
         errorCode: firstResult && firstResult.errorCode,
         rawReason: firstResult && firstResult.rawReason,
@@ -2163,9 +2179,10 @@ async function hireAll(hireGids, limit = 10, duration = 1) {
             ...publicHiringState(hiring),
         };
     }
+    const desiredHires = Math.min(Math.max(1, toInt(limit) || 10), hiring.available);
     const candidates = list
         .filter((gid) => !hiring.currentGids.has(gid))
-        .slice(0, Math.min(Math.max(1, toInt(limit) || 10), hiring.available));
+        .slice(0, desiredHires * (HIRE_EXTRA_CANDIDATE_ATTEMPTS + 1));
     if (!candidates.length) {
         return {
             ok: true,
@@ -2187,7 +2204,7 @@ async function hireAll(hireGids, limit = 10, duration = 1) {
     let failureCode = 0;
     let failureRawReason = '';
     for (const gid of candidates) {
-        if (okCount >= hiring.available || currentHiring.available <= 0) break;
+        if (okCount >= desiredHires || currentHiring.available <= 0) break;
         const availableSlots = currentHiring.availableSlots || [];
         const targetSlot = availableSlots.length ? toInt(availableSlots[0]) : -1;
         if (targetSlot < 0) break;
@@ -2215,6 +2232,10 @@ async function hireAll(hireGids, limit = 10, duration = 1) {
             failureReason = (r && r.reason) || '失败';
             failureCode = toInt(r && r.errorCode);
             failureRawReason = (r && r.rawReason) || '';
+            if (canRetryHireCandidate(r) && results.length < candidates.length) {
+                await sleep(700);
+                continue;
+            }
             break;
         }
         await sleep(700);   // 节流: 避免把游戏请求队列打满(满了会心跳异常掉线)
@@ -2222,12 +2243,19 @@ async function hireAll(hireGids, limit = 10, duration = 1) {
     const staff = stateSyncPending
         ? '，员工列表状态待同步'
         : `（员工 ${currentHiring.employeeCount}/${currentHiring.employeeCapacity}）`;
-    const failureText = failureReason ? `：${shortErr(failureReason)}` : '';
+    const failedCount = results.filter((x) => !x.ok).length;
+    const failureText = failureReason
+        ? (okCount > 0
+            ? `；${failedCount} 位候选未通过：${shortErr(failureReason)}`
+            : `：${shortErr(failureReason)}`)
+        : '';
     log('活动', `奶茶热销中: 批量雇佣尝试 ${results.length}/${candidates.length}，成功 ${okCount} 人${staff}${failureText}`, {
-        module: 'activity', event: '奶茶热销中', result: okCount ? (stateSyncPending ? 'warn' : 'ok') : 'warn',
+        module: 'activity', event: '奶茶热销中', result: okCount && !failedCount && !stateSyncPending ? 'ok' : 'warn',
     });
     const stopReason = failureReason
-        ? `第 ${results.length} 位雇佣失败: ${shortErr(failureReason)}；本轮停止继续尝试`
+        ? (okCount > 0
+            ? `已雇佣 ${okCount} 人；${failedCount} 位候选未通过: ${shortErr(failureReason)}`
+            : `尝试 ${results.length} 位好友仍未雇佣成功: ${shortErr(failureReason)}`)
         : '';
     return {
         ok: okCount > 0,

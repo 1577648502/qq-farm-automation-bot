@@ -1756,6 +1756,127 @@ sendImpl = async (service, method, body) => {
                 sent: sent.map((x) => ({ cmd: x.cmd, slot: hireRequestSlot(x) })),
             });
 
+        let retriedHireEmployees = [];
+        router = async (req) => {
+            if (req.cmd === 55) {
+                return operateReply(55, {
+                    result: cashierDetailResult({ level: 3, employees: retriedHireEmployees }),
+                    resultField: 160,
+                });
+            }
+            if (req.cmd === 56) return operateReply(56, { result: Buffer.alloc(0), resultField: 161 });
+            if (req.cmd === 57) {
+                const gid = toInt((hireRequestInner(req).find((x) => x.f === 3) || {}).v);
+                if (gid === 1300000014 || gid === 1300000015) {
+                    return operateReply(57, { errorCode: 1034130, result: Buffer.alloc(0), resultField: 162 });
+                }
+                retriedHireEmployees.push(employee(gid, hireRequestSlot(req), nowSec, nowSec + 3600));
+                return operateReply(57, { result: Buffer.alloc(0), resultField: 162 });
+            }
+            throw new Error(`批量候选重试用例收到 cmd=${req.cmd}`);
+        };
+        sent.length = 0;
+        const batchRetried = await milkTea.hireAll([1300000014, 1300000015, 1300000018, 1300000019]);
+        check('批量雇佣按每个空位多试一位候选并补满两名员工',
+            batchRetried.ok === true && batchRetried.hired === 2
+            && batchRetried.attempted === 4
+            && batchRetried.results[0].errorCode === 1034130
+            && batchRetried.results[1].errorCode === 1034130
+            && batchRetried.results[2].ok === true
+            && batchRetried.results[3].ok === true
+            && sent.filter((x) => x.cmd === 57).length === 4, {
+                result: batchRetried,
+                sent: sent.map((x) => ({
+                    cmd: x.cmd,
+                    gid: x.cmd === 57 ? toInt((hireRequestInner(x).find((f) => f.f === 3) || {}).v) : 0,
+                    slot: x.cmd === 57 ? hireRequestSlot(x) : -1,
+                })),
+            });
+
+        let retriedAutoEmployees = [];
+        router = async (req) => {
+            if (req.cmd === 55) {
+                return operateReply(55, {
+                    result: cashierDetailResult({ level: 3, employees: retriedAutoEmployees }),
+                    resultField: 160,
+                });
+            }
+            if (req.cmd === 56) return operateReply(56, { result: Buffer.alloc(0), resultField: 161 });
+            if (req.cmd === 57) {
+                const gid = toInt((hireRequestInner(req).find((x) => x.f === 3) || {}).v);
+                if (gid === 1300000016) {
+                    return operateReply(57, { errorCode: 1034130, result: Buffer.alloc(0), resultField: 162 });
+                }
+                retriedAutoEmployees.push(employee(gid, hireRequestSlot(req), nowSec, nowSec + 3600));
+                return operateReply(57, { result: Buffer.alloc(0), resultField: 162 });
+            }
+            throw new Error(`自动候选重试用例收到 cmd=${req.cmd}`);
+        };
+        sent.length = 0;
+        const autoRetried = await milkTea.autoHire([1300000016, 1300000017], { duration: 1 });
+        check('自动雇佣首个好友返回 1034130 后继续尝试下一位并成功',
+            autoRetried.ok === true && autoRetried.hired === 1
+            && autoRetried.attempted === 2
+            && autoRetried.results[0].errorCode === 1034130
+            && autoRetried.results[1].ok === true
+            && sent.filter((x) => x.cmd === 57).length === 2, {
+                result: autoRetried,
+                sent: sent.map((x) => x.cmd),
+            });
+
+        let autoRetryLimitAttempts = 0;
+        router = async (req) => {
+            if (req.cmd === 55) {
+                return operateReply(55, {
+                    result: cashierDetailResult({ level: 3, employees: [] }),
+                    resultField: 160,
+                });
+            }
+            if (req.cmd === 56) return operateReply(56, { result: Buffer.alloc(0), resultField: 161 });
+            if (req.cmd === 57) {
+                autoRetryLimitAttempts += 1;
+                return operateReply(57, { errorCode: 1034130, result: Buffer.alloc(0), resultField: 162 });
+            }
+            throw new Error(`自动候选上限用例收到 cmd=${req.cmd}`);
+        };
+        sent.length = 0;
+        const autoExhaustedGids = Array.from({ length: 49 }, (_, i) => 1302000000 + i);
+        const autoExhausted = await milkTea.autoHire(autoExhaustedGids, { duration: 1 });
+        check('自动雇佣连续返回 1034130 时按空位数量限制候选尝试次数',
+            autoExhausted.ok === false
+            && autoExhausted.attempted === 4 && autoRetryLimitAttempts === 4
+            && sent.filter((x) => x.cmd === 57).length === 4
+            && autoExhausted.errorCode === 1034130, {
+                result: autoExhausted,
+                sent: sent.map((x) => x.cmd),
+            });
+
+        let exhaustedAttempts = 0;
+        router = async (req) => {
+            if (req.cmd === 55) {
+                return operateReply(55, {
+                    result: cashierDetailResult({ level: 3, employees: [] }),
+                    resultField: 160,
+                });
+            }
+            if (req.cmd === 56) return operateReply(56, { result: Buffer.alloc(0), resultField: 161 });
+            if (req.cmd === 57) {
+                exhaustedAttempts += 1;
+                return operateReply(57, { errorCode: 1034130, result: Buffer.alloc(0), resultField: 162 });
+            }
+            throw new Error(`候选重试上限用例收到 cmd=${req.cmd}`);
+        };
+        sent.length = 0;
+        const exhausted = await milkTea.hireAll([1300000020, 1300000021, 1300000022, 1300000023, 1300000024]);
+        check('批量候选连续返回 1034130 时只尝试上限内的好友并保留错误码',
+            exhausted.ok === false && exhausted.hired === 0
+            && exhausted.attempted === 4 && exhaustedAttempts === 4
+            && exhausted.errorCode === 1034130
+            && /code=1034130/.test(exhausted.reason || ''), {
+                result: exhausted,
+                sent: sent.map((x) => x.cmd),
+            });
+
         router = async (req) => {
             if (req.cmd === 55) {
                 return operateReply(55, {
