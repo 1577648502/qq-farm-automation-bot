@@ -16,14 +16,13 @@
     "build:mac": "pkg . --no-bytecode --targets node18-macos-x64,node18-macos-arm64 --out-path dist",
     "lint": "eslint . --fix",
     "sync:game-config": "node scripts/sync-game-config-from-qq-cache.js",
+    "test:ws-capture-decode": "node scripts/ws-capture-decode.js --self-test",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "dependencies": {
     "axios": "^1.6.0",
     "express": "^4.21.0",
-    "http-mitm-proxy": "^1.1.0",
     "long": "^5.3.2",
-    "node-fetch": "^2.7.0",
     "protobufjs": "^8.0.0",
     "pushoo": "^0.1.11",
     "qrcode": "^1.5.4",
