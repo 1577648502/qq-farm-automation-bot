@@ -201,10 +201,11 @@ function hireCandidateFriend({
     level = 100,
     titleId = 9001,
     titleName = '金牌销售',
-    state = 1,
+    state = 0,
     offAt = 0,
+    field7,
 } = {}) {
-    return bytesField(4, Buffer.concat([
+    const fields = [
         bytesField(1, Buffer.concat([
             varintField(1, gid),
             bytesField(2, name),
@@ -214,7 +215,9 @@ function hireCandidateFriend({
         bytesField(4, titleName),
         varintField(5, state),
         varintField(6, offAt),
-    ]));
+    ];
+    if (field7 !== undefined) fields.push(varintField(7, field7));
+    return bytesField(4, Buffer.concat(fields));
 }
 
 function hireCandidateStaff({
@@ -1562,6 +1565,20 @@ sendImpl = async (service, method, body) => {
                 sent: sent.map((x) => x.cmd),
             });
 
+        const latestCaptureFriends = [
+            hireCandidateFriend({ gid: 1004896646, name: '金牌销售好友', titleId: 9001, state: 1, offAt: 1792396184 }),
+            hireCandidateFriend({ gid: 1022250540, name: '金牌销售好友', titleId: 9001, state: 1, offAt: 1792398217 }),
+            hireCandidateFriend({ gid: 1030663005, name: '金牌服务好友', titleId: 9003, state: 1, offAt: 1792400040 }),
+            hireCandidateFriend({ gid: 1018793394, name: '金牌宣传好友', titleId: 9002, state: 1, offAt: 1792423965 }),
+        ];
+        const latestCapturePanel = milkTea.__testing.parseEmployeePanel(
+            employeePanelResult({ friends: latestCaptureFriends }).toString('hex')
+        );
+        check('解析好友候选的 #5 状态与 #6/#7 原始字段',
+            latestCapturePanel.friends.length === 4
+            && latestCapturePanel.friends.every((x) => x.state === 1)
+            && latestCapturePanel.friends[0].offAt === 1792396184, latestCapturePanel);
+
         let candidateSequenceEmployees = [];
         let candidateSequenceSettled = true;
         router = async (req) => {
@@ -1575,7 +1592,8 @@ sendImpl = async (service, method, body) => {
             if (req.cmd === 56) {
                 return operateReply(56, {
                     result: employeePanelResult({
-                        friends: [],
+                        // 20261019-133724_雇佣1: 四位好友均为 #5=1，随后客户端改用系统员工。
+                        friends: latestCaptureFriends,
                         staff: [hireCandidateStaff({ gid: 101 }), hireCandidateStaff({ gid: 102 })],
                     }),
                     resultField: 161,
@@ -1595,12 +1613,88 @@ sendImpl = async (service, method, body) => {
         sent.length = 0;
         const candidateSequence = await milkTea.autoHire([1300000310], { duration: 1 });
         const candidateSequenceCommands = sent.map((x) => x.cmd);
-        check('官方双店员序列按 101、102 连续单人补满',
+        check('最新抓包好友全不可雇佣时按 101、102 连续单人补满',
             candidateSequence.ok === true && candidateSequence.hired === 2
             && candidateSequenceCommands.join(',') === '55,56,57,55,56,57,55'
             && sent.filter((x) => x.cmd === 57).map((x) => toInt((hireRequestInner(x).find((f) => f.f === 3) || {}).v)).join(',') === '101,102', {
                 result: candidateSequence,
                 sent: candidateSequenceCommands,
+            });
+
+        const unavailablePanel = employeePanelResult({
+            friends: [
+                hireCandidateFriend({ gid: 1300000320, state: 1, offAt: nowSec + 3600 }),
+                hireCandidateFriend({ gid: 1300000321, state: 2, offAt: nowSec + 7200, field7: nowSec + 10800 }),
+            ],
+            staff: [hireCandidateStaff({ gid: 101 })],
+        });
+        const unavailableParsed = milkTea.__testing.parseEmployeePanel(unavailablePanel.toString('hex'));
+        check('好友候选 #7 未确认字段原样保留',
+            unavailableParsed.friends[0].field7 === 0
+            && unavailableParsed.friends[1].field7 === nowSec + 10800, unavailableParsed);
+        router = async (req) => {
+            if (req.cmd === 56) {
+                return operateReply(56, { result: unavailablePanel, resultField: 161 });
+            }
+            throw new Error(`不可雇佣好友直调用例收到 cmd=${req.cmd}`);
+        };
+        sent.length = 0;
+        const unavailableFriend = await milkTea.hireFriend(1300000320, 1, { skipCapacityCheck: true, slot: 0 });
+        check('显式指定 #5=1 好友时不再发送 cmd57',
+            unavailableFriend.ok === false && unavailableFriend.skipped === true
+            && /#5=1.*已跳过 cmd57/.test(unavailableFriend.reason || '')
+            && sent.map((x) => x.cmd).join(',') === '56', {
+                result: unavailableFriend,
+                sent: sent.map((x) => x.cmd),
+            });
+
+        sent.length = 0;
+        const unavailableFriendState2 = await milkTea.hireFriend(1300000321, 1, { skipCapacityCheck: true, slot: 0 });
+        check('显式指定 #5=2 好友时同样不发送 cmd57',
+            unavailableFriendState2.ok === false && unavailableFriendState2.skipped === true
+            && /#5=2.*已跳过 cmd57/.test(unavailableFriendState2.reason || '')
+            && sent.map((x) => x.cmd).join(',') === '56', {
+                result: unavailableFriendState2,
+                sent: sent.map((x) => x.cmd),
+            });
+
+        let staleCandidateEmployees = [];
+        let staleCandidateFetches = 0;
+        router = async (req) => {
+            if (req.cmd === 55) {
+                return operateReply(55, {
+                    result: cashierDetailResult({ level: 3, employees: staleCandidateEmployees }),
+                    resultField: 160,
+                });
+            }
+            if (req.cmd === 56) {
+                staleCandidateFetches += 1;
+                return operateReply(56, {
+                    result: employeePanelResult({
+                        friends: [
+                            hireCandidateFriend({ gid: 1300000322, state: staleCandidateFetches === 1 ? 0 : 1 }),
+                            hireCandidateFriend({ gid: 1300000323, state: staleCandidateFetches === 1 ? 0 : 1 }),
+                        ],
+                        staff: [hireCandidateStaff({ gid: 101 })],
+                    }),
+                    resultField: 161,
+                });
+            }
+            if (req.cmd === 57) {
+                const gid = toInt((hireRequestInner(req).find((x) => x.f === 3) || {}).v);
+                staleCandidateEmployees.push(employee(gid, hireRequestSlot(req), nowSec, nowSec + 3600));
+                return operateReply(57, { result: Buffer.alloc(0), resultField: 162 });
+            }
+            throw new Error(`候选刷新失效用例收到 cmd=${req.cmd}`);
+        };
+        sent.length = 0;
+        const staleCandidate = await milkTea.autoHire([1300000322], { duration: 1 });
+        check('第二空位刷新后好友 #5 变为 1 时跳过并继续系统员工',
+            staleCandidate.ok === true && staleCandidate.hired === 2
+            && sent.filter((x) => x.cmd === 57)
+                .map((x) => toInt((hireRequestInner(x).find((f) => f.f === 3) || {}).v)).join(',') === '1300000322,101', {
+                result: staleCandidate,
+                sent: sent.map((x) => x.cmd),
             });
 
         const fullEmployees = [

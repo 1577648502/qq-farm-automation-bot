@@ -416,8 +416,10 @@ function parseEmployeePanel(resultHex) {
                 level: toInt((findField(fi, 4) || {}).v),
                 titleId,
                 titleName: title ? Buffer.from(title).toString('utf8') : (EMPLOYEE_SKILLS[titleId] || ''),
+                kind: 'friend',
                 state: toInt((findField(e, 5) || {}).v),
                 offAt: toInt((findField(e, 6) || {}).v),
+                field7: toInt((findField(e, 7) || {}).v),
             });
         } else if (x.f === 5) {
             const npcTitle = (findField(e, 4) || {}).v;
@@ -426,6 +428,7 @@ function parseEmployeePanel(resultHex) {
                 gid: toInt((findField(fi, 1) || {}).v),
                 id: toInt((findField(fi, 1) || {}).v),
                 name: npcName ? Buffer.from(npcName).toString('utf8') : '',
+                kind: 'staff',
                 state: toInt((findField(e, 2) || {}).v),
                 titleId: toInt((findField(e, 3) || {}).v),
                 titleName: npcTitle ? Buffer.from(npcTitle).toString('utf8') : '',
@@ -466,6 +469,21 @@ function findHireCandidate(candidates, gid) {
         (candidates.friends || []).find((x) => toInt(x.gid) === expected)
         || (candidates.staff || []).find((x) => toInt(x.gid) === expected)
     )) || null;
+}
+
+/**
+ * 抓包闭环: 好友候选只有 #5=0 后客户端才会发 cmd57。
+ * #5=1/#5=2 的好友均跳过；系统员工使用 #5.#2 的独立状态，不能套用此规则。
+ */
+function isHireableFriendCandidate(candidate) {
+    return !!candidate
+        && candidate.kind === 'friend'
+        && toInt(candidate.state) === 0;
+}
+
+function unavailableFriendReason(candidate) {
+    const state = toInt(candidate && candidate.state);
+    return `好友 ${toInt(candidate && candidate.gid)} 当前不可雇佣(#5=${state})，已跳过 cmd57`;
 }
 
 function hireTargetName(candidate) {
@@ -523,6 +541,14 @@ async function hireFriend(friendGid, duration = 1, opts = {}) {
             ok: false,
             skipped: true,
             reason: `员工 ${gid} 不在当前可雇佣候选中，已跳过 cmd57`,
+        };
+    }
+    if (candidate.kind === 'friend' && !isHireableFriendCandidate(candidate)) {
+        return {
+            ok: false,
+            skipped: true,
+            reason: unavailableFriendReason(candidate),
+            candidateState: toInt(candidate.state),
         };
     }
     const inner = Buffer.concat([
@@ -1040,8 +1066,9 @@ async function autoHire(hireGids, opts = {}) {
         const i = order.indexOf(sid);
         return i >= 0 ? i : order.length + 1;
     };
-    const availableFriends = initialCandidates.friends
+    const selectableFriends = initialCandidates.friends
         .filter((f) => !hiring.currentGids.has(toInt(f.gid)));
+    const availableFriends = selectableFriends.filter(isHireableFriendCandidate);
     const preferredFriends = list
         .map((gid) => availableFriends.find((f) => toInt(f.gid) === gid))
         .filter(Boolean);
@@ -1052,10 +1079,13 @@ async function autoHire(hireGids, opts = {}) {
         .filter((x) => !hiring.currentGids.has(toInt(x.gid)));
     const todo = [...preferredFriends, ...otherFriends, ...availableStaff];
     if (!todo.length) {
+        const unavailableCount = selectableFriends.length - availableFriends.length;
         return {
             ok: true,
             skipped: true,
-            reason: `白名单 ${list.length} 位已是当前员工(${currentNames.slice(0, 4).join('、')}${currentNames.length > 4 ? ' 等' : ''})`,
+            reason: unavailableCount
+                ? `好友候选当前均不可雇佣(${unavailableCount} 位)，且无可用系统员工`
+                : `白名单 ${list.length} 位已是当前员工(${currentNames.slice(0, 4).join('、')}${currentNames.length > 4 ? ' 等' : ''})`,
             ...publicAutoHireState(hiring),
         };
     }
@@ -1130,19 +1160,35 @@ async function autoHireInner(
                 errors.push(shortErr((currentCandidates && currentCandidates.reason) || '员工面板刷新失败'));
                 break;
             }
+            candidatesFresh = true;
         }
-        candidatesFresh = false;
         const requestCandidate = findHireCandidate(currentCandidates, gid);
         if (!requestCandidate) {
+            const reason = `员工 ${gid} 不在当前可雇佣候选中，已跳过 cmd57`;
             results.push({
                 gid,
                 slot: targetSlot,
                 ok: false,
-                reason: `员工 ${gid} 不在当前可雇佣候选中，已跳过 cmd57`,
+                reason,
                 skipped: true,
             });
+            errors.push(reason);
             continue;
         }
+        if (requestCandidate.kind === 'friend' && !isHireableFriendCandidate(requestCandidate)) {
+            const reason = unavailableFriendReason(requestCandidate);
+            results.push({
+                gid,
+                slot: targetSlot,
+                ok: false,
+                reason,
+                skipped: true,
+                source: requestCandidate.kind,
+            });
+            errors.push(reason);
+            continue;
+        }
+        candidatesFresh = false;
         const r = await hireFriend(gid, duration, {
             skipCapacityCheck: true,
             slot: targetSlot,
@@ -1155,6 +1201,7 @@ async function autoHireInner(
             ok: !!(r && r.ok && !r.skipped),
             reason: (r && r.reason) || '',
             skipped: !!(r && r.skipped),
+            source: requestCandidate.kind,
             ...(r && r.errorCode ? { errorCode: r.errorCode, rawReason: r.rawReason || '' } : {}),
         });
         if (r && r.ok && !r.skipped) {
@@ -2263,8 +2310,9 @@ async function hireAll(hireGids, limit = 10, duration = 1) {
         };
     }
     const desiredHires = Math.min(Math.max(1, toInt(limit) || 10), hiring.available);
-    const availableFriends = initialCandidates.friends
+    const selectableFriends = initialCandidates.friends
         .filter((f) => !hiring.currentGids.has(toInt(f.gid)));
+    const availableFriends = selectableFriends.filter(isHireableFriendCandidate);
     const preferredFriends = list
         .map((gid) => availableFriends.find((f) => toInt(f.gid) === gid))
         .filter(Boolean);
@@ -2282,7 +2330,9 @@ async function hireAll(hireGids, limit = 10, duration = 1) {
             hired: 0,
             total: 0,
             results: [],
-            reason: '白名单中的好友已是当前员工',
+            reason: selectableFriends.length
+                ? `好友候选当前均不可雇佣(${selectableFriends.length} 位)，且无可用系统员工`
+                : '白名单中的好友已是当前员工',
             ...publicHiringState(hiring),
         };
     }
@@ -2295,6 +2345,7 @@ async function hireAll(hireGids, limit = 10, duration = 1) {
     let failureReason = '';
     let failureCode = 0;
     let failureRawReason = '';
+    let skippedReason = '';
     let currentCandidates = initialCandidates;
     let candidatesFresh = !!initialCandidates;
     for (const candidate of candidates) {
@@ -2309,19 +2360,33 @@ async function hireAll(hireGids, limit = 10, duration = 1) {
                 failureReason = (currentCandidates && currentCandidates.reason) || '员工面板刷新失败';
                 break;
             }
+            candidatesFresh = true;
         }
-        candidatesFresh = false;
         const requestCandidate = findHireCandidate(currentCandidates, gid);
         if (!requestCandidate) {
+            skippedReason = `员工 ${gid} 不在当前可雇佣候选中，已跳过 cmd57`;
             results.push({
                 gid,
                 slot: targetSlot,
                 ok: false,
-                reason: `员工 ${gid} 不在当前可雇佣候选中，已跳过 cmd57`,
+                reason: skippedReason,
                 skipped: true,
             });
             continue;
         }
+        if (requestCandidate.kind === 'friend' && !isHireableFriendCandidate(requestCandidate)) {
+            skippedReason = unavailableFriendReason(requestCandidate);
+            results.push({
+                gid,
+                slot: targetSlot,
+                ok: false,
+                reason: skippedReason,
+                skipped: true,
+                source: requestCandidate.kind,
+            });
+            continue;
+        }
+        candidatesFresh = false;
         const r = await hireFriend(gid, dur, {
             skipCapacityCheck: true,
             slot: targetSlot,
@@ -2333,6 +2398,7 @@ async function hireAll(hireGids, limit = 10, duration = 1) {
             slot: targetSlot,
             ok: !!(r && r.ok),
             reason: (r && r.reason) || '',
+            source: requestCandidate.kind,
             ...(r && r.errorCode ? { errorCode: r.errorCode, rawReason: r.rawReason || '' } : {}),
         });
         if (r && r.ok) {
@@ -2358,18 +2424,19 @@ async function hireAll(hireGids, limit = 10, duration = 1) {
         ? '，员工列表状态待同步'
         : `（员工 ${currentHiring.employeeCount}/${currentHiring.employeeCapacity}）`;
     const failedCount = results.filter((x) => !x.ok).length;
-    const failureText = failureReason
+    const effectiveFailureReason = failureReason || (!okCount ? skippedReason : '');
+    const failureText = effectiveFailureReason
         ? (okCount > 0
-            ? `；${failedCount} 位候选未通过：${shortErr(failureReason)}`
-            : `：${shortErr(failureReason)}`)
+            ? `；${failedCount} 位候选未通过：${shortErr(effectiveFailureReason)}`
+            : `：${shortErr(effectiveFailureReason)}`)
         : '';
     log('活动', `奶茶热销中: 批量雇佣尝试 ${results.length}/${candidates.length}，成功 ${okCount} 人${staff}${failureText}`, {
         module: 'activity', event: '奶茶热销中', result: okCount && !failedCount && !stateSyncPending ? 'ok' : 'warn',
     });
-    const stopReason = failureReason
+    const stopReason = effectiveFailureReason
         ? (okCount > 0
-            ? `已雇佣 ${okCount} 人；${failedCount} 位候选未通过: ${shortErr(failureReason)}`
-            : `尝试 ${results.length} 位好友仍未雇佣成功: ${shortErr(failureReason)}`)
+            ? `已雇佣 ${okCount} 人；${failedCount} 位候选未通过: ${shortErr(effectiveFailureReason)}`
+            : `尝试 ${results.length} 位候选仍未雇佣成功: ${shortErr(effectiveFailureReason)}`)
         : '';
     return {
         ok: okCount > 0,
