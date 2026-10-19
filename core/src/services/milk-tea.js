@@ -15,7 +15,7 @@
  *         2026110103 任务 / 2026110104 快乐不独享S4
  * 活动列表: gamepb.activitypb.ActivityService.List(空请求)
  *   根组 #1=活动头, #2=repeated 子活动; 活动头 #6 开始 / #7 结束 / #24 结算期开始。
- *   商店和任务以 List 快照为准, 服务端约有 20~30 秒缓存, 购买/升级后主动失效本地缓存。
+ *   商店和任务以 List 快照为准, 服务端约有 20~30 秒缓存; 购买记本地增量, 升级等主状态变更后失效缓存。
  * 主活动(0101): **payload 字段 = cmd + 105**, 状态容器 = 活动体 #121.#1
  *   cmd=53 开业     {#158: {#1: "店名"}}
  *   cmd=55 收银台详情 {#160: ""}
@@ -25,7 +25,7 @@
  *        两个成功抓包覆盖员工位 0/1, 且均为 #2=1(班次 = #9.#5-#9.#4 = 14400s = 4h); 12/24h 档位值未抓到, 不猜。
  *   cmd=58 配方菜单 {#163: ""}
  *   cmd=59 领取收银台收益 {#164: ""}
- *   cmd=60 查询 {#165: {#1: 1}} → {#1,#2,#3} 业务语义未闭环
+ *   cmd=60 查询 {#165: {#1: 1}} → {#1,#2,#3} = 长期累计杯数/奶茶券/金币
  *   cmd=61 店铺升级 {#166: ""}
  *   cmd=62 制作奶茶 {#167: {#1: packed 果实uid}}
  *   cmd=63 刷新/查询 {#168: ""}
@@ -194,9 +194,22 @@ async function throttle() {
     lastCallAt = Date.now();
 }
 
+let activityRequestQueue = Promise.resolve();
+
+/** 所有活动 RPC 共用一条队列；throttle 只控间隔，队列才保证请求不重叠。 */
+function enqueueActivityRequest(task) {
+    const run = activityRequestQueue
+        .catch(() => undefined)
+        .then(async () => {
+            await throttle();
+            return task();
+        });
+    activityRequestQueue = run.then(() => undefined, () => undefined);
+    return run;
+}
+
 /** 主活动请求(串行节流) */
 async function mainOperate(cmd, payloadField, payloadBytes) {
-    await throttle();
     const r = await operateSafe(GROUP_MAIN, cmd, payloadField === undefined ? cmd + FIELD_OFFSET : payloadField, payloadBytes || Buffer.alloc(0));
     if (MAIN_STATUS_MUTATING_CMDS.has(toInt(cmd))) clearMainStatusCache();
     return r;
@@ -253,7 +266,7 @@ function parseMainState(activityBuf) {
     return out;
 }
 
-const MAIN_STATUS_CACHE_MS = 20 * 1000;
+const ACTIVITY_LIST_CACHE_MS = 20 * 1000;
 const MAIN_STATUS_MUTATING_CMDS = new Set([
     CMD_OPEN,
     CMD_HIRE,
@@ -263,14 +276,15 @@ const MAIN_STATUS_MUTATING_CMDS = new Set([
     CMD_CLAIM_WAGE,
     CMD_WORK_INTERACT,
 ]);
-let mainStatusCache = null;
-let mainStatusInFlight = null;
-let mainStatusGeneration = 0;
+let activityListCache = null;
+let activityListInFlight = null;
+let activityListGeneration = 0;
 
 function clearMainStatusCache() {
-    mainStatusCache = null;
+    activityListCache = null;
+    activityListInFlight = null;
     // 让已经发出的旧 List 请求回来后不能重新写入缓存。
-    mainStatusGeneration += 1;
+    activityListGeneration += 1;
 }
 
 /** 从 ActivityService.List 的根组里取出指定活动体。 */
@@ -288,39 +302,52 @@ function findActivityBody(replyBody, groupId = GROUP_MAIN) {
     return null;
 }
 
-async function fetchMainStatus() {
+async function fetchActivityListSnapshot() {
     try {
-        await throttle();
-        const { body: replyBody } = await sendMsgAsync(ACTIVITY_SERVICE, 'List', Buffer.alloc(0));
-        const activity = findActivityBody(replyBody, GROUP_MAIN);
-        if (!activity) return { ok: false, reason: '活动列表未返回奶茶主活动' };
-        const st = parseMainState(activity);
-        return st.ok ? st : { ...st, ok: false, reason: '奶茶主活动状态解析失败' };
+        const { body: replyBody } = await enqueueActivityRequest(
+            () => sendMsgAsync(ACTIVITY_SERVICE, 'List', Buffer.alloc(0)),
+        );
+        return {
+            ok: true,
+            fetchedAt: Date.now(),
+            mainActivity: findActivityBody(replyBody, GROUP_MAIN),
+            shopActivity: findActivityBody(replyBody, GROUP_SHOP),
+            taskActivity: findActivityBody(replyBody, GROUP_TASK),
+        };
     } catch (e) {
         return { ok: false, reason: `读取活动列表失败: ${shortErr(e && e.message)}` };
     }
 }
 
-/** 读取主店状态: 权威来源是 ActivityService.List，短暂缓存并合并并发请求。 */
-async function getMainStatus(force = false) {
-    if (!force && mainStatusCache && Date.now() - mainStatusCache.at < MAIN_STATUS_CACHE_MS) {
-        return mainStatusCache.value;
+/** #121/#102/#122 共用一次 ActivityService.List 快照，并合并并发强制刷新。 */
+async function getActivityListSnapshot(force = false) {
+    if (!force && activityListCache && Date.now() - activityListCache.fetchedAt < ACTIVITY_LIST_CACHE_MS) {
+        return activityListCache.value;
     }
-    if (!force && mainStatusInFlight) return mainStatusInFlight;
-    const generation = mainStatusGeneration;
+    if (activityListInFlight) return activityListInFlight;
+    const generation = activityListGeneration;
     const task = (async () => {
-        const value = await fetchMainStatus();
-        if (value && value.ok && generation === mainStatusGeneration) {
-            mainStatusCache = { at: Date.now(), value };
+        const value = await fetchActivityListSnapshot();
+        if (value && value.ok && generation === activityListGeneration) {
+            activityListCache = { fetchedAt: value.fetchedAt, value };
         }
         return value;
     })();
-    if (!force) mainStatusInFlight = task;
+    activityListInFlight = task;
     try {
         return await task;
     } finally {
-        if (mainStatusInFlight === task) mainStatusInFlight = null;
+        if (activityListInFlight === task) activityListInFlight = null;
     }
+}
+
+/** 读取主店状态: 权威来源是 ActivityService.List，短暂缓存并合并并发请求。 */
+async function getMainStatus(force = false) {
+    const snapshot = await getActivityListSnapshot(force);
+    if (!snapshot.ok) return snapshot;
+    if (!snapshot.mainActivity) return { ok: false, reason: '活动列表未返回奶茶主活动' };
+    const st = parseMainState(snapshot.mainActivity);
+    return st.ok ? st : { ...st, ok: false, reason: '奶茶主活动状态解析失败' };
 }
 
 let claimCashierInFlight = null;
@@ -481,9 +508,27 @@ function isHireableFriendCandidate(candidate) {
         && toInt(candidate.state) === 0;
 }
 
+/** 系统员工 #5.#2=1 才可雇佣；0/2/缺省均不得发送 cmd57。 */
+function isHireableStaffCandidate(candidate) {
+    return !!candidate
+        && candidate.kind === 'staff'
+        && toInt(candidate.state) === 1;
+}
+
+/** 候选级业务拒绝只淘汰当前员工，继续尝试下一位，直到可用系统员工。 */
+const HIRE_CANDIDATE_RETRY_CODES = new Set([1034130, 1034140, 1034141]);
+function isRetryableHireCandidateError(code) {
+    return HIRE_CANDIDATE_RETRY_CODES.has(toInt(code));
+}
+
 function unavailableFriendReason(candidate) {
     const state = toInt(candidate && candidate.state);
     return `好友 ${toInt(candidate && candidate.gid)} 当前不可雇佣(#5=${state})，已跳过 cmd57`;
+}
+
+function unavailableStaffReason(candidate) {
+    const state = toInt(candidate && candidate.state);
+    return `系统员工 ${toInt(candidate && candidate.gid)} 当前不可雇佣(#5.#2=${state})，已跳过 cmd57`;
 }
 
 function hireTargetName(candidate) {
@@ -551,6 +596,14 @@ async function hireFriend(friendGid, duration = 1, opts = {}) {
             candidateState: toInt(candidate.state),
         };
     }
+    if (candidate.kind === 'staff' && !isHireableStaffCandidate(candidate)) {
+        return {
+            ok: false,
+            skipped: true,
+            reason: unavailableStaffReason(candidate),
+            candidateState: toInt(candidate.state),
+        };
+    }
     const inner = Buffer.concat([
         encodeVarintField(1, targetSlot),
         encodeVarintField(2, normalizeHireDuration(duration)),
@@ -558,17 +611,20 @@ async function hireFriend(friendGid, duration = 1, opts = {}) {
     ]);
     const payload = Buffer.concat([Buffer.from([0x0a, inner.length]), inner]);
     const r = await mainOperate(CMD_HIRE, undefined, payload);
-    if (r.errorCode !== 0) {
+    if (!r.ok) {
+        const code = toInt(r.errorCode);
         return {
             ok: false,
-            reason: `雇佣失败 code=${r.errorCode}`,
-            errorCode: r.errorCode,
-            rawReason: r.rawReason || r.reason || `code=${r.errorCode}`,
+            reason: code ? `雇佣失败 code=${code}` : `雇佣请求失败: ${shortErr(r.reason || r.rawReason)}`,
+            errorCode: code,
+            rawReason: r.rawReason || r.reason || (code ? `code=${code}` : ''),
         };
     }
-    log('活动', `奶茶热销中: 已雇佣 ${hireTargetName(candidate)}（员工位 ${targetSlot + 1}）`, {
-        module: 'activity', event: '奶茶热销中', result: 'ok', friendGid: gid, employeeSlot: targetSlot,
-    });
+    if (opts.logSuccess !== false) {
+        log('活动', `奶茶热销中: 已雇佣 ${hireTargetName(candidate)}（员工位 ${targetSlot + 1}）`, {
+            module: 'activity', event: '奶茶热销中', result: 'ok', friendGid: gid, employeeSlot: targetSlot,
+        });
+    }
     return { ok: true, friendGid: gid, employeeSlot: targetSlot, state: parseMainState(r.activity) };
 }
 function encodeVarintField(field, value) {
@@ -584,83 +640,101 @@ function rawFieldSnapshot(fields) {
     return out;
 }
 
-/** 种子商店列表(0102 cmd=7) */
+/** 种子商店列表: 与主状态共用 ActivityService.List 中的 #102。 */
 async function getShopGoods() {
-    await throttle();
-    const r = await operateSafe(GROUP_SHOP, CMD_SHOP_LIST, 0, Buffer.alloc(0));
-    if (r.errorCode !== 0) return { ok: false, reason: `读取商店失败 code=${r.errorCode}`, goods: [] };
+    ensureShopDay();
+    const snapshot = await getActivityListSnapshot();
+    if (!snapshot.ok) return { ok: false, reason: snapshot.reason, goods: [] };
+    if (!snapshot.shopActivity) return { ok: false, reason: '活动列表未返回奶茶商店 #102', goods: [] };
     const goods = [];
     try {
-        const act = parseTop(r.activity);
+        const act = parseTop(snapshot.shopActivity);
         const box = findField(act, SHOP_BODY_FIELD);
-        if (box && box.w === 2) {
-            for (const it of parseTop(box.v)) {
-                if (it.w !== 2) continue;
-                const f = parseTop(it.v);
-                const goodsId = toInt((findField(f, 1) || {}).v);
-                if (!goodsId) continue;
-                const item = findField(f, 2);
-                const price = findField(f, 3);
-                const nameField = findField(f, 7);
-                const unlock = findField(f, 13);
-                const itemFields = item && item.w === 2 ? parseTop(item.v) : [];
-                const priceFields = price && price.w === 2 ? parseTop(price.v) : [];
-                const itemId = toInt((findField(itemFields, 1) || {}).v);
-                const itemCount = toInt((findField(itemFields, 2) || {}).v) || 1;
-                const currencyId = toInt((findField(priceFields, 1) || {}).v);
-                const unitPrice = toInt((findField(priceFields, 2) || {}).v);
-                let unlockText = '';
-                let requireLevel = 0;      // 需要的奶茶店等级(0 = 无要求)
-                if (unlock && unlock.w === 2) {
-                    const uf = parseTop(unlock.v);
-                    const cond = findField(uf, 2);
-                    const need = toInt((findField(uf, 5) || {}).v);
-                    if (cond && cond.w === 2) unlockText = cond.v.toString('utf8') + (need ? ` ≥${need}` : '');
-                    // 实测条件名形如 "2026110101_奶茶店等级_3" + #5=3 → 需要的店铺等级
-                    requireLevel = need;
-                }
-                // 限购(#4) / 类型(#12: seed=种子, exchange=装扮兑换, 空=道具) / 每单限购份数(#11)
-                const limitCount = toInt((findField(f, 4) || {}).v);
-                const kindField = findField(f, 12);
-                const kind = kindField && kindField.w === 2 ? kindField.v.toString('utf8') : '';
-                const itemDef = getItemById(itemId);
-                // ⚠ 不用本地计数判断"已限购"(服务器只下发上限 #4, 不下发已购数) ——
-                //    "已限购"一律以**服务端在购买时的应答**为准
-                const bought = 0;
-                goods.push({
-                    goodsId,
-                    boughtCount: bought,
-                    soldOut: shopSoldOut.has(goodsId),   // 仅由服务端应答(限购/已购类错误)置位
-                    name: nameField && nameField.w === 2 ? nameField.v.toString('utf8') : `商品#${goodsId}`,
-                    itemId,
-                    itemCount,
-                    // 内容物名称: 官方表没有这个名字时留空, 由界面只显示商品名(避免出现"物品#20525")
-                    itemName: itemDef ? itemLabel(itemId, itemCount) : '',
-                    itemNameKnown: !!itemDef,
-                    image: getItemImageById(itemId),
-                    currencyId,
-                    currencyName: (getItemById(currencyId) || {}).name || `货币#${currencyId}`,
-                    unitPrice,
-                    limitCount,
-                    kind,
-                    unlockText,
-                    requireLevel,
-                });
+        if (!box || box.w !== 2) return { ok: false, reason: '商店列表缺少 #102 容器', goods: [] };
+        for (const it of parseTop(box.v)) {
+            if (it.w !== 2) continue;
+            const f = parseTop(it.v);
+            const goodsId = toInt((findField(f, 1) || {}).v);
+            if (!goodsId) continue;
+            const item = findField(f, 2);
+            const price = findField(f, 3);
+            const nameField = findField(f, 7);
+            const unlock = findField(f, 13);
+            const itemFields = item && item.w === 2 ? parseTop(item.v) : [];
+            const priceFields = price && price.w === 2 ? parseTop(price.v) : [];
+            const itemId = toInt((findField(itemFields, 1) || {}).v);
+            const itemCount = toInt((findField(itemFields, 2) || {}).v) || 1;
+            const currencyId = toInt((findField(priceFields, 1) || {}).v);
+            const unitPrice = toInt((findField(priceFields, 2) || {}).v);
+            let unlockText = '';
+            let requireLevel = 0;      // 需要的奶茶店等级(0 = 无要求)
+            let unlocked = true;
+            if (unlock && unlock.w === 2) {
+                const uf = parseTop(unlock.v);
+                const cond = findField(uf, 2);
+                const need = toInt((findField(uf, 5) || {}).v);
+                if (cond && cond.w === 2) unlockText = cond.v.toString('utf8') + (need ? ` ≥${need}` : '');
+                // 抓包确认: #13.#3 是解锁标志；条件文本/#5 只用于展示需求。
+                unlocked = toInt((findField(uf, 3) || {}).v) === 1;
+                requireLevel = need;
             }
+            // 限购(#4) / 已购(#5) / 限制类型(#11) / 类型(#12: seed=种子, exchange=装扮兑换, 空=道具)
+            const limitCount = toInt((findField(f, 4) || {}).v);
+            const purchasedCount = toInt((findField(f, 5) || {}).v);
+            const restrictionType = toInt((findField(f, 11) || {}).v);
+            const kindField = findField(f, 12);
+            const kind = kindField && kindField.w === 2 ? kindField.v.toString('utf8') : '';
+            const itemDef = getItemById(itemId);
+            // 旧 List 快照可能落后于刚成功的购买，因此服务端已购数与本地增量取较大值。
+            const boughtCount = Math.max(purchasedCount, shopBought.get(goodsId) || 0);
+            goods.push({
+                goodsId,
+                boughtCount,
+                soldOut: shopSoldOut.has(goodsId)
+                    || (limitCount > 0 && boughtCount >= limitCount),
+                name: nameField && nameField.w === 2 ? nameField.v.toString('utf8') : `商品#${goodsId}`,
+                itemId,
+                itemCount,
+                // 内容物名称: 官方表没有这个名字时留空, 由界面只显示商品名(避免出现"物品#20525")
+                itemName: itemDef ? itemLabel(itemId, itemCount) : '',
+                itemNameKnown: !!itemDef,
+                image: getItemImageById(itemId),
+                currencyId,
+                currencyName: (getItemById(currencyId) || {}).name || `货币#${currencyId}`,
+                unitPrice,
+                limitCount,
+                purchasedCount,
+                restrictionType,
+                kind,
+                unlocked,
+                unlockText,
+                requireLevel,
+            });
         }
-    } catch (e) { /* 解析失败返回空 */ }
+    } catch (e) {
+        return { ok: false, reason: `解析商店列表失败: ${e.message}`, goods: [] };
+    }
     return { ok: true, goods };
 }
 
-/**
- * 已被**服务端明确拒绝**为"限购/已购"的商品(内存态; 页面刷新后重置, 再次点击时由服务端重新确认)
- * ⚠ 服务器只下发限购上限(#4), 不下发已购买数 → "已限购"只能以服务端应答为准
- */
+/** 已被服务端明确拒绝为限购/已购的商品；与 List 中的 #4/#5 一起决定售罄状态。 */
 const shopSoldOut = new Set();
 function markShopGoodsSoldOut(goodsId) { if (goodsId) shopSoldOut.add(toInt(goodsId)); }
 
-/** 本次进程内各商品已兑换数量(用于显示"已限购"; 服务端没给已购字段, 只能自己记) */
+/** 本次进程内各商品已兑换数量，用于补足刚购买后仍返回旧快照的服务端状态。 */
 const shopBought = new Map();
+let shopStateDay = '';
+let shopNow = () => Date.now();
+
+function ensureShopDay() {
+    const today = String(beijingDayStart(Math.floor(shopNow() / 1000)));
+    if (shopStateDay === today) return;
+    const dayChanged = !!shopStateDay && shopStateDay !== today;
+    shopStateDay = today;
+    shopSoldOut.clear();
+    shopBought.clear();
+    if (dayChanged) clearMainStatusCache();
+}
 
 /** 兑换/购买商品(数量必填) —— 实测 {#101: {#1: 商品ID, #2: 数量}} */
 /**
@@ -883,6 +957,7 @@ async function upgradeStore() {
     log('活动', `奶茶热销中: 店铺已升级到 Lv${level || '?'}${got.length ? ` (奖励 ${got.join('、')})` : ''}`, {
         module: 'activity', event: '奶茶热销中', result: 'ok',
     });
+    clearMenuCache();
     return { ok: true, level, got };
 }
 
@@ -891,7 +966,9 @@ async function buyDailySeeds(perSeed = 1) {
     if (st0 && isSettling(st0)) return { ok: false, skipped: true, reason: '结算期, 不兑换' };
     const shop = await getShopGoods();
     if (!shop.ok) return { ok: false, reason: shop.reason || '读取商店失败' };
-    const seeds = (shop.goods || []).filter((g) => toInt(g.itemId) === DAILY_BUY_SEED_ID);
+    const seeds = (shop.goods || []).filter(
+        (g) => toInt(g.itemId) === DAILY_BUY_SEED_ID && g.unlocked !== false,
+    );
     if (!seeds.length) return { ok: false, skipped: true, reason: '商店里没有森野黄金芽种子' };
     const bought = [];
     let spent = 0;
@@ -900,7 +977,7 @@ async function buyDailySeeds(perSeed = 1) {
         const n = Math.max(1, toInt(perSeed) || 1);
         const r = await buyShopGoods(g.goodsId, n);
         if (r && r.ok) {
-            bought.push(`${g.name}×${n}`);
+            bought.push(`${g.name}×${toInt(r.count) || n}`);
             spent += toInt(r.cost && r.cost.amount) || 0;
         } else if (r && /限购|已满|上限|已售|已购|已兑换|已领|1034007/.test(String(r.reason))) {
             // 今天已经买过/限购: 视为"当日已完成"(实测: 手动买过之后再自动买 → code=1034007)
@@ -922,17 +999,44 @@ async function buyDailySeeds(perSeed = 1) {
 }
 
 async function buyShopGoods(goodsId, count = 1) {
+    ensureShopDay();
     const st0 = await getMainStatus().catch(() => null);
     if (st0 && isSettling(st0)) return { ok: false, reason: '活动已进入结算期(11/15–11/16), 不能兑换活动种子' };
     const id = toNum(goodsId);
-    const n = Math.max(1, Math.min(9999, toInt(count) || 1));
+    let n = Math.max(1, Math.min(9999, toInt(count) || 1));
     if (!id) return { ok: false, reason: '缺少商品 ID' };
     // ⚠ 实测(20261015 抓包): #101 的值**直接**就是 {#1: 商品ID, #2: 数量} = 08 ad02 10 6c,
     //   不能像 cmd=57 那样再套一层 {#1: ...}, 否则服务端报 1034006「活动商品不存在」(踩过)
     // 等级没达标就别发请求(服务端会报 1034006, 白跑一趟)
     try {
         const goods = await getShopGoods();
+        if (!goods.ok) return { ok: false, reason: goods.reason || '读取商店失败' };
         const target = (goods.goods || []).find((g) => toNum(g.goodsId) === id);
+        if (target && target.soldOut) {
+            return {
+                ok: false,
+                skipped: true,
+                soldOut: true,
+                reason: `「${target.name}」已达限购上限，不再发送兑换请求`,
+            };
+        }
+        if (target && target.limitCount > 0) {
+            const remaining = Math.max(0, target.limitCount - target.boughtCount);
+            if (remaining <= 0) {
+                markShopGoodsSoldOut(id);
+                return {
+                    ok: false,
+                    skipped: true,
+                    soldOut: true,
+                    reason: `「${target.name}」已达限购上限，不再发送兑换请求`,
+                };
+            }
+            n = Math.min(n, remaining);
+        }
+        if (target && target.unlocked === false) {
+            const levelText = target.requireLevel > 0 ? `，需要奶茶店等级 ≥${target.requireLevel}` : '';
+            return { ok: false, reason: `「${target.name}」尚未解锁${levelText}` };
+        }
         if (target && target.requireLevel > 0) {
             const st = await getMainStatus();
             const lv = toNum(st.storeLevel) || 0;
@@ -941,7 +1045,9 @@ async function buyShopGoods(goodsId, count = 1) {
                 return { ok: false, reason: `「${target.name}」需要奶茶店等级 ≥${target.requireLevel}（当前 Lv${lv}）` };
             }
         }
-    } catch (e) { /* 校验失败就按原样尝试 */ }
+    } catch (e) {
+        return { ok: false, reason: `校验商店商品失败: ${e.message}` };
+    }
     const payload = Buffer.concat([encodeVarintField(1, id), encodeVarintField(2, n)]);
     const r = await operateSafe(GROUP_SHOP, CMD_SHOP_BUY, FIELD_SHOP_BUY, payload);
     if (r.errorCode !== 0) {
@@ -967,40 +1073,61 @@ async function buyShopGoods(goodsId, count = 1) {
             }
         } catch (e) { /* 忽略 */ }
     }
-    shopBought.set(id, (shopBought.get(id) || 0) + n);
-    log('活动', `奶茶热销中: 兑换 ${n} 个商品#${id}${got ? ` → ${itemLabel(got.id, got.count)}` : ''}${cost ? `, 花费 ${cost.amount} ${(getItemById(cost.currencyId) || {}).name || ''}` : ''}`, {
-        module: 'activity', event: '奶茶热销中', result: 'ok', goodsId: id, count: n,
+    const actualCount = got && got.count > 0 ? got.count : n;
+    shopBought.set(id, (shopBought.get(id) || 0) + actualCount);
+    log('活动', `奶茶热销中: 兑换 ${actualCount} 个商品#${id}${got ? ` → ${itemLabel(got.id, got.count)}` : ''}${cost ? `, 花费 ${cost.amount} ${(getItemById(cost.currencyId) || {}).name || ''}` : ''}`, {
+        module: 'activity', event: '奶茶热销中', result: 'ok', goodsId: id, count: actualCount,
     });
-    return { ok: true, goodsId: id, count: n, got, cost };
+    return { ok: true, goodsId: id, count: actualCount, got, cost };
 }
 
-/** 任务列表(0103 cmd=7) */
+/** 任务列表: 与主状态共用 ActivityService.List 中的 #122。 */
 async function getTasks() {
-    await throttle();
-    const r = await operateSafe(GROUP_TASK, 7, 0, Buffer.alloc(0));
-    if (r.errorCode !== 0) return { ok: false, reason: `读取任务失败 code=${r.errorCode}`, tasks: [] };
+    const snapshot = await getActivityListSnapshot();
+    if (!snapshot.ok) return { ok: false, reason: snapshot.reason, tasks: [] };
+    if (!snapshot.taskActivity) return { ok: false, reason: '活动列表未返回奶茶任务 #122', tasks: [] };
     const tasks = [];
     try {
-        const act = parseTop(r.activity);
+        const act = parseTop(snapshot.taskActivity);
         const box = findField(act, TASK_BODY_FIELD);
-        if (box && box.w === 2) {
-            for (const it of parseTop(box.v)) {
-                if (it.f !== 3 || it.w !== 2) continue;
-                const f = parseTop(it.v);
-                const id = toInt((findField(f, 1) || {}).v);
-                if (!id) continue;
-                const rewards = [];
-                for (const rw of f) {
-                    if (rw.f !== 3 || rw.w !== 2) continue;
-                    const rwf = parseTop(rw.v);
-                    const rid = toInt((findField(rwf, 1) || {}).v);
-                    const rcount = toInt((findField(rwf, 2) || {}).v);
-                    if (rid) rewards.push({ id: rid, count: rcount || 1, name: itemLabel(rid, rcount || 1) });
-                }
-                tasks.push({ id, status: toInt((findField(f, 4) || {}).v), rewards });
+        if (!box || box.w !== 2) return { ok: false, reason: '任务列表缺少 #122 容器', tasks: [] };
+        for (const it of parseTop(box.v)) {
+            if (it.f !== 3 || it.w !== 2) continue;
+            const f = parseTop(it.v);
+            const id = toInt((findField(f, 1) || {}).v);
+            if (!id) continue;
+            const condition = findField(f, 2);
+            const conditionFields = condition && condition.w === 2 ? parseTop(condition.v) : [];
+            const conditionTextField = findField(conditionFields, 1);
+            const conditionText = conditionTextField && conditionTextField.w === 2
+                ? conditionTextField.v.toString('utf8')
+                : '';
+            const conditionType = toInt((findField(conditionFields, 2) || {}).v);
+            const taskIndex = toInt((findField(conditionFields, 3) || {}).v);
+            const conditionValue = toInt((findField(conditionFields, 4) || {}).v);
+            const rewards = [];
+            for (const rw of f) {
+                if (rw.f !== 3 || rw.w !== 2) continue;
+                const rwf = parseTop(rw.v);
+                const rid = toInt((findField(rwf, 1) || {}).v);
+                const rcount = toInt((findField(rwf, 2) || {}).v);
+                if (rid) rewards.push({ id: rid, count: rcount || 1, name: itemLabel(rid, rcount || 1) });
             }
+            tasks.push({
+                id,
+                status: toInt((findField(f, 4) || {}).v),
+                conditionText,
+                conditionType,
+                taskIndex,
+                conditionValue,
+                // #2.#4 是条件参数，不是当前进度，无法据此判断任务是否完成。
+                conditionMet: null,
+                rewards,
+            });
         }
-    } catch (e) { /* 忽略 */ }
+    } catch (e) {
+        return { ok: false, reason: `解析任务列表失败: ${e.message}`, tasks: [] };
+    }
     return { ok: true, tasks };
 }
 
@@ -1026,12 +1153,13 @@ async function getFriendList() {
 }
 
 /**
- * 自动雇佣: 从白名单里挑好友补位；cmd57 首次明确拒绝后停止本轮。
- * @param hireGids 白名单(账号配置里的 milkTeaHireGids)
+ * 自动雇佣: 优先白名单好友，好友不可用或候选被拒后继续查找系统员工。
+ * @param hireGids 优先好友(账号配置里的 milkTeaHireGids)，可为空
  */
 async function autoHire(hireGids, opts = {}) {
-    const list = (Array.isArray(hireGids) ? hireGids : []).map((g) => toInt(g)).filter((g) => g > 0);
-    if (!list.length) return { ok: false, reason: '未配置可雇佣好友(先在页面里勾选)' };
+    const list = [...new Set((Array.isArray(hireGids) ? hireGids : [])
+        .map((g) => toInt(g))
+        .filter((g) => g > 0))];
     const duration = normalizeHireDuration(opts.duration);
     const hiring = await getHiringAvailability().catch((e) => ({ ok: false, reason: e.message }));
     if (!hiring.ok) {
@@ -1076,7 +1204,8 @@ async function autoHire(hireGids, opts = {}) {
         .filter((f) => !preferredFriends.some((x) => toInt(x.gid) === toInt(f.gid)))
         .sort((a, b) => rank(a) - rank(b));
     const availableStaff = initialCandidates.staff
-        .filter((x) => !hiring.currentGids.has(toInt(x.gid)));
+        .filter((x) => !hiring.currentGids.has(toInt(x.gid)))
+        .filter(isHireableStaffCandidate);
     const todo = [...preferredFriends, ...otherFriends, ...availableStaff];
     if (!todo.length) {
         const unavailableCount = selectableFriends.length - availableFriends.length;
@@ -1098,16 +1227,30 @@ async function autoHire(hireGids, opts = {}) {
         initialCandidates,
     );
     const { finalHiring, ...publicResult } = result;
-    return { ...publicResult, ...publicAutoHireState(finalHiring || hiring, result.hired, hiring) };
+    const out = { ...publicResult, ...publicAutoHireState(finalHiring || hiring, result.hired, hiring) };
+    if (out.ok && !out.skipped && out.friendGid) {
+        const gids = (Array.isArray(out.friendGids) && out.friendGids.length ? out.friendGids : [out.friendGid])
+            .map((gid) => toNum(gid))
+            .filter((gid) => gid > 0);
+        const staff = out.initialEmployeeCount !== undefined && out.finalEmployeeCount !== undefined && out.employeeCapacity
+            ? ` (员工 ${out.initialEmployeeCount}/${out.employeeCapacity} → ${out.finalEmployeeCount}/${out.employeeCapacity})`
+            : '';
+        const sync = out.stateSyncPending ? `；${out.reason}` : '';
+        log('活动', `奶茶热销中: 已自动补位 ${gids.join('、')}${staff}${sync}`, {
+            module: 'activity', event: '奶茶热销中', result: out.stateSyncPending ? 'warn' : 'ok',
+        });
+    }
+    return out;
 }
 
 // cmd57 成功后 cmd55 偶尔还会返回上一帧；有界轮询确认新 GID 已落到员工列表，
 // 没确认前绝不再发下一单，避免状态尚未同步就提交第二个员工位。
 const HIRE_SYNC_RETRY_DELAYS_MS = [0, 500, 1000];
 
-async function confirmHiredEmployee(gid, previousEmployeeCount) {
+async function confirmHiredEmployee(gid, previousEmployeeCount, targetSlot = -1) {
     const expectedGid = toInt(gid);
     const previousCount = Math.max(0, toInt(previousEmployeeCount));
+    const expectedSlot = toInt(targetSlot);
     let latest = null;
     let lastError = '';
     for (const delay of HIRE_SYNC_RETRY_DELAYS_MS) {
@@ -1117,7 +1260,13 @@ async function confirmHiredEmployee(gid, previousEmployeeCount) {
             lastError = latest.reason || '员工状态查询失败';
             continue;
         }
-        if (latest.employeeCount > previousCount && latest.currentGids.has(expectedGid)) {
+        const targetEmployee = expectedSlot >= 0
+            ? (latest.currentEmployees || []).find((employee) => toInt(employee.slot) === expectedSlot)
+            : null;
+        const targetSlotConfirmed = !!targetEmployee && toInt(targetEmployee.gid) === expectedGid;
+        // 班次交界时可能旧员工离开、新员工补位，人数保持 2/2；目标员工位才是主判据。
+        const fallbackConfirmed = latest.employeeCount > previousCount && latest.currentGids.has(expectedGid);
+        if (targetSlotConfirmed || fallbackConfirmed) {
             return { ok: true, hiring: latest };
         }
     }
@@ -1127,7 +1276,7 @@ async function confirmHiredEmployee(gid, previousEmployeeCount) {
     return { ok: false, reason, hiring: latest && latest.ok ? latest : null };
 }
 
-/** autoHire 实际执行体；每个空位仍单人提交，cmd57 失败后停止本轮。 */
+/** autoHire 实际执行体；每个空位单人提交，候选级拒绝继续下一人。 */
 async function autoHireInner(
     list,
     duration = 1,
@@ -1188,11 +1337,25 @@ async function autoHireInner(
             errors.push(reason);
             continue;
         }
+        if (requestCandidate.kind === 'staff' && !isHireableStaffCandidate(requestCandidate)) {
+            const reason = unavailableStaffReason(requestCandidate);
+            results.push({
+                gid,
+                slot: targetSlot,
+                ok: false,
+                reason,
+                skipped: true,
+                source: requestCandidate.kind,
+            });
+            errors.push(reason);
+            continue;
+        }
         candidatesFresh = false;
         const r = await hireFriend(gid, duration, {
             skipCapacityCheck: true,
             slot: targetSlot,
             candidate: requestCandidate,
+            logSuccess: false,
         })
             .catch((e) => ({ ok: false, reason: e.message }));
         results.push({
@@ -1206,7 +1369,7 @@ async function autoHireInner(
         });
         if (r && r.ok && !r.skipped) {
             hired.push(gid);
-            const confirmed = await confirmHiredEmployee(gid, confirmedEmployeeCount);
+            const confirmed = await confirmHiredEmployee(gid, confirmedEmployeeCount, targetSlot);
             if (!confirmed.ok) {
                 errors.push(`已雇佣 ${gid}，但${confirmed.reason}`);
                 finalHiring = confirmed.hiring;
@@ -1220,7 +1383,9 @@ async function autoHireInner(
             if (!confirmed.hiring || confirmed.hiring.available <= 0) break;
             continue;
         }
-        errors.push(shortErr((r && r.reason) || '失败'));
+        const reason = shortErr((r && r.reason) || '失败');
+        errors.push(reason);
+        if (r && isRetryableHireCandidateError(r.errorCode)) continue;
         break;
     }
     if (hired.length) {
@@ -1238,14 +1403,19 @@ async function autoHireInner(
                 : {}),
         };
     }
-    const first = errors[0] || '未知错误';
-    const firstResult = results[0] || null;
+    const lastActualFailure = [...results]
+        .reverse()
+        .find((result) => !result.skipped && result.errorCode);
+    const selectedResult = lastActualFailure || results[results.length - 1] || null;
+    const selectedReason = (selectedResult && selectedResult.reason)
+        || errors[errors.length - 1]
+        || '未知错误';
     return {
         ok: false,
-        reason: `尝试 ${results.length} 位好友仍未雇佣成功: ${first}`,
+        reason: `尝试 ${results.length} 位候选仍未雇佣成功: ${selectedReason}`,
         attempted: results.length,
-        errorCode: firstResult && firstResult.errorCode,
-        rawReason: firstResult && firstResult.rawReason,
+        errorCode: selectedResult && selectedResult.errorCode,
+        rawReason: selectedResult && selectedResult.rawReason,
         results,
         finalHiring,
     };
@@ -1273,11 +1443,26 @@ let menuRecipesCache = { at: 0, recipes: [], names: new Map() };
 
 async function getMenuRecipes(force = false) {
     if (!force && menuRecipesCache.at && Date.now() - menuRecipesCache.at < MENU_CACHE_MS) {
-        return menuRecipesCache.recipes;
+        return {
+            ok: true,
+            recipes: menuRecipesCache.recipes,
+            names: menuRecipesCache.names,
+        };
     }
     const recipes = [];
-    const r = await mainOperate(CMD_MENU, 163, Buffer.alloc(0));
-    if (r.errorCode !== 0 || !r.resultHex) return [];
+    let r;
+    try {
+        r = await mainOperate(CMD_MENU, 163, Buffer.alloc(0));
+    } catch (e) {
+        return { ok: false, reason: `读取配方菜单失败: ${shortErr(e.message)}`, recipes: [], names: new Map() };
+    }
+    if (r.errorCode !== 0) {
+        const why = String(r.reason || `code=${r.errorCode}`);
+        return { ok: false, reason: `读取配方菜单失败: ${why}`, recipes: [], names: new Map() };
+    }
+    if (!r.resultHex) {
+        return { ok: false, reason: '读取配方菜单失败: 服务端未返回菜单数据', recipes: [], names: new Map() };
+    }
     try {
         for (const x of parseTop(Buffer.from(r.resultHex, 'hex'))) {
             if (x.w !== 2) continue;
@@ -1301,13 +1486,14 @@ async function getMenuRecipes(force = false) {
             });
         }
     } catch (e) {
-        return [];
+        return { ok: false, reason: `解析配方菜单失败: ${shortErr(e.message)}`, recipes: [], names: new Map() };
     }
-    if (recipes.length) {
-        const names = new Map(recipes.map((x) => [x.id, x.name]));
-        menuRecipesCache = { at: Date.now(), recipes, names };
+    if (!recipes.length) {
+        return { ok: false, reason: '读取配方菜单失败: 服务端返回空菜单', recipes: [], names: new Map() };
     }
-    return recipes;
+    const names = new Map(recipes.map((x) => [x.id, x.name]));
+    menuRecipesCache = { at: Date.now(), recipes, names };
+    return { ok: true, recipes, names };
 }
 
 function clearMenuCache() {
@@ -1339,7 +1525,19 @@ async function collectFruitUids(limit = Number.MAX_SAFE_INTEGER) {
     const items = getBagItems(await getBag());
     const fruitRecipeMap = getCraftableFruitRecipeMap();
     const fruitIds = new Set(fruitRecipeMap.keys());
-    const recipes = await getMenuRecipes();
+    const menu = await getMenuRecipes();
+    if (!menu.ok) {
+        return {
+            ok: false,
+            reason: menu.reason,
+            uids: [],
+            entries: [],
+            fruitIds: [...fruitIds],
+            recipes: [],
+            skipped: [],
+        };
+    }
+    const recipes = menu.recipes;
     const recipeById = new Map(recipes.map((x) => [x.id, x]));
     const uids = [];
     const entries = [];
@@ -1379,6 +1577,7 @@ async function collectFruitUids(limit = Number.MAX_SAFE_INTEGER) {
         }
     }
     return {
+        ok: true,
         uids,
         entries,
         fruitIds: [...fruitIds],
@@ -1398,11 +1597,27 @@ async function craftAllFruits(perBatch = CRAFT_BATCH_SIZE, maxBatches = 50) {
     const pb = toInt(perBatch);
     perBatch = Math.min(CRAFT_BATCH_SIZE, pb > 0 ? pb : CRAFT_BATCH_SIZE);
     maxBatches = Math.max(1, toInt(maxBatches) || 50);
-    let all = { uids: [], entries: [], fruitIds: [], recipes: [], skipped: [] };
+    let all = { ok: true, uids: [], entries: [], fruitIds: [], recipes: [], skipped: [] };
     try {
         all = await collectFruitUids();
     } catch (e) {
         return { ok: false, reason: `读取背包失败: ${e.message}` };
+    }
+    if (!all.ok) {
+        const reason = all.reason || '读取配方菜单失败';
+        log('活动', `奶茶热销中: 未制作 — ${reason}`, {
+            module: 'activity', event: '奶茶热销中', result: 'error',
+        });
+        return {
+            ok: false,
+            reason,
+            used: 0,
+            usedUnits: 0,
+            batches: 0,
+            made: [],
+            skipped: false,
+            skippedItems: [],
+        };
     }
     if (!all.uids.length) {
         if (all.skipped.length) {
@@ -1492,7 +1707,6 @@ async function craftAllFruits(perBatch = CRAFT_BATCH_SIZE, maxBatches = 50) {
 
 /** 提交一批果实 uid 去制作(内部用) */
 async function mainOperateCraft(uids) {
-    await throttle();
     const packed = encodePackedVarints(uids);
     const payload = Buffer.concat([encodeVarint(0x0a), encodeVarint(packed.length), packed]);
     const r = await operateSafe(GROUP_MAIN, CMD_CRAFT_REAL, 167, payload);
@@ -1534,6 +1748,21 @@ async function craftMilkTea(limit = CRAFT_BATCH_SIZE) {
         all = await collectFruitUids(limit);
     } catch (e) {
         return { ok: false, reason: `读取背包失败: ${e.message}` };
+    }
+    if (!all.ok) {
+        const reason = all.reason || '读取配方菜单失败';
+        log('活动', `奶茶热销中: 未制作 — ${reason}`, {
+            module: 'activity', event: '奶茶热销中', result: 'error',
+        });
+        return {
+            ok: false,
+            reason,
+            used: 0,
+            usedUnits: 0,
+            usedFruits: [],
+            skipped: false,
+            skippedItems: [],
+        };
     }
     const picked = all.uids;
     const usedIds = new Set(all.entries.map((x) => x.itemId));
@@ -1925,7 +2154,6 @@ function parseWorkFromRefresh(resultHex) {
 
 /** 实时查询“我的工作”状态；唯一权威来源是 cmd63/#168。 */
 async function getWorkStatus() {
-    await throttle();
     const r = await operateSafe(GROUP_MAIN, CMD_REFRESH, 168, Buffer.alloc(0));
     if (!r.ok) {
         return {
@@ -1954,8 +2182,39 @@ async function getWorkStatus() {
  */
 /** 兼容销量页：复用配方菜单缓存，返回"品类 id → 名字"。 */
 async function getMenuNames(force = false) {
-    await getMenuRecipes(force);
-    return menuRecipesCache.names;
+    const menu = await getMenuRecipes(force).catch(() => null);
+    return menu && menu.ok ? menu.names : new Map();
+}
+
+/**
+ * 主状态 #121.#1.#15.#1250 只下发当前主推配方 ID，页面展示名称需回查 cmd58 菜单。
+ * 菜单失败时保留配方编号，避免把未知值显示成错误名称。
+ */
+async function getFeaturedRecipe(recipeId, force = false) {
+    const id = toInt(recipeId);
+    if (!id) return { ok: true, id: 0, name: '', unlocked: null, reason: '' };
+    const menu = await getMenuRecipes(force).catch((e) => ({
+        ok: false,
+        reason: `读取配方菜单失败: ${shortErr(e && e.message)}`,
+        recipes: [],
+    }));
+    const recipe = menu.ok ? menu.recipes.find((x) => x.id === id) : null;
+    if (recipe) {
+        return {
+            ok: true,
+            id,
+            name: recipe.name,
+            unlocked: recipe.unlocked === true,
+            reason: '',
+        };
+    }
+    return {
+        ok: false,
+        id,
+        name: `配方#${id}`,
+        unlocked: null,
+        reason: menu.reason || `配方菜单中未找到 #${id}`,
+    };
 }
 
 /** 兼容旧调用名；营业记录统一走 cmd=67/#172，传入北京时间当日 00:00。 */
@@ -2110,6 +2369,30 @@ function decorateCashierEmployees(employees) {
 }
 
 /**
+ * 收银台员工记录不携带稳定的好友/NPC 类型；用员工候选面板的 GID 关联来源。
+ * 候选面板缺失时保留 unknown，禁止根据 GID 或名称猜测。
+ */
+function applyEmployeeSources(employees, candidates) {
+    const sourceByGid = new Map();
+    for (const friend of (candidates && candidates.friends) || []) {
+        sourceByGid.set(toInt(friend && friend.gid), 'friend');
+    }
+    for (const staff of (candidates && candidates.staff) || []) {
+        sourceByGid.set(toInt(staff && staff.gid), 'npc');
+    }
+    return (employees || []).map((employee) => {
+        const employeeType = sourceByGid.get(toInt(employee && employee.gid));
+        if (!employeeType) return employee;
+        return {
+            ...employee,
+            employeeType,
+            isFriend: employeeType === 'friend',
+            isNpc: employeeType === 'npc',
+        };
+    });
+}
+
+/**
  * 收银台详情(cmd=55) —— **查询**用, 它不会发放任何东西(别当领取用, 踩过)
  * #160.#1: #1 等级, #2 累计营业额, #3 下一级门槛, #4=172800, #22/#24 当日累计杯数,
  *          #9 repeated 当前在岗员工, #10 repeated 当日品类销量,
@@ -2182,17 +2465,18 @@ function parseSalesByKind(inner, fieldNo) {
 }
 
 /**
- * 收银台查询(cmd=60): 返回待领取收益等。规则说"满载会暂停营业且不补发", 所以顶部要显示待领。
- * 实测结果 #1 = {#1: 容量(40), #2: 当前待领(253), #3: 累计杯数(164312)}
+ * 收银台查询(cmd=60): 返回长期累计数据。
+ * 实测结果 #1 = {#1: 长期累计杯数, #2: 长期累计奶茶券, #3: 长期累计金币}
+ * 今日杯数必须读 cmd55/#160.#22/#24，不能使用这里的累计值。
  */
 async function getCashierStatus() {
     const r = await mainOperate(CMD_CASHIER_INFO, undefined, encodeUint1(1));
     if (!r.ok) return { ok: false, reason: `收银台查询失败 ${r.reason || `code=${r.errorCode}`}` };
-    const out = { ok: true, todayCups: 0, couponTotal: 0, goldTotal: 0 };
+    const out = { ok: true, cupTotal: 0, couponTotal: 0, goldTotal: 0 };
     if (r.resultHex) {
         try {
             const rf = parseTop(Buffer.from(r.resultHex, 'hex'));
-            out.todayCups = toInt((findField(rf, 1) || {}).v);
+            out.cupTotal = toInt((findField(rf, 1) || {}).v);
             out.couponTotal = toInt((findField(rf, 2) || {}).v);
             out.goldTotal = toInt((findField(rf, 3) || {}).v);
         } catch (e) {
@@ -2221,67 +2505,22 @@ async function getMilkCouponBalance(force = false) {
 }
 
 /**
- * 任务奖励领取 —— ⚠ 该活动"任务"需充值激活, 界面入口已移除(2026-10-15 用户确认),
- * 这里保留协议实现但不自动执行; 若以后激活, 直接用 claimAllTasks() 即可。
- *
- * 领取任务奖励
- * ⚠ 领取命令**没有抓到**(抓包里只有列表 cmd=7) → 用候选命令逐个试, 并用"任务状态变 3"校验;
- *   成功的命令记在内存里, 下次直接用(和秋祈良愿的愿望编号一个思路)
+ * 任务领取命令尚未抓到。保留列表解析用于展示，但禁止发送候选命令。
  */
-let workingTaskClaimCmd = 0;
-const TASK_CLAIM_CANDIDATES = [1, 8, 6, 9];
-
 async function claimTask(taskId) {
     const id = toInt(taskId);
     if (!id) return { ok: false, reason: '缺少任务序号' };
-    const candidates = [];
-    if (workingTaskClaimCmd > 0) candidates.push(workingTaskClaimCmd);
-    TASK_CLAIM_CANDIDATES.forEach((c) => { if (!candidates.includes(c)) candidates.push(c); });
-    const errors = [];
-    for (const cmd of candidates) {
-        let r = null;
-        try {
-            r = await operateSafe(GROUP_TASK, cmd, cmd + 100, encodeUint1(id));
-        } catch (e) {
-            errors.push(`cmd=${cmd}: ${e.message}`);
-            continue;
-        }
-        if (r.errorCode !== 0) { errors.push(`cmd=${cmd}: code=${r.errorCode}`); continue; }
-        // 校验: 重新拉任务表看该任务是否变"已领"
-        await sleep(800);
-        const t = await getTasks().catch(() => null);
-        const after = t && (t.tasks || []).find((x) => toNum(x.id) === id);
-        if (after && after.status === 3) {
-            workingTaskClaimCmd = cmd;
-            log('活动', `奶茶热销中: 已领取任务#${id} 奖励(${(after.rewards || []).map((x) => x.name).join('、') || '已发放'})`, {
-                module: 'activity', event: '奶茶热销中', result: 'ok', cmd,
-            });
-            return { ok: true, taskId: id, cmd, rewards: after.rewards || [] };
-        }
-        errors.push(`cmd=${cmd}: 状态未变`);
-    }
-    return { ok: false, reason: `领取失败(${errors.slice(0, 2).join('; ')})`, taskId: id };
+    return { ok: false, skipped: true, taskId: id, reason: '领取协议尚未抓包，已禁用' };
 }
 
 /** 领取所有"可领"的任务(status=2) */
 async function claimAllTasks() {
-    const t = await getTasks();
-    if (!t.ok) return { ok: false, reason: t.reason };
-    const todo = (t.tasks || []).filter((x) => x.status === 2);
-    if (!todo.length) return { ok: true, claimed: [], skipped: true, reason: '没有可领任务' };
-    const claimed = [];
-    for (const task of todo) {
-        const r = await claimTask(task.id);
-        claimed.push({ id: task.id, ok: r.ok, reason: r.reason });
-        await sleep(700);
-    }
-    return { ok: true, claimed };
+    return { ok: false, skipped: true, claimed: [], reason: '领取协议尚未抓包，已禁用' };
 }
 
-/** 批量雇佣: 只补当前空位；满员时不发送 cmd57。 */
+/** 批量雇佣: 优先好友并用系统员工兜底；满员时不发送 cmd57。 */
 async function hireAll(hireGids, limit = 10, duration = 1) {
     const list = [...new Set((Array.isArray(hireGids) ? hireGids : []).map((g) => toNum(g)).filter((g) => g > 0))];
-    if (!list.length) return { ok: false, reason: '未选择好友' };
     const hiring = await getHiringAvailability().catch((e) => ({ ok: false, reason: e.message }));
     if (!hiring.ok) {
         return { ok: false, skipped: true, reason: `无法确认员工容量，跳过雇佣: ${hiring.reason}` };
@@ -2321,7 +2560,9 @@ async function hireAll(hireGids, limit = 10, duration = 1) {
     const candidates = [
         ...preferredFriends,
         ...otherFriends,
-        ...initialCandidates.staff.filter((x) => !hiring.currentGids.has(toInt(x.gid))),
+        ...initialCandidates.staff
+            .filter((x) => !hiring.currentGids.has(toInt(x.gid)))
+            .filter(isHireableStaffCandidate),
     ];
     if (!candidates.length) {
         return {
@@ -2386,11 +2627,24 @@ async function hireAll(hireGids, limit = 10, duration = 1) {
             });
             continue;
         }
+        if (requestCandidate.kind === 'staff' && !isHireableStaffCandidate(requestCandidate)) {
+            skippedReason = unavailableStaffReason(requestCandidate);
+            results.push({
+                gid,
+                slot: targetSlot,
+                ok: false,
+                reason: skippedReason,
+                skipped: true,
+                source: requestCandidate.kind,
+            });
+            continue;
+        }
         candidatesFresh = false;
         const r = await hireFriend(gid, dur, {
             skipCapacityCheck: true,
             slot: targetSlot,
             candidate: requestCandidate,
+            logSuccess: false,
         })
             .catch((e) => ({ ok: false, reason: e.message }));
         results.push({
@@ -2403,7 +2657,7 @@ async function hireAll(hireGids, limit = 10, duration = 1) {
         });
         if (r && r.ok) {
             okCount += 1;
-            const confirmed = await confirmHiredEmployee(gid, currentHiring.employeeCount);
+            const confirmed = await confirmHiredEmployee(gid, currentHiring.employeeCount, targetSlot);
             if (!confirmed.ok) {
                 stateSyncPending = true;
                 syncReason = confirmed.reason;
@@ -2416,6 +2670,10 @@ async function hireAll(hireGids, limit = 10, duration = 1) {
             failureReason = (r && r.reason) || '失败';
             failureCode = toInt(r && r.errorCode);
             failureRawReason = (r && r.rawReason) || '';
+            if (r && isRetryableHireCandidateError(failureCode)) {
+                await sleep(300);
+                continue;
+            }
             break;
         }
         await sleep(700);   // 节流: 避免把游戏请求队列打满(满了会心跳异常掉线)
@@ -2459,7 +2717,9 @@ async function hireAll(hireGids, limit = 10, duration = 1) {
  */
 async function operateSafe(groupId, cmd, payloadField, payloadBytes) {
     try {
-        const r = await operateRaw(groupId, cmd, payloadField, payloadBytes);
+        const r = await enqueueActivityRequest(
+            () => operateRaw(groupId, cmd, payloadField, payloadBytes),
+        );
         const code = toInt(r.errorCode);          // ⚠ 必须 toInt: toNum 对字符串会原样返回 → 数字比较失效
         const reason = code === 0 ? '' : `code=${code}`;
         return { ...r, errorCode: code, ok: code === 0, reason, rawReason: reason };
@@ -2558,7 +2818,7 @@ function rememberCompletedShift(shiftKey) {
  *   ① 刷新状态(顺带确认活动还在)  ② 未开业则开业  ③ 领收银台收益  ④ 用工坊加工  ⑤ 用宣传喇叭
  * 开关由调用方(worker)按配置决定是否执行各步。
  */
-async function runMilkTea(opts = {}) {
+async function runMilkTeaOnce(opts = {}) {
     const doCashier = opts.cashier !== false;
     const doCraft = !!opts.craft;
     const doSpeaker = !!opts.speaker;
@@ -2664,12 +2924,12 @@ async function runMilkTea(opts = {}) {
         }
         await stepGap();
     }
-    if (opts.autoHire && Array.isArray(opts.hireGids) && opts.hireGids.length) {
+    if (opts.autoHire) {
         if (Date.now() < hireBackoffUntil) {
             out.steps.push({ step: 'autoHire', ok: false, skipped: true, reason: '上次雇佣请求失败, 通用退避中' });
             return out;
         }
-        const r = await autoHire(opts.hireGids, opts);
+        const r = await autoHire(Array.isArray(opts.hireGids) ? opts.hireGids : [], opts);
         out.steps.push({ step: 'autoHire', ...r });
         await stepGap();
         if (!r.ok && !r.skipped && toInt(r.errorCode) > 0) {
@@ -2679,22 +2939,7 @@ async function runMilkTea(opts = {}) {
             });
             return out;
         }
-        if (r.ok && !r.skipped && r.friendGid && r.stateSyncPending) {
-            const gids = (Array.isArray(r.friendGids) && r.friendGids.length ? r.friendGids : [r.friendGid])
-                .map((gid) => toNum(gid))
-                .filter((gid) => gid > 0);
-            log('活动', `奶茶热销中: 已自动补位 ${gids.join('、')}；${r.reason}`, {
-                module: 'activity', event: '奶茶热销中', result: 'warn',
-            });
-        } else if (r.ok && !r.skipped && r.friendGid) {
-            const gids = (Array.isArray(r.friendGids) && r.friendGids.length ? r.friendGids : [r.friendGid])
-                .map((gid) => toNum(gid))
-                .filter((gid) => gid > 0);
-            const staff = r.initialEmployeeCount !== undefined && r.finalEmployeeCount !== undefined && r.employeeCapacity
-                ? ` (员工 ${r.initialEmployeeCount}/${r.employeeCapacity} → ${r.finalEmployeeCount}/${r.employeeCapacity})`
-                : '';
-            log('活动', `奶茶热销中: 已自动补位 ${gids.join('、')}${staff}`, { module: 'activity', event: '奶茶热销中', result: 'ok' });
-        } else {
+        if (!r.ok || r.skipped) {
             if (r.skipped) {
                 log('活动', `奶茶热销中: 雇佣跳过(${r.reason})`, { module: 'activity', event: '奶茶热销中', result: 'skip' });
             } else {
@@ -2704,6 +2949,27 @@ async function runMilkTea(opts = {}) {
     }
     out.state = await getMainStatus().catch(() => st);
     return out;
+}
+
+let runMilkTeaInFlight = null;
+
+/** 自动流程单飞：并发触发只执行一轮，并保证任何提前返回后都刷新真实状态。 */
+async function runMilkTea(opts = {}) {
+    if (runMilkTeaInFlight) return runMilkTeaInFlight;
+    const task = (async () => {
+        const out = await runMilkTeaOnce(opts);
+        if (out && out.refreshState !== false) {
+            const state = await getMainStatus(true).catch(() => null);
+            if (state && state.ok) out.state = state;
+        }
+        return out;
+    })();
+    runMilkTeaInFlight = task;
+    try {
+        return await task;
+    } finally {
+        if (runMilkTeaInFlight === task) runMilkTeaInFlight = null;
+    }
 }
 
 module.exports = {
@@ -2740,6 +3006,7 @@ module.exports = {
         operateSafe,
         mainOperateCraft,
         getMenuRecipes,
+        getFeaturedRecipe,
         clearMenuCache,
         getCraftableFruitRecipeMap,
         collectFruitUids,
@@ -2757,8 +3024,17 @@ module.exports = {
         clearMainStatusCache,
         fetchHireCandidates,
         parseEmployeePanel,
+        applyEmployeeSources,
         HIRE_DURATIONS,
         CRAFT_BATCH_SIZE,
+        setShopClock(nextNow) {
+            shopNow = typeof nextNow === 'function' ? nextNow : (() => Date.now());
+        },
+        resetShopState() {
+            shopStateDay = '';
+            shopSoldOut.clear();
+            shopBought.clear();
+        },
     },
     getMainStatus,
     claimCashier,
@@ -2779,6 +3055,7 @@ module.exports = {
     getStoreRankings,
     getOnDutyEmployees,
     getCashierEmployees: getOnDutyEmployees,
+    applyEmployeeSources,
     HIRE_DURATIONS,
     markShopGoodsSoldOut,
     getUpgradeInfo,
@@ -2786,6 +3063,7 @@ module.exports = {
     buyDailySeeds,
     getMenuRecipes,
     getMenuNames,
+    getFeaturedRecipe,
     useSpeaker,
     openStore,
     hireFriend,

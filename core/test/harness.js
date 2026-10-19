@@ -97,11 +97,14 @@ function makeCaptureReplayer(sandbox, captureFile) {
 function createChecker() {
     let pass = 0;
     const fails = [];
+    const serialize = (value) => JSON.stringify(value, (_, item) => (
+        typeof item === 'bigint' ? item.toString() : item
+    ));
     return {
         section: (t) => console.log('\n── ' + t),
         check: (name, cond, extra) => {
             if (cond) pass += 1;
-            else fails.push(name + (extra === undefined ? '' : ' → ' + JSON.stringify(extra)));
+            else fails.push(name + (extra === undefined ? '' : ' → ' + serialize(extra)));
         },
         finish: () => {
             console.log('\n通过 ' + pass + ' / ' + (pass + fails.length));

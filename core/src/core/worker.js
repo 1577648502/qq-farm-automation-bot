@@ -9,7 +9,7 @@ if (parentPort && workerData && workerData.startupMode === 'code_refresh') {
     process.env.FARM_STARTUP_MODE = 'code_refresh';
 }
 const { getLevelExpProgress } = require('../config/gameConfig');
-const { getAutomation, getPreferredSeed, getConfigSnapshot, applyConfigSnapshot, getBuyBookConfig, getAutumnWishConfig, getHappyShareEnabled, getMilkTeaConfig, getAdGiftEnabled } = require('../models/store');
+const { getAutomation, getPreferredSeed, getConfigSnapshot, applyConfigSnapshot, getBuyBookConfig, getAutumnWishConfig, getHappyShareEnabled, getMilkTeaConfig, getActivityStatus, getAdGiftEnabled } = require('../models/store');
 const { checkAndClaimEmails } = require('../services/email');
 const { getEmailDailyState } = require('../services/email');
 const { checkFarm, startFarmCheckLoop, stopFarmCheckLoop, refreshFarmCheckLoop, getLandsDetail, getAvailableSeeds, buySeed, runFarmOperation, runFertilizerByConfig, operateSingleLand } = require('../services/farm');
@@ -306,6 +306,7 @@ async function runAdGift(reason = 'interval') {
  */
 async function runMilkTea(reason = 'interval') {
     if (!canRunTasks()) return { skipped: true, reason: 'offline' };
+    if (!getActivityStatus().milkTeaEnabled) return { skipped: true, reason: 'disabled' };
     const cfg = getMilkTeaConfig();
     if (!cfg.enabled) return { skipped: true, reason: 'disabled' };
     try {
@@ -314,6 +315,7 @@ async function runMilkTea(reason = 'interval') {
             storeName: cfg.storeName,
             autoHire: cfg.autoHire,
             hireGids: cfg.hireGids,
+            duration: cfg.hireDuration,
             autoInteract: cfg.autoInteract,
             autoWage: cfg.autoWage,
             autoBuySeed: cfg.autoBuySeed,
@@ -328,13 +330,6 @@ async function runMilkTea(reason = 'interval') {
         if (r.ok === false) {
             log('活动', `奶茶热销中: ${r.reason || '处理失败'}`, { module: 'activity', event: '奶茶热销中', result: 'warn', trigger: reason });
             return r;
-        }
-        const st = r.state || {};
-        const cashierStep = (r.steps || []).find(x => x.step === 'cashier');
-        if (cashierStep && cashierStep.ok) {
-            log('活动', `奶茶热销中: 已领收银台收益(店铺「${st.storeName || '?'}」, 营业额 ${st.value || 0})`, {
-                module: 'activity', event: '奶茶热销中', result: 'ok', trigger: reason,
-            });
         }
         return r;
     } catch (e) {
@@ -1412,17 +1407,42 @@ async function handleApiCall(msg) {
                 // ⚠ 待领取的权威来源是 cmd55/#160.#19; cmd60/#165.#2 是长期累计值, 只作兜底
                 const cashierDetail = await milkTea.getCashierDetail().catch(() => null);
                 // getCashierDetail 已包含 #160.#9 全量员工；复用快照，避免重复发送 cmd55。
-                const employees = await milkTea.getOnDutyEmployees(cashierDetail).catch(() => null);
+                const employeesSnapshot = await milkTea.getOnDutyEmployees(cashierDetail).catch(() => null);
+                const rawEmployees = (cashierDetail && cashierDetail.currentEmployees) || [];
+                const employeeCandidates = rawEmployees.length
+                    ? await milkTea.getEmployees().catch(() => null)
+                    : null;
+                const currentEmployees = milkTea.applyEmployeeSources(rawEmployees, employeeCandidates);
+                const onDutyEmployees = currentEmployees.filter((employee) => employee.onDuty);
+                const employees = employeesSnapshot && employeesSnapshot.ok
+                    ? {
+                        ...employeesSnapshot,
+                        employees: currentEmployees,
+                        currentEmployees,
+                        onDutyEmployees,
+                        onDutyEmployeeCount: onDutyEmployees.length,
+                    }
+                    : employeesSnapshot;
+                const featuredRecipe = main.recipeId > 0
+                    ? await milkTea.getFeaturedRecipe(main.recipeId).catch((e) => ({
+                        ok: false,
+                        id: main.recipeId,
+                        name: `配方#${main.recipeId}`,
+                        unlocked: null,
+                        reason: e && e.message ? e.message : '读取主推配方失败',
+                    }))
+                    : null;
                 result = {
                     ...main,
+                    featuredRecipe,
                     work,
                     cashier,
                     cashierDetail,
                     employees,
-                    currentEmployees: (cashierDetail && cashierDetail.currentEmployees) || [],
+                    currentEmployees,
                     employeeCapacity: (cashierDetail && cashierDetail.employeeCapacity) || 0,
-                    employeeCount: (cashierDetail && cashierDetail.employeeCount) || 0,
-                    onDutyEmployeeCount: (cashierDetail && cashierDetail.onDutyEmployeeCount) || 0,
+                    employeeCount: currentEmployees.length,
+                    onDutyEmployeeCount: onDutyEmployees.length,
                     milkCoupon: coupon,
                 };
                 break;

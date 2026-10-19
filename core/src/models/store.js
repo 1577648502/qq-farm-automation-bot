@@ -238,6 +238,7 @@ const DEFAULT_ACCOUNT_CONFIG = {
     milkTeaStoreName: '奶茶小铺',       // 首次开业的店名
     milkTeaHireGids: [],              // 雇佣好友白名单(可选好友, 参考萌宠游记的选择方式)
     milkTeaAutoHire: false,           // 自动雇佣(从白名单里挑)
+    milkTeaHireDuration: 1,           // 雇佣班次档位(当前仅抓包确认 1 = 4 小时)
     milkTeaAutoTask: false,           // 自动领取任务奖励(领取命令待确认, 默认关)
     milkTeaAutoInteract: false,       // 自动互动(需"自己被好友雇佣")
     milkTeaAutoWage: true,            // 自动领兼职工资(cmd 64, 纯收益; 需被雇佣)
@@ -563,7 +564,8 @@ function normalizeAccountConfig(input, fallback = accountFallbackConfig) {
         cfg.milkTeaHireGids = src.milkTeaHireGids.map((g) => String(g).trim()).filter(Boolean).slice(0, 50);
     }
     if (src.milkTeaAutoHire !== undefined && src.milkTeaAutoHire !== null) cfg.milkTeaAutoHire = !!src.milkTeaAutoHire;
-    if (src.milkTeaAutoTask !== undefined && src.milkTeaAutoTask !== null) cfg.milkTeaAutoTask = !!src.milkTeaAutoTask;
+    cfg.milkTeaHireDuration = 1;
+    cfg.milkTeaAutoTask = false;
     if (src.milkTeaAutoInteract !== undefined && src.milkTeaAutoInteract !== null) cfg.milkTeaAutoInteract = !!src.milkTeaAutoInteract;
     if (src.milkTeaAutoWage !== undefined && src.milkTeaAutoWage !== null) cfg.milkTeaAutoWage = !!src.milkTeaAutoWage;
     if (src.milkTeaAutoBuySeed !== undefined && src.milkTeaAutoBuySeed !== null) cfg.milkTeaAutoBuySeed = !!src.milkTeaAutoBuySeed;
@@ -858,7 +860,8 @@ function getConfigSnapshot(accountId) {
         milkTeaStoreName: cfg.milkTeaStoreName || '奶茶小铺',
         milkTeaHireGids: [...(cfg.milkTeaHireGids || [])],
         milkTeaAutoHire: !!cfg.milkTeaAutoHire,
-        milkTeaAutoTask: !!cfg.milkTeaAutoTask,
+        milkTeaHireDuration: 1,
+        milkTeaAutoTask: false,
         milkTeaAutoInteract: !!cfg.milkTeaAutoInteract,
         milkTeaAutoWage: cfg.milkTeaAutoWage !== false,
         milkTeaAutoBuySeed: !!cfg.milkTeaAutoBuySeed,
@@ -1033,7 +1036,8 @@ function applyConfigSnapshot(snapshot, options = {}) {
         next.milkTeaHireGids = cfg.milkTeaHireGids.map((g) => String(g).trim()).filter(Boolean).slice(0, 50);
     }
     if (cfg.milkTeaAutoHire !== undefined && cfg.milkTeaAutoHire !== null) next.milkTeaAutoHire = !!cfg.milkTeaAutoHire;
-    if (cfg.milkTeaAutoTask !== undefined && cfg.milkTeaAutoTask !== null) next.milkTeaAutoTask = !!cfg.milkTeaAutoTask;
+    next.milkTeaHireDuration = 1;
+    next.milkTeaAutoTask = false;
     if (cfg.milkTeaAutoInteract !== undefined && cfg.milkTeaAutoInteract !== null) next.milkTeaAutoInteract = !!cfg.milkTeaAutoInteract;
     if (cfg.milkTeaAutoWage !== undefined && cfg.milkTeaAutoWage !== null) next.milkTeaAutoWage = !!cfg.milkTeaAutoWage;
     if (cfg.milkTeaAutoBuySeed !== undefined && cfg.milkTeaAutoBuySeed !== null) next.milkTeaAutoBuySeed = !!cfg.milkTeaAutoBuySeed;
@@ -1616,7 +1620,8 @@ function getMilkTeaConfig(accountId) {
         storeName: cfg.milkTeaStoreName || '奶茶小铺',
         hireGids: [...(cfg.milkTeaHireGids || [])],
         autoHire: !!cfg.milkTeaAutoHire,
-        autoTask: !!cfg.milkTeaAutoTask,
+        hireDuration: 1,
+        autoTask: false,
         autoInteract: !!cfg.milkTeaAutoInteract,
         autoWage: cfg.milkTeaAutoWage !== false,
         autoBuySeed: !!cfg.milkTeaAutoBuySeed,

@@ -16,6 +16,8 @@ isolateDataDir(SB, 'milk-tea-test');
 
 const ACTIVITY_SERVICE = 'gamepb.activitypb.ActivityService';
 const GROUP_MAIN = 2026110101;
+const GROUP_SHOP = 2026110102;
+const GROUP_TASK = 2026110103;
 
 /**
  * mengchong 在 require 时会解构 network.sendMsgAsync，因此必须先安装转发桩，
@@ -31,6 +33,10 @@ const mg = require(`${SB}/src/services/mengchong`);
 const milkTea = require(`${SB}/src/services/milk-tea`);
 const warehouse = require(`${SB}/src/services/warehouse`);
 const { toInt } = require(`${SB}/src/utils/utils`);
+const activityLogs = [];
+require(`${SB}/src/utils/utils`).setLogHook((tag, msg, isWarn, meta) => {
+    if (meta && meta.module === 'activity') activityLogs.push({ tag, msg, isWarn, meta });
+});
 
 function encodeVarint(value) {
     let n = BigInt(value);
@@ -54,11 +60,98 @@ function bytesField(field, value) {
     return Buffer.concat([encodeVarint((field << 3) | 2), encodeVarint(data.length), data]);
 }
 
+function activityBody(groupId, fields = []) {
+    return Buffer.concat([
+        bytesField(1, varintField(1, groupId)),
+        ...fields,
+    ]);
+}
+
 /** 合成主活动体: #1 活动头 / #121.#1 店铺状态。 */
 function mainActivity(state = null) {
-    const fields = [bytesField(1, varintField(1, GROUP_MAIN))];
+    const fields = [];
     if (state) fields.push(bytesField(121, bytesField(1, state)));
-    return Buffer.concat(fields);
+    return activityBody(GROUP_MAIN, fields);
+}
+
+function shopGoods({
+    goodsId,
+    itemId,
+    itemCount = 1,
+    currencyId = 1041,
+    unitPrice = 1,
+    limitCount = 0,
+    purchasedCount = 0,
+    name = `商品${goodsId}`,
+    restrictionType = 0,
+    kind = 'seed',
+    unlocked = true,
+    requireLevel = 0,
+    conditionText = '',
+} = {}) {
+    const fields = [
+        varintField(1, goodsId),
+        bytesField(2, Buffer.concat([
+            varintField(1, itemId),
+            varintField(2, itemCount),
+        ])),
+        bytesField(3, Buffer.concat([
+            varintField(1, currencyId),
+            varintField(2, unitPrice),
+        ])),
+        varintField(4, limitCount),
+        varintField(5, purchasedCount),
+        bytesField(7, name),
+        varintField(11, restrictionType),
+        bytesField(12, kind),
+    ];
+    if (unlocked === false || requireLevel > 0 || conditionText) {
+        fields.push(bytesField(13, Buffer.concat([
+            bytesField(2, conditionText),
+            varintField(3, unlocked === false ? 0 : 1),
+            varintField(5, requireLevel),
+        ])));
+    }
+    return bytesField(2, Buffer.concat(fields));
+}
+
+function shopActivity(goods = []) {
+    return activityBody(GROUP_SHOP, [bytesField(102, Buffer.concat(goods))]);
+}
+
+function taskEntry({
+    id,
+    status = 1,
+    conditionText = '',
+    conditionType = 0,
+    taskIndex = 0,
+    conditionValue = 0,
+    rewards = [],
+} = {}) {
+    const fields = [
+        varintField(1, id),
+        bytesField(2, Buffer.concat([
+            bytesField(1, conditionText),
+            varintField(2, conditionType),
+            varintField(3, taskIndex),
+            varintField(4, conditionValue),
+        ])),
+    ];
+    for (const reward of rewards) {
+        fields.push(bytesField(3, Buffer.concat([
+            varintField(1, reward.id),
+            varintField(2, reward.count),
+        ])));
+    }
+    fields.push(varintField(4, status));
+    return bytesField(3, Buffer.concat(fields));
+}
+
+function taskActivity({ summary = Buffer.alloc(0), tasks = [] } = {}) {
+    const fields = [];
+    if (summary.length) fields.push(bytesField(2, summary));
+    fields.push(...tasks);
+    return activityBody(GROUP_TASK, [bytesField(122, Buffer.concat(fields))]);
 }
 
 /** 合成 ActivityService.List 根组: 根 #1 → repeated #2 活动体。 */
@@ -584,12 +677,39 @@ sendImpl = async (service, method, body) => {
         check('雇员记录不再输出未证实工资/销量',
             r.records.length === 1 && !Object.prototype.hasOwnProperty.call(r.records[0], 'wage')
             && !Object.prototype.hasOwnProperty.call(r.records[0], 'soldCups'), r.records[0]);
-        const recipes = await milkTea.__testing.getMenuRecipes();
+        const parsedMenu = await milkTea.__testing.getMenuRecipes();
         check('cmd58 结构化解析配方字段与解锁状态',
-            recipes.length === 1 && recipes[0].id === 10 && recipes[0].name === '普通奶茶'
-            && recipes[0].unlocked === true && recipes[0].field4 === 12
-            && recipes[0].productId === 50010 && recipes[0].price === 18 && recipes[0].field7 === 7,
-            recipes);
+            parsedMenu.ok === true && parsedMenu.recipes.length === 1 && parsedMenu.recipes[0].id === 10
+            && parsedMenu.recipes[0].name === '普通奶茶' && parsedMenu.recipes[0].unlocked === true
+            && parsedMenu.recipes[0].field4 === 12 && parsedMenu.recipes[0].productId === 50010
+            && parsedMenu.recipes[0].price === 18 && parsedMenu.recipes[0].field7 === 7,
+            parsedMenu);
+        const featured = await milkTea.__testing.getFeaturedRecipe(10);
+        check('当前主推配方 ID 使用 cmd58 菜单补全名称',
+            featured.ok === true && featured.id === 10 && featured.name === '普通奶茶'
+            && featured.unlocked === true, featured);
+
+        milkTea.__testing.clearMenuCache();
+        router = async (req) => {
+            if (req.cmd === 67) return operateReply(67, { result: sales, resultField: 172 });
+            if (req.cmd === 58) {
+                return operateReply(58, {
+                    errorCode: 1034149,
+                    result: Buffer.alloc(0),
+                    resultField: 163,
+                });
+            }
+            throw new Error(`菜单降级用例收到 ${req.method || `cmd=${req.cmd}`}`);
+        };
+        const degradedSales = await milkTea.__testing.getSalesRecords(day);
+        check('cmd58 失败时营业记录仍成功并降级显示品类编号',
+            degradedSales.ok === true && degradedSales.items[0].name === '品类10',
+            degradedSales);
+        const featuredFallback = await milkTea.__testing.getFeaturedRecipe(10);
+        check('菜单读取失败时主推配方保留编号并标记降级',
+            featuredFallback.ok === false && featuredFallback.id === 10
+            && featuredFallback.name === '配方#10' && /读取配方菜单失败/.test(featuredFallback.reason),
+            featuredFallback);
         milkTea.__testing.clearMenuCache();
     }
 
@@ -1066,7 +1186,60 @@ sendImpl = async (service, method, body) => {
         milkTea.__testing.clearMenuCache();
     }
 
-    section('11. 收银台详情 cmd55/#160 字段分离与员工位');
+    section('11. cmd58 读取或解析失败时禁止制作');
+    {
+        const originalGetBag = warehouse.getBag;
+        const originalGetBagItems = warehouse.getBagItems;
+        warehouse.getBag = async () => ({});
+        warehouse.getBagItems = () => [{ id: 40525, uid: 71001, count: 1 }];
+        const failures = [
+            {
+                label: '接口失败',
+                reply: () => operateReply(58, {
+                    errorCode: 1034149,
+                    result: Buffer.alloc(0),
+                    resultField: 163,
+                }),
+            },
+            {
+                label: '空响应',
+                reply: () => operateReply(58, { result: Buffer.alloc(0), resultField: 163 }),
+            },
+            {
+                label: '解析失败',
+                reply: () => operateReply(58, {
+                    result: Buffer.from([0x0a, 0x05, 0x01]),
+                    resultField: 163,
+                }),
+            },
+        ];
+        for (const failure of failures) {
+            for (const [method, call] of [
+                ['craftAllFruits', () => milkTea.__testing.craftAllFruits(2, 1)],
+                ['craftMilkTea', () => milkTea.craftMilkTea(1)],
+            ]) {
+                milkTea.__testing.clearMenuCache();
+                router = async (req) => {
+                    if (req.cmd === 58) return failure.reply();
+                    throw new Error(`${failure.label}/${method} 不应发送 cmd=${req.cmd}`);
+                };
+                sent.length = 0;
+                const logStart = activityLogs.length;
+                const r = await call();
+                const logs = activityLogs.slice(logStart).map((x) => x.msg).join('\n');
+                check(`${failure.label}时 ${method} 禁止发送 cmd62`,
+                    r.ok === false && /读取配方菜单失败|解析配方菜单失败/.test(r.reason)
+                    && !sent.some((x) => x.cmd === 62), { result: r, sent: sent.map((x) => x.cmd) });
+                check(`${failure.label}时 ${method} 记录配方菜单错误`,
+                    /读取配方菜单失败|解析配方菜单失败/.test(logs), logs);
+            }
+        }
+        warehouse.getBag = originalGetBag;
+        warehouse.getBagItems = originalGetBagItems;
+        milkTea.__testing.clearMenuCache();
+    }
+
+    section('12. 收银台详情 cmd55/#160 字段分离与员工位');
     {
         const nowSec = Math.floor(Date.now() / 1000);
         const slotOneShiftUid = '30069608145587714';
@@ -1197,7 +1370,7 @@ sendImpl = async (service, method, body) => {
         check('cmd55/#160 解析异常时 ok:false', malformed.ok === false, malformed);
     }
 
-    section('12. 领取收银台收益必须先确认 #19 且网络异常不成功');
+    section('13. 领取收银台收益必须先确认 #19 且网络异常不成功');
     {
         const listOnly = (req) => {
             if (req.method === 'List') return activityListReply();
@@ -1296,7 +1469,7 @@ sendImpl = async (service, method, body) => {
             sent.filter((x) => x.cmd === 59).length === 1, sent.map((x) => x.method || x.cmd));
     }
 
-    section('13. getOnDutyEmployees(detail) 不重复查询 cmd55');
+    section('14. getOnDutyEmployees(detail) 不重复查询 cmd55');
     {
         const nowSec = Math.floor(Date.now() / 1000);
         const detail = {
@@ -1378,7 +1551,34 @@ sendImpl = async (service, method, body) => {
             && queried.employees[0].onDuty === true, queried);
     }
 
-    section('14. 收银台查询 cmd60/#165 请求与长期累计映射');
+    section('14.1 收银台员工按候选 GID 关联好友/NPC 来源');
+    {
+        const employees = [
+            { gid: 10001, name: '好友员工', employeeType: 'unknown', isFriend: false, isNpc: false },
+            { gid: 20001, name: '系统员工', employeeType: 'unknown', isFriend: false, isNpc: false },
+            { gid: 30001, name: '未知员工', employeeType: 'unknown', isFriend: false, isNpc: false },
+        ];
+        const sourced = milkTea.__testing.applyEmployeeSources(employees, {
+            friends: [{ gid: 10001, kind: 'friend' }],
+            staff: [{ gid: 20001, kind: 'staff' }],
+        });
+        check('好友 GID 标记为 friend',
+            sourced[0].employeeType === 'friend' && sourced[0].isFriend === true && sourced[0].isNpc === false,
+            sourced[0]);
+        check('系统员工 GID 标记为 npc',
+            sourced[1].employeeType === 'npc' && sourced[1].isFriend === false && sourced[1].isNpc === true,
+            sourced[1]);
+        check('候选面板缺失的 GID 保留 unknown 且不猜测来源',
+            sourced[2].employeeType === 'unknown' && sourced[2].isFriend === false && sourced[2].isNpc === false,
+            sourced[2]);
+
+        const unavailable = milkTea.__testing.applyEmployeeSources(employees, null);
+        check('员工候选读取失败时保持原记录',
+            unavailable.every((employee) => employee.employeeType === 'unknown'),
+            unavailable);
+    }
+
+    section('15. 收银台查询 cmd60/#165 请求与长期累计映射');
     {
         router = async (req) => {
             if (req.cmd === 60) {
@@ -1402,16 +1602,17 @@ sendImpl = async (service, method, body) => {
             req && req.payloadField === 165 && req.payload.toString('hex') === '0801'
             && payload && payload.length === 1 && toInt(payload[0].v) === 1,
             req && { field: req.payloadField, payload: req.payload.toString('hex') });
-        check('#165.#1/#2/#3 映射 todayCups/couponTotal/goldTotal',
-            status.ok === true && status.todayCups === 50
+        check('#165.#1/#2/#3 映射 cupTotal/couponTotal/goldTotal',
+            status.ok === true && status.cupTotal === 50
             && status.couponTotal === 2250 && status.goldTotal === 2908400, status);
         check('cmd60 不再把长期累计误命名为容量/待领取/杯数',
-            !Object.prototype.hasOwnProperty.call(status, 'capacity')
+            !Object.prototype.hasOwnProperty.call(status, 'todayCups')
+            && !Object.prototype.hasOwnProperty.call(status, 'capacity')
             && !Object.prototype.hasOwnProperty.call(status, 'pending')
             && !Object.prototype.hasOwnProperty.call(status, 'cups'), status);
     }
 
-    section('15. 雇佣好友 cmd57/#162 目标员工位与非法档位回落');
+    section('16. 雇佣好友 cmd57/#162 目标员工位与非法档位回落');
     {
         const gid = 1253397809;
         router = async (req) => {
@@ -1514,7 +1715,7 @@ sendImpl = async (service, method, body) => {
             { result: latestCaptureHire, sent: sent.map((x) => ({ cmd: x.cmd, slot: hireRequestSlot(x) })) });
     }
 
-    section('16. 三级店铺两个员工位、满员跳过与已下班员工占位');
+    section('17. 三级店铺两个员工位、满员跳过与已下班员工占位');
     {
         const nowSec = Math.floor(Date.now() / 1000);
         const employee = (gid, slot, startAt, endAt) => cashierEmployee({
@@ -1912,12 +2113,163 @@ sendImpl = async (service, method, body) => {
         sent.length = 0;
         const manyGids = Array.from({ length: 49 }, (_, i) => 1301000000 + i);
         const manyRejected = await milkTea.autoHire(manyGids, { duration: 1 });
-        check('49 位好友遇到首个明确拒绝后只发送一次 cmd57',
-            manyRejected.ok === false && manyRejected.attempted === 1
-            && manyHireAttempts === 1
-            && sent.filter((x) => x.cmd === 57).length === 1
-            && sent.map((x) => x.cmd).join(',') === '55,56,57', {
+        check('好友候选业务拒绝后继续尝试系统员工',
+            manyRejected.ok === false && manyRejected.attempted === 3
+            && manyHireAttempts === 3
+            && sent.filter((x) => x.cmd === 57).length === 3
+            && sent.map((x) => x.cmd).join(',') === '55,56,57,56,57,56,57', {
                 result: manyRejected,
+                sent: sent.map((x) => x.cmd),
+            });
+
+        let fallbackEmployees = [
+            employee(1244632861, 1, nowSec - 3600, nowSec + 3600),
+        ];
+        let fallbackAttempts = [];
+        router = async (req) => {
+            if (req.cmd === 55) {
+                return operateReply(55, {
+                    result: cashierDetailResult({ level: 3, employees: fallbackEmployees }),
+                    resultField: 160,
+                });
+            }
+            if (req.cmd === 56) return operateReply(56, {
+                result: employeePanelResult({
+                    friends: [
+                        hireCandidateFriend({ gid: 1300000401 }),
+                        hireCandidateFriend({ gid: 1300000402 }),
+                    ],
+                    staff: [hireCandidateStaff({ gid: 101 })],
+                }),
+                resultField: 161,
+            });
+            if (req.cmd === 57) {
+                const gid = toInt((hireRequestInner(req).find((x) => x.f === 3) || {}).v);
+                fallbackAttempts.push(gid);
+                if (gid === 1300000401) {
+                    return operateReply(57, { errorCode: 1034141, result: Buffer.alloc(0), resultField: 162 });
+                }
+                fallbackEmployees.push(employee(gid, hireRequestSlot(req), nowSec, nowSec + 3600));
+                return operateReply(57, { result: Buffer.alloc(0), resultField: 162 });
+            }
+            throw new Error(`好友候选拒绝后继续用例收到 cmd=${req.cmd}`);
+        };
+        sent.length = 0;
+        const fallbackToNextFriend = await milkTea.autoHire([1300000401, 1300000402], { duration: 1 });
+        check('好友 1034141 后继续下一位好友并成功补位',
+            fallbackToNextFriend.ok === true && fallbackToNextFriend.hired === 1
+            && fallbackToNextFriend.friendGids.join(',') === '1300000402'
+            && fallbackAttempts.join(',') === '1300000401,1300000402'
+            && sent.map((x) => x.cmd).join(',') === '55,56,57,56,57,55', {
+                result: fallbackToNextFriend,
+                sent: sent.map((x) => x.cmd),
+                attempts: fallbackAttempts,
+            });
+
+        let staffFallbackEmployees = [];
+        let staffFallbackAttempts = [];
+        router = async (req) => {
+            if (req.cmd === 55) {
+                return operateReply(55, {
+                    result: cashierDetailResult({ level: 3, employees: staffFallbackEmployees }),
+                    resultField: 160,
+                });
+            }
+            if (req.cmd === 56) return operateReply(56, {
+                result: employeePanelResult({
+                    friends: [
+                        hireCandidateFriend({ gid: 1300000411 }),
+                        hireCandidateFriend({ gid: 1300000412 }),
+                    ],
+                    staff: [hireCandidateStaff({ gid: 101 })],
+                }),
+                resultField: 161,
+            });
+            if (req.cmd === 57) {
+                const gid = toInt((hireRequestInner(req).find((x) => x.f === 3) || {}).v);
+                staffFallbackAttempts.push(gid);
+                if (gid === 1300000411) {
+                    return operateReply(57, { errorCode: 1034130, result: Buffer.alloc(0), resultField: 162 });
+                }
+                if (gid === 1300000412) {
+                    return operateReply(57, { errorCode: 1034140, result: Buffer.alloc(0), resultField: 162 });
+                }
+                staffFallbackEmployees.push(employee(gid, hireRequestSlot(req), nowSec, nowSec + 3600));
+                return operateReply(57, { result: Buffer.alloc(0), resultField: 162 });
+            }
+            throw new Error(`系统员工兜底用例收到 cmd=${req.cmd}`);
+        };
+        sent.length = 0;
+        const fallbackToStaff = await milkTea.autoHire([1300000411, 1300000412], { duration: 1 });
+        check('好友 1034130/1034140 全部失败后系统员工成功兜底',
+            fallbackToStaff.ok === true && fallbackToStaff.hired === 1
+            && fallbackToStaff.friendGids.join(',') === '101'
+            && staffFallbackAttempts.join(',') === '1300000411,1300000412,101'
+            && sent.filter((x) => x.cmd === 57).length === 3, {
+                result: fallbackToStaff,
+                sent: sent.map((x) => x.cmd),
+                attempts: staffFallbackAttempts,
+            });
+
+        let emptyWhitelistEmployees = [
+            employee(1244632861, 1, nowSec - 3600, nowSec + 3600),
+        ];
+        router = async (req) => {
+            if (req.cmd === 55) {
+                return operateReply(55, {
+                    result: cashierDetailResult({ level: 3, employees: emptyWhitelistEmployees }),
+                    resultField: 160,
+                });
+            }
+            if (req.cmd === 56) return operateReply(56, {
+                result: employeePanelResult({
+                    friends: [hireCandidateFriend({ gid: 1300000421, state: 1 })],
+                    staff: [hireCandidateStaff({ gid: 101, state: 1 })],
+                }),
+                resultField: 161,
+            });
+            if (req.cmd === 57) {
+                const gid = toInt((hireRequestInner(req).find((x) => x.f === 3) || {}).v);
+                emptyWhitelistEmployees.push(employee(gid, hireRequestSlot(req), nowSec, nowSec + 3600));
+                return operateReply(57, { result: Buffer.alloc(0), resultField: 162 });
+            }
+            throw new Error(`空白名单系统员工用例收到 cmd=${req.cmd}`);
+        };
+        sent.length = 0;
+        const emptyWhitelistHire = await milkTea.autoHire([], { duration: 1 });
+        check('未配置优先好友时仍查询 employee 面板并雇佣可用系统员工',
+            emptyWhitelistHire.ok === true && emptyWhitelistHire.hired === 1
+            && emptyWhitelistHire.friendGids.join(',') === '101'
+            && sent.map((x) => x.cmd).join(',') === '55,56,57,55', {
+                result: emptyWhitelistHire,
+                sent: sent.map((x) => x.cmd),
+            });
+
+        router = async (req) => {
+            if (req.cmd === 55) {
+                return operateReply(55, {
+                    result: cashierDetailResult({ level: 3, employees: [] }),
+                    resultField: 160,
+                });
+            }
+            if (req.cmd === 56) return operateReply(56, {
+                result: employeePanelResult({
+                    friends: [hireCandidateFriend({ gid: 1300000431, state: 1 })],
+                    staff: [
+                        hireCandidateStaff({ gid: 101, state: 0 }),
+                        hireCandidateStaff({ gid: 102, state: 2 }),
+                    ],
+                }),
+                resultField: 161,
+            });
+            throw new Error(`无可用系统员工用例收到 cmd=${req.cmd}`);
+        };
+        sent.length = 0;
+        const noAvailableStaff = await milkTea.autoHire([], { duration: 1 });
+        check('未配置好友且系统员工 state=0/2 时不发送 cmd57',
+            noAvailableStaff.ok === true && noAvailableStaff.skipped === true
+            && sent.map((x) => x.cmd).join(',') === '55,56', {
+                result: noAvailableStaff,
                 sent: sent.map((x) => x.cmd),
             });
 
@@ -2023,6 +2375,7 @@ sendImpl = async (service, method, body) => {
             throw new Error(`自动补位用例收到 cmd=${req.cmd}`);
         };
         sent.length = 0;
+        activityLogs.length = 0;
         const auto = await milkTea.autoHire([1300000003, 1300000004], { duration: 1 });
         check('1 号位已有员工时自动雇佣只补一名到 0 号位并返回完整员工占位',
             auto.ok === true && auto.hired === 1
@@ -2032,6 +2385,51 @@ sendImpl = async (service, method, body) => {
             && sent.filter((x) => x.cmd === 57).length === 1
             && hireRequestSlot(sent.find((x) => x.cmd === 57)) === 0, {
                 result: auto,
+                sent: sent.map((x) => ({ cmd: x.cmd, slot: hireRequestSlot(x) })),
+            });
+        check('自动雇佣成功只产生一条概览汇总日志',
+            activityLogs.filter((x) => /已自动补位|已雇佣/.test(x.msg)).length === 1,
+            activityLogs);
+
+        const replacementEmployees = [employee(1300000300, 0, nowSec - 3600, nowSec + 3600)];
+        const replacementGid = 1300000305;
+        router = async (req) => {
+            if (req.cmd === 55) {
+                return operateReply(55, {
+                    result: cashierDetailResult({ level: 3, employees: replacementEmployees }),
+                    resultField: 160,
+                });
+            }
+            if (req.cmd === 56) {
+                return operateReply(56, {
+                    result: employeePanelResult({
+                        friends: [hireCandidateFriend({ gid: replacementGid })],
+                        staff: [hireCandidateStaff({ gid: 101 })],
+                    }),
+                    resultField: 161,
+                });
+            }
+            if (req.cmd === 57) {
+                // 班次交界：旧员工离开、新员工补入目标位，员工总数保持不变。
+                replacementEmployees.splice(0, 1, employee(
+                    replacementGid,
+                    hireRequestSlot(req),
+                    nowSec,
+                    nowSec + 3600,
+                ));
+                return operateReply(57, { result: Buffer.alloc(0), resultField: 162 });
+            }
+            throw new Error(`员工换班确认用例收到 cmd=${req.cmd}`);
+        };
+        sent.length = 0;
+        const replacement = await milkTea.autoHire([replacementGid], { duration: 1 });
+        check('员工总数不变但目标员工位换人时按已入店确认',
+            replacement.ok === true && replacement.hired === 1
+            && replacement.stateSyncPending === false
+            && replacement.finalEmployeeCount === 1
+            && replacement.currentEmployees[0].slot === 1
+            && replacement.currentEmployees[0].gid === replacementGid, {
+                result: replacement,
                 sent: sent.map((x) => ({ cmd: x.cmd, slot: hireRequestSlot(x) })),
             });
 
@@ -2058,21 +2456,74 @@ sendImpl = async (service, method, body) => {
         };
         sent.length = 0;
         const rejectedOnce = await milkTea.autoHire([1300000311], { duration: 1 });
-        check('1034130 不再触发候选盲扫，自动雇佣保留错误并停止',
-            rejectedOnce.ok === false && rejectedOnce.attempted === 1
-            && rejectedOnce.errorCode === 1034130 && rejectedOnceAttempts === 1
-            && sent.map((x) => x.cmd).join(',') === '55,56,57', {
+        check('1034130 自动雇佣继续候选并保留最终业务错误',
+            rejectedOnce.ok === false && rejectedOnce.attempted === 3
+            && rejectedOnce.errorCode === 1034130 && rejectedOnceAttempts === 3
+            && sent.map((x) => x.cmd).join(',') === '55,56,57,56,57,56,57', {
                 result: rejectedOnce,
                 sent: sent.map((x) => x.cmd),
             });
 
+        let mixedFailureAttempts = 0;
+        router = async (req) => {
+            if (req.cmd === 55) {
+                return operateReply(55, {
+                    result: cashierDetailResult({ level: 3, employees: [] }),
+                    resultField: 160,
+                });
+            }
+            if (req.cmd === 56) return operateReply(56, {
+                result: employeePanelResult({
+                    friends: [hireCandidateFriend({ gid: 1300000311 })],
+                    staff: [hireCandidateStaff({ gid: 101 })],
+                }),
+                resultField: 161,
+            });
+            if (req.cmd === 57) {
+                mixedFailureAttempts += 1;
+                return operateReply(57, {
+                    errorCode: mixedFailureAttempts === 1 ? 1034140 : 1034141,
+                    result: Buffer.alloc(0),
+                    resultField: 162,
+                });
+            }
+            throw new Error(`混合失败用例收到 cmd=${req.cmd}`);
+        };
+        sent.length = 0;
+        const mixedFailure = await milkTea.autoHire([1300000311], { duration: 1 });
+        check('好友与系统员工均失败时返回最后一个真实服务端错误',
+            mixedFailure.ok === false && mixedFailure.attempted === 2
+            && mixedFailure.errorCode === 1034141 && mixedFailureAttempts === 2
+            && mixedFailure.results.filter((x) => !x.skipped).map((x) => x.errorCode).join(',') === '1034140,1034141',
+            { result: mixedFailure, sent: sent.map((x) => x.cmd) });
+
+        router = async (req) => {
+            if (req.cmd === 55) {
+                return operateReply(55, {
+                    result: cashierDetailResult({ level: 3, employees: [] }),
+                    resultField: 160,
+                });
+            }
+            if (req.cmd === 56) return operateReply(56, {
+                result: employeePanelResult({
+                    friends: [hireCandidateFriend({ gid: 1300000311 })],
+                    staff: [hireCandidateStaff({ gid: 101 }), hireCandidateStaff({ gid: 102 })],
+                }),
+                resultField: 161,
+            });
+            if (req.cmd === 57) {
+                rejectedOnceAttempts += 1;
+                return operateReply(57, { errorCode: 1034130, result: Buffer.alloc(0), resultField: 162 });
+            }
+            throw new Error(`批量 1034130 用例收到 cmd=${req.cmd}`);
+        };
         sent.length = 0;
         rejectedOnceAttempts = 0;
         const batchRejectedOnce = await milkTea.hireAll([1300000311]);
-        check('1034130 不再触发批量候选盲扫',
-            batchRejectedOnce.ok === false && batchRejectedOnce.attempted === 1
-            && batchRejectedOnce.errorCode === 1034130 && rejectedOnceAttempts === 1
-            && sent.filter((x) => x.cmd === 57).length === 1, {
+        check('1034130 批量雇佣继续候选并保留最终业务错误',
+            batchRejectedOnce.ok === false && batchRejectedOnce.attempted === 3
+            && batchRejectedOnce.errorCode === 1034130 && rejectedOnceAttempts === 3
+            && sent.filter((x) => x.cmd === 57).length === 3, {
                 result: batchRejectedOnce,
                 sent: sent.map((x) => x.cmd),
             });
@@ -2099,9 +2550,9 @@ sendImpl = async (service, method, body) => {
         };
         sent.length = 0;
         const exhausted = await milkTea.hireAll([1300000020, 1300000021, 1300000022, 1300000023, 1300000024]);
-        check('批量雇佣遇到 1034130 时立即停止并保留错误码',
+        check('批量雇佣遍历 1034130 候选并保留错误码',
             exhausted.ok === false && exhausted.hired === 0
-            && exhausted.attempted === 1 && exhaustedAttempts === 1
+            && exhausted.attempted === 3 && exhaustedAttempts === 3
             && exhausted.errorCode === 1034130
             && /code=1034130/.test(exhausted.reason || ''), {
                 result: exhausted,
@@ -2129,17 +2580,17 @@ sendImpl = async (service, method, body) => {
         };
         sent.length = 0;
         const batchRejected = await milkTea.hireAll([1300000012, 1300000013]);
-        check('批量雇佣遇到首个明确拒绝后停止并保留错误码',
+        check('批量雇佣遇到 1034140 后继续候选并保留错误码',
             batchRejected.ok === false && batchRejected.hired === 0
-            && batchRejected.attempted === 1 && batchRejected.errorCode === 1034140
-            && sent.filter((x) => x.cmd === 57).length === 1
+            && batchRejected.attempted === 3 && batchRejected.errorCode === 1034140
+            && sent.filter((x) => x.cmd === 57).length === 3
             && /code=1034140/.test(batchRejected.reason || ''), {
                 result: batchRejected,
                 sent: sent.map((x) => x.cmd),
             });
     }
 
-    section('17. cmd62 十五 UID 上限、16 条拆分与多字节 packed 长度');
+    section('18. cmd62 十五 UID 上限、16 条拆分与多字节 packed 长度');
     {
         const originalGetBag = warehouse.getBag;
         const originalGetBagItems = warehouse.getBagItems;
@@ -2204,7 +2655,7 @@ sendImpl = async (service, method, body) => {
         milkTea.__testing.clearMenuCache();
     }
 
-    section('18. 店铺排行榜 cmd66/#171 页码、本人排名与好友标记');
+    section('19. 店铺排行榜 cmd66/#171 页码、本人排名与好友标记');
     {
         const makeEntries = (startRank, count) => Array.from({ length: count }, (_, i) => {
             const rank = startRank + i;
@@ -2322,6 +2773,378 @@ sendImpl = async (service, method, body) => {
             && failed.hasNext === false && failed.containsSelf === false
             && /1034149|排行榜读取失败/.test(failed.reason), failed);
     }
+
+    section('20. 活动 List 快照、商店已购/限购与任务条件元数据');
+    {
+        const fixedNow = Date.UTC(2026, 9, 19, 4, 0, 0);
+        milkTea.__testing.setShopClock(() => fixedNow);
+        milkTea.__testing.resetShopState();
+        milkTea.__testing.clearMainStatusCache();
+        const state = Buffer.concat([
+            varintField(1, 1792200000),
+            bytesField(2, '活动快照测试店'),
+            varintField(4, 3),
+            varintField(5, 45678),
+            varintField(16, 1792203600),
+        ]);
+        const snapshotGoods = [
+            shopGoods({
+                goodsId: 301,
+                itemId: 20525,
+                limitCount: 108,
+                purchasedCount: 108,
+                restrictionType: 4,
+                name: '森野甜莓种子',
+            }),
+            shopGoods({
+                goodsId: 308,
+                itemId: 29005,
+                limitCount: 1,
+                purchasedCount: 1,
+                restrictionType: 1,
+                name: '森野黄金芽种子',
+            }),
+            shopGoods({
+                goodsId: 311,
+                itemId: 20525,
+                limitCount: 0,
+                purchasedCount: 0,
+                name: '不限购测试商品',
+            }),
+        ];
+        router = async (req) => {
+            if (req.method === 'List') {
+                return activityListReply([
+                    mainActivity(state),
+                    shopActivity(snapshotGoods),
+                    taskActivity({
+                        tasks: [
+                            taskEntry({
+                                id: 9001,
+                                status: 2,
+                                conditionText: '累计制作 3 杯奶茶',
+                                conditionType: 7,
+                                taskIndex: 4,
+                                conditionValue: 3,
+                                rewards: [{ id: 1041, count: 50 }],
+                            }),
+                            taskEntry({
+                                id: 9002,
+                                status: 1,
+                                conditionText: '尚未开始的任务',
+                                conditionType: 8,
+                                taskIndex: 5,
+                                conditionValue: 0,
+                            }),
+                        ],
+                    }),
+                ]);
+            }
+            throw new Error(`活动快照用例不应发送 ${req.method || `cmd=${req.cmd}`}`);
+        };
+
+        sent.length = 0;
+        const main = await milkTea.getMainStatus(true);
+        const shop = await milkTea.getShopGoods();
+        const tasks = await milkTea.getTasks();
+        check('主店/商店/任务连续读取只发送一次 ActivityService.List',
+            main.ok === true && shop.ok === true && tasks.ok === true
+            && sent.filter((x) => x.method === 'List').length === 1,
+            sent.map((x) => x.method || x.cmd));
+
+        const goods301 = shop.goods.find((x) => x.goodsId === 301);
+        const goods308 = shop.goods.find((x) => x.goodsId === 308);
+        const goods311 = shop.goods.find((x) => x.goodsId === 311);
+        check('商店 #4/#5/#11 映射为 limitCount/purchasedCount/restrictionType',
+            goods301.limitCount === 108 && goods301.purchasedCount === 108
+            && goods301.boughtCount === 108 && goods301.restrictionType === 4
+            && goods308.limitCount === 1 && goods308.purchasedCount === 1
+            && goods308.boughtCount === 1 && goods308.restrictionType === 1,
+            { goods301, goods308 });
+        check('服务端已购数达到限购时直接标记 soldOut',
+            goods301.soldOut === true && goods308.soldOut === true
+            && goods311.soldOut === false, [goods301, goods308, goods311]);
+
+        check('任务 #2 条件文本/类型/序号/值完整解析',
+            tasks.tasks[0].conditionText === '累计制作 3 杯奶茶'
+            && tasks.tasks[0].conditionType === 7
+            && tasks.tasks[0].taskIndex === 4
+            && tasks.tasks[0].conditionValue === 3
+            && tasks.tasks[0].conditionMet === null,
+            tasks.tasks[0]);
+        check('任务条件参数不冒充当前完成状态',
+            tasks.tasks[1].conditionValue === 0 && tasks.tasks[1].conditionMet === null,
+            tasks.tasks[1]);
+
+        sent.length = 0;
+        const skippedSoldOut = await milkTea.buyShopGoods(308, 1);
+        check('已售罄商品在购买前直接跳过且不发送 Operate',
+            skippedSoldOut.ok === false && skippedSoldOut.skipped === true
+            && skippedSoldOut.soldOut === true && sent.length === 0,
+            { result: skippedSoldOut, sent: sent.map((x) => x.method || x.cmd) });
+    }
+
+    {
+        const fixedNow = Date.UTC(2026, 9, 19, 4, 0, 0);
+        milkTea.__testing.setShopClock(() => fixedNow);
+        milkTea.__testing.resetShopState();
+        milkTea.__testing.clearMainStatusCache();
+        const state = Buffer.concat([
+            varintField(1, 1792200000),
+            bytesField(2, '增量测试店'),
+            varintField(4, 3),
+        ]);
+        let serverPurchased = 0;
+        router = async (req) => {
+            if (req.method === 'List') {
+                return activityListReply([
+                    mainActivity(state),
+                    shopActivity([
+                        shopGoods({
+                            goodsId: 311,
+                            itemId: 20525,
+                            limitCount: 4,
+                            purchasedCount: serverPurchased,
+                            name: '增量测试商品',
+                        }),
+                    ]),
+                ]);
+            }
+            if (req.cmd === 1 && req.group === GROUP_SHOP) {
+                const payload = mg.parseTop(req.payload);
+                const count = toInt((payload.find((x) => x.f === 2) || {}).v);
+                return operateReply(1, {
+                    group: GROUP_SHOP,
+                    result: Buffer.concat([
+                        bytesField(1, Buffer.concat([varintField(1, 20525), varintField(2, count)])),
+                        bytesField(2, Buffer.concat([varintField(1, 1041), varintField(2, count * 100)])),
+                    ]),
+                    resultField: 101,
+                });
+            }
+            throw new Error(`商店增量用例收到 ${req.method || `cmd=${req.cmd}`}`);
+        };
+
+        sent.length = 0;
+        const bought = await milkTea.buyShopGoods(311, 2);
+        const staleSnapshot = await milkTea.getShopGoods();
+        const staleGoods = staleSnapshot.goods.find((x) => x.goodsId === 311);
+        check('购买成功后使用 max(服务端 #5, 本地增量) 防止旧快照回退',
+            bought.ok === true && staleGoods.purchasedCount === 0
+            && staleGoods.boughtCount === 2 && staleGoods.soldOut === false,
+            { bought, staleGoods });
+        check('购买后复用当前 List 快照，不立即重复请求',
+            sent.filter((x) => x.method === 'List').length === 1
+            && sent.filter((x) => x.group === GROUP_SHOP && x.cmd === 1).length === 1,
+            sent.map((x) => x.method || `cmd=${x.cmd}`));
+
+        serverPurchased = 3;
+        milkTea.__testing.clearMainStatusCache();
+        const refreshed = await milkTea.getShopGoods();
+        const refreshedGoods = refreshed.goods.find((x) => x.goodsId === 311);
+        check('服务端已购数高于本地增量时采用服务端值',
+            refreshedGoods.purchasedCount === 3 && refreshedGoods.boughtCount === 3,
+            refreshedGoods);
+        check('购买失效缓存后下一次读取重新发送 List',
+            sent.filter((x) => x.method === 'List').length === 2,
+            sent.map((x) => x.method || `cmd=${x.cmd}`));
+
+        sent.length = 0;
+        const truncated = await milkTea.buyShopGoods(311, 2);
+        const truncatedReq = sent.find((x) => x.group === GROUP_SHOP && x.cmd === 1);
+        const truncatedPayload = truncatedReq && mg.parseTop(truncatedReq.payload);
+        const truncatedCount = toInt((truncatedPayload || []).find((x) => x.f === 2)?.v);
+        check('剩余限购为 1 时请求数量从 2 截断为 1',
+            truncated.ok === true && truncated.count === 1 && truncatedCount === 1
+            && truncated.got && truncated.got.count === 1, {
+                result: truncated,
+                sent: sent.map((x) => ({ cmd: x.cmd, payload: x.payload && x.payload.toString('hex') })),
+            });
+
+        milkTea.__testing.setShopClock(() => fixedNow + 24 * 60 * 60 * 1000);
+        serverPurchased = 0;
+        const nextDay = await milkTea.getShopGoods();
+        const nextDayGoods = nextDay.goods.find((x) => x.goodsId === 311);
+        check('北京时间跨日后清空本地商店已购与售罄状态',
+            nextDayGoods.purchasedCount === 0 && nextDayGoods.boughtCount === 0
+            && nextDayGoods.soldOut === false, nextDayGoods);
+    }
+
+    {
+        const fixedNow = Date.UTC(2026, 9, 19, 5, 0, 0);
+        milkTea.__testing.setShopClock(() => fixedNow);
+        milkTea.__testing.resetShopState();
+        milkTea.__testing.clearMainStatusCache();
+        const state = Buffer.concat([
+            varintField(1, 1792200000),
+            bytesField(2, '实际成交测试店'),
+            varintField(4, 3),
+        ]);
+        router = async (req) => {
+            if (req.method === 'List') {
+                return activityListReply([
+                    mainActivity(state),
+                    shopActivity([
+                        shopGoods({
+                            goodsId: 312,
+                            itemId: 20526,
+                            limitCount: 5,
+                            purchasedCount: 0,
+                            name: '实际成交测试商品',
+                        }),
+                    ]),
+                ]);
+            }
+            if (req.cmd === 1 && req.group === GROUP_SHOP) {
+                return operateReply(1, {
+                    group: GROUP_SHOP,
+                    result: Buffer.concat([
+                        bytesField(1, Buffer.concat([varintField(1, 20526), varintField(2, 1)])),
+                        bytesField(2, Buffer.concat([varintField(1, 1041), varintField(2, 100)])),
+                    ]),
+                    resultField: 101,
+                });
+            }
+            throw new Error(`实际成交用例收到 ${req.method || `cmd=${req.cmd}`}`);
+        };
+        sent.length = 0;
+        const partialBought = await milkTea.buyShopGoods(312, 2);
+        const staleSnapshot = await milkTea.getShopGoods();
+        const staleGoods = staleSnapshot.goods.find((x) => x.goodsId === 312);
+        check('服务端实际成交少于请求量时返回实际数量并据此记账',
+            partialBought.ok === true && partialBought.count === 1
+            && partialBought.got && partialBought.got.count === 1
+            && staleGoods.boughtCount === 1,
+            { result: partialBought, staleGoods });
+        milkTea.__testing.setShopClock(() => Date.now());
+        milkTea.__testing.resetShopState();
+        milkTea.__testing.clearMainStatusCache();
+    }
+
+    {
+        milkTea.__testing.setShopClock(() => Date.now());
+        milkTea.__testing.resetShopState();
+        milkTea.__testing.clearMainStatusCache();
+        router = async (req) => {
+            if (req.method === 'List') return activityListReply([mainActivity()]);
+            throw new Error(`缺失活动体用例不应发送 ${req.method || `cmd=${req.cmd}`}`);
+        };
+        const shopMissing = await milkTea.getShopGoods();
+        const taskMissing = await milkTea.getTasks();
+        check('活动 List 缺少 #102 时商店返回 ok:false',
+            shopMissing.ok === false && /#102/.test(shopMissing.reason), shopMissing);
+        check('活动 List 缺少 #122 时任务返回 ok:false',
+            taskMissing.ok === false && /#122/.test(taskMissing.reason), taskMissing);
+
+        sent.length = 0;
+        const claimOne = await milkTea.claimTask(9001);
+        const claimAll = await milkTea.claimAllTasks();
+        check('未抓到领取协议时 claimTask/claimAllTasks 均零请求禁用',
+            claimOne.skipped === true && claimAll.skipped === true && sent.length === 0,
+            { claimOne, claimAll, sent });
+    }
+
+    {
+        milkTea.__testing.clearMainStatusCache();
+        let activeListRequests = 0;
+        let maxActiveListRequests = 0;
+        router = async (req) => {
+            if (req.method !== 'List') {
+                throw new Error(`List 并发用例收到 ${req.method || `cmd=${req.cmd}`}`);
+            }
+            activeListRequests += 1;
+            maxActiveListRequests = Math.max(maxActiveListRequests, activeListRequests);
+            await new Promise((resolve) => setTimeout(resolve, 20));
+            activeListRequests -= 1;
+            return activityListReply([
+                mainActivity(),
+                shopActivity([]),
+                taskActivity({ tasks: [] }),
+            ]);
+        };
+        sent.length = 0;
+        const [main, shop, tasks] = await Promise.all([
+            milkTea.getMainStatus(true),
+            milkTea.getShopGoods(),
+            milkTea.getTasks(),
+        ]);
+        check('并发读取主店/商店/任务会合并为一次 List 且不重叠',
+            main.ok === true && shop.ok === true && tasks.ok === true
+            && sent.length === 1 && maxActiveListRequests === 1,
+            { sent: sent.map((x) => x.method || x.cmd), maxActiveListRequests });
+
+        let activeOperates = 0;
+        let maxActiveOperates = 0;
+        router = async (req) => {
+            if (req.cmd !== 60) throw new Error(`RPC 串行用例收到 cmd=${req.cmd}`);
+            activeOperates += 1;
+            maxActiveOperates = Math.max(maxActiveOperates, activeOperates);
+            await new Promise((resolve) => setTimeout(resolve, 20));
+            activeOperates -= 1;
+            return operateReply(60, {
+                result: Buffer.concat([
+                    varintField(1, 50),
+                    varintField(2, 2250),
+                    varintField(3, 2908400),
+                ]),
+                resultField: 165,
+            });
+        };
+        sent.length = 0;
+        await Promise.all([milkTea.getCashierStatus(), milkTea.getCashierStatus()]);
+        check('活动 Operate RPC 并发最大值不超过 1',
+            sent.filter((x) => x.cmd === 60).length === 2 && maxActiveOperates === 1,
+            { sent: sent.map((x) => x.cmd), maxActiveOperates });
+    }
+
+    {
+        const gid = 1300000501;
+        const employees = [];
+        router = async (req) => {
+            if (req.cmd === 55) {
+                return operateReply(55, {
+                    result: cashierDetailResult({ level: 3, employees }),
+                    resultField: 160,
+                });
+            }
+            if (req.cmd === 56) {
+                return operateReply(56, {
+                    result: employeePanelResult({
+                        friends: [hireCandidateFriend({ gid })],
+                        staff: [],
+                    }),
+                    resultField: 161,
+                });
+            }
+            if (req.cmd === 57) {
+                employees.push(cashierEmployee({
+                    slot: hireRequestSlot(req),
+                    shiftUid: '30070362835095999',
+                    gid,
+                    name: '重复白名单好友',
+                    level: 100,
+                    startAt: 1792200000,
+                    endAt: 1792214400,
+                    wage: 40,
+                    titleId: 9001,
+                    titleName: '金牌销售',
+                }));
+                return operateReply(57, { result: Buffer.alloc(0), resultField: 162 });
+            }
+            throw new Error(`重复白名单用例收到 cmd=${req.cmd}`);
+        };
+        sent.length = 0;
+        const duplicateWhitelist = await milkTea.autoHire([gid, gid, String(gid)], { duration: 1 });
+        check('自动雇佣白名单去重且保持输入顺序，同一 GID 只尝试一次',
+            duplicateWhitelist.ok === true && duplicateWhitelist.hired === 1
+            && duplicateWhitelist.attempted === 1
+            && sent.filter((x) => x.cmd === 57).length === 1,
+            { result: duplicateWhitelist, sent: sent.map((x) => x.cmd) });
+    }
+
+    milkTea.__testing.setShopClock(() => Date.now());
+    milkTea.__testing.resetShopState();
+    milkTea.__testing.clearMainStatusCache();
 
     finish();
 })().catch((e) => {

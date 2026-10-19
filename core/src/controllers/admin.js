@@ -2168,6 +2168,7 @@ app.use('/api', (req, res, next) => {
                     milkTeaStoreName: milkTeaCfg.storeName,
                     milkTeaHireGids: milkTeaCfg.hireGids || [],
                     milkTeaAutoHire: !!milkTeaCfg.autoHire,
+                    milkTeaHireDuration: milkTeaCfg.hireDuration || 1,
                     milkTeaAutoTask: !!milkTeaCfg.autoTask,
                     milkTeaAutoInteract: !!milkTeaCfg.autoInteract,
                     milkTeaAutoWage: milkTeaCfg.autoWage !== false,
@@ -3415,12 +3416,18 @@ app.use('/api', (req, res, next) => {
         try {
             const cfg = (typeof store.getMilkTeaConfig === 'function')
                 ? store.getMilkTeaConfig(id)
-                : { hireGids: [], autoHire: false, autoTask: false };
+                : { hireGids: [], autoHire: false, hireDuration: 1, autoTask: false };
+            const configuredHireDuration = Number(cfg.hireDuration);
+            const hireDuration = Number.isFinite(configuredHireDuration) && configuredHireDuration > 0
+                ? Math.floor(configuredHireDuration)
+                : 1;
             res.json({ ok: true, data: {
                 hireGids: cfg.hireGids || [],
                 autoHire: !!cfg.autoHire,
                 autoTask: !!cfg.autoTask,
                 autoInteract: !!cfg.autoInteract,
+                milkTeaHireDuration: hireDuration,
+                hireDuration,
                 interactType: cfg.interactType || 2,
                 storeName: cfg.storeName || '奶茶小铺',
                 autoBuySeed: !!cfg.autoBuySeed,
@@ -3435,6 +3442,15 @@ app.use('/api', (req, res, next) => {
         if (!checkAccountAccess(req, id)) return res.status(403).json({ ok: false, error: '无权访问此账号' });
         const body = req.body || {};
         try {
+            const rawHireDuration = body.milkTeaHireDuration !== undefined
+                ? body.milkTeaHireDuration
+                : body.hireDuration;
+            const parsedHireDuration = Number(rawHireDuration);
+            const hireDuration = rawHireDuration !== undefined
+                && Number.isFinite(parsedHireDuration)
+                && parsedHireDuration > 0
+                ? Math.floor(parsedHireDuration)
+                : undefined;
             await provider.saveSettings(id, {
                 milkTeaHireGids: Array.isArray(body.hireGids) ? body.hireGids : undefined,
                 milkTeaAutoHire: typeof body.autoHire === 'boolean' ? body.autoHire : undefined,
@@ -3444,13 +3460,26 @@ app.use('/api', (req, res, next) => {
                 milkTeaStoreName: typeof body.storeName === 'string' ? body.storeName : undefined,
                 milkTeaAutoBuySeed: typeof body.autoBuySeed === 'boolean' ? body.autoBuySeed : undefined,
                 milkTeaSeedBuyCount: body.seedBuyCount !== undefined ? body.seedBuyCount : undefined,
+                milkTeaHireDuration: hireDuration,
             });
+            const savedCfg = (typeof store.getMilkTeaConfig === 'function')
+                ? store.getMilkTeaConfig(id)
+                : {};
+            const configuredHireDuration = Number(savedCfg.hireDuration);
+            const savedHireDuration = Number.isFinite(configuredHireDuration) && configuredHireDuration > 0
+                ? Math.floor(configuredHireDuration)
+                : (hireDuration || 1);
             res.json({ ok: true, data: {
-                hireGids: body.hireGids || [],
-                autoHire: !!body.autoHire,
-                autoTask: !!body.autoTask,
-                autoInteract: !!body.autoInteract,
-                interactType: body.interactType || 2,
+                hireGids: savedCfg.hireGids || [],
+                autoHire: !!savedCfg.autoHire,
+                autoTask: !!savedCfg.autoTask,
+                autoInteract: !!savedCfg.autoInteract,
+                milkTeaHireDuration: savedHireDuration,
+                hireDuration: savedHireDuration,
+                interactType: savedCfg.interactType || 2,
+                storeName: savedCfg.storeName || '奶茶小铺',
+                autoBuySeed: !!savedCfg.autoBuySeed,
+                seedBuyCount: savedCfg.seedBuyCount || 1,
             } });
         } catch (e) { res.json({ ok: false, error: e.message }); }
     });
@@ -3490,15 +3519,17 @@ app.use('/api', (req, res, next) => {
     milkTeaRoute('/api/activity/milk-tea/craft', (id, body) => provider.craftMilkTea(id, { limit: body.limit, all: body.all, perBatch: body.perBatch }));
     milkTeaRoute('/api/activity/milk-tea/speaker', (id) => provider.useMilkTeaSpeaker(id));
     milkTeaRoute('/api/activity/milk-tea/open', (id) => provider.openMilkTeaStore(id));
-    milkTeaRoute('/api/activity/milk-tea/hire', (id, body) => provider.hireMilkTea(id, { friendGid: body.friendGid }));
+    milkTeaRoute('/api/activity/milk-tea/hire', (id, body) => provider.hireMilkTea(id, { friendGid: body.friendGid, duration: body.duration }));
     milkTeaRoute('/api/activity/milk-tea/interact', (id, body) => provider.interactMilkTea(id, { type: body.type }));
     milkTeaRoute('/api/activity/milk-tea/sales-record', (id, body) => provider.getMilkTeaSalesRecord(id, { day: body && body.day }));
     milkTeaRoute('/api/activity/milk-tea/upgrade-store', (id) => provider.upgradeMilkTeaStore(id));
     milkTeaRoute('/api/activity/milk-tea/upgrade-info', (id) => provider.getMilkTeaUpgrade(id));
     milkTeaRoute('/api/activity/milk-tea/sales', (id) => provider.getMilkTeaSales(id));
     milkTeaRoute('/api/activity/milk-tea/employees', (id) => provider.getMilkTeaEmployees(id));
-    milkTeaRoute('/api/activity/milk-tea/hire-all', (id, body) => provider.hireMilkTeaAll(id, { hireGids: body.hireGids, limit: body.limit }));
-    milkTeaRoute('/api/activity/milk-tea/hire-auto', (id, body) => provider.hireMilkTeaAuto(id, { hireGids: body.hireGids }));
+    milkTeaRoute('/api/activity/milk-tea/hire-all', (id, body) => provider.hireMilkTeaAll(id, { hireGids: body.hireGids, limit: body.limit, duration: body.duration }));
+    milkTeaRoute('/api/activity/milk-tea/on-duty', (id) => provider.getMilkTeaOnDuty(id));
+    milkTeaRoute('/api/activity/milk-tea/cashier-detail', (id) => provider.getMilkTeaCashierDetail(id));
+    milkTeaRoute('/api/activity/milk-tea/hire-auto', (id, body) => provider.hireMilkTeaAuto(id, { hireGids: body.hireGids, duration: body.duration }));
     milkTeaRoute('/api/activity/milk-tea/claim-task', (id, body) => provider.claimMilkTeaTask(id, { taskId: body.taskId }));
     milkTeaRoute('/api/activity/milk-tea/buy', (id, body) => provider.buyMilkTeaGoods(id, { goodsId: body.goodsId, count: body.count }));
 
