@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { useIntervalFn } from '@vueuse/core'
 import { storeToRefs } from 'pinia'
-import { computed, onMounted, ref, watch, watchEffect } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch, watchEffect } from 'vue'
 import { useRouter } from 'vue-router'
 import api from '@/api'
 import AccountModal from '@/components/AccountModal.vue'
@@ -60,6 +60,9 @@ function showAlert(message: string, type: 'primary' | 'danger' = 'primary') {
 
 // ==================== 账号管理 ====================
 const { accounts, loading: accountsLoading, currentAccountId } = storeToRefs(accountStore)
+let accountSaveEpoch = 0
+let bagSeedsRequestId = 0
+let strategyPreviewRequestId = 0
 
 const showModal = ref(false)
 const showDeleteConfirm = ref(false)
@@ -68,7 +71,7 @@ const editingAccount = ref<any>(null)
 const accountToDelete = ref<any>(null)
 const showClearStoppedConfirm = ref(false)
 const clearStoppedLoading = ref(false)
-const kickoutRefreshSavingId = ref('')
+const kickoutRefreshSavingIds = ref<string[]>([])
 
 const isAccountOpsDisabled = computed(() => !userStore.isAdmin && userStore.isExpired)
 const quotaLimit = computed(() => {
@@ -102,25 +105,57 @@ let accountSettingsQueue = Promise.resolve()
 /** 串行加载设置；切换账号期间排在后面的最新账号不会被并发锁漏掉 */
 function loadForCurrentAccount() {
   const accountId = String(currentAccountId.value || '')
-  if (!accountId)
+  if (!accountId) {
+    settingStore.prepareSettingsLoad('')
     return
+  }
 
+  settingStore.prepareSettingsLoad(accountId)
   accountSettingsQueue = accountSettingsQueue
     .catch(() => undefined)
     .then(async () => {
       if (String(currentAccountId.value || '') !== accountId)
         return
-      await settingStore.fetchSettings(accountId)
+      const result = await settingStore.fetchSettings(accountId)
+      if (!result?.ok)
+        return
       if (String(currentAccountId.value || '') !== accountId)
         return
-      syncLocalStrategySettings()
-      syncLocalAutomationSettings()
-      syncLocalOfflineSettings()
+      syncLoadedSettings()
       await farmStore.fetchSeeds(accountId)
       await fetchStealthStatus()
     })
 
   return accountSettingsQueue
+}
+
+interface SubmittedSettingsDraft {
+  strategy?: any
+  automation?: any
+}
+
+function cloneJsonValue<T>(value: T): T {
+  if (value === undefined || value === null)
+    return value
+  return JSON.parse(JSON.stringify(value))
+}
+
+function draftValuesEqual(a: any, b: any) {
+  return JSON.stringify(a) === JSON.stringify(b)
+}
+
+function syncLoadedSettings(submitted?: SubmittedSettingsDraft) {
+  syncLocalStrategySettings(submitted?.strategy)
+  syncLocalAutomationSettings(submitted?.automation)
+  if (!submitted)
+    syncLocalOfflineSettings()
+}
+
+async function retrySettingsLoad() {
+  const accountId = String(currentAccountId.value || '')
+  if (!accountId)
+    return
+  await loadForCurrentAccount()
 }
 
 onMounted(async () => {
@@ -133,8 +168,35 @@ onMounted(async () => {
 
 // 布局切换账号会重建页面; 此 watcher 只负责兜底同一实例内的账号变化。
 watch(currentAccountId, (now, prev) => {
+  if (String(now ?? '') !== String(prev ?? '')) {
+    accountSaveEpoch += 1
+    strategySaveRequest += 1
+    automationSaveRequest += 1
+    stealthSaveRequest += 1
+    offlineSaveRequest += 1
+    offlineTestRequest += 1
+    bagSeedsRequestId += 1
+    strategyPreviewRequestId += 1
+    strategySaving.value = false
+    automationSaving.value = false
+    offlineSaving.value = false
+    offlineTesting.value = false
+    bagSeeds.value = []
+    bagSeedsError.value = null
+    bagSeedsLoading.value = false
+    strategyPreviewLabel.value = null
+    resetStealthForAccountChange()
+  }
   if (accountSettingsReady.value && String(now ?? '') !== String(prev ?? ''))
     void loadForCurrentAccount()
+})
+
+onUnmounted(() => {
+  if (stealthSaveTimer)
+    clearTimeout(stealthSaveTimer)
+  stealthSaveTimer = null
+  bagSeedsRequestId += 1
+  strategyPreviewRequestId += 1
 })
 
 useIntervalFn(() => {
@@ -192,18 +254,20 @@ async function toggleAccount(account: any) {
 async function toggleKickoutCodeRefresh(account: any, enabled: boolean) {
   if (!account?.id)
     return
-  kickoutRefreshSavingId.value = String(account.id)
+  const accountId = String(account.id)
+  if (!kickoutRefreshSavingIds.value.includes(accountId))
+    kickoutRefreshSavingIds.value = [...kickoutRefreshSavingIds.value, accountId]
   const oldValue = !!account.keepRunningOnKickout
   account.keepRunningOnKickout = enabled
   try {
-    await accountStore.setKickoutCodeRefresh(String(account.id), enabled)
+    await accountStore.setKickoutCodeRefresh(accountId, enabled)
   }
   catch {
     account.keepRunningOnKickout = oldValue
     showAlert('保存失败，请稍后重试', 'danger')
   }
   finally {
-    kickoutRefreshSavingId.value = ''
+    kickoutRefreshSavingIds.value = kickoutRefreshSavingIds.value.filter(id => id !== accountId)
   }
 }
 
@@ -249,10 +313,11 @@ async function confirmClearStopped() {
 }
 
 // ==================== 策略设置 ====================
-const { settings, loading: settingsLoading } = storeToRefs(settingStore)
+const { settings, loading: settingsLoading, settingsLoadError } = storeToRefs(settingStore)
 const { seeds } = storeToRefs(farmStore)
 
 const strategySaving = ref(false)
+let strategySaveRequest = 0
 
 const currentAccountName = computed(() => {
   const acc = accounts.value.find((a: any) => a.id === currentAccountId.value)
@@ -325,23 +390,39 @@ const sortedBagSeeds = computed(() => {
 })
 
 async function fetchBagSeeds() {
-  if (!currentAccountId.value)
+  const accountId = String(currentAccountId.value || '')
+  if (!accountId)
     return
+  const requestId = ++bagSeedsRequestId
+  const saveEpoch = accountSaveEpoch
+  const isCurrentRequest = () => requestId === bagSeedsRequestId
+    && saveEpoch === accountSaveEpoch
+    && String(currentAccountId.value || '') === accountId
   bagSeedsLoading.value = true
   bagSeedsError.value = null
   try {
     const res = await api.get('/api/bag/seeds', {
-      headers: { 'x-account-id': currentAccountId.value },
+      headers: { 'x-account-id': accountId },
     })
-    if (res.data.ok) {
+    if (!isCurrentRequest())
+      return
+    if (res.data?.ok) {
       bagSeeds.value = res.data.data || []
+    }
+    else {
+      bagSeeds.value = []
+      bagSeedsError.value = res.data?.error || '加载失败'
     }
   }
   catch (e: any) {
+    if (!isCurrentRequest())
+      return
+    bagSeeds.value = []
     bagSeedsError.value = e.message || '加载失败'
   }
   finally {
-    bagSeedsLoading.value = false
+    if (isCurrentRequest())
+      bagSeedsLoading.value = false
   }
 }
 
@@ -461,7 +542,15 @@ const analyticsSortByMap: Record<string, string> = {
 
 const strategyPreviewLabel = ref<string | null>(null)
 
-watchEffect(async () => {
+watchEffect(async (onCleanup) => {
+  const requestId = ++strategyPreviewRequestId
+  const accountId = String(currentAccountId.value || '')
+  const saveEpoch = accountSaveEpoch
+  let cancelled = false
+  onCleanup(() => {
+    cancelled = true
+  })
+
   let strategy = localStrategySettings.value.plantingStrategy
   if (strategy === 'preferred') {
     strategyPreviewLabel.value = null
@@ -502,9 +591,21 @@ watchEffect(async () => {
   }
   const sortBy = analyticsSortByMap[strategy]
   if (sortBy) {
+    if (!accountId) {
+      strategyPreviewLabel.value = null
+      return
+    }
     try {
-      const res = await api.get(`/api/analytics?sort=${sortBy}`)
-      const rankings: any[] = res.data.ok ? (res.data.data || []) : []
+      const res = await api.get(`/api/analytics?sort=${sortBy}`, {
+        headers: { 'x-account-id': accountId },
+      })
+      const stillCurrent = !cancelled
+        && requestId === strategyPreviewRequestId
+        && saveEpoch === accountSaveEpoch
+        && String(currentAccountId.value || '') === accountId
+      if (!stillCurrent)
+        return
+      const rankings: any[] = res.data?.ok ? (res.data.data || []) : []
       const availableIds = new Set(available.map(s => s.seedId))
       const match = rankings.find(r => availableIds.has(Number(r.seedId)))
       if (match) {
@@ -516,30 +617,64 @@ watchEffect(async () => {
       }
     }
     catch {
-      strategyPreviewLabel.value = null
+      if (!cancelled
+        && requestId === strategyPreviewRequestId
+        && saveEpoch === accountSaveEpoch
+        && String(currentAccountId.value || '') === accountId) {
+        strategyPreviewLabel.value = null
+      }
     }
   }
 })
 
-function syncLocalStrategySettings() {
-  if (settings.value) {
-    localStrategySettings.value = JSON.parse(JSON.stringify({
-      plantingStrategy: settings.value.plantingStrategy,
-      preferredSeedId: settings.value.preferredSeedId,
-      bagSeedPriority: settings.value.bagSeedPriority ?? [],
-      bagSeedFallbackStrategy: settings.value.bagSeedFallbackStrategy ?? 'level',
-      plantSeedExclude: settings.value.plantSeedExclude ?? [],
-      stealDelaySeconds: settings.value.stealDelaySeconds ?? 0,
-      plantOrderRandom: !!settings.value.plantOrderRandom,
-      plantDelaySeconds: settings.value.plantDelaySeconds ?? 0,
-      intervals: settings.value.intervals,
-      friendQuietHours: settings.value.friendQuietHours,
-    }))
+function syncLocalStrategySettings(submitted?: any) {
+  if (!settings.value)
+    return
+
+  const loaded = {
+    plantingStrategy: settings.value.plantingStrategy,
+    preferredSeedId: settings.value.preferredSeedId,
+    bagSeedPriority: settings.value.bagSeedPriority ?? [],
+    bagSeedFallbackStrategy: settings.value.bagSeedFallbackStrategy ?? 'level',
+    plantSeedExclude: settings.value.plantSeedExclude ?? [],
+    stealDelaySeconds: settings.value.stealDelaySeconds ?? 0,
+    plantOrderRandom: !!settings.value.plantOrderRandom,
+    plantDelaySeconds: settings.value.plantDelaySeconds ?? 0,
+    intervals: {
+      farmMin: settings.value.intervals?.farmMin ?? 2,
+      farmMax: settings.value.intervals?.farmMax ?? 5,
+      helpMin: settings.value.intervals?.helpMin ?? 10,
+      helpMax: settings.value.intervals?.helpMax ?? 15,
+      stealMin: settings.value.intervals?.stealMin ?? 10,
+      stealMax: settings.value.intervals?.stealMax ?? 15,
+    },
+    friendQuietHours: {
+      enabled: settings.value.friendQuietHours?.enabled ?? false,
+      start: settings.value.friendQuietHours?.start ?? '23:00',
+      end: settings.value.friendQuietHours?.end ?? '07:00',
+    },
   }
+
+  if (!submitted) {
+    localStrategySettings.value = cloneJsonValue(loaded)
+    return
+  }
+
+  const current = cloneJsonValue(localStrategySettings.value)
+  const merged = cloneJsonValue(current)
+  const currentRecord = current as Record<string, any>
+  const mergedRecord = merged as Record<string, any>
+  const loadedRecord = loaded as Record<string, any>
+  for (const key of Object.keys(loadedRecord)) {
+    if (draftValuesEqual(currentRecord[key], submitted[key]))
+      mergedRecord[key] = cloneJsonValue(loadedRecord[key])
+  }
+  localStrategySettings.value = merged
 }
 
 // ==================== 自动控制 ====================
 const automationSaving = ref(false)
+let automationSaveRequest = 0
 
 const allFertilizerLandTypes = ['amethyst', 'gold', 'black', 'red', 'normal']
 
@@ -611,6 +746,7 @@ const localAutomationSettings = ref({
   milkTeaCraft: true,
   milkTeaSpeaker: false,
   milkTeaStoreName: '奶茶小铺',
+  milkTeaHireDuration: 1,
   milkTeaAutoInteract: false,
   milkTeaAutoWage: true,
   milkTeaAutoBuySeed: false,
@@ -640,6 +776,10 @@ const fertilizerOptions = [
   { label: '不施肥', value: 'none' },
 ]
 
+const milkTeaHireDurationOptions = [
+  { label: '4 小时（已确认）', value: 1 },
+]
+
 // 活动菜单在后台被关闭时, 对应自动化开关必须一并关闭
 const activityStatus = ref<Record<string, boolean>>({})
 const ACTIVITY_GATED_AUTOMATION: Record<string, string> = {
@@ -650,6 +790,7 @@ const ACTIVITY_GATED_AUTOMATION: Record<string, string> = {
   mengchong_task: 'mengChongEnabled',
   mengchong_hunt: 'mengChongEnabled',
 }
+const isMilkTeaActivityGated = computed(() => activityStatus.value.milkTeaEnabled === false)
 
 function isAutomationGated(key: string): boolean {
   const flagKey = ACTIVITY_GATED_AUTOMATION[key]
@@ -662,6 +803,9 @@ function autoLabel(key: string, base: string): string {
 
 /** 把被后台关闭的活动的自动化开关强制置为 false */
 function applyActivityGate() {
+  if (isMilkTeaActivityGated.value)
+    localAutomationSettings.value.milkTeaEnabled = false
+
   const auto = localAutomationSettings.value.automation as any
   if (!auto)
     return
@@ -679,10 +823,46 @@ const stealthSaveState = ref<'idle' | 'saving' | 'saved' | 'error'>('idle')
 const stealthSavedAt = ref('')
 const stealthSaveError = ref('')
 let stealthSaveTimer: any = null
+let stealthSaveRequest = 0
+let stealthStatusRequest = 0
+let stealthForceRequest = 0
+
+function resetStealthSaveState() {
+  if (stealthSaveTimer)
+    clearTimeout(stealthSaveTimer)
+  stealthSaveTimer = null
+  stealthSaveState.value = 'idle'
+  stealthSavedAt.value = ''
+  stealthSaveError.value = ''
+}
+
+function resetStealthForAccountChange() {
+  stealthStatusRequest += 1
+  stealthForceRequest += 1
+  stealthStatus.value = null
+  stealthStatusError.value = ''
+  stealthLoading.value = false
+  resetStealthSaveState()
+}
 
 async function fetchStealthStatus() {
+  const accountId = String(currentAccountId.value || '')
+  if (!accountId) {
+    stealthStatus.value = null
+    stealthStatusError.value = ''
+    return
+  }
+  const requestId = ++stealthStatusRequest
+  const saveEpoch = accountSaveEpoch
+  const isCurrentRequest = () => requestId === stealthStatusRequest
+    && saveEpoch === accountSaveEpoch
+    && String(currentAccountId.value || '') === accountId
   try {
-    const res = await api.get('/api/stealth/status')
+    const res = await api.get('/api/stealth/status', {
+      headers: { 'x-account-id': accountId },
+    })
+    if (!isCurrentRequest())
+      return
     if (res.data?.ok) {
       stealthStatus.value = res.data.data
       stealthStatusError.value = ''
@@ -692,6 +872,8 @@ async function fetchStealthStatus() {
     }
   }
   catch (e: any) {
+    if (!isCurrentRequest())
+      return
     const code = e?.response?.status
     stealthStatusError.value = code === 404
       ? '后台没有 /api/stealth 接口 —— 说明后台进程还是旧版本，请重启后台（core）后再试'
@@ -736,20 +918,32 @@ const stealthDirty = computed(() => !stealthSame(stealthPayload(), stealthSavedP
 
 /** 只保存防封号相关设置(自动保存用, 不影响其它未保存的编辑) */
 async function saveStealthSettings() {
-  if (!currentAccountId.value)
+  const accountId = String(currentAccountId.value || '')
+  if (!accountId || settingsLoading.value || settingsLoadError.value
+    || String(settingStore.settingsAccountId) !== accountId)
     return
+  const saveEpoch = accountSaveEpoch
+  const requestId = ++stealthSaveRequest
+  const isCurrentSave = () => requestId === stealthSaveRequest
+    && saveEpoch === accountSaveEpoch
+    && String(currentAccountId.value || '') === accountId
+    && String(settingStore.settingsAccountId) === accountId
+
   stealthSaveState.value = 'saving'
   stealthSaveError.value = ''
   try {
-    // 用「已保存的完整设置」打底, 只覆盖防封号字段 —— 避免部分保存把其它设置(背包种子顺序/排外等)冲掉
-    const payload = { ...(settings.value || {}), ...stealthPayload() }
-    const res = await settingStore.saveSettings(currentAccountId.value, payload)
+    const submitted = stealthPayload()
+    const payload = submitted
+    const res = await settingStore.saveSettings(accountId, payload)
+    if (res?.stale || !isCurrentSave())
+      return
     if (res?.ok) {
       // 同步到本地 settings, 让"未保存"提示消失
-      Object.assign(settings.value as any, stealthPayload())
+      Object.assign(settings.value as any, submitted)
       stealthSaveState.value = 'saved'
       stealthSavedAt.value = new Date().toLocaleTimeString('zh-CN', { hour12: false })
-      await fetchStealthStatus()
+      if (isCurrentSave())
+        await fetchStealthStatus()
     }
     else {
       stealthSaveState.value = 'error'
@@ -757,6 +951,8 @@ async function saveStealthSettings() {
     }
   }
   catch (e: any) {
+    if (!isCurrentSave())
+      return
     stealthSaveState.value = 'error'
     stealthSaveError.value = e?.response?.data?.error || e?.message || '保存失败'
   }
@@ -769,7 +965,9 @@ watch(
     return JSON.stringify(payload)
   },
   () => {
-    if (!currentAccountId.value || !stealthDirty.value)
+    const accountId = String(currentAccountId.value || '')
+    if (!accountId || !stealthDirty.value || settingsLoading.value || settingsLoadError.value
+      || String(settingStore.settingsAccountId) !== accountId)
       return
     if (stealthSaveTimer)
       clearTimeout(stealthSaveTimer)
@@ -780,11 +978,19 @@ watch(
 )
 
 async function handleForceStealth(action: 'online' | 'offline') {
-  if (!currentAccountId.value)
+  const accountId = String(currentAccountId.value || '')
+  if (!accountId)
     return
+  const saveEpoch = accountSaveEpoch
+  const requestId = ++stealthForceRequest
+  const isCurrentRequest = () => requestId === stealthForceRequest
+    && saveEpoch === accountSaveEpoch
+    && String(currentAccountId.value || '') === accountId
   stealthLoading.value = true
   try {
-    const res = await api.post('/api/stealth/force', { action }, { headers: { 'x-account-id': currentAccountId.value } })
+    const res = await api.post('/api/stealth/force', { action }, { headers: { 'x-account-id': accountId } })
+    if (!isCurrentRequest())
+      return
     if (res.data?.ok) {
       const detail = res.data?.data?.message
       showAlert(detail || (action === 'offline' ? '已手动下线' : '已手动上线'), 'primary')
@@ -795,10 +1001,13 @@ async function handleForceStealth(action: 'online' | 'offline') {
     }
   }
   catch (e: any) {
+    if (!isCurrentRequest())
+      return
     showAlert(e?.response?.data?.error || e?.message || '操作失败', 'danger')
   }
   finally {
-    stealthLoading.value = false
+    if (isCurrentRequest())
+      stealthLoading.value = false
   }
 }
 
@@ -832,6 +1041,7 @@ async function fetchActivityStatus() {
         yuLuoChengShiEnabled: res.data.yuLuoChengShiEnabled !== false,
         gongYiXiaoHongHuaEnabled: res.data.gongYiXiaoHongHuaEnabled !== false,
         mengChongEnabled: res.data.mengChongEnabled !== false,
+        milkTeaEnabled: res.data.milkTeaEnabled !== false,
       }
       applyActivityGate()
     }
@@ -841,7 +1051,8 @@ async function fetchActivityStatus() {
   }
 }
 
-function syncLocalAutomationSettings() {
+function syncLocalAutomationSettings(submitted?: any) {
+  const currentDraft = submitted ? cloneJsonValue(localAutomationSettings.value) : null
   if (settings.value) {
     if (!settings.value.automation) {
       localAutomationSettings.value.automation = {
@@ -934,6 +1145,7 @@ function syncLocalAutomationSettings() {
     localAutomationSettings.value.milkTeaCraft = settings.value.milkTeaCraft ?? true
     localAutomationSettings.value.milkTeaSpeaker = settings.value.milkTeaSpeaker ?? false
     localAutomationSettings.value.milkTeaStoreName = settings.value.milkTeaStoreName ?? '奶茶小铺'
+    localAutomationSettings.value.milkTeaHireDuration = settings.value.milkTeaHireDuration ?? 1
     localAutomationSettings.value.milkTeaAutoInteract = settings.value.milkTeaAutoInteract ?? false
     localAutomationSettings.value.milkTeaAutoWage = settings.value.milkTeaAutoWage !== false
     localAutomationSettings.value.milkTeaAutoBuySeed = !!settings.value.milkTeaAutoBuySeed
@@ -947,30 +1159,79 @@ function syncLocalAutomationSettings() {
     localAutomationSettings.value.fertilizerBuyNormalThresholdHours = settings.value.fertilizerBuyNormalThresholdHours ?? 10
     localAutomationSettings.value.fertilizerBuyCheckIntervalMinutes = settings.value.fertilizerBuyCheckIntervalMinutes ?? 30
     applyActivityGate()
+
+    if (currentDraft) {
+      const loaded = cloneJsonValue(localAutomationSettings.value)
+      const merged = cloneJsonValue(currentDraft)
+      const currentRecord = currentDraft as Record<string, any>
+      const mergedRecord = merged as Record<string, any>
+      const loadedRecord = loaded as Record<string, any>
+      for (const key of Object.keys(loadedRecord)) {
+        if (key === 'automation')
+          continue
+        if (draftValuesEqual(currentRecord[key], submitted?.[key]))
+          mergedRecord[key] = cloneJsonValue(loadedRecord[key])
+      }
+
+      const currentAutomation = (currentDraft.automation || {}) as Record<string, any>
+      const mergedAutomation = (merged.automation || {}) as Record<string, any>
+      const loadedAutomation = (loaded.automation || {}) as Record<string, any>
+      const submittedAutomation = (submitted?.automation || {}) as Record<string, any>
+      for (const key of Object.keys(loadedAutomation)) {
+        if (draftValuesEqual(currentAutomation[key], submittedAutomation[key]))
+          mergedAutomation[key] = cloneJsonValue(loadedAutomation[key])
+      }
+      mergedRecord.automation = mergedAutomation
+      localAutomationSettings.value = merged
+    }
   }
 }
 
 async function saveStrategySettings() {
-  if (!currentAccountId.value)
+  const accountId = String(currentAccountId.value || '')
+  if (!accountId || settingsLoading.value || settingsLoadError.value
+    || String(settingStore.settingsAccountId) !== accountId)
     return
+  const saveEpoch = accountSaveEpoch
+  const requestId = ++strategySaveRequest
+  const isCurrentSave = () => requestId === strategySaveRequest
+    && saveEpoch === accountSaveEpoch
+    && String(currentAccountId.value || '') === accountId
+    && String(settingStore.settingsAccountId) === accountId
+
   strategySaving.value = true
   try {
-    // 策略页保存时保留自动控制页尚未提交的本地编辑，避免切换页签后被旧值覆盖。
-    const fullSettings = {
-      ...settings.value,
-      ...localStrategySettings.value,
-      automation: localAutomationSettings.value.automation,
+    const fullSettings = buildCompleteSettingsPayload()
+    const submitted = {
+      strategy: cloneJsonValue(localStrategySettings.value),
+      automation: cloneJsonValue(localAutomationSettings.value),
     }
-    const res = await settingStore.saveSettings(currentAccountId.value, fullSettings)
+    const res = await settingStore.saveSettings(accountId, fullSettings)
+    if (!isCurrentSave() || res.stale)
+      return
     if (res.ok) {
+      syncLoadedSettings(submitted)
       showAlert('策略设置已保存', 'primary')
     }
     else {
+      if (res.refreshed)
+        syncLoadedSettings(submitted)
       showAlert(`保存失败: ${res.error}`, 'danger')
     }
   }
   finally {
-    strategySaving.value = false
+    if (requestId === strategySaveRequest)
+      strategySaving.value = false
+  }
+}
+
+function buildCompleteSettingsPayload() {
+  applyActivityGate()
+  return {
+    ...settings.value,
+    ...localStrategySettings.value,
+    ...localAutomationSettings.value,
+    automation: JSON.parse(JSON.stringify(localAutomationSettings.value.automation || {})),
   }
 }
 
@@ -1174,51 +1435,29 @@ async function runTreasureNow() {
 }
 
 async function saveAutomationSettings() {
-  if (!currentAccountId.value)
+  const accountId = String(currentAccountId.value || '')
+  if (!accountId || settingsLoading.value || settingsLoadError.value
+    || String(settingStore.settingsAccountId) !== accountId)
     return
+  const saveEpoch = accountSaveEpoch
+  const requestId = ++automationSaveRequest
+  const isCurrentSave = () => requestId === automationSaveRequest
+    && saveEpoch === accountSaveEpoch
+    && String(currentAccountId.value || '') === accountId
+    && String(settingStore.settingsAccountId) === accountId
+
   automationSaving.value = true
   try {
-    // 后台已关闭的活动, 其自动化开关一并置 false 后再保存
-    applyActivityGate()
-    const fullSettings = {
-      ...settings.value,
-      automation: localAutomationSettings.value.automation,
-      stealthEnabled: localAutomationSettings.value.stealthEnabled,
-      stealthOnlineMinMinutes: localAutomationSettings.value.stealthOnlineMinMinutes,
-      stealthOnlineMaxMinutes: localAutomationSettings.value.stealthOnlineMaxMinutes,
-      stealthOfflineMinMinutes: localAutomationSettings.value.stealthOfflineMinMinutes,
-      stealthOfflineMaxMinutes: localAutomationSettings.value.stealthOfflineMaxMinutes,
-      stealthWakeForRipe: localAutomationSettings.value.stealthWakeForRipe,
-      robTreasureIntervalMinutes: localAutomationSettings.value.robTreasureIntervalMinutes,
-      robMaxPerRun: localAutomationSettings.value.robMaxPerRun,
-      robDailyLimit: localAutomationSettings.value.robDailyLimit,
-      buyBookEnabled: localAutomationSettings.value.buyBookEnabled,
-      buyBookCount: localAutomationSettings.value.buyBookCount,
-      autumnWishEnabled: localAutomationSettings.value.autumnWishEnabled,
-      fireworkEnabled: localAutomationSettings.value.fireworkEnabled,
-      fireworkMode: localAutomationSettings.value.fireworkMode,
-      fireworkCount: localAutomationSettings.value.fireworkCount,
-      happyShareEnabled: localAutomationSettings.value.happyShareEnabled,
-      milkTeaEnabled: localAutomationSettings.value.milkTeaEnabled,
-      milkTeaCashier: localAutomationSettings.value.milkTeaCashier,
-      milkTeaCraft: localAutomationSettings.value.milkTeaCraft,
-      milkTeaSpeaker: localAutomationSettings.value.milkTeaSpeaker,
-      milkTeaStoreName: localAutomationSettings.value.milkTeaStoreName,
-      milkTeaAutoInteract: localAutomationSettings.value.milkTeaAutoInteract,
-      milkTeaAutoWage: localAutomationSettings.value.milkTeaAutoWage,
-      milkTeaAutoBuySeed: localAutomationSettings.value.milkTeaAutoBuySeed,
-      milkTeaAutoUpgrade: localAutomationSettings.value.milkTeaAutoUpgrade,
-      milkTeaInteractType: localAutomationSettings.value.milkTeaInteractType,
-      sellGoldenFruit: localAutomationSettings.value.sellGoldenFruit,
-      adGiftEnabled: localAutomationSettings.value.adGiftEnabled,
-      fertilizerBuyOrganicCount: localAutomationSettings.value.fertilizerBuyOrganicCount,
-      fertilizerBuyOrganicThresholdHours: localAutomationSettings.value.fertilizerBuyOrganicThresholdHours,
-      fertilizerBuyNormalCount: localAutomationSettings.value.fertilizerBuyNormalCount,
-      fertilizerBuyNormalThresholdHours: localAutomationSettings.value.fertilizerBuyNormalThresholdHours,
-      fertilizerBuyCheckIntervalMinutes: localAutomationSettings.value.fertilizerBuyCheckIntervalMinutes,
+    const fullSettings = buildCompleteSettingsPayload()
+    const submitted = {
+      strategy: cloneJsonValue(localStrategySettings.value),
+      automation: cloneJsonValue(localAutomationSettings.value),
     }
-    const res = await settingStore.saveSettings(currentAccountId.value, fullSettings)
+    const res = await settingStore.saveSettings(accountId, fullSettings)
+    if (!isCurrentSave() || res.stale)
+      return
     if (res.ok) {
+      syncLoadedSettings(submitted)
       showAlert('自动控制设置已保存', 'primary')
 
       // 如果启用了自动购买化肥，立即检测并购买
@@ -1232,8 +1471,10 @@ async function saveAutomationSettings() {
             normalCount: localAutomationSettings.value.fertilizerBuyNormalCount,
             normalThresholdHours: localAutomationSettings.value.fertilizerBuyNormalThresholdHours,
           }, {
-            headers: { 'x-account-id': currentAccountId.value },
+            headers: { 'x-account-id': accountId },
           })
+          if (!isCurrentSave())
+            return
           if (buyRes.data?.ok) {
             const totalBought = (buyRes.data.organicBought || 0) + (buyRes.data.normalBought || 0)
             if (totalBought > 0) {
@@ -1247,11 +1488,14 @@ async function saveAutomationSettings() {
       }
     }
     else {
+      if (res.refreshed)
+        syncLoadedSettings(submitted)
       showAlert(`保存失败: ${res.error}`, 'danger')
     }
   }
   finally {
-    automationSaving.value = false
+    if (requestId === automationSaveRequest)
+      automationSaving.value = false
   }
 }
 
@@ -1259,6 +1503,8 @@ async function saveAutomationSettings() {
 const passwordSaving = ref(false)
 const offlineSaving = ref(false)
 const offlineTesting = ref(false)
+let offlineSaveRequest = 0
+let offlineTestRequest = 0
 
 const passwordForm = ref({
   old: '',
@@ -1344,10 +1590,6 @@ function syncLocalOfflineSettings() {
   }
 }
 
-watch(settings, () => {
-  syncLocalOfflineSettings()
-}, { deep: true })
-
 async function handleChangePassword() {
   if (!passwordForm.value.old || !passwordForm.value.new) {
     showAlert('请填写完整', 'danger')
@@ -1384,10 +1626,26 @@ async function handleChangePassword() {
 }
 
 async function handleSaveOffline() {
+  const accountId = String(currentAccountId.value || '')
+  if (!accountId || settingsLoading.value || settingsLoadError.value
+    || String(settingStore.settingsAccountId) !== accountId) {
+    showAlert(settingsLoadError.value || '设置尚未加载完成，请稍后重试', 'danger')
+    return
+  }
+  const saveEpoch = accountSaveEpoch
+  const requestId = ++offlineSaveRequest
+  const snapshot = cloneJsonValue(localOffline.value)
+  const isCurrentRequest = () => requestId === offlineSaveRequest
+    && saveEpoch === accountSaveEpoch
+    && String(currentAccountId.value || '') === accountId
+    && String(settingStore.settingsAccountId) === accountId
+    && !settingsLoadError.value
   offlineSaving.value = true
   try {
-    const res = await settingStore.saveOfflineConfig(localOffline.value)
+    const res = await settingStore.saveOfflineConfig(snapshot, accountId)
 
+    if (res.stale || !isCurrentRequest())
+      return
     if (res.ok) {
       showAlert('下线提醒设置已保存', 'primary')
     }
@@ -1396,14 +1654,33 @@ async function handleSaveOffline() {
     }
   }
   finally {
-    offlineSaving.value = false
+    if (isCurrentRequest())
+      offlineSaving.value = false
   }
 }
 
 async function handleTestOffline() {
+  const accountId = String(currentAccountId.value || '')
+  if (!accountId || settingsLoading.value || settingsLoadError.value
+    || String(settingStore.settingsAccountId) !== accountId) {
+    showAlert(settingsLoadError.value || '设置尚未加载完成，请稍后重试', 'danger')
+    return
+  }
+  const saveEpoch = accountSaveEpoch
+  const requestId = ++offlineTestRequest
+  const snapshot = cloneJsonValue(localOffline.value)
+  const isCurrentAccount = () => saveEpoch === accountSaveEpoch
+    && requestId === offlineTestRequest
+    && String(currentAccountId.value || '') === accountId
+    && String(settingStore.settingsAccountId) === accountId
+    && !settingsLoadError.value
   offlineTesting.value = true
   try {
-    const { data } = await api.post('/api/settings/offline-reminder/test', localOffline.value)
+    const { data } = await api.post('/api/settings/offline-reminder/test', snapshot, {
+      headers: { 'x-account-id': accountId },
+    })
+    if (!isCurrentAccount())
+      return
     if (data?.ok) {
       showAlert('测试消息发送成功', 'primary')
     }
@@ -1412,11 +1689,14 @@ async function handleTestOffline() {
     }
   }
   catch (e: any) {
+    if (!isCurrentAccount())
+      return
     const msg = e?.response?.data?.error || e?.message || '请求失败'
     showAlert(`测试失败: ${msg}`, 'danger')
   }
   finally {
-    offlineTesting.value = false
+    if (isCurrentAccount())
+      offlineTesting.value = false
   }
 }
 // ===== 配置备份 / 恢复（迁移服务器用） =====
@@ -1520,11 +1800,11 @@ async function onBackupFileChange(ev: Event) {
     </div>
 
     <div class="overflow-hidden border border-gray-200 rounded-lg bg-white dark:border-gray-700 dark:bg-gray-800">
-      <nav class="scrollbar-none flex flex-nowrap snap-x snap-mandatory gap-1 overflow-x-auto p-2 sm:flex-wrap sm:overflow-visible">
+      <nav class="grid grid-cols-2 gap-1 p-2 sm:flex sm:flex-wrap">
         <button
           v-for="tab in tabs"
           :key="tab.key"
-          class="flex shrink-0 snap-start items-center gap-2 rounded-md px-3 py-2 text-sm font-medium transition-all sm:px-4"
+          class="flex min-w-0 items-center justify-center gap-2 rounded-md px-3 py-2 text-sm font-medium transition-all sm:justify-start sm:px-4"
           :class="activeTab === tab.key
             ? 'text-white shadow-sm'
             : 'text-gray-600 hover:bg-gray-100 dark:text-gray-400 dark:hover:bg-gray-700'"
@@ -1663,7 +1943,7 @@ async function onBackupFileChange(ev: Event) {
                   @update:model-value="value => toggleKickoutCodeRefresh(acc, !!value)"
                 />
               </div>
-              <div v-if="kickoutRefreshSavingId === String(acc.id)" class="mt-1 text-[11px] text-blue-500">
+              <div v-if="kickoutRefreshSavingIds.includes(String(acc.id))" class="mt-1 text-[11px] text-blue-500">
                 保存中...
               </div>
             </div>
@@ -1790,6 +2070,25 @@ async function onBackupFileChange(ev: Event) {
         <div v-else-if="!currentAccountId" class="py-8 text-center text-gray-500">
           <div class="i-carbon-settings-adjust mx-auto mb-2 text-3xl text-gray-400" />
           <p>请先选择账号</p>
+        </div>
+
+        <div v-else-if="settingsLoadError" class="border border-red-200 rounded-lg bg-red-50 p-4 text-red-700 dark:border-red-900/50 dark:bg-red-900/20 dark:text-red-300">
+          <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <div class="min-w-0">
+              <div class="text-sm font-semibold">
+                策略设置加载失败
+              </div>
+              <div class="mt-1 break-words text-xs">
+                {{ settingsLoadError }}
+              </div>
+              <div class="mt-1 text-xs opacity-80">
+                为避免覆盖服务端数据，加载成功前表单不可编辑或保存。
+              </div>
+            </div>
+            <BaseButton variant="secondary" size="sm" :loading="settingsLoading" @click="retrySettingsLoad">
+              重试加载
+            </BaseButton>
+          </div>
         </div>
 
         <div v-else class="space-y-4">
@@ -2042,6 +2341,25 @@ async function onBackupFileChange(ev: Event) {
           <p>请先选择账号</p>
         </div>
 
+        <div v-else-if="settingsLoadError" class="border border-red-200 rounded-lg bg-red-50 p-4 text-red-700 dark:border-red-900/50 dark:bg-red-900/20 dark:text-red-300">
+          <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <div class="min-w-0">
+              <div class="text-sm font-semibold">
+                自动控制设置加载失败
+              </div>
+              <div class="mt-1 break-words text-xs">
+                {{ settingsLoadError }}
+              </div>
+              <div class="mt-1 text-xs opacity-80">
+                为避免覆盖服务端数据，加载成功前表单不可编辑或保存。
+              </div>
+            </div>
+            <BaseButton variant="secondary" size="sm" :loading="settingsLoading" @click="retrySettingsLoad">
+              重试加载
+            </BaseButton>
+          </div>
+        </div>
+
         <div v-else class="space-y-4">
           <div class="grid grid-cols-1 gap-3 xl:grid-cols-3">
             <section class="border border-gray-200 rounded-lg bg-white p-4 dark:border-gray-700 dark:bg-gray-800">
@@ -2077,7 +2395,11 @@ async function onBackupFileChange(ev: Event) {
                 <BaseSwitch v-model="localAutomationSettings.automation.charity_task" :label="autoLabel('charity_task', '公益小红花')" :disabled="isAutomationGated('charity_task')" />
                 <BaseSwitch v-model="localAutomationSettings.automation.mengchong_task" :label="autoLabel('mengchong_task', '萌宠游记任务')" :disabled="isAutomationGated('mengchong_task')" />
                 <BaseSwitch v-model="localAutomationSettings.automation.mengchong_hunt" :label="autoLabel('mengchong_hunt', '萌宠游记寻宝')" :disabled="isAutomationGated('mengchong_hunt')" />
-                <BaseSwitch v-model="localAutomationSettings.milkTeaEnabled" label="奶茶热销中" />
+                <BaseSwitch
+                  v-model="localAutomationSettings.milkTeaEnabled"
+                  :label="isMilkTeaActivityGated ? '奶茶热销中（活动已在后台关闭）' : '奶茶热销中'"
+                  :disabled="isMilkTeaActivityGated"
+                />
               </div>
             </section>
 
@@ -2240,6 +2562,12 @@ async function onBackupFileChange(ev: Event) {
                 <BaseSwitch v-model="localAutomationSettings.milkTeaAutoWage" label="自动领兼职工资（被雇佣后）" />
                 <BaseSwitch v-model="localAutomationSettings.milkTeaAutoBuySeed" label="每日自动购买森野黄金芽种子（1份/天）" />
                 <BaseSwitch v-model="localAutomationSettings.milkTeaAutoUpgrade" label="自动升级店铺（营业额达标即升）" />
+                <BaseSelect
+                  v-model="localAutomationSettings.milkTeaHireDuration"
+                  label="雇佣班次"
+                  :options="milkTeaHireDurationOptions"
+                  class="w-full sm:w-52"
+                />
               </div>
               <template #note>
                 手动操作（领收益 / 制作奶茶 / 领工资 / 互动一次）和参数（店名、互动事项）都在左侧栏「奶茶热销中」页面。
@@ -2273,7 +2601,6 @@ async function onBackupFileChange(ev: Event) {
               </template>
             </AutoTaskCard>
           </div>
-        </div>
 
         <!-- 防封号(低调)模式 -->
         <div class="border border-amber-200 rounded bg-amber-50 p-3 space-y-3 dark:border-amber-900/40 dark:bg-amber-900/10">
@@ -2329,13 +2656,13 @@ async function onBackupFileChange(ev: Event) {
 
             <!-- 实时状态 -->
             <div class="rounded bg-white p-2 text-xs dark:bg-gray-800">
-              <div class="mb-1 flex items-center justify-between">
-                <span class="text-gray-500 dark:text-gray-400">当前账号状态</span>
-                <span v-if="stealthSaveState === 'saving'" class="text-blue-500">正在保存…</span>
-                <span v-else-if="stealthSaveState === 'error'" class="text-red-500">保存失败：{{ stealthSaveError }}</span>
-                <span v-else-if="stealthDirty" class="text-amber-600 dark:text-amber-400">有未保存的修改…</span>
-                <span v-else-if="stealthSaveState === 'saved'" class="text-gray-400">已自动保存 {{ stealthSavedAt }}</span>
-                <span v-else class="text-gray-400">修改后自动保存</span>
+              <div class="mb-1 flex flex-wrap items-center justify-between gap-x-2 gap-y-1">
+                <span class="shrink-0 text-gray-500 dark:text-gray-400">当前账号状态</span>
+                <span v-if="stealthSaveState === 'saving'" class="min-w-0 text-blue-500">正在保存…</span>
+                <span v-else-if="stealthSaveState === 'error'" class="min-w-0 break-words text-red-500">保存失败：{{ stealthSaveError }}</span>
+                <span v-else-if="stealthDirty" class="min-w-0 text-amber-600 dark:text-amber-400">有未保存的修改…</span>
+                <span v-else-if="stealthSaveState === 'saved'" class="min-w-0 text-gray-400">已自动保存 {{ stealthSavedAt }}</span>
+                <span v-else class="min-w-0 text-gray-400">修改后自动保存</span>
               </div>
               <div v-if="stealthStatusError" class="mb-2 rounded bg-red-50 px-2 py-1 text-red-600 dark:bg-red-900/30 dark:text-red-300">
                 {{ stealthStatusError }}
@@ -2514,6 +2841,7 @@ async function onBackupFileChange(ev: Event) {
             保存自动控制
           </BaseButton>
         </div>
+        </div>
       </div>
 
       <!-- 用户与通知 -->
@@ -2522,48 +2850,72 @@ async function onBackupFileChange(ev: Event) {
           用户与通知
         </h3>
 
-        <div class="space-y-4">
-          <div class="border border-gray-200 rounded-lg bg-white p-4 dark:border-gray-700 dark:bg-gray-800">
-            <h4 class="mb-3 flex items-center gap-2 text-base text-gray-900 font-bold dark:text-gray-100">
-              <div class="i-carbon-password" />
-              修改用户密码
-            </h4>
+        <div class="border border-gray-200 rounded-lg bg-white p-4 dark:border-gray-700 dark:bg-gray-800">
+          <h4 class="mb-3 flex items-center gap-2 text-base text-gray-900 font-bold dark:text-gray-100">
+            <div class="i-carbon-password" />
+            修改用户密码
+          </h4>
 
-            <div class="space-y-3">
-              <div class="grid grid-cols-1 gap-3 md:grid-cols-3">
-                <BaseInput
-                  v-model="passwordForm.old"
-                  label="当前密码"
-                  type="password"
-                  placeholder="当前用户密码"
-                />
-                <BaseInput
-                  v-model="passwordForm.new"
-                  label="新密码"
-                  type="password"
-                  placeholder="至少 4 位"
-                />
-                <BaseInput
-                  v-model="passwordForm.confirm"
-                  label="确认新密码"
-                  type="password"
-                  placeholder="再次输入新密码"
-                />
-              </div>
+          <div class="space-y-3">
+            <div class="grid grid-cols-1 gap-3 md:grid-cols-3">
+              <BaseInput
+                v-model="passwordForm.old"
+                label="当前密码"
+                type="password"
+                placeholder="当前用户密码"
+              />
+              <BaseInput
+                v-model="passwordForm.new"
+                label="新密码"
+                type="password"
+                placeholder="至少 4 位"
+              />
+              <BaseInput
+                v-model="passwordForm.confirm"
+                label="确认新密码"
+                type="password"
+                placeholder="再次输入新密码"
+              />
+            </div>
 
-              <div class="flex items-center justify-end pt-1">
-                <BaseButton
-                  variant="primary"
-                  size="sm"
-                  :loading="passwordSaving"
-                  @click="handleChangePassword"
-                >
-                  修改用户密码
-                </BaseButton>
-              </div>
+            <div class="flex items-center justify-end pt-1">
+              <BaseButton
+                variant="primary"
+                size="sm"
+                :loading="passwordSaving"
+                @click="handleChangePassword"
+              >
+                修改用户密码
+              </BaseButton>
             </div>
           </div>
+        </div>
 
+        <div v-if="settingsLoadError" class="border border-red-200 rounded-lg bg-red-50 p-4 text-red-700 dark:border-red-900/50 dark:bg-red-900/20 dark:text-red-300">
+          <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <div class="min-w-0">
+              <div class="text-sm font-semibold">
+                用户与通知设置加载失败
+              </div>
+              <div class="mt-1 break-words text-xs">
+                {{ settingsLoadError }}
+              </div>
+              <div class="mt-1 text-xs opacity-80">
+                为避免覆盖服务端数据，加载成功前不可保存或测试通知。
+              </div>
+            </div>
+            <BaseButton variant="secondary" size="sm" :loading="settingsLoading" @click="retrySettingsLoad">
+              重试加载
+            </BaseButton>
+          </div>
+        </div>
+
+        <div v-else-if="!currentAccountId" class="py-8 text-center text-gray-500">
+          <div class="i-carbon-settings-adjust mx-auto mb-2 text-3xl text-gray-400" />
+          <p>请先选择账号</p>
+        </div>
+
+        <div v-else class="space-y-4">
           <div class="border border-gray-200 rounded-lg bg-white p-4 dark:border-gray-700 dark:bg-gray-800">
             <h4 class="mb-3 flex items-center gap-2 text-base text-gray-900 font-bold dark:text-gray-100">
               <div class="i-carbon-notification" />
