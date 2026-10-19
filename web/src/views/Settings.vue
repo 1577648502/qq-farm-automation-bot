@@ -11,6 +11,7 @@ import BaseButton from '@/components/ui/BaseButton.vue'
 import BaseInput from '@/components/ui/BaseInput.vue'
 import BaseSelect from '@/components/ui/BaseSelect.vue'
 import BaseSwitch from '@/components/ui/BaseSwitch.vue'
+import { MILK_TEA_HIRE_DURATION_OPTIONS, normalizeMilkTeaHireDuration } from '@/config/milkTea'
 import { getPlatformClass, getPlatformLabel, useAccountStore } from '@/stores/account'
 import { useFarmStore } from '@/stores/farm'
 import { useSettingStore } from '@/stores/setting'
@@ -776,10 +777,6 @@ const fertilizerOptions = [
   { label: '不施肥', value: 'none' },
 ]
 
-const milkTeaHireDurationOptions = [
-  { label: '4 小时（已确认）', value: 1 },
-]
-
 // 活动菜单在后台被关闭时, 对应自动化开关必须一并关闭
 const activityStatus = ref<Record<string, boolean>>({})
 const ACTIVITY_GATED_AUTOMATION: Record<string, string> = {
@@ -1145,7 +1142,7 @@ function syncLocalAutomationSettings(submitted?: any) {
     localAutomationSettings.value.milkTeaCraft = settings.value.milkTeaCraft ?? true
     localAutomationSettings.value.milkTeaSpeaker = settings.value.milkTeaSpeaker ?? false
     localAutomationSettings.value.milkTeaStoreName = settings.value.milkTeaStoreName ?? '奶茶小铺'
-    localAutomationSettings.value.milkTeaHireDuration = settings.value.milkTeaHireDuration ?? 1
+    localAutomationSettings.value.milkTeaHireDuration = normalizeMilkTeaHireDuration(settings.value.milkTeaHireDuration)
     localAutomationSettings.value.milkTeaAutoInteract = settings.value.milkTeaAutoInteract ?? false
     localAutomationSettings.value.milkTeaAutoWage = settings.value.milkTeaAutoWage !== false
     localAutomationSettings.value.milkTeaAutoBuySeed = !!settings.value.milkTeaAutoBuySeed
@@ -2565,7 +2562,7 @@ async function onBackupFileChange(ev: Event) {
                 <BaseSelect
                   v-model="localAutomationSettings.milkTeaHireDuration"
                   label="雇佣班次"
-                  :options="milkTeaHireDurationOptions"
+                  :options="MILK_TEA_HIRE_DURATION_OPTIONS"
                   class="w-full sm:w-52"
                 />
               </div>

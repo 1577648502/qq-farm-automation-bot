@@ -32,6 +32,7 @@ network.sendMsgAsync = (...args) => sendImpl(...args);
 const mg = require(`${SB}/src/services/mengchong`);
 const milkTea = require(`${SB}/src/services/milk-tea`);
 const warehouse = require(`${SB}/src/services/warehouse`);
+const store = require(`${SB}/src/models/store`);
 const { toInt } = require(`${SB}/src/utils/utils`);
 const activityLogs = [];
 require(`${SB}/src/utils/utils`).setLogHook((tag, msg, isWarn, meta) => {
@@ -1655,7 +1656,7 @@ sendImpl = async (service, method, body) => {
             && !Object.prototype.hasOwnProperty.call(status, 'cups'), status);
     }
 
-    section('16. 雇佣好友 cmd57/#162 目标员工位与非法档位回落');
+    section('16. 雇佣好友 cmd57/#162 目标员工位与完整班次档位');
     {
         const gid = 1253397809;
         router = async (req) => {
@@ -1690,6 +1691,17 @@ sendImpl = async (service, method, body) => {
             && toInt((inner.find((x) => x.f === 2) || {}).v) === 1
             && toInt((inner.find((x) => x.f === 3) || {}).v) === gid, inner);
 
+        for (const duration of [2, 3]) {
+            sent.length = 0;
+            const result = await milkTea.hireFriend(gid, duration, { skipCapacityCheck: true, slot: 1 });
+            const durationReq = sent.find((x) => x.cmd === 57);
+            const durationInner = hireRequestInner(durationReq);
+            check(`hireDuration=${duration} 精确写入 cmd57/#162.#1.#2`,
+                result.ok === true
+                && toInt((durationInner.find((x) => x.f === 2) || {}).v) === duration,
+                durationInner);
+        }
+
         sent.length = 0;
         const invalid = await milkTea.hireFriend(gid, 99, { skipCapacityCheck: true, slot: 1 });
         const invalidReq = sent.find((x) => x.cmd === 57);
@@ -1699,6 +1711,27 @@ sendImpl = async (service, method, body) => {
         check('非法 hireDuration 回落到 #2=1',
             invalid.ok === true
             && toInt((invalidInner.find((x) => x.f === 2) || {}).v) === 1, invalidInner);
+
+        check('招聘班次完整覆盖 4/12/24 小时',
+            milkTea.HIRE_DURATIONS.map((x) => [x.id, x.seconds]).join(',')
+            === '1,14400,2,43200,3,86400', milkTea.HIRE_DURATIONS);
+
+        const savedDurations = [];
+        for (const duration of [1, 2, 3]) {
+            store.applyConfigSnapshot(
+                { milkTeaHireDuration: duration },
+                { persist: false, accountId: process.env.FARM_ACCOUNT_ID },
+            );
+            savedDurations.push(store.getMilkTeaConfig(process.env.FARM_ACCOUNT_ID).hireDuration);
+        }
+        store.applyConfigSnapshot(
+            { milkTeaHireDuration: 99 },
+            { persist: false, accountId: process.env.FARM_ACCOUNT_ID },
+        );
+        const invalidSavedDuration = store.getMilkTeaConfig(process.env.FARM_ACCOUNT_ID).hireDuration;
+        check('班次配置保存后 1/2/3 不被重置，非法值回落 1',
+            savedDurations.join(',') === '1,2,3' && invalidSavedDuration === 1,
+            { savedDurations, invalidSavedDuration });
 
         const nowSec = Math.floor(Date.now() / 1000);
         const latestCaptureGid = 1226530474;

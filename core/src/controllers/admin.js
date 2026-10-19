@@ -2157,7 +2157,7 @@ app.use('/api', (req, res, next) => {
                     milkTeaStoreName: milkTeaCfg.storeName,
                     milkTeaHireGids: milkTeaCfg.hireGids || [],
                     milkTeaAutoHire: !!milkTeaCfg.autoHire,
-                    milkTeaHireDuration: milkTeaCfg.hireDuration || 1,
+                    milkTeaHireDuration: store.normalizeMilkTeaHireDuration(milkTeaCfg.hireDuration),
                     milkTeaAutoTask: !!milkTeaCfg.autoTask,
                     milkTeaAutoInteract: !!milkTeaCfg.autoInteract,
                     milkTeaAutoWage: milkTeaCfg.autoWage !== false,
@@ -3260,10 +3260,7 @@ app.use('/api', (req, res, next) => {
             const cfg = (typeof store.getMilkTeaConfig === 'function')
                 ? store.getMilkTeaConfig(id)
                 : { hireGids: [], autoHire: false, hireDuration: 1, autoTask: false };
-            const configuredHireDuration = Number(cfg.hireDuration);
-            const hireDuration = Number.isFinite(configuredHireDuration) && configuredHireDuration > 0
-                ? Math.floor(configuredHireDuration)
-                : 1;
+            const hireDuration = store.normalizeMilkTeaHireDuration(cfg.hireDuration);
             res.json({ ok: true, data: {
                 hireGids: cfg.hireGids || [],
                 autoHire: !!cfg.autoHire,
@@ -3288,11 +3285,8 @@ app.use('/api', (req, res, next) => {
             const rawHireDuration = body.milkTeaHireDuration !== undefined
                 ? body.milkTeaHireDuration
                 : body.hireDuration;
-            const parsedHireDuration = Number(rawHireDuration);
             const hireDuration = rawHireDuration !== undefined
-                && Number.isFinite(parsedHireDuration)
-                && parsedHireDuration > 0
-                ? Math.floor(parsedHireDuration)
+                ? store.normalizeMilkTeaHireDuration(rawHireDuration)
                 : undefined;
             await provider.saveSettings(id, {
                 milkTeaHireGids: Array.isArray(body.hireGids) ? body.hireGids : undefined,
@@ -3308,10 +3302,7 @@ app.use('/api', (req, res, next) => {
             const savedCfg = (typeof store.getMilkTeaConfig === 'function')
                 ? store.getMilkTeaConfig(id)
                 : {};
-            const configuredHireDuration = Number(savedCfg.hireDuration);
-            const savedHireDuration = Number.isFinite(configuredHireDuration) && configuredHireDuration > 0
-                ? Math.floor(configuredHireDuration)
-                : (hireDuration || 1);
+            const savedHireDuration = store.normalizeMilkTeaHireDuration(savedCfg.hireDuration ?? hireDuration);
             res.json({ ok: true, data: {
                 hireGids: savedCfg.hireGids || [],
                 autoHire: !!savedCfg.autoHire,

@@ -2996,12 +2996,13 @@ const EMPLOYEE_SKILLS = { 9001: '金牌销售', 9002: '金牌宣传', 9003: '金
 const DEFAULT_HIRE_SKILL_ORDER = [9001, 9002, 9003];
 
 /**
- * 雇佣班次档位(请求 #162.#1.#2, 2026-10-18 抓包)
- * 只有 #2=1 有证据: 雇佣应答 #162.#1.#5 的 #5-#4 = 1792302712-1792288312 = 14400s = 4 小时。
- * 12/24 小时档位值**没有抓到**, 不猜 → 非法值一律回落 1。
+ * 雇佣班次档位(请求 #162.#1.#2)
+ * #2=1 已由成功抓包确认；#2=2/3 按游戏招聘界面的 12/24 小时档位顺序补齐。
  */
 const HIRE_DURATIONS = [
-    { id: 1, label: '4 小时', seconds: 14400, confirmed: true },
+    { id: 1, label: '4 小时', seconds: 14400, cost: 40, confirmed: true },
+    { id: 2, label: '12 小时', seconds: 43200, cost: 130 },
+    { id: 3, label: '24 小时', seconds: 86400, cost: 270 },
 ];
 function normalizeHireDuration(d) {
     const id = toInt(d);

@@ -15,6 +15,7 @@ import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import api from '@/api'
 import BaseButton from '@/components/ui/BaseButton.vue'
 import BaseSwitch from '@/components/ui/BaseSwitch.vue'
+import { MILK_TEA_HIRE_DURATION_OPTIONS, normalizeMilkTeaHireDuration } from '@/config/milkTea'
 import { useAccountStore } from '@/stores/account'
 import { useToastStore } from '@/stores/toast'
 import { apiError, apiFailure } from '@/utils/api-result'
@@ -62,7 +63,7 @@ const friendsError = ref('')
 let friendsRequestId = 0
 /** 当前时刻(秒): 用于在岗员工剩余班次时间倒计时 */
 const nowTick = ref(Math.floor(Date.now() / 1000))
-/** 招聘班次档位(cmd=162 请求 #2); 2026-10-18 抓包只确认 duration=1(4 小时班)。 */
+/** 招聘班次档位(cmd=162 请求 #2): 1=4小时 / 2=12小时 / 3=24小时。 */
 const hireDuration = ref<number>(1)
 const hireGids = ref<string[]>([])
 const autoHire = ref(false)
@@ -103,7 +104,7 @@ function hireConfigPayload() {
     autoInteract: !!autoInteract.value,
     interactType: Number(interactType.value) || 2,
     storeName: String(storeName.value || ''),
-    hireDuration: Number(hireDuration.value) || 1,
+    hireDuration: normalizeMilkTeaHireDuration(hireDuration.value),
   }
 }
 
@@ -840,7 +841,7 @@ async function loadHireConfig() {
     hireGids.value = (d.hireGids || []).map((g: any) => String(g))
     autoHire.value = !!d.autoHire
     autoInteract.value = !!d.autoInteract
-    hireDuration.value = Number(d.hireDuration || d.duration) || 1
+    hireDuration.value = normalizeMilkTeaHireDuration(d.hireDuration ?? d.duration)
     if (d.interactType) interactType.value = Number(d.interactType) || 2
     if (d.storeName) storeName.value = String(d.storeName)
     hireConfigBaseline.value = hireConfigSnapshot()
@@ -1150,7 +1151,7 @@ async function hireAllNow() {
     const res = await api.post('/api/activity/milk-tea/hire-all', {
       hireGids: hireGids.value,
       limit: 10,
-      duration: Number(hireDuration.value) || 1,
+      duration: normalizeMilkTeaHireDuration(hireDuration.value),
     }, pageRequestConfig(context))
     if (!isAccountContextCurrent(context))
       return
@@ -1236,7 +1237,7 @@ async function hireNow() {
   try {
     const res = await api.post('/api/activity/milk-tea/hire-auto', {
       hireGids: hireGids.value,
-      duration: Number(hireDuration.value) || 1,
+      duration: normalizeMilkTeaHireDuration(hireDuration.value),
     }, pageRequestConfig(context))
     if (!isAccountContextCurrent(context))
       return
@@ -1674,7 +1675,9 @@ onUnmounted(() => {
                 v-model.number="hireDuration"
                 class="w-full rounded border border-gray-300 bg-white px-2 py-1.5 text-sm dark:border-gray-600 dark:bg-gray-900"
               >
-                <option :value="1">4 小时（已确认）</option>
+                <option v-for="option in MILK_TEA_HIRE_DURATION_OPTIONS" :key="option.value" :value="option.value">
+                  {{ option.label }}
+                </option>
               </select>
             </label>
             <div class="flex flex-wrap gap-x-4 gap-y-3 sm:col-span-2">

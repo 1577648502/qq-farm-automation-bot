@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import api from '@/api'
+import { normalizeMilkTeaHireDuration } from '@/config/milkTea'
 
 export interface AutomationConfig {
   farm?: boolean
@@ -313,7 +314,7 @@ export const useSettingStore = defineStore('setting', () => {
       settings.value.milkTeaCraft = d.milkTeaCraft ?? true
       settings.value.milkTeaSpeaker = d.milkTeaSpeaker ?? false
       settings.value.milkTeaStoreName = d.milkTeaStoreName ?? '奶茶小铺'
-      settings.value.milkTeaHireDuration = d.milkTeaHireDuration ?? 1
+      settings.value.milkTeaHireDuration = normalizeMilkTeaHireDuration(d.milkTeaHireDuration)
       settings.value.milkTeaAutoInteract = d.milkTeaAutoInteract ?? false
       settings.value.milkTeaAutoWage = d.milkTeaAutoWage !== false
       settings.value.milkTeaAutoBuySeed = !!d.milkTeaAutoBuySeed
