@@ -83,10 +83,6 @@ const CMD_REFRESH = 63;     // 刷新/查询兼职状态(只用于 #168)
 const CMD_RANKING = 66;     // 好友店铺排行(店名+热度)
 const CMD_WORK_INTERACT = 65;// **互动(我的工作)**: 请求 #170 = {#1: 好友gid, #2: 互动类型}
 const CMD_CLAIM_WAGE = 64;   // **领工资**: 请求 #169 空 → 响应 {#1: {#1: 1041, #2: 120}}(奶茶券×120)
-// 该错误码只说明当前候选好友未通过请求，业务含义尚未从失败抓包闭环。
-// 每个待补员工位只额外尝试 1 位候选，避免重新退化成一次扫完白名单。
-const HIRE_CANDIDATE_RETRY_CODE = 1034130;
-const HIRE_EXTRA_CANDIDATE_ATTEMPTS = 1;
 /**
  * 互动(工作事项)5 选 1 —— 名称/效果取自游戏「工作事项」界面(2026-10-16 截图)
  * ⚠ 实测 type=5 会造成工资 -20(带"工资减半"风险的那档), 所以默认改成 2
@@ -398,10 +394,87 @@ async function openStore(storeName) {
     return { ok: true, storeName: name, state: parseMainState(r.activity) };
 }
 
+function parseEmployeePanel(resultHex) {
+    const friends = [];
+    const staff = [];
+    if (!resultHex) return { ok: true, selector: 0, field2: 0, field3: 0, friends, staff };
+    const rf = parseTop(Buffer.from(resultHex, 'hex'));
+    for (const x of rf) {
+        if (x.w !== 2) continue;
+        const e = parseTop(x.v);
+        const info = findField(e, 1);
+        const fi = info && info.w === 2 ? parseTop(info.v) : [];
+        if (x.f === 4) {
+            const gid = toInt((findField(fi, 1) || {}).v);
+            const nm = (findField(fi, 2) || {}).v;
+            // 昵称可能包含 emoji 等多字节字符，必须显式按 UTF-8 解码。
+            const titleId = toInt((findField(e, 3) || {}).v);
+            const title = (findField(e, 4) || {}).v;
+            friends.push({
+                gid,
+                name: nm ? Buffer.from(nm).toString('utf8') : `GID:${gid}`,
+                level: toInt((findField(fi, 4) || {}).v),
+                titleId,
+                titleName: title ? Buffer.from(title).toString('utf8') : (EMPLOYEE_SKILLS[titleId] || ''),
+                state: toInt((findField(e, 5) || {}).v),
+                offAt: toInt((findField(e, 6) || {}).v),
+            });
+        } else if (x.f === 5) {
+            const npcTitle = (findField(e, 4) || {}).v;
+            const npcName = (findField(fi, 2) || {}).v;
+            staff.push({
+                gid: toInt((findField(fi, 1) || {}).v),
+                id: toInt((findField(fi, 1) || {}).v),
+                name: npcName ? Buffer.from(npcName).toString('utf8') : '',
+                state: toInt((findField(e, 2) || {}).v),
+                titleId: toInt((findField(e, 3) || {}).v),
+                titleName: npcTitle ? Buffer.from(npcTitle).toString('utf8') : '',
+            });
+        }
+    }
+    return {
+        ok: true,
+        selector: toInt((findField(rf, 1) || {}).v),
+        field2: toInt((findField(rf, 2) || {}).v),
+        field3: toInt((findField(rf, 3) || {}).v),
+        friends,
+        staff,
+    };
+}
+
+async function fetchHireCandidates() {
+    const panel = await mainOperate(CMD_EMPLOYEES, 161, encodeVarintField(1, 1));
+    if (!panel.ok) {
+        return {
+            ok: false,
+            reason: `员工面板刷新失败 ${panel.reason || `code=${panel.errorCode}`}`,
+            errorCode: panel.errorCode,
+            rawReason: panel.rawReason || panel.reason || '',
+        };
+    }
+    try {
+        return parseEmployeePanel(panel.resultHex);
+    } catch (e) {
+        return { ok: false, reason: `解析员工面板失败: ${e.message}` };
+    }
+}
+
+function findHireCandidate(candidates, gid) {
+    const expected = toInt(gid);
+    if (!expected) return null;
+    return (candidates && (
+        (candidates.friends || []).find((x) => toInt(x.gid) === expected)
+        || (candidates.staff || []).find((x) => toInt(x.gid) === expected)
+    )) || null;
+}
+
+function hireTargetName(candidate) {
+    return (candidate && (candidate.name || `GID:${candidate.gid}`)) || '';
+}
+
 /**
- * 雇佣好友: #162.#1 = {#1: 目标员工位, #2: 班次档位, #3: 好友gid}。
- * 最新成功抓包中 1 号位已有员工, cmd57 发送 #1=0; 旧成功抓包中 0 号位已有员工, 发送 #1=1。
- * 成功抓包在 cmd57 前固定带有 cmd56/#161 员工面板刷新，自动和手动雇佣都走同一序列。
+ * 雇佣: #162.#1 = {#1: 目标员工位, #2: 班次档位, #3: 员工 gid}。
+ * 成功抓包固定是 cmd56 刷新候选后单人提交 cmd57；目标必须存在于当前 cmd56 响应。
  */
 async function hireFriend(friendGid, duration = 1, opts = {}) {
     const gid = toNum(friendGid);
@@ -439,13 +512,17 @@ async function hireFriend(friendGid, duration = 1, opts = {}) {
     if (targetSlot < 0) {
         return { ok: false, skipped: true, reason: '无法确定目标员工位' };
     }
-    const panel = await mainOperate(CMD_EMPLOYEES, 161, encodeVarintField(1, 1));
-    if (!panel.ok) {
+    let candidate = opts.candidate || null;
+    if (!candidate) {
+        const candidates = await fetchHireCandidates();
+        if (!candidates.ok) return candidates;
+        candidate = findHireCandidate(candidates, gid);
+    }
+    if (!candidate) {
         return {
             ok: false,
-            reason: `员工面板刷新失败 ${panel.reason || `code=${panel.errorCode}`}`,
-            errorCode: panel.errorCode,
-            rawReason: panel.rawReason || panel.reason || '',
+            skipped: true,
+            reason: `员工 ${gid} 不在当前可雇佣候选中，已跳过 cmd57`,
         };
     }
     const inner = Buffer.concat([
@@ -463,7 +540,7 @@ async function hireFriend(friendGid, duration = 1, opts = {}) {
             rawReason: r.rawReason || r.reason || `code=${r.errorCode}`,
         };
     }
-    log('活动', `奶茶热销中: 已雇佣好友 ${gid}（员工位 ${targetSlot + 1}）`, {
+    log('活动', `奶茶热销中: 已雇佣 ${hireTargetName(candidate)}（员工位 ${targetSlot + 1}）`, {
         module: 'activity', event: '奶茶热销中', result: 'ok', friendGid: gid, employeeSlot: targetSlot,
     });
     return { ok: true, friendGid: gid, employeeSlot: targetSlot, state: parseMainState(r.activity) };
@@ -949,15 +1026,31 @@ async function autoHire(hireGids, opts = {}) {
         skillOf.set(toInt(f.gid), toInt(f.titleId));
     }
     // 按"特长加成"排序: 先生命里带的高加成特长(默认 9001 销售 > 9002 宣传 > 9003 服务), 未知放最后
+    const initialCandidates = await fetchHireCandidates();
+    if (!initialCandidates.ok) {
+        return {
+            ok: false,
+            ...initialCandidates,
+            ...publicAutoHireState(hiring),
+        };
+    }
     const order = Array.isArray(opts.hireSkillOrder) && opts.hireSkillOrder.length ? opts.hireSkillOrder : DEFAULT_HIRE_SKILL_ORDER;
-    const rank = (g) => {
-        const sid = skillOf.get(toInt(g));
+    const rank = (candidate) => {
+        const sid = toInt(candidate && candidate.titleId);
         const i = order.indexOf(sid);
         return i >= 0 ? i : order.length + 1;
     };
-    const todo = [...new Set(list)]
-        .filter((g) => !hiring.currentGids.has(g))
+    const availableFriends = initialCandidates.friends
+        .filter((f) => !hiring.currentGids.has(toInt(f.gid)));
+    const preferredFriends = list
+        .map((gid) => availableFriends.find((f) => toInt(f.gid) === gid))
+        .filter(Boolean);
+    const otherFriends = availableFriends
+        .filter((f) => !preferredFriends.some((x) => toInt(x.gid) === toInt(f.gid)))
         .sort((a, b) => rank(a) - rank(b));
+    const availableStaff = initialCandidates.staff
+        .filter((x) => !hiring.currentGids.has(toInt(x.gid)));
+    const todo = [...preferredFriends, ...otherFriends, ...availableStaff];
     if (!todo.length) {
         return {
             ok: true,
@@ -966,7 +1059,14 @@ async function autoHire(hireGids, opts = {}) {
             ...publicAutoHireState(hiring),
         };
     }
-    const result = await autoHireInner(todo, duration, hiring.available, hiring.employeeCount, hiring);
+    const result = await autoHireInner(
+        todo,
+        duration,
+        hiring.available,
+        hiring.employeeCount,
+        hiring,
+        initialCandidates,
+    );
     const { finalHiring, ...publicResult } = result;
     return { ...publicResult, ...publicAutoHireState(finalHiring || hiring, result.hired, hiring) };
 }
@@ -997,32 +1097,57 @@ async function confirmHiredEmployee(gid, previousEmployeeCount) {
     return { ok: false, reason, hiring: latest && latest.ok ? latest : null };
 }
 
-function canRetryHireCandidate(result) {
-    return !!(result && !result.ok && toInt(result.errorCode) === HIRE_CANDIDATE_RETRY_CODE);
-}
-
-/** autoHire 实际执行体 */
-async function autoHireInner(list, duration = 1, maxHires = 1, initialEmployeeCount = 0, initialHiring = null) {
+/** autoHire 实际执行体；每个空位仍单人提交，cmd57 失败后停止本轮。 */
+async function autoHireInner(
+    list,
+    duration = 1,
+    maxHires = 1,
+    initialEmployeeCount = 0,
+    initialHiring = null,
+    initialCandidates = null,
+) {
     const errors = [];
     const hired = [];
     const results = [];
     const hireLimit = Math.max(1, toInt(maxHires));
-    const candidateAttemptLimit = Math.min(
-        list.length,
-        hireLimit * (HIRE_EXTRA_CANDIDATE_ATTEMPTS + 1)
-    );
     let confirmedEmployeeCount = Math.max(0, toInt(initialEmployeeCount));
     let finalHiring = initialHiring;
     let stateSyncPending = false;
     let syncReason = '';
-    for (const gid of list.slice(0, candidateAttemptLimit)) {
+    let currentCandidates = initialCandidates;
+    let candidatesFresh = !!initialCandidates;
+    for (const candidate of list) {
         if (hired.length >= hireLimit) break;
         const availableSlots = finalHiring && Array.isArray(finalHiring.availableSlots)
             ? finalHiring.availableSlots
             : [];
         const targetSlot = availableSlots.length ? toInt(availableSlots[0]) : -1;
         if (targetSlot < 0) break;
-        const r = await hireFriend(gid, duration, { skipCapacityCheck: true, slot: targetSlot })
+        const gid = toInt(candidate && candidate.gid);
+        if (!candidatesFresh) {
+            currentCandidates = await fetchHireCandidates().catch((e) => ({ ok: false, reason: e.message }));
+            if (!currentCandidates || !currentCandidates.ok) {
+                errors.push(shortErr((currentCandidates && currentCandidates.reason) || '员工面板刷新失败'));
+                break;
+            }
+        }
+        candidatesFresh = false;
+        const requestCandidate = findHireCandidate(currentCandidates, gid);
+        if (!requestCandidate) {
+            results.push({
+                gid,
+                slot: targetSlot,
+                ok: false,
+                reason: `员工 ${gid} 不在当前可雇佣候选中，已跳过 cmd57`,
+                skipped: true,
+            });
+            continue;
+        }
+        const r = await hireFriend(gid, duration, {
+            skipCapacityCheck: true,
+            slot: targetSlot,
+            candidate: requestCandidate,
+        })
             .catch((e) => ({ ok: false, reason: e.message }));
         results.push({
             gid,
@@ -1049,10 +1174,6 @@ async function autoHireInner(list, duration = 1, maxHires = 1, initialEmployeeCo
             continue;
         }
         errors.push(shortErr((r && r.reason) || '失败'));
-        if (canRetryHireCandidate(r) && results.length < candidateAttemptLimit) {
-            await sleep(700);
-            continue;
-        }
         break;
     }
     if (hired.length) {
@@ -1796,61 +1917,11 @@ async function getSalesRecords(dayTs) {
 }
 
 async function getEmployees() {
-    const r = await mainOperate(CMD_EMPLOYEES, 161, encodeVarintField(1, 1));
-    if (!r.ok && r.errorCode !== 0) return { ok: false, reason: r.reason || `员工列表失败 code=${r.errorCode}` };
-    const friends = [];
-    const npcs = [];
-    if (r.resultHex) {
-        try {
-            const rf = parseTop(Buffer.from(r.resultHex, 'hex'));
-            for (const x of rf) {
-                if (x.w !== 2) continue;
-                if (x.f === 4) {
-                    const e = parseTop(x.v);
-                    const info = findField(e, 1);
-                    const fi = info && info.w === 2 ? parseTop(info.v) : [];
-                    const gid = toInt((findField(fi, 1) || {}).v);
-                    const nm = (findField(fi, 2) || {}).v;
-                    // ⚠ 昵称可能是特殊字符(emoji 等), toString('utf8') 必须加 encoding 参数
-                    //    (踩过: Buffer→String 不传 encoding 会按 latin1 解, 昵称变乱码)
-                    const name = nm ? Buffer.from(nm).toString('utf8') : `GID:${gid}`;
-                    const titleId = toInt((findField(e, 3) || {}).v);
-                    const title = (findField(e, 4) || {}).v;
-                    friends.push({
-                        gid,
-                        name,
-                        level: toInt((findField(fi, 4) || {}).v),
-                        titleId,
-                        titleName: title ? Buffer.from(title).toString('utf8') : (EMPLOYEE_SKILLS[titleId] || ''),
-                        state: toInt((findField(e, 5) || {}).v),
-                        offAt: toInt((findField(e, 6) || {}).v),
-                    });
-                } else if (x.f === 5) {
-                    const e = parseTop(x.v);
-                    const info = findField(e, 1);
-                    const fi = info && info.w === 2 ? parseTop(info.v) : [];
-                    const npcTitle = (findField(e, 4) || {}).v;
-                    const npcName = (findField(fi, 2) || {}).v;
-                    npcs.push({
-                        id: toInt((findField(fi, 1) || {}).v),
-                        name: npcName ? Buffer.from(npcName).toString('utf8') : '',
-                        titleName: npcTitle ? Buffer.from(npcTitle).toString('utf8') : '',
-                    });
-                }
-            }
-            return {
-                ok: true,
-                selector: toInt((findField(rf, 1) || {}).v),
-                field2: toInt((findField(rf, 2) || {}).v),
-                field3: toInt((findField(rf, 3) || {}).v),
-                friends,
-                npcs,
-            };
-        } catch (e) {
-            return { ok: false, reason: `解析员工列表失败: ${e.message}` };
-        }
+    const candidates = await fetchHireCandidates();
+    if (!candidates.ok) {
+        return { ok: false, reason: candidates.reason, errorCode: candidates.errorCode };
     }
-    return { ok: true, selector: 0, field2: 0, field3: 0, friends, npcs };
+    return { ...candidates, npcs: candidates.staff };
 }
 
 /** 等级 3 起有两个员工位；低等级只有 1 个。 */
@@ -2179,10 +2250,31 @@ async function hireAll(hireGids, limit = 10, duration = 1) {
             ...publicHiringState(hiring),
         };
     }
+    const initialCandidates = await fetchHireCandidates();
+    if (!initialCandidates.ok) {
+        return {
+            ok: false,
+            hired: 0,
+            total: 0,
+            attempted: 0,
+            results: [],
+            ...initialCandidates,
+            ...publicHiringState(hiring),
+        };
+    }
     const desiredHires = Math.min(Math.max(1, toInt(limit) || 10), hiring.available);
-    const candidates = list
-        .filter((gid) => !hiring.currentGids.has(gid))
-        .slice(0, desiredHires * (HIRE_EXTRA_CANDIDATE_ATTEMPTS + 1));
+    const availableFriends = initialCandidates.friends
+        .filter((f) => !hiring.currentGids.has(toInt(f.gid)));
+    const preferredFriends = list
+        .map((gid) => availableFriends.find((f) => toInt(f.gid) === gid))
+        .filter(Boolean);
+    const otherFriends = availableFriends
+        .filter((f) => !preferredFriends.some((x) => toInt(x.gid) === toInt(f.gid)));
+    const candidates = [
+        ...preferredFriends,
+        ...otherFriends,
+        ...initialCandidates.staff.filter((x) => !hiring.currentGids.has(toInt(x.gid))),
+    ];
     if (!candidates.length) {
         return {
             ok: true,
@@ -2203,12 +2295,38 @@ async function hireAll(hireGids, limit = 10, duration = 1) {
     let failureReason = '';
     let failureCode = 0;
     let failureRawReason = '';
-    for (const gid of candidates) {
+    let currentCandidates = initialCandidates;
+    let candidatesFresh = !!initialCandidates;
+    for (const candidate of candidates) {
         if (okCount >= desiredHires || currentHiring.available <= 0) break;
         const availableSlots = currentHiring.availableSlots || [];
         const targetSlot = availableSlots.length ? toInt(availableSlots[0]) : -1;
         if (targetSlot < 0) break;
-        const r = await hireFriend(gid, dur, { skipCapacityCheck: true, slot: targetSlot })
+        const gid = toInt(candidate && candidate.gid);
+        if (!candidatesFresh) {
+            currentCandidates = await fetchHireCandidates().catch((e) => ({ ok: false, reason: e.message }));
+            if (!currentCandidates || !currentCandidates.ok) {
+                failureReason = (currentCandidates && currentCandidates.reason) || '员工面板刷新失败';
+                break;
+            }
+        }
+        candidatesFresh = false;
+        const requestCandidate = findHireCandidate(currentCandidates, gid);
+        if (!requestCandidate) {
+            results.push({
+                gid,
+                slot: targetSlot,
+                ok: false,
+                reason: `员工 ${gid} 不在当前可雇佣候选中，已跳过 cmd57`,
+                skipped: true,
+            });
+            continue;
+        }
+        const r = await hireFriend(gid, dur, {
+            skipCapacityCheck: true,
+            slot: targetSlot,
+            candidate: requestCandidate,
+        })
             .catch((e) => ({ ok: false, reason: e.message }));
         results.push({
             gid,
@@ -2232,10 +2350,6 @@ async function hireAll(hireGids, limit = 10, duration = 1) {
             failureReason = (r && r.reason) || '失败';
             failureCode = toInt(r && r.errorCode);
             failureRawReason = (r && r.rawReason) || '';
-            if (canRetryHireCandidate(r) && results.length < candidates.length) {
-                await sleep(700);
-                continue;
-            }
             break;
         }
         await sleep(700);   // 节流: 避免把游戏请求队列打满(满了会心跳异常掉线)
@@ -2574,6 +2688,8 @@ module.exports = {
         employeeCapacityForLevel,
         getWorkStatus,
         clearMainStatusCache,
+        fetchHireCandidates,
+        parseEmployeePanel,
         HIRE_DURATIONS,
         CRAFT_BATCH_SIZE,
     },
