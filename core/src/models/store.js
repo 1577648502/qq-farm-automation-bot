@@ -52,6 +52,7 @@ function writeKnownFriendGidsCache(accountId, gids) {
 }
 const ALLOWED_PLANTING_STRATEGIES = ['preferred', 'level', 'max_exp', 'max_fert_exp', 'max_profit', 'max_fert_profit', 'bag_priority'];
 const ALLOWED_BAG_SEED_FALLBACK_STRATEGIES = ALLOWED_PLANTING_STRATEGIES.filter(s => s !== 'bag_priority');
+const MILK_TEA_INTERACT_TYPES = new Set([1, 2, 3, 4, 5]);
 const PUSHOO_CHANNELS = new Set([
     'webhook', 'qmsg', 'serverchan', 'pushplus', 'pushplushxtrip',
     'dingtalk', 'wecom', 'bark', 'gocqhttp', 'onebot', 'atri',
@@ -113,6 +114,12 @@ function normalizeBagSeedFallbackStrategy(input, fallback = 'level') {
     const strategy = String(input || '').trim();
     if (ALLOWED_BAG_SEED_FALLBACK_STRATEGIES.includes(strategy)) return strategy;
     return fallback;
+}
+
+function normalizeMilkTeaInteractType(input, fallback = 2) {
+    const value = Number.parseInt(input, 10);
+    if (MILK_TEA_INTERACT_TYPES.has(value)) return value;
+    return MILK_TEA_INTERACT_TYPES.has(fallback) ? fallback : 2;
 }
 
 const DEFAULT_OFFLINE_REMINDER = {
@@ -287,8 +294,6 @@ const globalConfig = {
     announcementReadRecords: {},
     // 系统运行配置
     systemConfig: null,
-    // 全局微信配置
-    globalWxConfig: null,
 };
 
 function normalizeOfflineReminder(input) {
@@ -571,7 +576,7 @@ function normalizeAccountConfig(input, fallback = accountFallbackConfig) {
     if (src.milkTeaAutoBuySeed !== undefined && src.milkTeaAutoBuySeed !== null) cfg.milkTeaAutoBuySeed = !!src.milkTeaAutoBuySeed;
     if (src.milkTeaAutoUpgrade !== undefined && src.milkTeaAutoUpgrade !== null) cfg.milkTeaAutoUpgrade = !!src.milkTeaAutoUpgrade;
     if (src.milkTeaSeedBuyCount !== undefined && src.milkTeaSeedBuyCount !== null) cfg.milkTeaSeedBuyCount = Math.max(1, Number(src.milkTeaSeedBuyCount) || 1);
-    if (src.milkTeaInteractType !== undefined && src.milkTeaInteractType !== null) cfg.milkTeaInteractType = Math.max(1, Number(src.milkTeaInteractType) || 2);
+    if (src.milkTeaInteractType !== undefined && src.milkTeaInteractType !== null) cfg.milkTeaInteractType = normalizeMilkTeaInteractType(src.milkTeaInteractType);
     if (typeof src.milkTeaEmployerGid === 'string') cfg.milkTeaEmployerGid = src.milkTeaEmployerGid.trim().slice(0, 32);
     if (src.sellGoldenFruit !== undefined && src.sellGoldenFruit !== null) {
         cfg.sellGoldenFruit = !!src.sellGoldenFruit;
@@ -737,18 +742,6 @@ function loadGlobalConfig() {
                 };
             }
 
-            // 加载全局微信配置
-            if (data.globalWxConfig && typeof data.globalWxConfig === 'object') {
-                globalConfig.globalWxConfig = {
-                    enabled: data.globalWxConfig.enabled !== false,
-                    apiBase: String(data.globalWxConfig.apiBase || 'http://127.0.0.1:8059/api').trim(),
-                    apiKey: String(data.globalWxConfig.apiKey || '').trim(),
-                    proxyApiUrl: String(data.globalWxConfig.proxyApiUrl || 'http://127.0.0.1:8059/api').trim(),
-                    appId: String(data.globalWxConfig.appId || 'wx5306c5978fdb76e4').trim(),
-                    autoAddAccount: data.globalWxConfig.autoAddAccount !== false,
-                    userIsolation: data.globalWxConfig.userIsolation !== false,
-                };
-            }
         }
     } catch (e) {
         console.error('加载配置失败:', e.message);
@@ -867,7 +860,7 @@ function getConfigSnapshot(accountId) {
         milkTeaAutoBuySeed: !!cfg.milkTeaAutoBuySeed,
         milkTeaAutoUpgrade: cfg.milkTeaAutoUpgrade !== false,
         milkTeaSeedBuyCount: Math.max(1, Number(cfg.milkTeaSeedBuyCount) || 1),
-        milkTeaInteractType: Math.max(1, Number(cfg.milkTeaInteractType) || 2),
+        milkTeaInteractType: normalizeMilkTeaInteractType(cfg.milkTeaInteractType),
         milkTeaEmployerGid: cfg.milkTeaEmployerGid || '',
         sellGoldenFruit: !!cfg.sellGoldenFruit,
         adGiftEnabled: cfg.adGiftEnabled === undefined ? true : !!cfg.adGiftEnabled,
@@ -1043,7 +1036,7 @@ function applyConfigSnapshot(snapshot, options = {}) {
     if (cfg.milkTeaAutoBuySeed !== undefined && cfg.milkTeaAutoBuySeed !== null) next.milkTeaAutoBuySeed = !!cfg.milkTeaAutoBuySeed;
     if (cfg.milkTeaAutoUpgrade !== undefined && cfg.milkTeaAutoUpgrade !== null) next.milkTeaAutoUpgrade = !!cfg.milkTeaAutoUpgrade;
     if (cfg.milkTeaSeedBuyCount !== undefined && cfg.milkTeaSeedBuyCount !== null) next.milkTeaSeedBuyCount = Math.max(1, Number(cfg.milkTeaSeedBuyCount) || 1);
-    if (cfg.milkTeaInteractType !== undefined && cfg.milkTeaInteractType !== null) next.milkTeaInteractType = Math.max(1, Number(cfg.milkTeaInteractType) || 2);
+    if (cfg.milkTeaInteractType !== undefined && cfg.milkTeaInteractType !== null) next.milkTeaInteractType = normalizeMilkTeaInteractType(cfg.milkTeaInteractType);
     if (typeof cfg.milkTeaEmployerGid === 'string') next.milkTeaEmployerGid = cfg.milkTeaEmployerGid.trim().slice(0, 32);
     if (cfg.sellGoldenFruit !== undefined && cfg.sellGoldenFruit !== null) {
         next.sellGoldenFruit = !!cfg.sellGoldenFruit;
@@ -1627,7 +1620,7 @@ function getMilkTeaConfig(accountId) {
         autoBuySeed: !!cfg.milkTeaAutoBuySeed,
         autoUpgrade: cfg.milkTeaAutoUpgrade !== false,
         seedBuyCount: Math.max(1, Number(cfg.milkTeaSeedBuyCount) || 1),
-        interactType: Math.max(1, Number(cfg.milkTeaInteractType) || 2),
+        interactType: normalizeMilkTeaInteractType(cfg.milkTeaInteractType),
     };
 }
 
@@ -1650,35 +1643,6 @@ function getActivityStatus() {
         mengChongEnabled: cfg.activityMengChong !== false,
         milkTeaEnabled: cfg.activityMilkTea !== false,
     };
-}
-
-const DEFAULT_WX_CONFIG = {
-    enabled: true,
-    apiBase: 'http://127.0.0.1:8059/api',
-    apiKey: '',
-    proxyApiUrl: 'http://127.0.0.1:8059/api',
-    appId: 'wx5306c5978fdb76e4',
-    autoAddAccount: true,
-    userIsolation: true,
-};
-
-function getGlobalWxConfig() {
-    return globalConfig.globalWxConfig ? { ...globalConfig.globalWxConfig } : { ...DEFAULT_WX_CONFIG };
-}
-
-function setGlobalWxConfig(config) {
-    if (!config || typeof config !== 'object') return null;
-    globalConfig.globalWxConfig = {
-        enabled: config.enabled !== false,
-        apiBase: String(config.apiBase || DEFAULT_WX_CONFIG.apiBase).trim(),
-        apiKey: String(config.apiKey || '').trim(),
-        proxyApiUrl: String(config.proxyApiUrl || DEFAULT_WX_CONFIG.proxyApiUrl).trim(),
-        appId: String(config.appId || DEFAULT_WX_CONFIG.appId).trim(),
-        autoAddAccount: config.autoAddAccount !== false,
-        userIsolation: config.userIsolation !== false,
-    };
-    saveGlobalConfig();
-    return { ...globalConfig.globalWxConfig };
 }
 
 module.exports = {
@@ -1751,8 +1715,4 @@ module.exports = {
     setSystemConfig,
     getActivityStatus,
     getStealthConfig,
-    // 全局微信配置
-    getGlobalWxConfig,
-    setGlobalWxConfig,
-    DEFAULT_WX_CONFIG,
 };

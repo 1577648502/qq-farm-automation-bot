@@ -8,7 +8,6 @@ const fs = require('node:fs');
 const path = require('node:path');
 const process = require('node:process');
 const express = require('express');
-const fetch = require('node-fetch');
 const { Server: SocketIOServer } = require('socket.io');
 const { version } = require('../../package.json');
 const { CONFIG, updateRuntimeConfig, getRuntimeConfig, getDefaultSystemConfig } = require('../config/config');
@@ -19,7 +18,6 @@ const backup = require('../services/backup');
 const { addOrUpdateAccount, deleteAccount } = store;
 const { findAccountByRef, normalizeAccountRef, resolveAccountId } = require('../services/account-resolver');
 const { createModuleLogger } = require('../services/logger');
-const { MiniProgramLoginSession } = require('../services/qrlogin');
 const { getSchedulerRegistrySnapshot } = require('../services/scheduler');
 const userStore = require('../models/user-store');
 const { readQcbyCodeConfigForUI, saveQcbyCodeConfig } = require('../services/qcby-code-config');
@@ -151,7 +149,7 @@ function startAdminServer(dataProvider) {
         }
         
         res.header('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS, PUT');
-        res.header('Access-Control-Allow-Headers', 'Content-Type, x-account-id, x-admin-token, x-proxy-api-key, x-proxy-api-url, x-proxy-app-id');
+        res.header('Access-Control-Allow-Headers', 'Content-Type, x-account-id, x-admin-token');
         res.header('Access-Control-Allow-Credentials', 'true');
         res.header('Access-Control-Max-Age', '86400');
         
@@ -471,7 +469,7 @@ function startAdminServer(dataProvider) {
     });
 
 app.use('/api', (req, res, next) => {
-        if (req.path === '/login' || req.path === '/qr/create' || req.path === '/qr/check' || req.path === '/proxy' || req.path === '/card-claim/status' || req.path === '/card-claim/claim' || req.path === '/activities/status' || req.path === '/game-version' || req.path.startsWith('/pet/')) return next();
+        if (req.path === '/login' || req.path === '/card-claim/status' || req.path === '/card-claim/claim' || req.path === '/activities/status' || req.path === '/game-version' || req.path.startsWith('/pet/')) return next();
         return authRequired(req, res, next);
     });
 
@@ -528,15 +526,10 @@ app.use('/api', (req, res, next) => {
 
     const getAccountList = (username = null) => {
         try {
-            // 检查是否启用用户隔离
-            const wxConfig = store.getGlobalWxConfig();
-            const userIsolation = wxConfig.userIsolation !== false;
-
             if (provider && typeof provider.getAccounts === 'function') {
                 const data = provider.getAccounts();
                 if (data && Array.isArray(data.accounts)) {
-                    // 如果指定了用户名且启用了用户隔离，只返回该用户的账号
-                    if (username && userIsolation) {
+                    if (username) {
                         return data.accounts.filter(a => a.username === username);
                     }
                     return data.accounts;
@@ -547,11 +540,7 @@ app.use('/api', (req, res, next) => {
         }
         const data = store.getAccounts ? store.getAccounts() : { accounts: [] };
         let accounts = Array.isArray(data.accounts) ? data.accounts : [];
-        // 检查是否启用用户隔离
-        const wxConfig = store.getGlobalWxConfig();
-        const userIsolation = wxConfig.userIsolation !== false;
-        // 如果指定了用户名且启用了用户隔离，只返回该用户的账号
-        if (username && userIsolation) {
+        if (username) {
             accounts = accounts.filter(a => a.username === username);
         }
         return accounts;
@@ -2300,29 +2289,6 @@ app.use('/api', (req, res, next) => {
         }
     });
 
-    // ============ 全局微信配置 API（仅管理员） ============
-
-    // 获取全局微信配置
-    app.get('/api/admin/wx-config', authRequired, adminRequired, (req, res) => {
-        try {
-            const config = store.getGlobalWxConfig();
-            res.json({ ok: true, data: config });
-        } catch (e) {
-            res.status(500).json({ ok: false, error: e.message });
-        }
-    });
-
-    // 保存全局微信配置
-    app.post('/api/admin/wx-config', authRequired, adminRequired, (req, res) => {
-        try {
-            const config = req.body || {};
-            const saved = store.setGlobalWxConfig(config);
-            res.json({ ok: true, data: saved });
-        } catch (e) {
-            res.status(500).json({ ok: false, error: e.message });
-        }
-    });
-
     // ============ qcby 自动取码配置 API（仅管理员） ============
 
     // 获取 qcby 自动取码配置
@@ -2657,38 +2623,6 @@ app.use('/api', (req, res, next) => {
         }
     });
 
-    // 保存用户微信登录配置（仅管理员可以保存全局配置）
-    app.post('/api/user/wxlogin-config', authRequired, adminRequired, (req, res) => {
-        try {
-            const user = req.currentUser;
-            if (!user) {
-                return res.status(401).json({ ok: false, error: '未登录' });
-            }
-
-            const config = req.body || {};
-            const saved = store.setGlobalWxConfig(config);
-            res.json({ ok: true, config: saved });
-        } catch (e) {
-            res.status(500).json({ ok: false, error: e.message });
-        }
-    });
-
-    // 获取用户微信登录配置（普通用户获取全局配置）
-    app.get('/api/user/wxlogin-config', authRequired, (req, res) => {
-        try {
-            const user = req.currentUser;
-            if (!user) {
-                return res.status(401).json({ ok: false, error: '未登录' });
-            }
-
-            // 普通用户获取全局配置，管理员可以获取并修改全局配置
-            const globalConfig = store.getGlobalWxConfig();
-            res.json({ ok: true, config: globalConfig });
-        } catch (e) {
-            res.status(500).json({ ok: false, error: e.message });
-        }
-    });
-
     // API: 账号管理
     app.get('/api/accounts', (req, res) => {
         try {
@@ -2857,6 +2791,12 @@ app.use('/api', (req, res, next) => {
             let list = provider.getAccountLogs ? provider.getAccountLogs(limit) : [];
             if (!Array.isArray(list)) list = [];
 
+            const requestedAccountRaw = String(req.get('x-account-id') || req.query.accountId || '').trim();
+            if (requestedAccountRaw && requestedAccountRaw !== 'all') {
+                const requestedAccountId = resolveAccId(requestedAccountRaw) || requestedAccountRaw;
+                list = list.filter(log => String(log.accountId || log.id || '') === String(requestedAccountId));
+            }
+
             // 所有用户（包括管理员）只能看到自己账号的操作日志
             if (currentUser) {
                 const accessibleIds = getAccessibleAccountIds(req);
@@ -2968,103 +2908,6 @@ app.use('/api', (req, res, next) => {
             res.json({ ok: true, data });
         } catch (e) {
             handleApiError(res, e);
-        }
-    });
-
-    // ============ QR Code Login APIs (无需账号选择) ============
-    // 这些接口不需要 authRequired 也能调用（用于登录流程）
-    app.post('/api/qr/create', async (req, res) => {
-        try {
-            const result = await MiniProgramLoginSession.requestLoginCode();
-            res.json({ ok: true, data: result });
-        } catch (e) {
-            res.status(500).json({ ok: false, error: e.message });
-        }
-    });
-
-    app.post('/api/qr/check', async (req, res) => {
-        const { code } = req.body || {};
-        if (!code) {
-            return res.status(400).json({ ok: false, error: 'Missing code' });
-        }
-
-        try {
-            const result = await MiniProgramLoginSession.queryStatus(code);
-
-            if (result.status === 'OK') {
-                const ticket = result.ticket;
-                const uin = result.uin || '';
-                const nickname = result.nickname || ''; // 获取昵称
-                const appid = '1112386029'; // Farm appid
-
-                const authCode = await MiniProgramLoginSession.getAuthCode(ticket, appid);
-
-                let avatar = '';
-                if (uin) {
-                    avatar = `https://q1.qlogo.cn/g?b=qq&nk=${uin}&s=640`;
-                }
-
-                if (!authCode) {
-                    // 获取不到有效的 uin 时
-                    console.warn('[QR Check] getAuthCode returned empty, storing partial data');
-                    res.json({ ok: true, data: { status: 'OK', code: authCode, uin, avatar, nickname, authFailed: true } });
-                } else {
-                    res.json({ ok: true, data: { status: 'OK', code: authCode, uin, avatar, nickname } });
-                }
-            } else if (result.status === 'Used') {
-                res.json({ ok: true, data: { status: 'Used' } });
-            } else if (result.status === 'Wait') {
-                res.json({ ok: true, data: { status: 'Wait' } });
-            } else {
-                res.json({ ok: true, data: { status: 'Error', error: result.msg } });
-            }
-        } catch (e) {
-            res.status(500).json({ ok: false, error: e.message });
-        }
-    });
-
-    // ============ 微信登录代理 API ============
-    // 用于转发请求到第三方微信登录 API（如 api.aineishe.com）
-    app.post('/api/proxy', async (req, res) => {
-        const { action, ...params } = req.body || {};
-
-        if (!action) {
-            return res.status(400).json({ code: -1, msg: '缺少 action 参数' });
-        }
-
-        // 从请求头或配置中获取 API 配置
-        // 优先使用请求头中的配置（前端传入）
-        const apiUrl = req.headers['x-proxy-api-url'] || process.env.WX_PROXY_API_URL || 'http://127.0.0.1:8059/api';
-        const apiKey = req.headers['x-proxy-api-key'] || process.env.WX_PROXY_API_KEY || '';
-        const appId = req.headers['x-proxy-app-id'] || process.env.WX_PROXY_APP_ID || 'wx5306c5978fdb76e4';
-
-        if (!apiKey) {
-            return res.status(400).json({ code: -1, msg: '缺少 API Key' });
-        }
-
-        // 如果是 jslogin 动作，自动添加 appid
-        if (action === 'jslogin') {
-            params.appid = appId;
-        }
-
-        try {
-            const url = `${apiUrl}?api_key=${encodeURIComponent(apiKey)}&action=${action}`;
-            adminLogger.info('proxy request', { action, apiUrl });
-
-            const response = await fetch(url, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(params)
-            });
-
-            const data = await response.json();
-            res.json(data);
-        } catch (error) {
-            adminLogger.error('proxy error', { error: error.message, action });
-            res.status(500).json({
-                code: -1,
-                msg: `代理请求失败: ${  error.message}`,
-            });
         }
     });
 
@@ -3774,6 +3617,7 @@ app.use('/api', (req, res, next) => {
                 }
 
                 socket.emit('account-logs:snapshot', {
+                    accountId: targetId || 'all',
                     logs: currentAccountLogs,
                 });
             }

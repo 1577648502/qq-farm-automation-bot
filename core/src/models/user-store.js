@@ -791,34 +791,6 @@ function changePassword(username, oldPassword, newPassword) {
     return { ok: true, message: '密码修改成功' };
 }
 
-// 保存用户微信登录配置
-function saveWxLoginConfig(username, config) {
-    loadUsers();
-    const user = users.find(u => u.username === username);
-    if (!user) {
-        return { ok: false, error: '用户不存在' };
-    }
-
-    user.wxLoginConfig = {
-        ...config,
-        updatedAt: Date.now()
-    };
-
-    saveUsers();
-    return { ok: true, config: user.wxLoginConfig };
-}
-
-// 获取用户微信登录配置
-function getWxLoginConfig(username) {
-    loadUsers();
-    const user = users.find(u => u.username === username);
-    if (!user) {
-        return { ok: false, error: '用户不存在' };
-    }
-
-    return { ok: true, config: user.wxLoginConfig || null };
-}
-
 // 获取用户账号额度
 function getUserAccountLimit(username) {
     loadUsers();
