@@ -416,7 +416,9 @@ async function openStore(storeName) {
     const nameBuf = Buffer.from(name, 'utf8');
     const payload = Buffer.concat([Buffer.from([0x0a, nameBuf.length]), nameBuf]);   // {#1: string}
     const r = await mainOperate(CMD_OPEN, undefined, payload);
-    if (r.errorCode !== 0) return { ok: false, reason: `开业失败 code=${r.errorCode}` };
+    if (r.ok === false || r.errorCode !== 0) {
+        return { ok: false, reason: `开业失败 ${r.reason || `code=${r.errorCode}`}` };
+    }
     log('活动', `奶茶热销中: 已开业(店名「${name}」)`, { module: 'activity', event: '奶茶热销中', result: 'ok' });
     return { ok: true, storeName: name, state: parseMainState(r.activity) };
 }
@@ -765,15 +767,17 @@ function beijingDayStart(tsSec) {
 }
 
 async function getSalesRecord(dayTs) {
+    const queriedAt = Math.floor(Date.now() / 1000);
     const st = await getMainStatus().catch(() => null);
     const requestedAt = toInt(dayTs) > 0 ? toInt(dayTs) : (toInt(st && st.at) || Math.floor(Date.now() / 1000));
     const base = beijingDayStart(requestedAt);
     const payload = Buffer.concat([encodeVarintField(1, base)]);
     const r = await mainOperate(CMD_SALES_RECORD, 172, payload);
-    if (r.errorCode !== 0) return { ok: false, reason: `读取营业记录失败 ${r.reason || `code=${r.errorCode}`}` };
+    if (r.ok === false || r.errorCode !== 0) return { ok: false, reason: `读取营业记录失败 ${r.reason || `code=${r.errorCode}`}` };
     const out = {
         ok: true,
         day: base,
+        queriedAt,
         coupon: 0,
         gold: 0,
         cups: 0,
@@ -795,8 +799,10 @@ async function getSalesRecord(dayTs) {
             const e = parseTop(x.v);
             if (x.f === 5) out.items.push({ id: toInt((findField(e, 1) || {}).v), cups: toInt((findField(e, 2) || {}).v) });
             else if (x.f === 6) {
+                const hoursAgo = toInt((findField(e, 1) || {}).v);
                 out.hourly.push({
-                    hoursAgo: toInt((findField(e, 1) || {}).v),
+                    hoursAgo,
+                    hourStart: Math.floor(queriedAt / 3600) * 3600 - hoursAgo * 3600,
                     cups: toInt((findField(e, 2) || {}).v),
                 });
             }
@@ -840,7 +846,7 @@ async function getSalesRecord(dayTs) {
 async function getStoreRankings(page = 1) {
     const requestedPage = Math.max(1, Math.min(999, toInt(page) || 1));
     const r = await mainOperate(CMD_RANKING, 171, encodeVarintField(1, requestedPage));
-    if (r.errorCode !== 0) {
+    if (r.ok === false || r.errorCode !== 0) {
         return {
             ok: false,
             reason: `读取店铺排行榜失败 ${r.reason || `code=${r.errorCode}`}`,
@@ -938,7 +944,9 @@ async function upgradeStore() {
         return { ok: false, skipped: true, reason: `营业额 ${info.revenue} < 升级所需 ${info.required}(Lv${info.level})` };
     }
     const r = await mainOperate(CMD_UPGRADE_STORE, 166, Buffer.alloc(0));
-    if (r.errorCode !== 0) return { ok: false, reason: `升级失败 ${r.reason || `code=${r.errorCode}`}` };
+    if (r.ok === false || r.errorCode !== 0) {
+        return { ok: false, reason: `升级失败 ${r.reason || `code=${r.errorCode}`}` };
+    }
     let level = 0;
     const got = [];
     if (r.resultHex) {
@@ -1050,7 +1058,7 @@ async function buyShopGoods(goodsId, count = 1) {
     }
     const payload = Buffer.concat([encodeVarintField(1, id), encodeVarintField(2, n)]);
     const r = await operateSafe(GROUP_SHOP, CMD_SHOP_BUY, FIELD_SHOP_BUY, payload);
-    if (r.errorCode !== 0) {
+    if (r.ok === false || r.errorCode !== 0) {
         const why = String(r.reason || `code=${r.errorCode}`);
         // 服务端明确说"限购/已购" → 记为已限购(界面显示"已限购")
         if (/限购|已满|上限|已售|已购|已兑换|已领|1034007/.test(why)) markShopGoodsSoldOut(id);
@@ -1235,9 +1243,11 @@ async function autoHire(hireGids, opts = {}) {
         const staff = out.initialEmployeeCount !== undefined && out.finalEmployeeCount !== undefined && out.employeeCapacity
             ? ` (员工 ${out.initialEmployeeCount}/${out.employeeCapacity} → ${out.finalEmployeeCount}/${out.employeeCapacity})`
             : '';
-        const sync = out.stateSyncPending ? `；${out.reason}` : '';
-        log('活动', `奶茶热销中: 已自动补位 ${gids.join('、')}${staff}${sync}`, {
-            module: 'activity', event: '奶茶热销中', result: out.stateSyncPending ? 'warn' : 'ok',
+        const detail = out.partial || out.stateSyncPending
+            ? `；${out.reason || `仍有 ${out.remainingVacancies} 个员工位空缺`}`
+            : '';
+        log('活动', `奶茶热销中: 已自动补位 ${gids.join('、')}${staff}${detail}`, {
+            module: 'activity', event: '奶茶热销中', result: out.partial || out.stateSyncPending ? 'warn' : 'ok',
         });
     }
     return out;
@@ -1271,7 +1281,7 @@ async function confirmHiredEmployee(gid, previousEmployeeCount, targetSlot = -1)
         }
     }
     const reason = latest && latest.ok
-        ? `cmd55 尚未确认好友 ${expectedGid} 入店(${latest.employeeCount}/${latest.employeeCapacity})`
+        ? `cmd55 尚未确认员工 ${expectedGid} 入店(${latest.employeeCount}/${latest.employeeCapacity})`
         : `员工状态刷新失败: ${shortErr(lastError)}`;
     return { ok: false, reason, hiring: latest && latest.ok ? latest : null };
 }
@@ -1389,8 +1399,23 @@ async function autoHireInner(
         break;
     }
     if (hired.length) {
+        const remainingVacancies = stateSyncPending
+            ? Math.max(0, hireLimit - hired.length)
+            : finalHiring && finalHiring.ok
+                ? Math.max(0, toInt(finalHiring.available))
+                : Math.max(0, hireLimit - hired.length);
+        const partial = remainingVacancies > 0;
+        const lastFailure = [...results]
+            .reverse()
+            .find((result) => !result.ok && !result.skipped && result.errorCode);
+        const partialReason = stateSyncPending
+            ? syncReason
+            : (lastFailure && lastFailure.reason)
+                || errors[errors.length - 1]
+                || '未找到可继续雇佣的候选';
         return {
             ok: true,
+            partial,
             hired: hired.length,
             friendGid: hired[0],
             friendGids: hired,
@@ -1398,8 +1423,13 @@ async function autoHireInner(
             attempted: results.length,
             finalHiring,
             stateSyncPending,
-            ...(stateSyncPending
-                ? { reason: `已雇佣 ${hired.join('、')}，${syncReason}；本轮停止继续雇佣` }
+            remainingVacancies,
+            ...(partial
+                ? {
+                    reason: stateSyncPending
+                        ? `已雇佣 ${hired.join('、')}，${partialReason}；仍有 ${remainingVacancies} 个员工位空缺`
+                        : `已雇佣 ${hired.join('、')}，仍有 ${remainingVacancies} 个员工位空缺：${shortErr(partialReason)}`,
+                }
                 : {}),
         };
     }
@@ -1456,7 +1486,7 @@ async function getMenuRecipes(force = false) {
     } catch (e) {
         return { ok: false, reason: `读取配方菜单失败: ${shortErr(e.message)}`, recipes: [], names: new Map() };
     }
-    if (r.errorCode !== 0) {
+    if (r.ok === false || r.errorCode !== 0) {
         const why = String(r.reason || `code=${r.errorCode}`);
         return { ok: false, reason: `读取配方菜单失败: ${why}`, recipes: [], names: new Map() };
     }
@@ -1517,6 +1547,27 @@ function skippedFruitText(skipped) {
         if (x.reason === 'locked') return `${x.recipeName}（${fruits}）`;
         return `${x.recipeName || '未知配方'}（${fruits}，配方未下发）`;
     }).join('、');
+}
+
+function summarizeCraftUids(totalUids, successfulUids, failedUids) {
+    const successfulSet = new Set(successfulUids || []);
+    const failedSet = new Set(failedUids || []);
+    const unprocessedUids = totalUids.filter((uid) => !successfulSet.has(uid) && !failedSet.has(uid));
+    return {
+        successful: successfulSet.size,
+        failed: failedSet.size,
+        unprocessed: unprocessedUids.length,
+        unprocessedUids,
+    };
+}
+
+function craftUidCountsText(summary, stoppedEarly, requestLimitReached) {
+    const stopReason = requestLimitReached
+        ? '达到本次请求上限'
+        : stoppedEarly
+            ? '请求异常后停止'
+            : '';
+    return `成功 ${summary.successful} 个 UID，失败 ${summary.failed} 个，未处理 ${summary.unprocessed} 个${stopReason ? `（${stopReason}）` : ''}`;
 }
 
 /** 收集背包里已解锁配方的果实 uid/count(只读一次背包，并查询配方菜单)。 */
@@ -1589,7 +1640,7 @@ async function collectFruitUids(limit = Number.MAX_SAFE_INTEGER) {
 /**
  * 把背包里**所有**活动果实都做成高级奶茶(分批提交, 批间隔 700ms 防队列打满)
  * @param perBatch 每批提交几个果实 uid(0/负数 = 用默认值)
- * @param maxBatches 最多几批(防跑飞)
+ * @param maxBatches 最多发送多少个 cmd62 请求(防跑飞；逐 UID 回退也计入)
  */
 // 抓包已验证客户端一次提交 15 个果实 uid(20261018-095056, payload 45B = 15 个 varint)。
 const CRAFT_BATCH_SIZE = 15;
@@ -1644,31 +1695,96 @@ async function craftAllFruits(perBatch = CRAFT_BATCH_SIZE, maxBatches = 50) {
     const made = [];
     let used = 0;         // 投入的"组"数(背包里每个 uid 一组)
     let usedUnits = 0;    // 实际消耗的果实个数
-    let batches = 0;
+    let batches = 0;      // 实际发送的 cmd62 请求数
+    let batchFallback = false;
+    let stoppedEarly = false;
+    let requestLimitReached = false;
     let failure = null;
+    const failedUids = [];
+    const successfulUids = [];
+    const consume = (uids, result) => {
+        used += uids.length;
+        usedUnits += uids.reduce((sum, uid) => sum + (entryByUid.get(uid)?.count || 1), 0);
+        successfulUids.push(...uids);
+        made.push(...(result.made || []));
+    };
     for (let i = 0; i < all.uids.length; i += perBatch) {
-        if (batches >= maxBatches) break;
+        if (batches >= maxBatches) {
+            requestLimitReached = true;
+            break;
+        }
         const slice = all.uids.slice(i, i + perBatch);
         const r = await mainOperateCraft(slice);
         batches += 1;
         if (!r.ok) {
-            failure = r;
-            break; // 服务端拒绝后停手，保留已经成功的批次，不再逐 UID 刷请求。
+            if (!failure) failure = r;
+            if (r.thrown || !r.errorCode) {
+                // 网络/队列异常时继续任何 cmd62 都只会放大故障。
+                failure = r;
+                failedUids.push(...slice);
+                stoppedEarly = true;
+                break;
+            }
+            if (r.errorCode === 1034149 && slice.length > 1) {
+                // 只有"配方未解锁"值得逐 UID 隔离，避免一个 UID 拖垮同批其他果实。
+                batchFallback = true;
+                for (const uid of slice) {
+                    if (batches >= maxBatches) {
+                        requestLimitReached = true;
+                        break;
+                    }
+                    const single = await mainOperateCraft([uid]);
+                    batches += 1;
+                    if (single.ok) {
+                        consume([uid], single);
+                    } else {
+                        failedUids.push(uid);
+                        if (single.thrown || !single.errorCode) {
+                            // 网络异常时结束本次制作，继续发单 UID 只会放大故障。
+                            failure = single;
+                            stoppedEarly = true;
+                            break;
+                        }
+                        if (single.errorCode !== 1034149) {
+                            // 其他业务错误不适合继续隔离，避免对同一故障反复发送 cmd62。
+                            failure = single;
+                            stoppedEarly = true;
+                            break;
+                        }
+                    }
+                }
+                if (stoppedEarly) break;
+            } else if (r.errorCode === 1034149) {
+                // 单 UID 批次本身就是隔离结果；记录后继续下一批。
+                failedUids.push(...slice);
+            } else {
+                failedUids.push(...slice);
+                // 非"配方未解锁"业务错误不是 UID 隔离场景，立即停止后续批次。
+                failure = r;
+                stoppedEarly = true;
+                break;
+            }
+        } else {
+            consume(slice, r);
         }
-        used += slice.length;
-        usedUnits += slice.reduce((sum, uid) => sum + (entryByUid.get(uid)?.count || 1), 0);
-        made.push(...(r.made || []));
         if (i + perBatch < all.uids.length) await sleep(700);
     }
 
     const skippedDetail = skippedFruitText(all.skipped);
     const output = aggregateMadeItems(made);
+    const summary = summarizeCraftUids(all.uids, successfulUids, failedUids);
     if (!used) {
-        const reason = failure ? failure.reason : '制作未产生任何结果';
-        const text = `奶茶热销中: 制作未完成 — ${reason}${skippedDetail ? `；跳过未解锁配方 ${skippedDetail}` : ''}`;
+        const reason = failure
+            ? failure.reason
+            : requestLimitReached
+                ? '达到本次请求上限'
+                : '制作未产生任何结果';
+        const countsText = craftUidCountsText(summary, stoppedEarly, requestLimitReached);
+        const text = `奶茶热销中: 制作未完成 — ${reason}；${countsText}${skippedDetail ? `；跳过未解锁配方 ${skippedDetail}` : ''}`;
         log('活动', text, {
             module: 'activity', event: '奶茶热销中', result: 'error',
             errorCode: failure && failure.errorCode, skippedGroups: all.skipped.reduce((n, x) => n + x.groups, 0),
+            successfulUids: summary.successful, failedUids: summary.failed, unprocessedUids: summary.unprocessed,
         });
         return {
             ok: false,
@@ -1679,26 +1795,38 @@ async function craftAllFruits(perBatch = CRAFT_BATCH_SIZE, maxBatches = 50) {
             usedUnits,
             batches,
             made,
+            failedUids,
+            successfulUids,
+            unprocessedUids: summary.unprocessedUids,
             skipped: false,
             skippedItems: all.skipped,
         };
     }
 
     const skipText = skippedDetail ? `；跳过未解锁配方 ${skippedDetail}` : '';
-    const failureText = failure ? `；后续停止: ${failure.reason}` : '';
-    log('活动', `奶茶热销中: 已制作 ${used} 组/共 ${usedUnits} 个果实${output.text ? ` → ${output.text}` : ''}${skipText}${failureText}`, {
-        module: 'activity', event: '奶茶热销中', result: failure ? 'warn' : 'ok',
+    const partial = summary.failed > 0 || stoppedEarly || requestLimitReached;
+    const partialText = partial
+        ? `；${craftUidCountsText(summary, stoppedEarly, requestLimitReached)}${failure ? `，失败原因: ${failure.reason}` : ''}`
+        : batchFallback
+            ? '；整批失败后逐项重试成功'
+            : '';
+    log('活动', `奶茶热销中: 已制作 ${used} 组/共 ${usedUnits} 个果实${output.text ? ` → ${output.text}` : ''}${skipText}${partialText}`, {
+        module: 'activity', event: '奶茶热销中', result: partial ? 'warn' : 'ok',
         fruits: used, batches, skippedGroups: all.skipped.reduce((n, x) => n + x.groups, 0),
+        successfulUids: summary.successful, failedUids: summary.failed, unprocessedUids: summary.unprocessed,
     });
     return {
         ok: true,
-        partial: !!failure,
-        errorCode: failure && failure.errorCode,
-        failureReason: failure && failure.reason,
+        partial,
+        errorCode: partial && failure && failure.errorCode,
+        failureReason: partial && failure && failure.reason,
         used,
         usedUnits,
         batches,
         made,
+        failedUids,
+        successfulUids,
+        unprocessedUids: summary.unprocessedUids,
         skipped: false,
         skippedItems: all.skipped,
         state: null,
@@ -1709,13 +1837,14 @@ async function craftAllFruits(perBatch = CRAFT_BATCH_SIZE, maxBatches = 50) {
 async function mainOperateCraft(uids) {
     const packed = encodePackedVarints(uids);
     const payload = Buffer.concat([encodeVarint(0x0a), encodeVarint(packed.length), packed]);
-    const r = await operateSafe(GROUP_MAIN, CMD_CRAFT_REAL, 167, payload);
-    if (r.errorCode !== 0) {
+    const r = await mainOperate(CMD_CRAFT_REAL, 167, payload);
+    if (r.ok === false || r.errorCode !== 0) {
         return {
             ok: false,
             errorCode: r.errorCode,
             reason: r.reason || `code=${r.errorCode}`,
             rawReason: r.rawReason || r.reason || '',
+            thrown: r.thrown === true,
         };
     }
     const made = [];
@@ -1765,8 +1894,7 @@ async function craftMilkTea(limit = CRAFT_BATCH_SIZE) {
         };
     }
     const picked = all.uids;
-    const usedIds = new Set(all.entries.map((x) => x.itemId));
-    const usedUnits = all.entries.reduce((sum, x) => sum + x.count, 0);
+    const entryByUid = new Map(all.entries.map((entry) => [entry.uid, entry]));
     if (!picked.length) {
         if (all.skipped.length) {
             const detail = skippedFruitText(all.skipped);
@@ -1786,25 +1914,106 @@ async function craftMilkTea(limit = CRAFT_BATCH_SIZE) {
         }
         return { ok: false, reason: '背包里没有活动果实(森野系列)，先种再收' };
     }
-    const r = await mainOperateCraft(picked);
-    if (!r.ok) {
-        log('活动', `奶茶热销中: 制作未完成 — ${r.reason}`, {
+
+    let r = await mainOperateCraft(picked);
+    let batches = 1;
+    const failedUids = [];
+    const successfulUids = [];
+    const made = [];
+    let stoppedEarly = false;
+    let fallbackStarted = false;
+    if (r.ok) {
+        successfulUids.push(...picked);
+        made.push(...(r.made || []));
+    }
+    if (!r.ok && r.errorCode === 1034149 && picked.length > 1) {
+        fallbackStarted = true;
+        for (const uid of picked) {
+            const single = await mainOperateCraft([uid]);
+            batches += 1;
+            if (single.ok) {
+                successfulUids.push(uid);
+                made.push(...(single.made || []));
+                continue;
+            }
+            failedUids.push(uid);
+            r = single;
+            if (single.thrown || !single.errorCode || single.errorCode !== 1034149) {
+                stoppedEarly = true;
+                break;
+            }
+        }
+    }
+
+    const successfulEntries = successfulUids
+        .map((uid) => entryByUid.get(uid))
+        .filter(Boolean);
+    const usedIds = new Set(successfulEntries.map((entry) => entry.itemId));
+    const usedUnits = successfulEntries.reduce((sum, entry) => sum + entry.count, 0);
+    const summary = summarizeCraftUids(picked, successfulUids, failedUids);
+    if (!successfulUids.length) {
+        if (!fallbackStarted) failedUids.push(...picked);
+        const failureSummary = summarizeCraftUids(picked, successfulUids, failedUids);
+        const countsText = craftUidCountsText(failureSummary, stoppedEarly, false);
+        log('活动', `奶茶热销中: 制作未完成 — ${r.reason}；${countsText}`, {
             module: 'activity', event: '奶茶热销中', result: 'error', errorCode: r.errorCode,
+            successfulUids: failureSummary.successful, failedUids: failureSummary.failed,
+            unprocessedUids: failureSummary.unprocessed,
         });
         return {
             ...r,
             used: 0,
             usedUnits: 0,
-            usedFruits: [...usedIds],
+            usedFruits: [],
+            failedUids,
+            successfulUids,
+            unprocessedUids: failureSummary.unprocessedUids,
+            batches,
             skipped: false,
             skippedItems: all.skipped,
         };
     }
-    const made = r.made || [];
+
+    if (fallbackStarted) {
+        const output = aggregateMadeItems(made);
+        const skipText = all.skipped.length ? `；跳过未解锁配方 ${skippedFruitText(all.skipped)}` : '';
+        const partial = summary.failed > 0 || summary.unprocessed > 0;
+        log('活动', `奶茶热销中: 已制作 ${successfulUids.length} 组/共 ${usedUnits} 个果实${output.text ? ` → ${output.text}` : ''}${skipText}；${craftUidCountsText(summary, stoppedEarly, false)}${summary.failed ? `，失败原因: ${r.reason}` : ''}`, {
+            module: 'activity',
+            event: '奶茶热销中',
+            result: partial ? 'warn' : 'ok',
+            fruits: successfulUids.length,
+            usedUnits,
+            batches,
+            errorCode: partial ? r.errorCode : 0,
+            successfulUids: summary.successful,
+            failedUids: summary.failed,
+            unprocessedUids: summary.unprocessed,
+        });
+        return {
+            ok: true,
+            partial,
+            errorCode: partial ? r.errorCode : 0,
+            failureReason: partial ? r.reason : '',
+            used: successfulUids.length,
+            usedUnits,
+            usedFruits: [...usedIds],
+            made,
+            failedUids,
+            successfulUids,
+            unprocessedUids: summary.unprocessedUids,
+            batches,
+            skipped: false,
+            skippedItems: all.skipped,
+            state: null,
+        };
+    }
+
     const output = aggregateMadeItems(made);
     const skipText = all.skipped.length ? `；跳过未解锁配方 ${skippedFruitText(all.skipped)}` : '';
     log('活动', `奶茶热销中: 已制作 ${picked.length} 组/共 ${usedUnits} 个果实${output.text ? ` → ${output.text}` : ''}${skipText}`, {
         module: 'activity', event: '奶茶热销中', result: 'ok', fruits: picked.length, usedUnits,
+        successfulUids: summary.successful, failedUids: 0, unprocessedUids: 0,
     });
     return {
         ok: true,
@@ -1812,6 +2021,10 @@ async function craftMilkTea(limit = CRAFT_BATCH_SIZE) {
         usedUnits,
         usedFruits: [...usedIds],
         made,
+        failedUids,
+        successfulUids,
+        unprocessedUids: [],
+        batches,
         skipped: false,
         skippedItems: all.skipped,
         state: r.state,
@@ -2696,16 +2909,26 @@ async function hireAll(hireGids, limit = 10, duration = 1) {
             ? `已雇佣 ${okCount} 人；${failedCount} 位候选未通过: ${shortErr(effectiveFailureReason)}`
             : `尝试 ${results.length} 位候选仍未雇佣成功: ${shortErr(effectiveFailureReason)}`)
         : '';
+    const remainingVacancies = stateSyncPending
+        ? Math.max(0, desiredHires - okCount)
+        : currentHiring && currentHiring.ok
+            ? Math.max(0, toInt(currentHiring.available))
+            : Math.max(0, desiredHires - okCount);
+    const partial = okCount > 0 && remainingVacancies > 0;
+    const resultReason = stateSyncPending
+        ? `已雇佣 ${okCount} 人，但${syncReason}；本轮停止继续雇佣`
+        : stopReason || (partial ? `已雇佣 ${okCount} 人，仍有 ${remainingVacancies} 个员工位空缺` : '');
     return {
         ok: okCount > 0,
+        partial,
         hired: okCount,
         total: candidates.length,
         attempted: results.length,
         results,
         stateSyncPending,
+        remainingVacancies,
         ...(failureCode ? { errorCode: failureCode, rawReason: failureRawReason } : {}),
-        ...(stateSyncPending ? { reason: `已雇佣 ${okCount} 人，但${syncReason}；本轮停止继续雇佣` } : {}),
-        ...(!stateSyncPending && stopReason ? { reason: stopReason } : {}),
+        ...(resultReason ? { reason: resultReason } : {}),
         ...publicHiringState(currentHiring),
     };
 }
@@ -2734,7 +2957,9 @@ async function operateSafe(groupId, cmd, payloadField, payloadBytes) {
             ok: false,
             reason: shortErr(m),
             rawReason: shortErr(m, 240),
-            thrown: true,
+            // 游戏业务错误也由 network 层抛异常；带 code 时仍应按业务错误处理，
+            // 只有没有业务码的传输/队列异常才标记为 thrown。
+            thrown: !code,
         };
     }
 }

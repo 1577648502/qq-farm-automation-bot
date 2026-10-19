@@ -794,6 +794,49 @@ sendImpl = async (service, method, body) => {
     }
 
     {
+        const originalGetBag = warehouse.getBag;
+        const originalGetBagItems = warehouse.getBagItems;
+        milkTea.__testing.clearMenuCache();
+        milkTea.__testing.clearMainStatusCache();
+        warehouse.getBag = async () => ({});
+        warehouse.getBagItems = () => [{ id: 40525, uid: 62001, count: 1 }];
+        let listCalls = 0;
+        let craftCalls = 0;
+        router = async (req) => {
+            if (req.method === 'List') {
+                listCalls += 1;
+                return activityListReply([mainActivity()]);
+            }
+            if (req.cmd === 58) {
+                return operateReply(58, {
+                    result: menuResult([{ id: 2, name: '甜莓奶茶', unlocked: true }]),
+                    resultField: 163,
+                });
+            }
+            if (req.cmd === 62) {
+                craftCalls += 1;
+                const payload = mg.parseTop(req.payload);
+                const requestUids = parsePackedVarints((payload.find((x) => x.f === 1) || {}).v);
+                return operateReply(62, { result: craftResult(requestUids), resultField: 167 });
+            }
+            throw new Error(`手动制作缓存失效用例收到 ${req.method || `cmd=${req.cmd}`}`);
+        };
+
+        const cachedBefore = await milkTea.getMainStatus(true);
+        const manual = await milkTea.craftMilkTea(1);
+        const refreshed = await milkTea.getMainStatus();
+        check('手动制作成功后清理主活动状态缓存并重新读取 List',
+            cachedBefore.ok === true && manual.ok === true && refreshed.ok === true
+            && craftCalls === 1 && listCalls === 2,
+            { cachedBefore, manual, refreshed, craftCalls, listCalls });
+
+        warehouse.getBag = originalGetBag;
+        warehouse.getBagItems = originalGetBagItems;
+        milkTea.__testing.clearMenuCache();
+        milkTea.__testing.clearMainStatusCache();
+    }
+
+    {
         router = async (req) => {
             if (req.cmd === 63) throw new Error('网络连接已断开');
             throw new Error(`cmd63 网络异常用例不应发送 cmd=${req.cmd}`);
@@ -1970,6 +2013,46 @@ sendImpl = async (service, method, body) => {
         check('首次雇佣成功后先刷新 cmd55，再提交第二个 cmd57',
             twoVacancyCommands.join(',') === '55,56,57,55,56,57,55', twoVacancyCommands);
 
+        let partialEmployees = [];
+        const partialFriendGid = 1300000501;
+        router = async (req) => {
+            if (req.cmd === 55) {
+                return operateReply(55, {
+                    result: cashierDetailResult({ level: 3, employees: partialEmployees }),
+                    resultField: 160,
+                });
+            }
+            if (req.cmd === 56) return operateReply(56, {
+                result: employeePanelResult({
+                    friends: [hireCandidateFriend({ gid: partialFriendGid })],
+                    staff: [hireCandidateStaff({ gid: 101 }), hireCandidateStaff({ gid: 102 })],
+                }),
+                resultField: 161,
+            });
+            if (req.cmd === 57) {
+                const gid = toInt((hireRequestInner(req).find((x) => x.f === 3) || {}).v);
+                if (gid === partialFriendGid && !partialEmployees.length) {
+                    partialEmployees.push(employee(gid, hireRequestSlot(req), nowSec, nowSec + 3600));
+                    return operateReply(57, { result: Buffer.alloc(0), resultField: 162 });
+                }
+                return operateReply(57, { errorCode: 1034140, result: Buffer.alloc(0), resultField: 162 });
+            }
+            throw new Error(`部分雇佣用例收到 cmd=${req.cmd}`);
+        };
+        sent.length = 0;
+        activityLogs.length = 0;
+        const partialAuto = await milkTea.autoHire([partialFriendGid], { duration: 1 });
+        check('双空位只成功一人时返回 partial、剩余空位和第二候选失败原因',
+            partialAuto.ok === true && partialAuto.partial === true
+            && partialAuto.hired === 1 && partialAuto.remainingVacancies === 1
+            && /1034140/.test(partialAuto.reason || ''), {
+                result: partialAuto,
+                sent: sent.map((x) => x.cmd),
+            });
+        check('部分雇佣汇总日志按警告记录',
+            activityLogs.some((x) => x.isWarn && /已自动补位|仍有 1 个员工位空缺/.test(x.msg)),
+            activityLogs);
+
         let laggingEmployees = [];
         let lastHireNeedsStalePoll = false;
         let stalePolls = 0;
@@ -2045,9 +2128,10 @@ sendImpl = async (service, method, body) => {
         };
         sent.length = 0;
         const unsynced = await milkTea.autoHire([1300000007, 1300000008], { duration: 1 });
-        check('cmd55 持续滞后时只雇佣一人并停止第二次 cmd57',
+        check('cmd55 持续滞后时只雇佣一人、停止第二次 cmd57 并标记部分成功',
             unsynced.ok === true && unsynced.hired === 1
             && unsynced.stateSyncPending === true
+            && unsynced.partial === true && unsynced.remainingVacancies === 1
             && sent.filter((x) => x.cmd === 57).length === 1, {
                 result: unsynced,
                 sent: sent.map((x) => x.cmd),
@@ -2302,6 +2386,45 @@ sendImpl = async (service, method, body) => {
             && hireRequestSlot(sent.find((x) => x.cmd === 57)) === 1, {
                 result: partial,
                 sent: sent.map((x) => ({ cmd: x.cmd, slot: hireRequestSlot(x) })),
+            });
+
+        let partialHireEmployees = [];
+        router = async (req) => {
+            if (req.cmd === 55) {
+                return operateReply(55, {
+                    result: cashierDetailResult({ level: 3, employees: partialHireEmployees }),
+                    resultField: 160,
+                });
+            }
+            if (req.cmd === 57) {
+                const outer = mg.parseTop(req.payload);
+                const innerBox = outer.find((x) => x.f === 1 && x.w === 2);
+                const inner = innerBox && mg.parseTop(innerBox.v);
+                const gid = toInt((inner && inner.find((x) => x.f === 3) || {}).v);
+                partialHireEmployees = [
+                    employee(gid, hireRequestSlot(req), nowSec, nowSec + 3600),
+                ];
+                return operateReply(57, { result: Buffer.alloc(0), resultField: 162 });
+            }
+            if (req.cmd === 56) return operateReply(56, {
+                result: employeePanelResult({
+                    friends: [hireCandidateFriend({ gid: 1300000021 })],
+                    staff: [],
+                }),
+                resultField: 161,
+            });
+            throw new Error(`批量部分成功用例收到 cmd=${req.cmd}`);
+        };
+        sent.length = 0;
+        const partialTwoSlots = await milkTea.hireAll([1300000021]);
+        check('双空位只雇到一人时返回 partial、剩余空位和原因',
+            partialTwoSlots.ok === true && partialTwoSlots.hired === 1
+            && partialTwoSlots.partial === true
+            && partialTwoSlots.remainingVacancies === 1
+            && /仍有 1 个员工位空缺/.test(partialTwoSlots.reason || '')
+            && sent.filter((x) => x.cmd === 57).length === 1, {
+                result: partialTwoSlots,
+                sent: sent.map((x) => x.cmd),
             });
 
         let hireAllHiddenEmployees = [...oneEmployee];
@@ -2590,7 +2713,7 @@ sendImpl = async (service, method, body) => {
             });
     }
 
-    section('18. cmd62 十五 UID 上限、16 条拆分与多字节 packed 长度');
+    section('18. cmd62 请求上限、15 UID 拆分、失败隔离与多字节 packed 长度');
     {
         const originalGetBag = warehouse.getBag;
         const originalGetBagItems = warehouse.getBagItems;
@@ -2650,6 +2773,337 @@ sendImpl = async (service, method, body) => {
             && Number(length.value) === packed.length,
             packed && { hex: packed.toString('hex'), tag, length });
 
+        sent.length = 0;
+        batches.length = 0;
+        const cappedLogStart = activityLogs.length;
+        const capped = await milkTea.__testing.craftAllFruits(3, 1);
+        const cappedLogs = activityLogs.slice(cappedLogStart).map((x) => x.msg).join('\n');
+        check('maxBatches=1 时实际只发送一个 cmd62，单 UID 回退也不能越界',
+            batches.length === 1 && capped.batches === 1
+            && capped.used === 3 && capped.partial === true,
+            { result: capped, batches });
+        check('达到请求上限时日志准确报告成功、失败和未处理 UID',
+            /成功 3 个 UID，失败 0 个，未处理 13 个（达到本次请求上限）/.test(cappedLogs), cappedLogs);
+
+        const originalItems = warehouse.getBagItems;
+        warehouse.getBagItems = () => bagUids.slice(0, 6)
+            .map((uid) => ({ id: 40525, uid, count: 1 }));
+        sent.length = 0;
+        batches.length = 0;
+        let networkFailureSingles = 0;
+        router = async (req) => {
+            if (req.cmd === 58) {
+                return operateReply(58, {
+                    result: menuResult([{ id: 2, name: '甜莓奶茶', unlocked: true }]),
+                    resultField: 163,
+                });
+            }
+            if (req.cmd === 62) {
+                const payload = mg.parseTop(req.payload);
+                const requestUids = parsePackedVarints((payload.find((x) => x.f === 1) || {}).v);
+                batches.push(requestUids);
+                return operateReply(62, {
+                    errorCode: 1034130,
+                    result: Buffer.alloc(0),
+                    resultField: 167,
+                });
+            }
+            throw new Error(`非未解锁业务错误用例收到 cmd=${req.cmd}`);
+        };
+        const nonLockedLogStart = activityLogs.length;
+        const nonLockedFailure = await milkTea.__testing.craftAllFruits(3, 10);
+        const nonLockedLogs = activityLogs.slice(nonLockedLogStart).map((x) => x.msg).join('\n');
+        check('非 1034149 业务错误只发送首个 cmd62，不重试也不继续后续批次',
+            nonLockedFailure.ok === false && nonLockedFailure.errorCode === 1034130
+            && nonLockedFailure.batches === 1 && nonLockedFailure.failedUids.length === 3
+            && batches.length === 1 && batches[0].length === 3,
+            { result: nonLockedFailure, batches });
+        check('整批失败后日志补报因停止而未处理的 UID',
+            /成功 0 个 UID，失败 3 个，未处理 3 个（请求异常后停止）/.test(nonLockedLogs), nonLockedLogs);
+
+        batches.length = 0;
+        const manualBatchLogStart = activityLogs.length;
+        const manualBatchFailure = await milkTea.craftMilkTea(3);
+        const manualBatchLogs = activityLogs.slice(manualBatchLogStart).map((x) => x.msg).join('\n');
+        check('手动制作整批失败时日志报告全部已尝试 UID',
+            manualBatchFailure.ok === false && manualBatchFailure.failedUids.length === 3
+            && /成功 0 个 UID，失败 3 个，未处理 0 个/.test(manualBatchLogs),
+            { result: manualBatchFailure, logs: manualBatchLogs });
+
+        warehouse.getBagItems = () => bagUids.slice(0, 3)
+            .map((uid) => ({ id: 40525, uid, count: 1 }));
+        sent.length = 0;
+        batches.length = 0;
+        router = async (req) => {
+            if (req.cmd === 58) {
+                return operateReply(58, {
+                    result: menuResult([{ id: 2, name: '甜莓奶茶', unlocked: true }]),
+                    resultField: 163,
+                });
+            }
+            if (req.cmd === 62) {
+                const payload = mg.parseTop(req.payload);
+                const requestUids = parsePackedVarints((payload.find((x) => x.f === 1) || {}).v);
+                batches.push(requestUids);
+                if (requestUids.length > 1) {
+                    return operateReply(62, {
+                        errorCode: 1034149,
+                        result: Buffer.alloc(0),
+                        resultField: 167,
+                    });
+                }
+                networkFailureSingles += 1;
+                if (networkFailureSingles === 2) {
+                    throw new Error('socket closed while crafting');
+                }
+                return operateReply(62, { result: craftResult(requestUids), resultField: 167 });
+            }
+            throw new Error(`单 UID 网络异常用例收到 cmd=${req.cmd}`);
+        };
+        const networkLogStart = activityLogs.length;
+        const networkFailure = await milkTea.__testing.craftAllFruits(3, 10);
+        const networkLogs = activityLogs.slice(networkLogStart).map((x) => x.msg).join('\n');
+        check('单 UID 网络异常后立即停止，不再提交剩余 UID',
+            batches.length === 3
+            && batches[0].length === 3
+            && batches[1].join(',') === String(bagUids[0])
+            && batches[2].join(',') === String(bagUids[1]),
+            batches);
+        check('网络异常覆盖旧批量业务错误并显示真实原因',
+            networkFailure.ok === true && networkFailure.partial === true
+            && networkFailure.used === 1 && /socket closed/.test(networkFailure.failureReason || '')
+            && !/1034149/.test(networkFailure.failureReason || ''),
+            networkFailure);
+        check('逐 UID 重试中断时日志报告失败和未处理数量',
+            /成功 1 个 UID，失败 1 个，未处理 1 个（请求异常后停止）/.test(networkLogs), networkLogs);
+
+        warehouse.getBagItems = () => bagUids.slice(0, 3)
+            .map((uid) => ({ id: 40525, uid, count: 1 }));
+        batches.length = 0;
+        let laterBatchRequests = 0;
+        router = async (req) => {
+            if (req.cmd === 58) {
+                return operateReply(58, {
+                    result: menuResult([{ id: 2, name: '甜莓奶茶', unlocked: true }]),
+                    resultField: 163,
+                });
+            }
+            if (req.cmd === 62) {
+                const payload = mg.parseTop(req.payload);
+                const requestUids = parsePackedVarints((payload.find((x) => x.f === 1) || {}).v);
+                batches.push(requestUids);
+                laterBatchRequests += 1;
+                if (laterBatchRequests === 1) {
+                    return operateReply(62, {
+                        errorCode: 1034149,
+                        result: Buffer.alloc(0),
+                        resultField: 167,
+                    });
+                }
+                if (laterBatchRequests === 2) {
+                    return operateReply(62, { result: craftResult(requestUids), resultField: 167 });
+                }
+                throw new Error('socket closed in later craft batch');
+            }
+            throw new Error(`后续批次网络异常用例收到 ${req.cmd}`);
+        };
+        const laterNetworkFailure = await milkTea.__testing.craftAllFruits(1, 10);
+        check('后续批次网络异常时终止错误码覆盖先前未解锁错误',
+            laterNetworkFailure.ok === true && laterNetworkFailure.partial === true
+            && laterNetworkFailure.used === 1
+            && /socket closed in later craft batch/.test(laterNetworkFailure.failureReason || '')
+            && !/1034149/.test(laterNetworkFailure.failureReason || ''), laterNetworkFailure);
+        warehouse.getBagItems = originalItems;
+
+        sent.length = 0;
+        batches.length = 0;
+        router = async (req) => {
+            if (req.cmd === 58) {
+                return operateReply(58, {
+                    result: menuResult([{ id: 2, name: '甜莓奶茶', unlocked: true }]),
+                    resultField: 163,
+                });
+            }
+            if (req.cmd === 62) {
+                const payload = mg.parseTop(req.payload);
+                const requestUids = parsePackedVarints((payload.find((x) => x.f === 1) || {}).v);
+                batches.push(requestUids);
+                if (requestUids.length > 1) {
+                    return operateReply(62, {
+                        errorCode: 1034149,
+                        result: Buffer.alloc(0),
+                        resultField: 167,
+                    });
+                }
+                if (requestUids[0] === bagUids[0]) {
+                    return operateReply(62, {
+                        errorCode: 1034149,
+                        result: Buffer.alloc(0),
+                        resultField: 167,
+                    });
+                }
+                return operateReply(62, { result: craftResult(requestUids), resultField: 167 });
+            }
+            throw new Error(`整批失败回退用例收到 cmd=${req.cmd}`);
+        };
+        const isolated = await milkTea.__testing.craftAllFruits(3, 4);
+        check('整批业务失败后逐 UID 重试并保留成功项',
+            isolated.ok === true && isolated.partial === true
+            && isolated.used === 2 && isolated.batches === 4
+            && isolated.made.length === 2
+            && isolated.failedUids.length === 1 && isolated.failedUids[0] === bagUids[0]
+            && batches.map((uids) => uids.join(',')).join('|') === [
+                bagUids.slice(0, 3).join(','),
+                String(bagUids[0]),
+                String(bagUids[1]),
+                String(bagUids[2]),
+            ].join('|'), { result: isolated, batches });
+        check('整批失败回退保留服务端业务错误码',
+            isolated.errorCode === 1034149 && /1034149/.test(isolated.failureReason || ''),
+            isolated);
+
+        warehouse.getBagItems = () => bagUids.slice(0, 3)
+            .map((uid) => ({ id: 40525, uid, count: 1 }));
+        router = async (req) => {
+            if (req.cmd === 58) {
+                return operateReply(58, {
+                    result: menuResult([{ id: 2, name: '甜莓奶茶', unlocked: true }]),
+                    resultField: 163,
+                });
+            }
+            if (req.cmd === 62) {
+                const payload = mg.parseTop(req.payload);
+                const requestUids = parsePackedVarints((payload.find((x) => x.f === 1) || {}).v);
+                batches.push(requestUids);
+                if (requestUids.length > 1) {
+                    throw new Error('gamepb.activitypb.ActivityService.Operate 错误: code=1034149 该配方尚未解锁');
+                }
+                return operateReply(62, { result: craftResult(requestUids), resultField: 167 });
+            }
+            throw new Error(`抛异常业务码回退用例收到 cmd=${req.cmd}`);
+        };
+        batches.length = 0;
+        const thrownBusiness = await milkTea.__testing.craftAllFruits(3, 10);
+        check('网络层抛出的 code=1034149 仍按业务错误逐 UID 回退',
+            thrownBusiness.ok === true && thrownBusiness.used === 3
+            && thrownBusiness.batches === 4 && batches.length === 4
+            && thrownBusiness.failedUids.length === 0, {
+                result: thrownBusiness,
+                batches,
+            });
+
+        warehouse.getBagItems = () => bagUids.slice(0, 3)
+            .map((uid) => ({ id: 40525, uid, count: 1 }));
+        router = async (req) => {
+            if (req.cmd === 58) {
+                return operateReply(58, {
+                    result: menuResult([{ id: 2, name: '甜莓奶茶', unlocked: true }]),
+                    resultField: 163,
+                });
+            }
+            if (req.cmd === 62) {
+                const payload = mg.parseTop(req.payload);
+                const requestUids = parsePackedVarints((payload.find((x) => x.f === 1) || {}).v);
+                batches.push(requestUids);
+                if (requestUids[0] === bagUids[0]) {
+                    return operateReply(62, {
+                        errorCode: 1034149,
+                        result: Buffer.alloc(0),
+                        resultField: 167,
+                    });
+                }
+                return operateReply(62, { result: craftResult(requestUids), resultField: 167 });
+            }
+            throw new Error(`单 UID 未解锁继续用例收到 cmd=${req.cmd}`);
+        };
+        batches.length = 0;
+        const singleLocked = await milkTea.__testing.craftAllFruits(1, 10);
+        check('单 UID 批次遇到 1034149 后继续后续可制作批次',
+            singleLocked.ok === true && singleLocked.used === 2
+            && singleLocked.batches === 3 && singleLocked.failedUids.length === 1
+            && singleLocked.failedUids[0] === bagUids[0], {
+                result: singleLocked,
+                batches,
+            });
+
+        warehouse.getBagItems = () => bagUids.slice(0, 3)
+            .map((uid) => ({ id: 40525, uid, count: 1 }));
+        router = async (req) => {
+            if (req.cmd === 58) {
+                return operateReply(58, {
+                    result: menuResult([{ id: 2, name: '甜莓奶茶', unlocked: true }]),
+                    resultField: 163,
+                });
+            }
+            if (req.cmd === 62) {
+                const payload = mg.parseTop(req.payload);
+                const requestUids = parsePackedVarints((payload.find((x) => x.f === 1) || {}).v);
+                batches.push(requestUids);
+                if (requestUids.length > 1 || requestUids[0] === bagUids[0]) {
+                    return operateReply(62, {
+                        errorCode: 1034149,
+                        result: Buffer.alloc(0),
+                        resultField: 167,
+                    });
+                }
+                return operateReply(62, { result: craftResult(requestUids), resultField: 167 });
+            }
+            throw new Error(`手动制作回退用例收到 cmd=${req.cmd}`);
+        };
+        batches.length = 0;
+        const manualFallbackLogStart = activityLogs.length;
+        const manualFallback = await milkTea.craftMilkTea(3);
+        const manualFallbackLogs = activityLogs.slice(manualFallbackLogStart).map((x) => x.msg).join('\n');
+        check('手动制作入口同样隔离 1034149 并保留成功项',
+            manualFallback.ok === true && manualFallback.partial === true
+            && manualFallback.used === 2 && manualFallback.failedUids.length === 1
+            && manualFallback.batches === 4, {
+                result: manualFallback,
+                batches,
+            });
+        check('手动制作逐 UID 完成时日志报告失败项且未处理为 0',
+            /成功 2 个 UID，失败 1 个，未处理 0 个/.test(manualFallbackLogs), manualFallbackLogs);
+
+        batches.length = 0;
+        let manualNetworkSingles = 0;
+        router = async (req) => {
+            if (req.cmd === 58) {
+                return operateReply(58, {
+                    result: menuResult([{ id: 2, name: '甜莓奶茶', unlocked: true }]),
+                    resultField: 163,
+                });
+            }
+            if (req.cmd === 62) {
+                const payload = mg.parseTop(req.payload);
+                const requestUids = parsePackedVarints((payload.find((x) => x.f === 1) || {}).v);
+                batches.push(requestUids);
+                if (requestUids.length > 1) {
+                    return operateReply(62, {
+                        errorCode: 1034149,
+                        result: Buffer.alloc(0),
+                        resultField: 167,
+                    });
+                }
+                manualNetworkSingles += 1;
+                if (manualNetworkSingles === 2) {
+                    throw new Error('socket closed during manual craft retry');
+                }
+                return operateReply(62, { result: craftResult(requestUids), resultField: 167 });
+            }
+            throw new Error(`手动制作网络异常用例收到 cmd=${req.cmd}`);
+        };
+        const manualNetworkLogStart = activityLogs.length;
+        const manualNetworkFailure = await milkTea.craftMilkTea(3);
+        const manualNetworkLogs = activityLogs.slice(manualNetworkLogStart).map((x) => x.msg).join('\n');
+        check('手动制作逐 UID 中断时返回失败与未处理 UID',
+            manualNetworkFailure.ok === true && manualNetworkFailure.partial === true
+            && manualNetworkFailure.used === 1 && manualNetworkFailure.failedUids.length === 1
+            && manualNetworkFailure.unprocessedUids.length === 1,
+            { result: manualNetworkFailure, batches });
+        check('手动制作逐 UID 中断时日志报告完整三类计数',
+            /成功 1 个 UID，失败 1 个，未处理 1 个（请求异常后停止）/.test(manualNetworkLogs), manualNetworkLogs);
+
+        warehouse.getBagItems = originalItems;
         warehouse.getBag = originalGetBag;
         warehouse.getBagItems = originalGetBagItems;
         milkTea.__testing.clearMenuCache();
