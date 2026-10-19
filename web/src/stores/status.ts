@@ -30,12 +30,55 @@ export const useStatusStore = defineStore('status', () => {
   const dailyGifts = ref<DailyGiftsResponse | null>(null)
   const loading = ref(false)
   const error = ref('')
+  const logsLoading = ref(false)
+  const logsError = ref('')
   const realtimeConnected = ref(false)
   const realtimeLogsEnabled = ref(true)
   const currentRealtimeAccountId = ref('')
   const tokenRef = useStorage('admin_token', '')
 
   let socket: Socket | null = null
+  let latestLogsRequest = 0
+  let latestStatusRequest = 0
+  let latestDailyGiftsRequest = 0
+  let latestAccountLogsRequest = 0
+
+  function normalizeAccountId(accountId: any) {
+    return String(accountId || '').trim()
+  }
+
+  function payloadMatchesCurrentAccount(payload: any) {
+    const current = normalizeAccountId(currentRealtimeAccountId.value)
+    if (!current)
+      return true
+    const actual = normalizeAccountId(payload && payload.accountId)
+    return actual === current
+  }
+
+  function filterLogsForAccount(list: any[], accountId: string) {
+    const current = normalizeAccountId(accountId)
+    if (!current || current === 'all')
+      return list
+    return list.filter(entry => normalizeAccountId(entry?.accountId) === current)
+  }
+
+  function responseMatchesTarget(response: any, targetAccountId: string) {
+    const target = normalizeAccountId(targetAccountId)
+    if (!target || target === 'all')
+      return true
+    const actual = normalizeAccountId(
+      response && (response.accountId || response.data?.accountId),
+    )
+    return !actual || actual === target
+  }
+
+  function requestMatchesCurrentAccount(requestId: number, latestRequest: number, targetAccountId: string) {
+    if (requestId !== latestRequest)
+      return false
+    const current = normalizeAccountId(currentRealtimeAccountId.value)
+    const target = normalizeAccountId(targetAccountId)
+    return !current || target === 'all' || current === target
+  }
 
   function normalizeStatusPayload(input: any) {
     return (input && typeof input === 'object') ? { ...input } : {}
@@ -67,8 +110,9 @@ export const useStatusStore = defineStore('status', () => {
 
   function handleRealtimeStatus(payload: any) {
     const body = (payload && typeof payload === 'object') ? payload : {}
-    const accountId = String(body.accountId || '')
-    if (currentRealtimeAccountId.value && accountId !== currentRealtimeAccountId.value)
+    const accountId = normalizeAccountId(body.accountId)
+    const current = normalizeAccountId(currentRealtimeAccountId.value)
+    if (current && accountId !== current)
       return
     if (body.status && typeof body.status === 'object') {
       status.value = normalizeStatusPayload(body.status)
@@ -77,25 +121,42 @@ export const useStatusStore = defineStore('status', () => {
   }
 
   function handleRealtimeLog(payload: any) {
-    if (!realtimeLogsEnabled.value)
+    if (!realtimeLogsEnabled.value || !payloadMatchesCurrentAccount(payload))
       return
     pushRealtimeLog(payload)
   }
 
   function handleRealtimeAccountLog(payload: any) {
+    if (!payloadMatchesCurrentAccount(payload))
+      return
     pushRealtimeAccountLog(payload)
   }
 
   function handleRealtimeLogsSnapshot(payload: any) {
+    if (!realtimeLogsEnabled.value)
+      return
     const body = (payload && typeof payload === 'object') ? payload : {}
+    if (!payloadMatchesCurrentAccount(body))
+      return
     const list = Array.isArray(body.logs) ? body.logs : []
-    logs.value = list.map((item: any) => normalizeLogEntry(item))
+    logs.value = filterLogsForAccount(list, currentRealtimeAccountId.value)
+      .map((item: any) => normalizeLogEntry(item))
+    logsError.value = ''
   }
 
   function handleRealtimeAccountLogsSnapshot(payload: any) {
     const body = (payload && typeof payload === 'object') ? payload : {}
     const list = Array.isArray(body.logs) ? body.logs : []
-    accountLogs.value = list
+    const current = normalizeAccountId(currentRealtimeAccountId.value)
+    const snapshotAccountId = normalizeAccountId(body.accountId)
+    if (current && snapshotAccountId && snapshotAccountId !== current)
+      return
+
+    const next = filterLogsForAccount(list, current)
+    // 兼容不带 accountId 的旧版快照: 空结果可能来自上一个账号, 不覆盖已加载的新账号日志。
+    if (current && !snapshotAccountId && next.length === 0 && accountLogs.value.length > 0)
+      return
+    accountLogs.value = next
   }
 
   function ensureRealtimeSocket() {
@@ -139,7 +200,22 @@ export const useStatusStore = defineStore('status', () => {
   }
 
   function connectRealtime(accountId: string) {
-    currentRealtimeAccountId.value = String(accountId || '').trim()
+    const normalizedAccountId = normalizeAccountId(accountId)
+    if (currentRealtimeAccountId.value !== normalizedAccountId) {
+      latestStatusRequest += 1
+      latestLogsRequest += 1
+      latestDailyGiftsRequest += 1
+      latestAccountLogsRequest += 1
+      status.value = null
+      logs.value = []
+      accountLogs.value = []
+      dailyGifts.value = null
+      error.value = ''
+      loading.value = false
+      logsError.value = ''
+      logsLoading.value = false
+    }
+    currentRealtimeAccountId.value = normalizedAccountId
     if (!tokenRef.value)
       return
 
@@ -173,13 +249,22 @@ export const useStatusStore = defineStore('status', () => {
   }
 
   async function fetchStatus(accountId: string) {
-    if (!accountId)
+    const normalizedAccountId = normalizeAccountId(accountId)
+    if (!normalizedAccountId)
       return
+    const requestId = ++latestStatusRequest
+    const isCurrentRequest = () => requestMatchesCurrentAccount(
+      requestId,
+      latestStatusRequest,
+      normalizedAccountId,
+    )
     loading.value = true
     try {
       const { data } = await api.get('/api/status', {
-        headers: { 'x-account-id': accountId },
+        headers: { 'x-account-id': normalizedAccountId },
       })
+      if (!isCurrentRequest() || !responseMatchesTarget(data, normalizedAccountId))
+        return
       if (data.ok) {
         status.value = normalizeStatusPayload(data.data)
         error.value = ''
@@ -189,62 +274,104 @@ export const useStatusStore = defineStore('status', () => {
       }
     }
     catch (e: any) {
-      error.value = e.message
+      if (isCurrentRequest())
+        error.value = e.message
     }
     finally {
-      loading.value = false
+      if (requestId === latestStatusRequest)
+        loading.value = false
     }
   }
 
   async function fetchLogs(accountId: string, options: any = {}) {
-    if (!accountId && options.accountId !== 'all')
+    const targetAccountId = normalizeAccountId(accountId) || normalizeAccountId(options.accountId) || 'all'
+    if (!accountId && targetAccountId !== 'all')
       return
+    const requestId = ++latestLogsRequest
     const params: any = { limit: 100, ...options }
     const headers: any = {}
-    if (accountId && accountId !== 'all') {
-      headers['x-account-id'] = accountId
+    if (targetAccountId !== 'all') {
+      headers['x-account-id'] = targetAccountId
     }
     else {
       params.accountId = 'all'
     }
 
+    logsLoading.value = true
+    logsError.value = ''
     try {
       const { data } = await api.get('/api/logs', { headers, params })
+      if (!requestMatchesCurrentAccount(requestId, latestLogsRequest, targetAccountId)
+        || !responseMatchesTarget(data, targetAccountId)) {
+        return
+      }
       if (data.ok) {
-        logs.value = data.data
-        error.value = ''
+        logs.value = filterLogsForAccount(Array.isArray(data.data) ? data.data : [], targetAccountId)
+        logsError.value = ''
+      }
+      else {
+        logsError.value = data?.error || '日志加载失败'
       }
     }
     catch (e: any) {
-      console.error(e)
+      if (requestMatchesCurrentAccount(requestId, latestLogsRequest, targetAccountId)) {
+        logsError.value = e?.response?.data?.error || e?.message || '日志加载失败'
+      }
+    }
+    finally {
+      if (requestId === latestLogsRequest)
+        logsLoading.value = false
     }
   }
 
   async function fetchDailyGifts(accountId: string) {
-    if (!accountId)
+    const normalizedAccountId = normalizeAccountId(accountId)
+    if (!normalizedAccountId)
       return
+    const requestId = ++latestDailyGiftsRequest
+    const isCurrentRequest = () => requestMatchesCurrentAccount(
+      requestId,
+      latestDailyGiftsRequest,
+      normalizedAccountId,
+    )
     try {
       const { data } = await api.get('/api/daily-gifts', {
-        headers: { 'x-account-id': accountId },
+        headers: { 'x-account-id': normalizedAccountId },
       })
+      if (!isCurrentRequest() || !responseMatchesTarget(data, normalizedAccountId))
+        return
       if (data.ok) {
         dailyGifts.value = data.data
       }
     }
     catch (e) {
-      console.error('获取每日奖励失败', e)
+      if (isCurrentRequest())
+        console.error('获取每日奖励失败', e)
     }
   }
 
   async function fetchAccountLogs(limit = 100) {
+    const targetAccountId = normalizeAccountId(currentRealtimeAccountId.value)
+    const requestId = ++latestAccountLogsRequest
+    if (!targetAccountId) {
+      accountLogs.value = []
+      return
+    }
+    const isCurrentRequest = () => requestId === latestAccountLogsRequest
+      && normalizeAccountId(currentRealtimeAccountId.value) === targetAccountId
     try {
-      const res = await api.get(`/api/account-logs?limit=${Math.max(1, Number(limit) || 100)}`)
+      const res = await api.get(`/api/account-logs?limit=${Math.max(1, Number(limit) || 100)}`, {
+        headers: { 'x-account-id': targetAccountId },
+      })
+      if (!isCurrentRequest())
+        return
       if (Array.isArray(res.data)) {
-        accountLogs.value = res.data
+        accountLogs.value = filterLogsForAccount(res.data, targetAccountId)
       }
     }
     catch (e) {
-      console.error(e)
+      if (isCurrentRequest())
+        console.error(e)
     }
   }
 
@@ -259,6 +386,8 @@ export const useStatusStore = defineStore('status', () => {
     dailyGifts,
     loading,
     error,
+    logsLoading,
+    logsError,
     realtimeConnected,
     realtimeLogsEnabled,
     fetchStatus,

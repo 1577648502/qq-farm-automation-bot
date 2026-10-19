@@ -42,18 +42,25 @@ export const useAccountStore = defineStore('account', () => {
   const currentAccountId = useStorage('current_account_id', '')
   const loading = ref(false)
   const logs = ref<AccountLog[]>([])
+  let latestAccountsRequest = 0
 
   const currentAccount = computed(() =>
     accounts.value.find(a => String(a.id) === currentAccountId.value),
   )
 
   async function fetchAccounts() {
+    const requestId = ++latestAccountsRequest
     loading.value = true
     try {
       // api interceptor adds x-admin-token
       const res = await api.get('/api/accounts')
-      if (res.data.ok && res.data.data && res.data.data.accounts) {
-        accounts.value = res.data.data.accounts
+      if (requestId !== latestAccountsRequest)
+        return
+      const nextAccounts = res.data?.ok && Array.isArray(res.data.data?.accounts)
+        ? res.data.data.accounts
+        : null
+      if (nextAccounts) {
+        accounts.value = nextAccounts
 
         // Auto-select first account if none selected or selected not found
         if (accounts.value.length > 0) {
@@ -67,20 +74,14 @@ export const useAccountStore = defineStore('account', () => {
           currentAccountId.value = ''
         }
       }
-      else {
-        // 如果返回数据无效，也清空账号列表和选中状态
-        accounts.value = []
-        currentAccountId.value = ''
-      }
     }
     catch (e) {
       console.error('获取账号失败', e)
-      // 请求失败时也清空状态
-      accounts.value = []
-      currentAccountId.value = ''
+      // 临时网络错误不能清空最后一次成功快照，否则所有依赖账号的页面都会失去上下文。
     }
     finally {
-      loading.value = false
+      if (requestId === latestAccountsRequest)
+        loading.value = false
     }
   }
 

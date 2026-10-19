@@ -4,20 +4,24 @@
  *
  * ① 顶部信息: 店铺/等级/待领取收益/奶茶券余额/累计营业额/结算期开始
  * ② 种子商店: 拾物小铺式卡片, 按货币分组, 卡内填数量兑换; 等级不足/已限购置灰
- * ③ 雇佣好友: 可折叠, 支持勾选白名单 + 自动雇佣
+ * ③ 雇佣好友: 可折叠, 支持勾选优先好友 + 自动雇佣
  * ④ 任务: 卡片式展示; 领取协议未确认, 页面不发送领取请求
  * 自动化开关与"立即执行"在 设置 → 自动控制
  *
  * 协议见 core/src/services/milk-tea.js
  */
-import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { storeToRefs } from 'pinia'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import api from '@/api'
 import BaseButton from '@/components/ui/BaseButton.vue'
 import BaseSwitch from '@/components/ui/BaseSwitch.vue'
+import { useAccountStore } from '@/stores/account'
 import { useToastStore } from '@/stores/toast'
-import { apiError } from '@/utils/api-result'
+import { apiError, apiFailure } from '@/utils/api-result'
 
 const toast = useToastStore()
+const accountStore = useAccountStore()
+const { currentAccountId } = storeToRefs(accountStore)
 
 const status = ref<any>(null)
 const statusBusy = ref(false)
@@ -27,6 +31,8 @@ const busy = ref('')
 const refreshing = ref(false)
 let statusRequestId = 0
 let workRequestId = 0
+let accountEpoch = 0
+let refreshRequestId = 0
 let workRefreshTimer: ReturnType<typeof setInterval> | null = null
 let clockTimer: ReturnType<typeof setInterval> | null = null
 
@@ -88,10 +94,31 @@ function formatWageChange(wage: any) {
 
 /** 互动(我的工作): 目标固定为当前雇主, 互动类型默认 2 花式摇杯 */
 const storeName = ref('奶茶小铺')
+const interactType = ref(2)
+
+function hireConfigPayload() {
+  return {
+    hireGids: hireGids.value.map(String),
+    autoHire: !!autoHire.value,
+    autoInteract: !!autoInteract.value,
+    interactType: Number(interactType.value) || 2,
+    storeName: String(storeName.value || ''),
+    hireDuration: Number(hireDuration.value) || 1,
+  }
+}
+
+function hireConfigSnapshot() {
+  return JSON.stringify(hireConfigPayload())
+}
+
+const hireConfigBaseline = ref(hireConfigSnapshot())
+const hireConfigDirty = computed(() => hireConfigSnapshot() !== hireConfigBaseline.value)
+
 /** 营业记录(cmd=67, 按天): 日期/售卖杯数/收益/奖励物品/雇员记录 */
 const sales = ref<any>(null)
 const salesLoading = ref(false)
 const salesDay = ref<number>(0)   // 0 = 尚未读取
+const pendingSalesDay = ref<number>(0)
 let salesRequestId = 0
 /** 店铺等级进度(来自 cmd=55: #1 等级 / #2 累计营业额 / #3 下一级所需) */
 const upgradeInfo = ref<any>(null)
@@ -99,6 +126,87 @@ let upgradeRequestId = 0
 let hireConfigRequestId = 0
 const DAY_SECONDS = 86400
 const BEIJING_OFFSET_SECONDS = 8 * 3600
+
+function captureAccountContext() {
+  return {
+    accountId: String(currentAccountId.value || ''),
+    epoch: accountEpoch,
+  }
+}
+
+function isAccountContextCurrent(context: any) {
+  return !!context?.accountId
+    && context.epoch === accountEpoch
+    && String(currentAccountId.value || '') === context.accountId
+}
+
+function isRequestCurrent(context: any, requestId: number, latestRequestId: number) {
+  return requestId === latestRequestId && isAccountContextCurrent(context)
+}
+
+function pageRequestConfig(context: any, config: any = {}) {
+  return {
+    ...config,
+    headers: {
+      ...(config.headers || {}),
+      'x-account-id': context.accountId,
+    },
+  }
+}
+
+function invalidateMilkTeaRequests() {
+  accountEpoch += 1
+  refreshRequestId += 1
+  statusRequestId += 1
+  workRequestId += 1
+  shopRequestId += 1
+  tasksRequestId += 1
+  rankingsRequestId += 1
+  salesRequestId += 1
+  upgradeRequestId += 1
+  hireConfigRequestId += 1
+  friendsRequestId += 1
+}
+
+function resetMilkTeaPageState() {
+  status.value = null
+  statusBusy.value = false
+  statusError.value = ''
+  actionResult.value = ''
+  busy.value = ''
+  refreshing.value = false
+  shop.value = []
+  shopBusy.value = false
+  shopError.value = ''
+  shopQty.value = {}
+  tasks.value = []
+  tasksLoading.value = false
+  tasksError.value = ''
+  rankings.value = []
+  rankingsLoading.value = false
+  rankingsError.value = ''
+  rankingCurrentPage.value = 1
+  rankingMyRank.value = 0
+  rankingHasNext.value = false
+  rankingServerTime.value = 0
+  friends.value = []
+  friendsBusy.value = false
+  friendsError.value = ''
+  friendsOpen.value = false
+  hireGids.value = []
+  autoHire.value = false
+  autoInteract.value = false
+  hireSaving.value = false
+  hireDuration.value = 1
+  interactType.value = 2
+  storeName.value = '奶茶小铺'
+  hireConfigBaseline.value = hireConfigSnapshot()
+  sales.value = null
+  salesLoading.value = false
+  salesDay.value = 0
+  pendingSalesDay.value = 0
+  upgradeInfo.value = null
+}
 
 /** 秒级时间戳 → 北京时间当日 00:00 */
 function beijingDayStart(ts: number) {
@@ -114,10 +222,14 @@ function upgradePercent() {
   return Math.max(0, Math.min(100, Math.round((Number(i.revenue) || 0) / Number(i.required) * 100)))
 }
 async function loadUpgradeInfo() {
+  const context = captureAccountContext()
+  if (!isAccountContextCurrent(context))
+    return
   const requestId = ++upgradeRequestId
   try {
-    const res = await api.post('/api/activity/milk-tea/upgrade-info', {})
-    if (requestId !== upgradeRequestId) return
+    const res = await api.post('/api/activity/milk-tea/upgrade-info', {}, pageRequestConfig(context))
+    if (!isRequestCurrent(context, requestId, upgradeRequestId))
+      return
     const d = res.data?.data || {}
     const err = apiError(res, d)
     if (err) {
@@ -127,14 +239,13 @@ async function loadUpgradeInfo() {
     }
     upgradeInfo.value = d
   } catch (e: any) {
-    if (requestId !== upgradeRequestId) return
+    if (!isRequestCurrent(context, requestId, upgradeRequestId))
+      return
     const err = apiError(null, null, e)
     upgradeInfo.value = { ok: false, reason: err }
     reportError('读取店铺升级信息', err)
   }
 }
-const interactType = ref(2)
-
 const KIND_LABEL: Record<string, string> = { seed: '种子', exchange: '装扮兑换' }
 const kindLabel = (g: any) => KIND_LABEL[g.kind] || '道具'
 
@@ -144,11 +255,33 @@ function reportError(where: string, msg: string) {
   toast.error(text)
 }
 
+function firstCount(source: any, keys: string[]): number | null {
+  for (const key of keys) {
+    const raw = source?.[key]
+    if (raw === null || raw === undefined || raw === '')
+      continue
+    const value = Number(raw)
+    if (Number.isFinite(value))
+      return Math.max(0, Math.floor(value))
+  }
+  return null
+}
+function purchaseLimit(g: any) {
+  return firstCount(g, ['limitCount', 'purchaseLimit', 'limit']) || 0
+}
+function purchaseRemaining(g: any): number | null {
+  const direct = firstCount(g, ['remainingCount', 'remainCount', 'remaining', 'leftCount', 'purchasableCount'])
+  if (direct !== null) return direct
+  const lim = purchaseLimit(g)
+  if (lim <= 0) return null
+  const bought = firstCount(g, ['boughtCount', 'purchasedCount', 'buyCount']) || 0
+  return Math.max(0, lim - bought)
+}
 const maxQty = (g: any) => {
-  const lim = Math.floor(Number(g.limitCount) || 0)
-  const bought = Math.floor(Number(g.boughtCount) || 0)
-  const remain = lim > 0 ? lim - bought : 9999
-  return remain > 0 ? remain : 1
+  const remain = purchaseRemaining(g)
+  if (remain !== null)
+    return remain > 0 ? remain : 1
+  return 9999
 }
 const clampQty = (g: any) => {
   const n = Math.floor(Number(shopQty.value[g.goodsId]) || 1)
@@ -214,7 +347,7 @@ function employeeTypeLabel(e: any) {
   const type = String(e?.employeeType || '').toLowerCase()
   if (type === 'friend') return '好友'
   if (type === 'npc') return 'NPC'
-  if (type === 'unknown') return '类型未知'
+  if (type === 'unknown') return ''
   if (e?.isFriend === true) return '好友'
   if (e?.isNpc === true) return 'NPC'
   return '员工'
@@ -223,6 +356,16 @@ function employeeTypeLabel(e: any) {
 const storeLevel = computed(() => Number(status.value?.storeLevel) || 0)
 const totalRevenue = computed(() => Number(status.value?.value) || 0)
 const cashierDetail = computed(() => status.value?.cashierDetail || {})
+const featuredRecipe = computed(() => {
+  const recipe = status.value?.featuredRecipe
+  const id = Number(recipe?.id ?? status.value?.recipeId) || 0
+  return {
+    id,
+    name: id ? String(recipe?.name || `配方#${id}`) : '活动未指定',
+    resolved: !id || recipe?.ok !== false,
+    reason: String(recipe?.reason || ''),
+  }
+})
 
 function pendingListFrom(source: any) {
   if (Array.isArray(source?.pendingRewards)) return source.pendingRewards
@@ -295,16 +438,46 @@ const isSettling = computed(() => {
   return settleAt > 0 && nowTick.value >= settleAt
 })
 
-/** 等级不足 */
+/** 后端明确给了 unlocked 时以它为准，否则回退到等级判断。 */
+function explicitUnlocked(g: any): boolean | null {
+  for (const value of [g?.unlocked, g?.isUnlocked]) {
+    if (value === true || value === 1)
+      return true
+    if (value === false || value === 0)
+      return false
+  }
+  if (g?.locked === true)
+    return false
+  if (g?.locked === false)
+    return true
+  return null
+}
 function isLocked(g: any) {
+  const unlocked = explicitUnlocked(g)
+  if (unlocked !== null)
+    return !unlocked
   const need = Number(g.requireLevel) || 0
-  if (need <= 0) return false
+  if (need <= 0)
+    return false
   return storeLevel.value < need
 }
-/** 已限购(本会话已兑满) */
+function lockReason(g: any) {
+  const unlocked = explicitUnlocked(g)
+  if (unlocked === false)
+    return '未解锁'
+  const need = Number(g.requireLevel) || 0
+  return need > 0 ? `需等级 ≥${need}` : '未解锁'
+}
+/** 已限购：兼容后端明确状态和服务端返回的剩余/已购数量。 */
 function isSoldOut(g: any) {
-  const lim = Number(g.limitCount) || 0
-  return g.soldOut === true || (lim > 0 && Number(g.boughtCount) >= lim)
+  if (g?.soldOut === true || g?.isSoldOut === true || g?.limitReached === true)
+    return true
+  const remain = purchaseRemaining(g)
+  if (remain !== null)
+    return remain <= 0
+  const lim = purchaseLimit(g)
+  const bought = firstCount(g, ['boughtCount', 'purchasedCount', 'buyCount'])
+  return lim > 0 && bought !== null && bought >= lim
 }
 function isDisabled(g: any) {
   return isLocked(g) || isSoldOut(g)
@@ -339,12 +512,16 @@ function fmtDuration(sec: any) {
 }
 
 async function loadStatus() {
+  const context = captureAccountContext()
+  if (!isAccountContextCurrent(context))
+    return
   const requestId = ++statusRequestId
   statusBusy.value = true
   statusError.value = ''
   try {
-    const res = await api.get('/api/activity/milk-tea/status')
-    if (requestId !== statusRequestId) return
+    const res = await api.get('/api/activity/milk-tea/status', pageRequestConfig(context))
+    if (!isRequestCurrent(context, requestId, statusRequestId))
+      return
     const d = res.data?.data || {}
     const err = apiError(res, d)
     if (err) {
@@ -355,19 +532,25 @@ async function loadStatus() {
     status.value = d
     nowTick.value = Math.floor(Date.now() / 1000)
   } catch (e: any) {
-    if (requestId !== statusRequestId) return
+    if (!isRequestCurrent(context, requestId, statusRequestId))
+      return
     statusError.value = apiError(null, null, e)
     reportError('读取经营状态', statusError.value)
   } finally {
-    if (requestId === statusRequestId) statusBusy.value = false
+    if (isRequestCurrent(context, requestId, statusRequestId))
+      statusBusy.value = false
   }
 }
 
 async function loadWorkStatus() {
+  const context = captureAccountContext()
+  if (!isAccountContextCurrent(context))
+    return
   const requestId = ++workRequestId
   try {
-    const res = await api.get('/api/activity/milk-tea/work')
-    if (requestId !== workRequestId) return
+    const res = await api.get('/api/activity/milk-tea/work', pageRequestConfig(context))
+    if (!isRequestCurrent(context, requestId, workRequestId))
+      return
     const d = res.data?.data || {}
     const err = apiError(res, d)
     if (err) {
@@ -376,7 +559,8 @@ async function loadWorkStatus() {
     }
     status.value = { ...(status.value || {}), work: d }
   } catch (e: any) {
-    if (requestId !== workRequestId) return
+    if (!isRequestCurrent(context, requestId, workRequestId))
+      return
     status.value = {
       ...(status.value || {}),
       work: { ok: false, hasEmployer: false, reason: apiError(null, null, e) },
@@ -385,12 +569,16 @@ async function loadWorkStatus() {
 }
 
 async function loadShop() {
+  const context = captureAccountContext()
+  if (!isAccountContextCurrent(context))
+    return
   const requestId = ++shopRequestId
   shopBusy.value = true
   shopError.value = ''
   try {
-    const res = await api.get('/api/activity/milk-tea/shop')
-    if (requestId !== shopRequestId) return
+    const res = await api.get('/api/activity/milk-tea/shop', pageRequestConfig(context))
+    if (!isRequestCurrent(context, requestId, shopRequestId))
+      return
     const d = res.data?.data || {}
     const err = apiError(res, d)
     if (err) {
@@ -402,22 +590,28 @@ async function loadShop() {
     shop.value = Array.isArray(d.goods) ? d.goods : []
     for (const g of shop.value) if (!shopQty.value[g.goodsId]) shopQty.value[g.goodsId] = 1
   } catch (e: any) {
-    if (requestId !== shopRequestId) return
+    if (!isRequestCurrent(context, requestId, shopRequestId))
+      return
     shop.value = []
     shopError.value = apiError(null, null, e)
     reportError('读取商店', shopError.value)
   } finally {
-    if (requestId === shopRequestId) shopBusy.value = false
+    if (isRequestCurrent(context, requestId, shopRequestId))
+      shopBusy.value = false
   }
 }
 
 async function loadTasks() {
+  const context = captureAccountContext()
+  if (!isAccountContextCurrent(context))
+    return
   const requestId = ++tasksRequestId
   tasksLoading.value = true
   tasksError.value = ''
   try {
-    const res = await api.get('/api/activity/milk-tea/tasks')
-    if (requestId !== tasksRequestId) return
+    const res = await api.get('/api/activity/milk-tea/tasks', pageRequestConfig(context))
+    if (!isRequestCurrent(context, requestId, tasksRequestId))
+      return
     const d = res.data?.data || {}
     const err = apiError(res, d)
     if (err) {
@@ -427,30 +621,34 @@ async function loadTasks() {
     }
     tasks.value = Array.isArray(d.tasks) ? d.tasks : Array.isArray(d) ? d : []
   } catch (e: any) {
-    if (requestId !== tasksRequestId) return
+    if (!isRequestCurrent(context, requestId, tasksRequestId))
+      return
     tasks.value = []
     tasksError.value = apiError(null, null, e)
   } finally {
-    if (requestId === tasksRequestId) tasksLoading.value = false
+    if (isRequestCurrent(context, requestId, tasksRequestId))
+      tasksLoading.value = false
   }
 }
 
 async function loadRankings(page = rankingCurrentPage.value) {
+  const context = captureAccountContext()
+  if (!isAccountContextCurrent(context))
+    return
   const targetPage = Math.max(1, Math.floor(Number(page) || 1))
   const requestId = ++rankingsRequestId
   rankingsLoading.value = true
   rankingsError.value = ''
   try {
-    const res = await api.get('/api/activity/milk-tea/rankings', { params: { page: targetPage } })
-    if (requestId !== rankingsRequestId) return
+    const res = await api.get('/api/activity/milk-tea/rankings', pageRequestConfig(context, {
+      params: { page: targetPage },
+    }))
+    if (!isRequestCurrent(context, requestId, rankingsRequestId))
+      return
     const d = res.data?.data || {}
     const err = apiError(res, d)
     if (err) {
-      rankings.value = []
       rankingsError.value = err
-      rankingMyRank.value = 0
-      rankingHasNext.value = false
-      rankingServerTime.value = 0
       return
     }
     rankings.value = Array.isArray(d.entries) ? d.entries : []
@@ -459,14 +657,12 @@ async function loadRankings(page = rankingCurrentPage.value) {
     rankingHasNext.value = d.hasNext === true
     rankingServerTime.value = Number(d.serverTime) || 0
   } catch (e: any) {
-    if (requestId !== rankingsRequestId) return
-    rankings.value = []
-    rankingMyRank.value = 0
-    rankingHasNext.value = false
-    rankingServerTime.value = 0
+    if (!isRequestCurrent(context, requestId, rankingsRequestId))
+      return
     rankingsError.value = apiError(null, null, e) || '排行榜读取失败'
   } finally {
-    if (requestId === rankingsRequestId) rankingsLoading.value = false
+    if (isRequestCurrent(context, requestId, rankingsRequestId))
+      rankingsLoading.value = false
   }
 }
 
@@ -478,6 +674,9 @@ function shiftRankingPage(delta: number) {
 
 /** 营业记录(cmd=67, 按天; day 省略=今天) */
 async function loadSales(day?: number) {
+  const context = captureAccountContext()
+  if (!isAccountContextCurrent(context))
+    return
   const requested = day ? beijingDayStart(Number(day)) : Number(todayStart.value)
   if (requested > Number(todayStart.value)) {
     toast.warning('不能查看未来日期的营业记录')
@@ -486,23 +685,64 @@ async function loadSales(day?: number) {
   const requestId = ++salesRequestId
   salesLoading.value = true
   try {
-    const res = await api.post('/api/activity/milk-tea/sales-record', requested ? { day: requested } : {})
-    if (requestId !== salesRequestId) return
+    const res = await api.post(
+      '/api/activity/milk-tea/sales-record',
+      requested ? { day: requested } : {},
+      pageRequestConfig(context),
+    )
+    if (!isRequestCurrent(context, requestId, salesRequestId))
+      return
     const d = res.data?.data || {}
-    if (apiError(res, d)) { sales.value = { ok: false, reason: `接口返回异常: ${JSON.stringify(res.data).slice(0, 120)}` }; return }
-    if (!d || d.ok !== true) { sales.value = { ok: false, reason: d.reason || `接口返回体不含 ok 字段(可能后端未更新): ${JSON.stringify(res.data).slice(0, 120)}` }; return }
+    const err = apiError(res, d)
+    if (err) { sales.value = { ok: false, reason: `接口返回异常：${err}` }; return }
+    if (!d || d.ok !== true) { sales.value = { ok: false, reason: d.reason || '营业记录接口未返回有效数据（后台可能未更新）' }; return }
     sales.value = d
     salesDay.value = Number(d.day) || requested
   } catch (e: any) {
-    if (requestId !== salesRequestId) return
+    if (!isRequestCurrent(context, requestId, salesRequestId))
+      return
     const st = e.response?.status ? `HTTP ${e.response.status}` : ''
     sales.value = { ok: false, reason: `营业记录请求失败：${st} ${e.response?.data?.error || e.message || '未知错误'}` }
   } finally {
-    if (requestId === salesRequestId) salesLoading.value = false
+    if (isRequestCurrent(context, requestId, salesRequestId)) {
+      salesLoading.value = false
+      flushPendingSalesRefresh()
+    }
   }
+}
+
+function flushPendingSalesRefresh() {
+  const context = captureAccountContext()
+  if (!isAccountContextCurrent(context))
+    return
+  const target = Number(pendingSalesDay.value) || 0
+  if (!target || document.hidden || salesLoading.value)
+    return
+  pendingSalesDay.value = 0
+  if (Number(salesDay.value) < target)
+    void loadSales(target)
+}
+
+/** 跨日时记录待刷新日期；若旧销售请求仍在进行，等它结束后立刻补拉新日期。 */
+function syncSalesClock(tick: number, flush = true) {
+  const previousToday = todayStart.value
+  const nextToday = beijingDayStart(tick)
+  const wasViewingToday = !salesDay.value || Number(salesDay.value) === Number(previousToday)
+  todayStart.value = nextToday
+  nowTick.value = tick
+  if (nextToday !== previousToday && wasViewingToday)
+    pendingSalesDay.value = Math.max(Number(pendingSalesDay.value) || 0, nextToday)
+  if (flush)
+    flushPendingSalesRefresh()
+}
+
+function handleVisibilityChange() {
+  if (!document.hidden)
+    syncSalesClock(Math.floor(Date.now() / 1000))
 }
 /** 前一天 / 后一天 */
 function shiftSalesDay(delta: number) {
+  pendingSalesDay.value = 0
   const cur = Number(salesDay.value) || Number(todayStart.value)
   const target = cur + delta * DAY_SECONDS
   if (target > Number(todayStart.value)) {
@@ -531,6 +771,12 @@ function fmtMonthDay(ts: number) {
   return `${String(d.getUTCMonth() + 1).padStart(2, '0')}/${String(d.getUTCDate()).padStart(2, '0')}`
 }
 
+function fmtHourStart(ts: number) {
+  if (!ts) return ''
+  const d = new Date((Number(ts) + BEIJING_OFFSET_SECONDS) * 1000)
+  return `${String(d.getUTCMonth() + 1).padStart(2, '0')}-${String(d.getUTCDate()).padStart(2, '0')} ${String(d.getUTCHours()).padStart(2, '0')}:00`
+}
+
 const activityPeriodText = computed(() => {
   const startAt = Number(status.value?.startAt) || 0
   const settleAt = Number(status.value?.settleAt) || 0
@@ -548,9 +794,16 @@ const settlementPeriodText = computed(() => {
   return '结算时间以游戏内为准'
 })
 
-function salesHourLabel(hoursAgo: any) {
-  const hours = Math.max(0, Math.floor(Number(hoursAgo) || 0))
-  if (hours === 0) return isTodaySales.value ? '本小时' : '最近时段'
+function salesHourLabel(hour: any) {
+  const hourStart = Number(hour?.hourStart) || 0
+  if (hourStart > 0) {
+    const currentHourStart = Math.floor(Number(nowTick.value) / 3600) * 3600
+    if (isTodaySales.value && hourStart === currentHourStart)
+      return '本小时'
+    return fmtHourStart(hourStart)
+  }
+  const hours = Math.max(0, Math.floor(Number(hour?.hoursAgo) || 0))
+  if (hours === 0) return '最近时段'
   return `${hours} 小时前`
 }
 
@@ -567,32 +820,48 @@ function rankingLevel(entry: any) {
 }
 
 async function loadHireConfig() {
+  const context = captureAccountContext()
+  if (!isAccountContextCurrent(context))
+    return
+  // 自动刷新不能覆盖用户尚未保存的雇佣配置。
+  if (hireConfigDirty.value)
+    return
   const requestId = ++hireConfigRequestId
   try {
-    const res = await api.get('/api/activity/milk-tea/hire-config')
-    if (requestId !== hireConfigRequestId) return
+    const res = await api.get('/api/activity/milk-tea/hire-config', pageRequestConfig(context))
+    if (!isRequestCurrent(context, requestId, hireConfigRequestId))
+      return
     const d = res.data?.data || {}
     const err = apiError(res, d)
     if (err) { reportError('读取雇佣设置', err); return }
+    // 请求期间若用户开始编辑，不能把服务端配置回填到表单。
+    if (hireConfigDirty.value)
+      return
     hireGids.value = (d.hireGids || []).map((g: any) => String(g))
     autoHire.value = !!d.autoHire
     autoInteract.value = !!d.autoInteract
     hireDuration.value = Number(d.hireDuration || d.duration) || 1
     if (d.interactType) interactType.value = Number(d.interactType) || 2
     if (d.storeName) storeName.value = String(d.storeName)
+    hireConfigBaseline.value = hireConfigSnapshot()
   } catch (e: any) {
-    if (requestId !== hireConfigRequestId) return
+    if (!isRequestCurrent(context, requestId, hireConfigRequestId))
+      return
     reportError('读取雇佣设置', apiError(null, null, e))
   }
 }
 
 async function loadFriends() {
+  const context = captureAccountContext()
+  if (!isAccountContextCurrent(context))
+    return
   const requestId = ++friendsRequestId
   friendsBusy.value = true
   friendsError.value = ''
   try {
-    const res = await api.get('/api/activity/milk-tea/friends')
-    if (requestId !== friendsRequestId) return
+    const res = await api.get('/api/activity/milk-tea/friends', pageRequestConfig(context))
+    if (!isRequestCurrent(context, requestId, friendsRequestId))
+      return
     const d = res.data?.data || {}
     const err = apiError(res, d)
     if (err) {
@@ -603,27 +872,44 @@ async function loadFriends() {
     }
     friends.value = Array.isArray(d.friends) ? d.friends : []
   } catch (e: any) {
-    if (requestId !== friendsRequestId) return
+    if (!isRequestCurrent(context, requestId, friendsRequestId))
+      return
     friends.value = []
     friendsError.value = apiError(null, null, e)
     reportError('读取好友', friendsError.value)
   } finally {
-    if (requestId === friendsRequestId) friendsBusy.value = false
+    if (isRequestCurrent(context, requestId, friendsRequestId))
+      friendsBusy.value = false
   }
 }
 
-
 async function buy(g: any) {
+  const context = captureAccountContext()
+  if (!isAccountContextCurrent(context))
+    return
   if (isLocked(g)) {
-    toast.warning(`「${g.name}」需要奶茶店等级 ≥${g.requireLevel}（当前 Lv${storeLevel.value}）`)
+    const reason = lockReason(g)
+    toast.warning(reason === '未解锁'
+      ? `「${g.name}」尚未解锁`
+      : `「${g.name}」需要奶茶店等级 ≥${g.requireLevel}（当前 Lv${storeLevel.value}）`)
     return
   }
-  if (isSoldOut(g)) { toast.warning(`「${g.name}」已达限购 ${g.limitCount}`); return }
+  if (isSoldOut(g)) {
+    const limit = purchaseLimit(g)
+    toast.warning(limit > 0 ? `「${g.name}」已达限购 ${limit}` : `「${g.name}」当前不可兑换`)
+    return
+  }
   const count = clampQty(g)
   busy.value = `buy-${g.goodsId}`
   actionResult.value = ''
   try {
-    const res = await api.post('/api/activity/milk-tea/buy', { goodsId: g.goodsId, count })
+    const res = await api.post(
+      '/api/activity/milk-tea/buy',
+      { goodsId: g.goodsId, count },
+      pageRequestConfig(context),
+    )
+    if (!isAccountContextCurrent(context))
+      return
     const d = res.data?.data || {}
     const err = apiError(res, d)
     if (err) { reportError(`兑换「${g.name}」`, err); return }
@@ -632,11 +918,16 @@ async function buy(g: any) {
     actionResult.value = `已兑换「${g.name}」${got}${cost}`
     toast.success(actionResult.value)
     await loadShop()
+    if (!isAccountContextCurrent(context))
+      return
     await loadStatus()
   } catch (e: any) {
+    if (!isAccountContextCurrent(context))
+      return
     reportError(`兑换「${g.name}」`, apiError(null, null, e))
   } finally {
-    busy.value = ''
+    if (isAccountContextCurrent(context))
+      busy.value = ''
   }
 }
 
@@ -655,6 +946,9 @@ function invertFriends() {
 /** 批量雇佣: 逐个雇(后台带节流, 单次最多 10 个) */
 /** 领收银台收益(cmd=59, 真正的领取) */
 async function claimCashierNow() {
+  const context = captureAccountContext()
+  if (!isAccountContextCurrent(context))
+    return
   if (isSettling.value) {
     toast.warning('已进入结算期，不能领取收银台收益')
     return
@@ -665,7 +959,9 @@ async function claimCashierNow() {
   }
   busy.value = 'cashier'
   try {
-    const res = await api.post('/api/activity/milk-tea/cashier', {})
+    const res = await api.post('/api/activity/milk-tea/cashier', {}, pageRequestConfig(context))
+    if (!isAccountContextCurrent(context))
+      return
     const d = res.data?.data || {}
     const err = apiError(res, d)
     if (err) { reportError('领收银台收益', err); return }
@@ -675,56 +971,109 @@ async function claimCashierNow() {
     toast.success(actionResult.value)
     await loadStatus()
   } catch (e: any) {
+    if (!isAccountContextCurrent(context))
+      return
     reportError('领收银台收益', apiError(null, null, e))
-  } finally { busy.value = '' }
+  } finally {
+    if (isAccountContextCurrent(context))
+      busy.value = ''
+  }
 }
 
 /** 制作奶茶(cmd=62): 把背包里所有活动果实都做掉 */
 async function craftNow() {
+  const context = captureAccountContext()
+  if (!isAccountContextCurrent(context))
+    return
   busy.value = 'craft'
   try {
-    const res = await api.post('/api/activity/milk-tea/craft', { all: true })
+    const res = await api.post(
+      '/api/activity/milk-tea/craft',
+      { all: true },
+      pageRequestConfig(context),
+    )
+    if (!isAccountContextCurrent(context))
+      return
     const d = res.data?.data || {}
     const err = apiError(res, d)
     if (err) { reportError('制作奶茶', err); return }
+    if (d.skipped) {
+      actionResult.value = d.reason || '当前没有可制作的已解锁配方'
+      toast.warning(actionResult.value)
+      return
+    }
     actionResult.value = d.usedUnits ? `已制作奶茶（投入 ${d.usedUnits} 个果实）` : '制作奶茶完成'
     toast.success(actionResult.value)
   } catch (e: any) {
+    if (!isAccountContextCurrent(context))
+      return
     reportError('制作奶茶', apiError(null, null, e))
-  } finally { busy.value = '' }
+  } finally {
+    if (isAccountContextCurrent(context))
+      busy.value = ''
+  }
 }
 
 /** 升级店铺(cmd=61) */
 async function upgradeNow() {
+  const context = captureAccountContext()
+  if (!isAccountContextCurrent(context))
+    return
   busy.value = 'upgrade'
   try {
-    const res = await api.post('/api/activity/milk-tea/upgrade-store', {})
+    const res = await api.post(
+      '/api/activity/milk-tea/upgrade-store',
+      {},
+      pageRequestConfig(context),
+    )
+    if (!isAccountContextCurrent(context))
+      return
     const d = res.data?.data || {}
-    if (apiError(res, d)) { actionResult.value = `升级店铺接口返回异常：${JSON.stringify(res.data).slice(0, 120)}`; return }
-    if (d.ok) {
+    const failure = apiFailure(res, d)
+    if (failure.kind === 'transport') {
+      actionResult.value = `升级店铺接口返回异常：${failure.error}`
+      toast.error(actionResult.value)
+      return
+    }
+    if (failure.kind === 'business' || d.skipped === true || d.ok === false) {
+      actionResult.value = failure.error || d.reason || '升级未成功'
+      toast.warning(actionResult.value)
+      return
+    }
+    if (d.ok === true) {
       actionResult.value = `店铺已升级到 Lv${d.level}${d.got && d.got.length ? `，奖励 ${d.got.join('、')}` : ''}`
       toast.success('店铺升级成功')
       await loadStatus()
+      if (!isAccountContextCurrent(context))
+        return
       await loadUpgradeInfo()
     } else {
-      actionResult.value = d.reason || '升级未成功'
-      toast.warning(d.reason || '升级未成功')
+      actionResult.value = '升级店铺接口返回异常：缺少业务结果'
+      toast.error(actionResult.value)
     }
   } catch (e: any) {
+    if (!isAccountContextCurrent(context))
+      return
+    const failure = apiFailure(null, null, e)
     const st = e.response?.status ? `HTTP ${e.response.status}` : ''
-    const msg = e.response?.data?.error || e.message || '未知错误'
-    actionResult.value = `升级店铺请求失败：${st} ${msg}`
+    actionResult.value = `升级店铺请求失败：${st} ${failure.error || '未知错误'}`.trim()
     toast.error(actionResult.value)
   } finally {
-    busy.value = ''
+    if (isAccountContextCurrent(context))
+      busy.value = ''
   }
 }
 
 /** 领工资(cmd=64): 实测 奶茶券×120 */
 async function claimWageNow() {
+  const context = captureAccountContext()
+  if (!isAccountContextCurrent(context))
+    return
   busy.value = 'wage'
   try {
-    const res = await api.post('/api/activity/milk-tea/wage', {})
+    const res = await api.post('/api/activity/milk-tea/wage', {}, pageRequestConfig(context))
+    if (!isAccountContextCurrent(context))
+      return
     const d = res.data?.data || {}
     const err = apiError(res, d)
     if (err) { reportError('领工资', err); return }
@@ -739,23 +1088,35 @@ async function claimWageNow() {
     toast.success(actionResult.value)
     await loadStatus()
   } catch (e: any) {
+    if (!isAccountContextCurrent(context))
+      return
     reportError('领工资', apiError(null, null, e))
   } finally {
-    busy.value = ''
+    if (isAccountContextCurrent(context))
+      busy.value = ''
   }
 }
 
 /** 互动(我的工作, cmd=65): 目标只取当前雇主, 资格由服务端判定 */
 async function interactNow() {
+  const context = captureAccountContext()
+  if (!isAccountContextCurrent(context))
+    return
   if (!canInteract.value) {
     toast.warning(hasEmployer.value
       ? '本班已经互动过，不能重复互动'
-      : '当前没有进行中的兼职（未被好友雇佣），不能互动')
+      : '当前没有进行中的兼职，不能互动')
     return
   }
   busy.value = 'interact'
   try {
-    const res = await api.post('/api/activity/milk-tea/interact', { type: Number(interactType.value) || 2 })
+    const res = await api.post(
+      '/api/activity/milk-tea/interact',
+      { type: Number(interactType.value) || 2 },
+      pageRequestConfig(context),
+    )
+    if (!isAccountContextCurrent(context))
+      return
     const d = res.data?.data || {}
     const err = apiError(res, d)
     if (err) { reportError('互动', err); return }
@@ -767,25 +1128,32 @@ async function interactNow() {
     }
     if (d.ok === false) { reportError('互动', d.reason || '互动未成功'); return }
     const wage = formatWageChange(d.interact && d.interact.wage)
-    actionResult.value = `已与好友 ${d.friendGid || '当前老板'} 互动${wage}`
+    actionResult.value = `已与老板 ${d.friendGid || '当前雇主'} 互动${wage}`
     toast.success(actionResult.value)
     await loadWorkStatus()
   } catch (e: any) {
+    if (!isAccountContextCurrent(context))
+      return
     reportError('互动', apiError(null, null, e))
   } finally {
-    busy.value = ''
+    if (isAccountContextCurrent(context))
+      busy.value = ''
   }
 }
 
 async function hireAllNow() {
-  if (!hireGids.value.length) { toast.warning('请先勾选好友（或点全选）'); return }
+  const context = captureAccountContext()
+  if (!isAccountContextCurrent(context))
+    return
   busy.value = 'hire-all'
   try {
     const res = await api.post('/api/activity/milk-tea/hire-all', {
       hireGids: hireGids.value,
       limit: 10,
       duration: Number(hireDuration.value) || 1,
-    })
+    }, pageRequestConfig(context))
+    if (!isAccountContextCurrent(context))
+      return
     const d = res.data?.data || {}
     const err = apiError(res, d)
     if (err) { reportError('批量雇佣', err); return }
@@ -799,13 +1167,30 @@ async function hireAllNow() {
       reportError('批量雇佣', d.reason || '批量雇佣未成功')
       return
     }
-    actionResult.value = `批量雇佣完成：${d.hired}/${d.total} 成功`
-    toast.success(actionResult.value)
+    const hired = Math.max(0, Number(d.hired) || 0)
+    if (hired <= 0) {
+      actionResult.value = d.reason || '批量雇佣未雇佣到员工'
+      toast.warning(actionResult.value)
+    }
+    else {
+      const remaining = Math.max(0, Number(d.remainingVacancies) || 0)
+      const partial = d.partial === true || d.stateSyncPending === true || remaining > 0
+      actionResult.value = `批量雇佣完成：成功 ${hired} 人${partial
+        ? `，仍有 ${remaining || '若干'} 个空位${d.reason ? `：${d.reason}` : ''}`
+        : ''}`
+      if (partial)
+        toast.warning(actionResult.value)
+      else
+        toast.success(actionResult.value)
+    }
     await loadStatus()
   } catch (e: any) {
+    if (!isAccountContextCurrent(context))
+      return
     reportError('批量雇佣', apiError(null, null, e))
   } finally {
-    busy.value = ''
+    if (isAccountContextCurrent(context))
+      busy.value = ''
   }
 }
 
@@ -815,40 +1200,51 @@ function toggleGid(gid: string) {
   else hireGids.value.push(gid)
 }
 
-
 async function saveHireConfig() {
+  const context = captureAccountContext()
+  if (!isAccountContextCurrent(context))
+    return
+  const payload = hireConfigPayload()
   hireSaving.value = true
   try {
-    const res = await api.post('/api/activity/milk-tea/hire-config', {
-      hireGids: hireGids.value,
-      autoHire: autoHire.value,
-      autoInteract: autoInteract.value,
-      interactType: Number(interactType.value) || 2,
-      storeName: String(storeName.value || ''),
-      hireDuration: Number(hireDuration.value) || 1,
-    })
+    const res = await api.post(
+      '/api/activity/milk-tea/hire-config',
+      payload,
+      pageRequestConfig(context),
+    )
+    if (!isAccountContextCurrent(context))
+      return
     const err = apiError(res, res.data?.data)
     if (err) { reportError('保存设置', err); return }
-    toast.success(`已保存：好友 ${hireGids.value.length} 位${autoHire.value ? '，自动雇佣开' : ''}`)
+    hireConfigBaseline.value = JSON.stringify(payload)
+    toast.success(`已保存：优先员工 ${payload.hireGids.length} 位${payload.autoHire ? '，自动雇佣开' : ''}`)
   } catch (e: any) {
+    if (!isAccountContextCurrent(context))
+      return
     reportError('保存设置', apiError(null, null, e))
   } finally {
-    hireSaving.value = false
+    if (isAccountContextCurrent(context))
+      hireSaving.value = false
   }
 }
 
 async function hireNow() {
+  const context = captureAccountContext()
+  if (!isAccountContextCurrent(context))
+    return
   busy.value = 'hire-auto'
   try {
     const res = await api.post('/api/activity/milk-tea/hire-auto', {
       hireGids: hireGids.value,
       duration: Number(hireDuration.value) || 1,
-    })
+    }, pageRequestConfig(context))
+    if (!isAccountContextCurrent(context))
+      return
     const d = res.data?.data || {}
     const err = apiError(res, d)
-    if (err) { reportError('雇佣好友', err); return }
+    if (err) { reportError('自动补位', err); return }
     if (d.skipped) {
-      actionResult.value = d.reason || '当前没有可雇佣的好友'
+      actionResult.value = d.reason || '当前没有可雇佣的员工'
       toast.warning(actionResult.value)
       return
     }
@@ -858,19 +1254,29 @@ async function hireNow() {
       .map((gid: any) => String(gid))
       .filter(Boolean)
     if (!hiredGids.length) {
-      reportError('雇佣好友', d.reason || '接口未返回被雇佣好友')
+      reportError('自动补位', d.reason || '接口未返回被雇佣员工')
       return
     }
     const staff = d.employeeCapacity
       ? `（员工 ${Number(d.finalEmployeeCount ?? d.employeeCount) || 0}/${Number(d.employeeCapacity)}）`
       : ''
-    actionResult.value = `已自动补位 ${hiredGids.join('、')}${staff}`
-    toast.success(actionResult.value)
+    const remaining = Math.max(0, Number(d.remainingVacancies) || 0)
+    const partial = d.partial === true || d.stateSyncPending === true || remaining > 0
+    actionResult.value = `已自动补位 ${hiredGids.join('、')}${staff}${partial
+      ? `，仍有 ${remaining || '若干'} 个空位${d.reason ? `：${d.reason}` : ''}`
+      : ''}`
+    if (partial)
+      toast.warning(actionResult.value)
+    else
+      toast.success(actionResult.value)
     await loadStatus()
   } catch (e: any) {
-    reportError('雇佣好友', apiError(null, null, e))
+    if (!isAccountContextCurrent(context))
+      return
+    reportError('自动补位', apiError(null, null, e))
   } finally {
-    busy.value = ''
+    if (isAccountContextCurrent(context))
+      busy.value = ''
   }
 }
 
@@ -883,43 +1289,65 @@ function toggleFriendsOpen() {
 
 /** 串行 + 错开加载: 避免一次性并发多个游戏请求把队列打满(队列已满→心跳异常掉线) */
 async function refreshAll() {
+  const context = captureAccountContext()
+  if (!isAccountContextCurrent(context))
+    return
   if (refreshing.value) return
+  const requestId = ++refreshRequestId
   refreshing.value = true
-  todayStart.value = beijingDayStart(Math.floor(Date.now() / 1000))
+  syncSalesClock(Math.floor(Date.now() / 1000), false)
+  const salesDayToLoad = Number(pendingSalesDay.value) || selectedSalesDay.value
+  pendingSalesDay.value = 0
+  const requestCurrent = () => isRequestCurrent(context, requestId, refreshRequestId)
   try {
     await loadStatus()
+    if (!requestCurrent()) return
     await new Promise((r) => setTimeout(r, 300))
-    await loadSales(selectedSalesDay.value)
+    if (!requestCurrent()) return
+    await loadSales(salesDayToLoad)
+    if (!requestCurrent()) return
     await new Promise((r) => setTimeout(r, 300))
+    if (!requestCurrent()) return
     await loadUpgradeInfo()
+    if (!requestCurrent()) return
     await new Promise((r) => setTimeout(r, 300))
+    if (!requestCurrent()) return
     await loadShop()
+    if (!requestCurrent()) return
     await new Promise((r) => setTimeout(r, 300))
+    if (!requestCurrent()) return
     await loadTasks()
+    if (!requestCurrent()) return
     await new Promise((r) => setTimeout(r, 300))
+    if (!requestCurrent()) return
     await loadRankings(rankingCurrentPage.value)
+    if (!requestCurrent()) return
     await new Promise((r) => setTimeout(r, 300))
+    if (!requestCurrent()) return
     await loadHireConfig()
+    if (!requestCurrent()) return
     // 好友列表首次会做重同步(约 6 个请求) → 只在展开"雇佣好友"时按需拉
     if (friendsOpen.value) await loadFriends()
   } finally {
-    refreshing.value = false
+    if (requestCurrent())
+      refreshing.value = false
   }
 }
+
+watch(currentAccountId, (accountId) => {
+  invalidateMilkTeaRequests()
+  resetMilkTeaPageState()
+  if (accountId)
+    void refreshAll()
+}, { flush: 'sync' })
 
 onMounted(() => {
   void refreshAll()
   nowTick.value = Math.floor(Date.now() / 1000)
+  document.addEventListener('visibilitychange', handleVisibilityChange)
   clockTimer = setInterval(() => {
     const tick = Math.floor(Date.now() / 1000)
-    const previousToday = todayStart.value
-    const nextToday = beijingDayStart(tick)
-    const wasViewingToday = !salesDay.value || Number(salesDay.value) === Number(previousToday)
-    nowTick.value = tick
-    if (nextToday !== previousToday) {
-      todayStart.value = nextToday
-      if (wasViewingToday && !document.hidden && !salesLoading.value) void loadSales(nextToday)
-    }
+    syncSalesClock(tick)
   }, 30_000)
   workRefreshTimer = setInterval(() => {
     if (document.hidden || statusBusy.value || busy.value || isSettling.value) return
@@ -928,6 +1356,8 @@ onMounted(() => {
 })
 
 onUnmounted(() => {
+  invalidateMilkTeaRequests()
+  document.removeEventListener('visibilitychange', handleVisibilityChange)
   if (clockTimer) clearInterval(clockTimer)
   clockTimer = null
   if (workRefreshTimer) clearInterval(workRefreshTimer)
@@ -946,7 +1376,7 @@ onUnmounted(() => {
           营业 {{ activityPeriodText }} · 结算 {{ settlementPeriodText }}
         </p>
       </div>
-      <BaseButton variant="secondary" size="sm" :loading="refreshing" @click="refreshAll">
+      <BaseButton variant="secondary" size="sm" class="shrink-0 whitespace-nowrap" :loading="refreshing" @click="refreshAll">
         <i class="i-carbon-renew mr-1 text-base" />
         刷新页面
       </BaseButton>
@@ -974,7 +1404,7 @@ onUnmounted(() => {
         >
           状态刷新失败：{{ statusError }}。当前显示的是上次成功读取的数据。
         </div>
-        <div class="grid grid-cols-1 gap-x-5 gap-y-4 sm:grid-cols-2 xl:grid-cols-5">
+        <div class="grid grid-cols-1 gap-x-5 gap-y-4 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-6">
           <div class="min-w-0">
             <div class="text-xs text-gray-500 dark:text-gray-400">店铺</div>
             <div class="mt-0.5 truncate text-base text-gray-900 font-bold dark:text-gray-100">
@@ -993,12 +1423,22 @@ onUnmounted(() => {
           </div>
           <div class="min-w-0">
             <div class="text-xs text-gray-500 dark:text-gray-400">奶茶券余额</div>
-            <div class="mt-0.5 text-base text-gray-900 font-bold dark:text-gray-100">{{ milkCoupon.toLocaleString() }}</div>
+            <div class="mt-0.5 break-all text-base text-gray-900 font-bold leading-tight tabular-nums dark:text-gray-100">{{ milkCoupon.toLocaleString() }}</div>
           </div>
           <div class="min-w-0">
             <div class="text-xs text-gray-500 dark:text-gray-400">累计营业额</div>
-            <div class="mt-0.5 text-base text-gray-900 font-bold dark:text-gray-100">
+            <div class="mt-0.5 break-all text-base text-gray-900 font-bold leading-tight tabular-nums dark:text-gray-100">
               {{ totalRevenue.toLocaleString() }}
+            </div>
+          </div>
+          <div class="min-w-0">
+            <div class="text-xs text-gray-500 dark:text-gray-400">当前主推配方</div>
+            <div
+              class="mt-0.5 min-w-0 break-words text-base font-bold"
+              :class="featuredRecipe.resolved ? 'text-gray-900 dark:text-gray-100' : 'text-amber-600 dark:text-amber-400'"
+              :title="featuredRecipe.reason"
+            >
+              {{ featuredRecipe.name }}
             </div>
           </div>
           <div class="min-w-0">
@@ -1098,6 +1538,7 @@ onUnmounted(() => {
                   {{ employeeOnDuty(e) ? '在岗' : '已下班' }}
                 </span>
                 <span
+                  v-if="employeeTypeLabel(e)"
                   class="shrink-0 whitespace-nowrap rounded bg-gray-100 px-1.5 py-0.5 text-[10px] text-gray-500 dark:bg-gray-700 dark:text-gray-300"
                 >
                   {{ employeeTypeLabel(e) }}
@@ -1132,14 +1573,14 @@ onUnmounted(() => {
         <div>
           <h3 class="text-sm text-gray-900 font-medium dark:text-white">员工与操作</h3>
           <p class="mt-0.5 text-xs text-gray-500 dark:text-gray-400">
-            白名单 {{ hireGids.length }} 位{{ autoHire ? ' · 自动雇佣已开启' : '' }}
+            优先好友 {{ hireGids.length }} 位{{ autoHire ? ' · 自动雇佣已开启' : '' }}
           </p>
         </div>
         <div class="flex flex-wrap gap-2">
           <BaseButton
             variant="secondary"
             size="sm"
-            :disabled="!hireGids.length || employeesFull"
+            :disabled="employeesFull"
             :loading="busy === 'hire-all'"
             :title="employeesFull ? `员工已满（${employeeCount}/${employeeCapacity}）` : ''"
             @click="hireAllNow"
@@ -1301,11 +1742,11 @@ onUnmounted(() => {
             {{ isTodaySales ? '今日售卖' : '当日售卖' }}
           </p>
         </div>
-        <div class="flex items-center gap-1">
+        <div class="flex max-w-full items-center gap-1">
           <BaseButton variant="secondary" size="sm" title="前一天" aria-label="前一天" @click="shiftSalesDay(-1)">
             <i class="i-carbon-chevron-left text-base" />
           </BaseButton>
-          <span class="min-w-[92px] px-1 text-center text-xs text-gray-600 dark:text-gray-300">
+          <span class="min-w-[92px] shrink-0 whitespace-nowrap px-1 text-center text-xs text-gray-600 tabular-nums dark:text-gray-300">
             {{ fmtDay(selectedSalesDay) }}
           </span>
           <BaseButton
@@ -1333,24 +1774,24 @@ onUnmounted(() => {
 
       <template v-if="sales && sales.ok">
         <div class="grid grid-cols-3 divide-x divide-gray-200 rounded bg-gray-50 py-2 text-center dark:divide-gray-700 dark:bg-gray-900/40">
-          <div>
+          <div class="min-w-0 px-1.5">
             <div class="text-[11px] text-gray-500 dark:text-gray-400">总杯数</div>
-            <div class="mt-0.5 text-base text-gray-900 font-bold dark:text-gray-100">{{ Number(sales.cups || 0).toLocaleString() }}</div>
+            <div class="mt-0.5 break-all text-sm text-gray-900 font-bold leading-tight tabular-nums dark:text-gray-100 sm:text-base">{{ Number(sales.cups || 0).toLocaleString() }}</div>
           </div>
-          <div>
+          <div class="min-w-0 px-1.5">
             <div class="text-[11px] text-gray-500 dark:text-gray-400">金币收益</div>
-            <div class="mt-0.5 text-base text-amber-600 font-bold dark:text-amber-400">{{ Number(sales.gold || 0).toLocaleString() }}</div>
+            <div class="mt-0.5 break-all text-sm text-amber-600 font-bold leading-tight tabular-nums dark:text-amber-400 sm:text-base">{{ Number(sales.gold || 0).toLocaleString() }}</div>
           </div>
-          <div>
+          <div class="min-w-0 px-1.5">
             <div class="text-[11px] text-gray-500 dark:text-gray-400">奶茶券收益</div>
-            <div class="mt-0.5 text-base text-emerald-600 font-bold dark:text-emerald-400">{{ Number(sales.coupon || 0).toLocaleString() }}</div>
+            <div class="mt-0.5 break-all text-sm text-emerald-600 font-bold leading-tight tabular-nums dark:text-emerald-400 sm:text-base">{{ Number(sales.coupon || 0).toLocaleString() }}</div>
           </div>
         </div>
 
         <div class="mt-4">
           <div class="mb-2 flex flex-wrap items-center justify-between gap-2">
             <span class="text-xs text-gray-500 dark:text-gray-400">分时销量</span>
-            <span class="text-[10px] text-gray-400">相对查询时段</span>
+            <span class="text-[10px] text-gray-400">按北京时间</span>
           </div>
           <div
             v-if="sales.hourly && sales.hourly.length"
@@ -1358,10 +1799,10 @@ onUnmounted(() => {
           >
             <div
               v-for="h in sales.hourly"
-              :key="h.hoursAgo"
+              :key="h.hourStart || h.hoursAgo"
               class="flex min-w-0 items-baseline justify-between gap-2"
             >
-              <span class="min-w-0 break-words text-gray-500 dark:text-gray-400">{{ salesHourLabel(h.hoursAgo) }}</span>
+              <span class="min-w-0 break-words text-gray-500 dark:text-gray-400">{{ salesHourLabel(h) }}</span>
               <span class="shrink-0 text-gray-900 font-medium dark:text-gray-100">{{ Number(h.cups || 0).toLocaleString() }} 杯</span>
             </div>
           </div>
@@ -1421,7 +1862,7 @@ onUnmounted(() => {
           <div v-else class="text-xs text-gray-500 dark:text-gray-400">暂无记录</div>
         </div>
       </template>
-      <div v-else class="rounded border border-dashed border-gray-200 px-3 py-4 text-xs text-gray-500 dark:border-gray-700 dark:text-gray-400">
+      <div v-else class="min-w-0 break-all rounded border border-dashed border-gray-200 px-3 py-4 text-xs text-gray-500 dark:border-gray-700 dark:text-gray-400">
         {{ salesLoading ? '读取中…' : (sales && sales.reason ? sales.reason : '暂无营业记录') }}
       </div>
     </section>
@@ -1430,13 +1871,19 @@ onUnmounted(() => {
     <section class="order-4 col-span-full rounded-lg border border-gray-200 bg-white p-4 shadow-sm dark:border-gray-700 dark:bg-gray-800 xl:col-span-1">
       <div class="mb-3 flex flex-wrap items-center justify-between gap-2">
         <h3 class="text-sm text-gray-900 font-medium dark:text-white">活动种子商店</h3>
-        <BaseButton variant="secondary" size="sm" :loading="shopBusy" @click="loadShop">
+        <BaseButton variant="secondary" size="sm" class="shrink-0 whitespace-nowrap" :loading="shopBusy" @click="loadShop">
           <i class="i-carbon-renew mr-1 text-base" />
           刷新商品
         </BaseButton>
       </div>
-      <div v-if="!shop.length" class="rounded border border-dashed border-gray-200 px-3 py-4 text-xs text-gray-500 dark:border-gray-700 dark:text-gray-400">
-        {{ shopBusy ? '读取中…' : (shopError || '暂无商品，账号需要在线') }}
+      <div v-if="shopBusy && !shop.length" class="rounded border border-dashed border-gray-200 px-3 py-4 text-xs text-gray-500 dark:border-gray-700 dark:text-gray-400">
+        读取中…
+      </div>
+      <div v-else-if="shopError" class="min-w-0 break-words rounded border border-dashed border-amber-200 px-3 py-4 text-xs text-amber-700 dark:border-amber-800 dark:text-amber-300">
+        {{ shopError }}
+      </div>
+      <div v-else-if="!shop.length" class="rounded border border-dashed border-gray-200 px-3 py-4 text-xs text-gray-500 dark:border-gray-700 dark:text-gray-400">
+        暂无商品，账号需要在线
       </div>
       <div v-else class="space-y-4">
         <div v-for="grp in shopGroups" :key="grp.currencyId">
@@ -1472,20 +1919,20 @@ onUnmounted(() => {
               </div>
               <div class="mt-1 flex-1 text-xs text-gray-500 dark:text-gray-400">
                 <template v-if="g.itemNameKnown">内容：{{ g.itemName }}<br></template>
-                <template v-if="g.limitCount">限购 {{ g.limitCount }}</template>
+                <template v-if="purchaseLimit(g)">限购 {{ purchaseLimit(g) }}</template>
                 <span v-if="isLocked(g)" class="text-amber-600 dark:text-amber-400">
-                  · 需等级 ≥{{ g.requireLevel }}
+                  · {{ lockReason(g) }}
                 </span>
                 <span v-else-if="isSoldOut(g)" class="text-red-500 dark:text-red-400"> · 已限购</span>
               </div>
-              <div class="mt-2 flex items-end justify-between gap-2">
-                <div class="flex min-w-0 flex-col gap-1">
+              <div class="mt-2 flex min-w-0 flex-wrap items-end justify-between gap-2">
+                <div class="flex min-w-0 flex-1 basis-24 flex-col gap-1">
                   <span class="truncate text-sm text-amber-600 dark:text-amber-400">
                     {{ Number(g.unitPrice).toLocaleString() }} {{ g.currencyName }}
                   </span>
                   <span class="text-[10px] text-gray-400">合计 {{ totalCost(g).toLocaleString() }}</span>
                 </div>
-                <div class="flex shrink-0 items-center gap-1.5">
+                <div class="flex w-full shrink-0 items-center justify-end gap-1.5 sm:w-auto">
                   <input
                     v-model.number="shopQty[g.goodsId]"
                     type="number"
@@ -1521,7 +1968,7 @@ onUnmounted(() => {
             共 {{ tasks.length }} 项
           </p>
         </div>
-        <BaseButton variant="secondary" size="sm" :loading="tasksLoading" @click="loadTasks">
+        <BaseButton variant="secondary" size="sm" class="shrink-0 whitespace-nowrap" :loading="tasksLoading" @click="loadTasks">
           <i class="i-carbon-renew mr-1 text-base" />
           刷新任务
         </BaseButton>
@@ -1584,22 +2031,22 @@ onUnmounted(() => {
             <span v-if="rankingServerTime"> · 服务器 {{ fmtTime(rankingServerTime) }}</span>
           </p>
         </div>
-        <BaseButton variant="secondary" size="sm" :loading="rankingsLoading" @click="loadRankings(rankingCurrentPage)">
+        <BaseButton variant="secondary" size="sm" class="shrink-0 whitespace-nowrap" :loading="rankingsLoading" @click="loadRankings(rankingCurrentPage)">
           <i class="i-carbon-renew mr-1 text-base" />
           刷新排行
         </BaseButton>
       </div>
 
+      <div v-if="rankingsError" class="min-w-0 break-words rounded border border-dashed border-amber-200 px-3 py-4 text-xs text-amber-700 dark:border-amber-800 dark:text-amber-300">
+        {{ rankingsError }}
+      </div>
       <div v-if="rankingsLoading && !rankings.length" class="rounded border border-dashed border-gray-200 px-3 py-4 text-xs text-gray-500 dark:border-gray-700 dark:text-gray-400">
         读取中…
       </div>
-      <div v-else-if="rankingsError" class="min-w-0 break-words rounded border border-dashed border-amber-200 px-3 py-4 text-xs text-amber-700 dark:border-amber-800 dark:text-amber-300">
-        {{ rankingsError }}
-      </div>
-      <div v-else-if="!rankings.length" class="rounded border border-dashed border-gray-200 px-3 py-4 text-xs text-gray-500 dark:border-gray-700 dark:text-gray-400">
+      <div v-else-if="!rankings.length && !rankingsError" class="rounded border border-dashed border-gray-200 px-3 py-4 text-xs text-gray-500 dark:border-gray-700 dark:text-gray-400">
         暂无排行数据
       </div>
-      <div v-else class="space-y-2">
+      <div v-if="rankings.length" class="space-y-2" :class="{ 'mt-2': rankingsError }">
         <div
           v-for="(entry, index) in rankings"
           :key="rankingKey(entry, index)"
@@ -1642,7 +2089,7 @@ onUnmounted(() => {
               </div>
             </div>
             <div class="max-w-[38%] shrink-0 text-right">
-              <div class="break-words text-sm text-emerald-600 font-bold dark:text-emerald-400">
+              <div class="break-all text-sm text-emerald-600 font-bold leading-tight tabular-nums dark:text-emerald-400">
                 {{ Number(entry.revenue || 0).toLocaleString() }}
               </div>
               <div class="text-[10px] text-gray-400">营业额</div>

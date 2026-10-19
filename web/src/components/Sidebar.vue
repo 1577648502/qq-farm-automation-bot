@@ -451,8 +451,8 @@ function closeOpenSourceNotice() {
 
 <template>
   <aside
-    class="fixed inset-y-0 left-0 z-50 h-full w-64 flex flex-col border-r border-gray-200/50 transition-transform duration-300 lg:static lg:translate-x-0 dark:border-gray-700/50 max-sm:!w-[85vw] max-sm:!max-w-[300px]"
-    :class="sidebarOpen ? 'translate-x-0' : '-translate-x-full'"
+    class="mobile-sidebar-panel flex flex-col border-r border-gray-200/50 dark:border-gray-700/50"
+    :class="{ 'is-open': sidebarOpen }"
     :style="{ background: 'var(--theme-bg)', color: 'var(--theme-text)' }"
   >
     <!-- Brand -->

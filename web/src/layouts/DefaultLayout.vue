@@ -35,7 +35,7 @@ watch(() => r.path, () => {
     <!-- Mobile Sidebar Overlay -->
     <div
       v-if="sidebarOpen"
-      class="fixed inset-0 z-40 bg-gray-900/50 backdrop-blur-sm transition-opacity lg:hidden"
+      class="mobile-sidebar-overlay bg-gray-900/50 backdrop-blur-sm transition-opacity lg:hidden"
       @click="appStore.closeSidebar"
     />
 

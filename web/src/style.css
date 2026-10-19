@@ -116,6 +116,40 @@ body {
   }
 }
 
+/* 移动端侧栏不能依赖动态 UnoCSS 类，避免状态类未生成时覆盖页面内容。 */
+.mobile-sidebar-panel {
+  position: fixed;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  z-index: 50;
+  width: min(85vw, 320px);
+  height: 100dvh;
+  transform: translateX(-100%);
+  transition: transform 300ms ease;
+}
+
+.mobile-sidebar-panel.is-open {
+  transform: translateX(0);
+}
+
+.mobile-sidebar-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+}
+
+@media (min-width: 1024px) {
+  .mobile-sidebar-panel {
+    position: static;
+    z-index: auto;
+    width: 16rem;
+    height: 100%;
+    transform: none;
+    transition: none;
+  }
+}
+
 @media (max-width: 380px) {
   .text-lg {
     font-size: 0.95rem !important;

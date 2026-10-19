@@ -19,6 +19,8 @@ const toastStore = useToastStore()
 const {
   status,
   logs: statusLogs,
+  logsLoading,
+  logsError,
   realtimeConnected,
 } = storeToRefs(statusStore)
 const { currentAccountId, currentAccount } = storeToRefs(accountStore)
@@ -27,6 +29,11 @@ const logContainer = ref<HTMLElement | null>(null)
 const autoScroll = ref(true)
 const lastBagFetchAt = ref(0)
 const clearingLogs = ref(false)
+let logRefreshScheduled = false
+let logRefreshPending = false
+let logRefreshRunning = false
+let dashboardAccountEpoch = 0
+let clearLogsRequestId = 0
 
 const allLogs = computed(() => {
   return (statusLogs.value || [])
@@ -440,14 +447,41 @@ async function refresh(forceReloadLogs = false) {
 }
 
 function onLogFilterChange() {
-  refresh(true)
+  scheduleLogRefresh()
 }
 
 function onLogSearchTrigger() {
-  refresh(true)
+  scheduleLogRefresh()
+}
+
+function scheduleLogRefresh() {
+  logRefreshPending = true
+  if (logRefreshScheduled || logRefreshRunning)
+    return
+  logRefreshScheduled = true
+  void nextTick(async () => {
+    logRefreshScheduled = false
+    if (logRefreshRunning)
+      return
+    logRefreshRunning = true
+    try {
+      while (logRefreshPending) {
+        logRefreshPending = false
+        await refresh(true)
+      }
+    }
+    finally {
+      logRefreshRunning = false
+      if (logRefreshPending)
+        scheduleLogRefresh()
+    }
+  })
 }
 
 watch(currentAccountId, async () => {
+  dashboardAccountEpoch += 1
+  clearLogsRequestId += 1
+  clearingLogs.value = false
   await refresh()
   scrollToBottom()
 })
@@ -465,7 +499,8 @@ watch(() => JSON.stringify(status.value?.operations || {}), (next, prev) => {
 
 watch(hasActiveLogFilter, (enabled) => {
   statusStore.setRealtimeLogsEnabled(!enabled)
-  refresh()
+  // 从有筛选切回实时日志时，WSS 已经连接不会自动补发全量快照。
+  scheduleLogRefresh()
 })
 
 function onLogScroll(e: Event) {
@@ -477,11 +512,21 @@ function onLogScroll(e: Event) {
 }
 
 async function clearLogs() {
-  if (!currentAccountId.value)
+  const accountId = String(currentAccountId.value || '')
+  if (!accountId)
     return
+  const accountEpoch = dashboardAccountEpoch
+  const requestId = ++clearLogsRequestId
+  const isCurrentRequest = () => requestId === clearLogsRequestId
+    && accountEpoch === dashboardAccountEpoch
+    && String(currentAccountId.value || '') === accountId
   clearingLogs.value = true
   try {
-    const { data } = await api.delete('/api/logs')
+    const { data } = await api.delete('/api/logs', {
+      headers: { 'x-account-id': accountId },
+    })
+    if (!isCurrentRequest())
+      return
     if (data?.ok) {
       toastStore.success('日志已清空')
       await refresh(true)
@@ -491,11 +536,14 @@ async function clearLogs() {
     }
   }
   catch (e: any) {
+    if (!isCurrentRequest())
+      return
     const msg = e?.response?.data?.error || e?.message || '请求失败'
     toastStore.error(`清空失败: ${msg}`)
   }
   finally {
-    clearingLogs.value = false
+    if (isCurrentRequest())
+      clearingLogs.value = false
   }
 }
 
@@ -533,7 +581,7 @@ useIntervalFn(updateCountdowns, 1000)
     <!-- Status Cards -->
     <div class="grid grid-cols-1 gap-4 lg:grid-cols-3 sm:grid-cols-2">
       <!-- Account & Exp -->
-      <div class="flex flex-col rounded-lg bg-white p-4 shadow dark:bg-gray-800">
+      <div class="flex min-w-0 flex-col rounded-lg bg-white p-4 shadow dark:bg-gray-800">
         <div class="mb-2 flex items-start justify-between">
           <div class="flex items-center gap-1.5 text-sm text-gray-500">
             <div class="i-fas-user-circle" />
@@ -549,12 +597,12 @@ useIntervalFn(updateCountdowns, 1000)
 
         <!-- Level Progress -->
         <div class="mt-auto">
-          <div class="mb-1 flex justify-between text-xs text-gray-500">
-            <div class="flex items-center gap-1">
+          <div class="mb-1 flex min-w-0 items-start justify-between gap-2 text-xs text-gray-500">
+            <div class="flex shrink-0 items-center gap-1">
               <div class="i-fas-bolt text-blue-400" />
               <span>EXP</span>
             </div>
-            <span>{{ formatNumber(status?.levelProgress?.current) }} / {{ status?.levelProgress?.needed ? formatNumber(status.levelProgress.needed) : '?' }}</span>
+            <span class="min-w-0 break-words text-right tabular-nums">{{ formatNumber(status?.levelProgress?.current) }} / {{ status?.levelProgress?.needed ? formatNumber(status.levelProgress.needed) : '?' }}</span>
           </div>
           <div class="h-1.5 w-full overflow-hidden rounded-full bg-gray-100 dark:bg-gray-700">
             <div
@@ -562,22 +610,22 @@ useIntervalFn(updateCountdowns, 1000)
               :style="{ width: `${getExpPercent(status?.levelProgress)}%` }"
             />
           </div>
-          <div class="mt-2 flex justify-between text-xs text-gray-400">
-            <span>效率: {{ expRate }}</span>
-            <span>{{ timeToLevel }}</span>
+          <div class="mt-2 flex min-w-0 flex-wrap justify-between gap-x-2 gap-y-1 text-xs text-gray-400">
+            <span class="shrink-0">效率: {{ expRate }}</span>
+            <span class="min-w-0 break-words text-right">{{ timeToLevel }}</span>
           </div>
         </div>
       </div>
 
       <!-- Assets & Status -->
-      <div class="flex flex-col justify-between rounded-lg bg-white p-4 shadow dark:bg-gray-800">
-        <div class="flex justify-between">
-          <div>
+      <div class="flex min-w-0 flex-col justify-between rounded-lg bg-white p-4 shadow dark:bg-gray-800">
+        <div class="grid min-w-0 grid-cols-2 gap-x-3 gap-y-4">
+          <div class="min-w-0">
             <div class="flex items-center gap-1.5 text-xs text-gray-500">
               <div class="i-fas-coins text-yellow-500" />
               金币
             </div>
-            <div class="text-2xl text-yellow-600 font-bold dark:text-yellow-500">
+            <div class="break-all text-xl text-yellow-600 font-bold leading-tight tabular-nums dark:text-yellow-500 sm:text-2xl">
               {{ formatCurrencyNumber(status?.status?.gold) }}
             </div>
             <div
@@ -588,12 +636,12 @@ useIntervalFn(updateCountdowns, 1000)
               {{ formatSignedCurrencyNumber(status?.sessionGoldGained) }}
             </div>
           </div>
-          <div class="text-right">
-            <div class="flex items-center justify-end gap-1.5 text-xs text-gray-500">
+          <div class="min-w-0">
+            <div class="flex items-center gap-1.5 text-xs text-gray-500">
               <div class="i-fas-ticket-alt text-emerald-400" />
               点券
             </div>
-            <div class="text-2xl text-emerald-500 font-bold dark:text-emerald-400">
+            <div class="break-all text-xl text-emerald-500 font-bold leading-tight tabular-nums dark:text-emerald-400 sm:text-2xl">
               {{ formatCurrencyNumber(status?.status?.coupon) }}
             </div>
             <div
@@ -604,27 +652,27 @@ useIntervalFn(updateCountdowns, 1000)
               {{ formatSignedCurrencyNumber(status?.sessionCouponGained) }}
             </div>
           </div>
-          <div class="text-right">
-            <div class="flex items-center justify-end gap-1.5 text-xs text-gray-500">
+          <div class="min-w-0">
+            <div class="flex items-center gap-1.5 text-xs text-gray-500">
               <div class="i-carbon-diamond-outline text-blue-400" />
               钻石
             </div>
-            <div class="text-2xl text-blue-500 font-bold dark:text-blue-400">
+            <div class="break-all text-xl text-blue-500 font-bold leading-tight tabular-nums dark:text-blue-400 sm:text-2xl">
               {{ formatCurrencyNumber(status?.status?.diamond) }}
             </div>
           </div>
-          <div class="text-right">
-            <div class="flex items-center justify-end gap-1.5 text-xs text-gray-500">
+          <div class="min-w-0">
+            <div class="flex items-center gap-1.5 text-xs text-gray-500">
               <div class="i-carbon-circle text-amber-500" />
               金豆豆
             </div>
-            <div class="text-2xl text-amber-500 font-bold dark:text-amber-400">
+            <div class="break-all text-xl text-amber-500 font-bold leading-tight tabular-nums dark:text-amber-400 sm:text-2xl">
               {{ formatCurrencyNumber(status?.status?.goldBean) }}
             </div>
           </div>
         </div>
         <div class="mt-4 border-t border-gray-100 pt-3 dark:border-gray-700">
-          <div class="flex items-center justify-between">
+          <div class="flex min-w-0 items-center justify-between gap-2">
             <div class="min-w-0 flex items-center gap-2">
               <div class="h-2.5 w-2.5 shrink-0 rounded-full" :class="status?.connection?.connected ? 'bg-green-500' : 'bg-red-500'" />
               <span class="shrink-0 text-xs font-bold">{{ status?.connection?.connected ? '在线' : '离线' }}</span>
@@ -637,7 +685,7 @@ useIntervalFn(updateCountdowns, 1000)
                 {{ status?.connection?.reason }}
               </span>
             </div>
-            <div class="flex items-center gap-1.5 text-xs text-gray-400">
+            <div class="flex shrink-0 items-center gap-1.5 whitespace-nowrap text-xs text-gray-400 tabular-nums">
               <div class="i-fas-clock text-purple-400" />
               {{ formatDuration(localUptime) }}
             </div>
@@ -646,27 +694,27 @@ useIntervalFn(updateCountdowns, 1000)
       </div>
 
       <!-- Items (Fertilizer & Collection) -->
-      <div class="flex flex-col justify-between rounded-lg bg-white p-4 shadow dark:bg-gray-800">
+      <div class="flex min-w-0 flex-col justify-between rounded-lg bg-white p-4 shadow dark:bg-gray-800">
         <div class="mb-2 flex items-center gap-1.5 text-sm text-gray-500">
           <div class="i-fas-flask text-emerald-400" />
           化肥容器
         </div>
-        <div class="grid grid-cols-2 gap-2">
-          <div>
+        <div class="grid min-w-0 grid-cols-2 gap-2">
+          <div class="min-w-0">
             <div class="flex items-center gap-1 text-xs text-gray-400">
               <div class="i-fas-flask text-emerald-400" />
               普通
             </div>
-            <div class="font-bold">
+            <div class="break-all font-bold tabular-nums">
               {{ formatBucketTime(fertilizerNormal) }}
             </div>
           </div>
-          <div>
+          <div class="min-w-0">
             <div class="flex items-center gap-1 text-xs text-gray-400">
               <div class="i-fas-vial text-emerald-400" />
               有机
             </div>
-            <div class="font-bold">
+            <div class="break-all font-bold tabular-nums">
               {{ formatBucketTime(fertilizerOrganic) }}
             </div>
           </div>
@@ -676,22 +724,22 @@ useIntervalFn(updateCountdowns, 1000)
           <div class="i-fas-star text-emerald-400" />
           收藏点
         </div>
-        <div class="grid grid-cols-2 gap-2">
-          <div>
+        <div class="grid min-w-0 grid-cols-2 gap-2">
+          <div class="min-w-0">
             <div class="flex items-center gap-1 text-xs text-gray-400">
               <div class="i-fas-bookmark text-emerald-400" />
               普通
             </div>
-            <div class="font-bold">
+            <div class="break-all font-bold tabular-nums">
               {{ collectionNormal?.count || 0 }}
             </div>
           </div>
-          <div>
+          <div class="min-w-0">
             <div class="flex items-center gap-1 text-xs text-gray-400">
               <div class="i-fas-gem text-emerald-400" />
               典藏
             </div>
-            <div class="font-bold">
+            <div class="break-all font-bold tabular-nums">
               {{ collectionRare?.count || 0 }}
             </div>
           </div>
@@ -702,7 +750,7 @@ useIntervalFn(updateCountdowns, 1000)
     <!-- Main Content Flex -->
     <div class="flex flex-1 flex-col items-stretch gap-6 md:flex-row">
       <!-- Logs (Left Column) -->
-      <div class="flex flex-1 flex-col gap-6 md:w-3/4">
+      <div class="flex min-w-0 flex-1 flex-col gap-6 md:w-3/4">
         <!-- Logs -->
         <div class="flex flex-1 flex-col overflow-hidden rounded-lg bg-white p-4 shadow dark:bg-gray-800 sm:p-6">
           <div class="mb-4 flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
@@ -711,7 +759,7 @@ useIntervalFn(updateCountdowns, 1000)
               <span>运行日志</span>
             </h3>
 
-            <div class="grid grid-cols-2 gap-2 text-sm sm:flex sm:flex-wrap sm:items-center">
+            <div class="grid w-full min-w-0 grid-cols-2 gap-2 text-sm sm:flex sm:flex-wrap sm:items-center xl:w-auto">
               <BaseSelect
                 v-model="filter.module"
                 :options="modules"
@@ -765,8 +813,21 @@ useIntervalFn(updateCountdowns, 1000)
             </div>
           </div>
 
+          <div
+            v-if="logsError"
+            class="mb-3 min-w-0 break-words rounded border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-700 dark:border-amber-800 dark:bg-amber-900/20 dark:text-amber-300"
+          >
+            日志刷新失败：{{ logsError }}。当前列表可能仍是上一次成功加载的数据。
+          </div>
+
           <div ref="logContainer" class="max-h-[50vh] min-h-0 flex-1 overflow-x-hidden overflow-y-auto rounded bg-gray-50 p-3 text-sm leading-relaxed font-mono dark:bg-gray-900 sm:p-4" @scroll="onLogScroll">
-            <div v-if="!allLogs.length" class="py-8 text-center text-gray-400">
+            <div v-if="logsLoading && !allLogs.length" class="py-8 text-center text-gray-400">
+              正在加载日志...
+            </div>
+            <div v-else-if="logsError && !allLogs.length" class="py-8 text-center text-red-500">
+              日志加载失败
+            </div>
+            <div v-else-if="!allLogs.length" class="py-8 text-center text-gray-400">
               暂无日志
             </div>
             <div v-for="log in allLogs" :key="log._uiKey" class="mb-2 min-w-0 sm:mb-1.5 sm:flex sm:items-start sm:gap-2">
@@ -783,7 +844,7 @@ useIntervalFn(updateCountdowns, 1000)
       </div>
 
       <!-- Right Column Stack -->
-      <div class="flex flex-col gap-6 md:w-1/4">
+      <div class="flex min-w-0 flex-col gap-6 md:w-1/4">
         <!-- Next Checks -->
         <div class="flex flex-col rounded-lg bg-white p-6 shadow dark:bg-gray-800">
           <h3 class="mb-4 flex items-center gap-2 text-lg font-medium">
@@ -791,30 +852,30 @@ useIntervalFn(updateCountdowns, 1000)
             <span>下次巡查倒计时</span>
           </h3>
           <div class="flex flex-col justify-center gap-4">
-            <div class="flex items-center justify-between">
-              <div class="flex items-center gap-2 text-gray-700 dark:text-gray-300">
+            <div class="flex min-w-0 items-center justify-between gap-2">
+              <div class="flex shrink-0 items-center gap-2 text-gray-700 dark:text-gray-300">
                 <div class="i-carbon-sprout text-lg text-green-500" />
                 <span>农场</span>
               </div>
-              <div class="text-lg font-bold font-mono">
+              <div class="shrink-0 whitespace-nowrap text-lg font-bold font-mono tabular-nums">
                 {{ nextFarmCheck }}
               </div>
             </div>
-            <div class="flex items-center justify-between">
-              <div class="flex items-center gap-2 text-gray-700 dark:text-gray-300">
+            <div class="flex min-w-0 items-center justify-between gap-2">
+              <div class="flex shrink-0 items-center gap-2 text-gray-700 dark:text-gray-300">
                 <div class="i-carbon-user-multiple text-lg text-blue-500" />
                 <span>帮助</span>
               </div>
-              <div class="text-lg font-bold font-mono">
+              <div class="shrink-0 whitespace-nowrap text-lg font-bold font-mono tabular-nums">
                 {{ nextHelpCheck }}
               </div>
             </div>
-            <div class="flex items-center justify-between">
-              <div class="flex items-center gap-2 text-gray-700 dark:text-gray-300">
+            <div class="flex min-w-0 items-center justify-between gap-2">
+              <div class="flex shrink-0 items-center gap-2 text-gray-700 dark:text-gray-300">
                 <div class="i-carbon-run text-lg text-orange-500" />
                 <span>偷菜</span>
               </div>
-              <div class="text-lg font-bold font-mono">
+              <div class="shrink-0 whitespace-nowrap text-lg font-bold font-mono tabular-nums">
                 {{ nextStealCheck }}
               </div>
             </div>
@@ -838,19 +899,19 @@ useIntervalFn(updateCountdowns, 1000)
               </div>
             </div>
           </div>
-          <div v-else class="grid grid-cols-2 gap-2 2xl:gap-3">
+          <div v-else class="grid min-w-0 grid-cols-2 gap-2 2xl:gap-3">
             <div
               v-for="(val, key) in filteredOperations"
               :key="key"
-              class="flex items-center justify-between rounded bg-gray-50 px-3 py-2 dark:bg-gray-700/30"
+              class="flex min-w-0 items-center justify-between gap-2 rounded bg-gray-50 px-3 py-2 dark:bg-gray-700/30"
             >
-              <div class="flex items-center gap-2">
-                <div class="text-base 2xl:text-lg" :class="[getOpIcon(key), getOpColor(key)]" />
-                <div class="text-xs text-gray-500 2xl:text-sm">
+              <div class="flex min-w-0 items-center gap-2">
+                <div class="shrink-0 text-base 2xl:text-lg" :class="[getOpIcon(key), getOpColor(key)]" />
+                <div class="min-w-0 break-words text-xs leading-tight text-gray-500 2xl:text-sm">
                   {{ getOpName(key) }}
                 </div>
               </div>
-              <div class="text-sm font-bold 2xl:text-base">
+              <div class="min-w-0 max-w-[45%] break-all text-right text-sm font-bold leading-tight tabular-nums 2xl:text-base">
                 {{ val }}
               </div>
             </div>

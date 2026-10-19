@@ -12,11 +12,13 @@ const api = axios.create({
 
 api.interceptors.request.use((config) => {
   const token = tokenRef.value
-  if (token) {
+  if (token && !config.headers['x-admin-token']) {
     config.headers['x-admin-token'] = token
   }
   const accountId = accountIdRef.value
-  if (accountId) {
+  // Preserve an explicit account captured by the caller. This lets async work
+  // finish against the account it started with after the global selection changes.
+  if (accountId && !config.headers['x-account-id']) {
     config.headers['x-account-id'] = accountId
   }
   return config
