@@ -137,15 +137,6 @@ const mutationItems = computed<MutationDisplay[]>(() => {
   return items
 })
 
-const mutationPanelStyle = computed(() => {
-  const color = String(mutationItems.value[0]?.color || '#6B7280')
-  const alpha = /^#[0-9a-f]{6}$/i.test(color) ? color : '#6B7280'
-  return {
-    borderColor: `${alpha}66`,
-    backgroundColor: `${alpha}14`,
-  }
-})
-
 function getMutationQualityClass(quality?: string) {
   if (quality === '天工')
     return 'bg-orange-100 text-orange-700 dark:bg-orange-900/40 dark:text-orange-300'
@@ -369,8 +360,7 @@ function getPlantSizeText(land: any) {
 
     <div
       v-if="mutationItems.length"
-      class="mt-1 w-full overflow-hidden rounded-md border px-1.5 py-1 text-[10px] space-y-1"
-      :style="mutationPanelStyle"
+      class="mt-1 w-full text-[10px] space-y-1"
     >
       <div
         v-for="item in mutationItems"
