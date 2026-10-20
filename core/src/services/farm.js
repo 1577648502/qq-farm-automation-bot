@@ -24,6 +24,9 @@ let externalSchedulerMode = false;
 let fertilizerBuyCheckTimer = null;
 let lastFertilizerBuyCheckAt = 0;
 const farmScheduler = createScheduler('farm');
+const LARGE_SEED_PRIORITY_MIN_SIZE = 4;
+const LARGE_SEED_WAIT_MS = 10 * 60 * 1000;
+const largeSeedWaitStates = new Map();
 
 // ============ 农场 API ============
 
@@ -695,13 +698,17 @@ function sortBagSeedsForPlanting(bagSeeds, priorityList) {
     });
 
     return [...(Array.isArray(bagSeeds) ? bagSeeds : [])].sort((a, b) => {
+        const aSize = Math.max(1, Number(a.plantSize || 1));
+        const bSize = Math.max(1, Number(b.plantSize || 1));
+        const aLarge = aSize >= LARGE_SEED_PRIORITY_MIN_SIZE;
+        const bLarge = bSize >= LARGE_SEED_PRIORITY_MIN_SIZE;
+        if (aLarge !== bLarge) return aLarge ? -1 : 1;
+
         const aIndex = indexMap.has(a.seedId) ? indexMap.get(a.seedId) : Number.MAX_SAFE_INTEGER;
         const bIndex = indexMap.has(b.seedId) ? indexMap.get(b.seedId) : Number.MAX_SAFE_INTEGER;
         if (aIndex !== bIndex) return aIndex - bIndex;
 
         // 未手动排序时，大作物优先消耗，避免先种满 1x1 后再也凑不出 2x2 空地。
-        const aSize = Math.max(1, Number(a.plantSize || 1));
-        const bSize = Math.max(1, Number(b.plantSize || 1));
         if (aSize !== bSize) return bSize - aSize;
 
         const aLevel = Number(a.requiredLevel || 0);
@@ -721,10 +728,79 @@ function getBagSeedPlantCapacity(seed, availableLandCount) {
     );
 }
 
+function getLargeSeedWaitKey(seedId, accountId = process.env.FARM_ACCOUNT_ID || 'default') {
+    return `${String(accountId || 'default')}:${Number(seedId) || 0}`;
+}
+
+function pruneLargeSeedWaitStates(activeSeedIds, accountId = process.env.FARM_ACCOUNT_ID || 'default') {
+    const activeKeys = new Set(
+        (Array.isArray(activeSeedIds) ? activeSeedIds : [])
+            .map(seedId => getLargeSeedWaitKey(seedId, accountId)),
+    );
+    for (const key of largeSeedWaitStates.keys()) {
+        if (key.startsWith(`${String(accountId || 'default')}:`) && !activeKeys.has(key)) {
+            largeSeedWaitStates.delete(key);
+        }
+    }
+}
+
+function getOrCreateLargeSeedWaitState(seed, now = Date.now(), accountId = process.env.FARM_ACCOUNT_ID || 'default') {
+    const seedId = Number(seed && seed.seedId) || 0;
+    const plantSize = Math.max(1, Number(seed && seed.plantSize) || 1);
+    const count = Math.max(0, Number(seed && seed.count) || 0);
+    const key = getLargeSeedWaitKey(seedId, accountId);
+    let state = largeSeedWaitStates.get(key);
+
+    if (!state || state.plantSize !== plantSize || count > state.lastObservedCount) {
+        state = {
+            seedId,
+            plantSize,
+            lastObservedCount: count,
+            startedAt: now,
+            expiresAt: now + LARGE_SEED_WAIT_MS,
+            shortageLogged: false,
+            timeoutLogged: false,
+        };
+        largeSeedWaitStates.set(key, state);
+    } else {
+        state.lastObservedCount = count;
+    }
+
+    return {
+        ...state,
+        expired: now >= state.expiresAt,
+    };
+}
+
+function markLargeSeedWaitShortage(state, accountId = process.env.FARM_ACCOUNT_ID || 'default') {
+    const key = getLargeSeedWaitKey(state && state.seedId, accountId);
+    const current = largeSeedWaitStates.get(key);
+    if (!current) return false;
+    const wasLogged = !!current.shortageLogged;
+    current.shortageLogged = true;
+    return !wasLogged;
+}
+
+function markLargeSeedWaitTimeout(state, accountId = process.env.FARM_ACCOUNT_ID || 'default') {
+    const key = getLargeSeedWaitKey(state && state.seedId, accountId);
+    const current = largeSeedWaitStates.get(key);
+    if (!current) return false;
+    const wasLogged = !!current.timeoutLogged;
+    current.timeoutLogged = true;
+    return !wasLogged;
+}
+
+function resetLargeSeedWaitStates(accountId = process.env.FARM_ACCOUNT_ID || 'default') {
+    const prefix = `${String(accountId || 'default')}:`;
+    for (const key of largeSeedWaitStates.keys()) {
+        if (key.startsWith(prefix)) largeSeedWaitStates.delete(key);
+    }
+}
+
 async function plantFromBagSeeds(landsToPlant) {
     const targetLandIds = (Array.isArray(landsToPlant) ? landsToPlant : []).map(id => Number(id)).filter(id => id > 0);
     if (targetLandIds.length === 0) {
-        return { remainingLandIds: [], fallbackAllowed: false, plantedLandIds: [], totalPlanted: 0, occupiedCount: 0 };
+        return { remainingLandIds: [], fallbackAllowed: false, plantedLandIds: [], totalPlanted: 0, occupiedCount: 0, waitingForLargeSeed: null };
     }
 
     const bagSeeds = await getBagSeeds();
@@ -734,6 +810,11 @@ async function plantFromBagSeeds(landsToPlant) {
     const usableSeeds = sortBagSeedsForPlanting(
         bagSeedsWithCount.filter(seed => !isPlantSeedExcluded(seed && seed.seedId, excludeSet)),
         getBagSeedPriority(),
+    );
+    pruneLargeSeedWaitStates(
+        usableSeeds
+            .filter(seed => Math.max(1, Number(seed && seed.plantSize) || 1) >= LARGE_SEED_PRIORITY_MIN_SIZE)
+            .map(seed => seed.seedId),
     );
 
     if (usableSeeds.length === 0) {
@@ -747,13 +828,14 @@ async function plantFromBagSeeds(landsToPlant) {
             result: 'fallback_ready',
             strategy: 'bag_priority',
         });
-        return { remainingLandIds: targetLandIds, fallbackAllowed: true, plantedLandIds: [], totalPlanted: 0, occupiedCount: 0 };
+        return { remainingLandIds: targetLandIds, fallbackAllowed: true, plantedLandIds: [], totalPlanted: 0, occupiedCount: 0, waitingForLargeSeed: null };
     }
 
     let remainingLandIds = [...targetLandIds];
     let fallbackAllowed = true;
     let totalPlanted = 0;
     let occupiedCount = 0;
+    let waitingForLargeSeed = null;
     const plantedLandIds = [];
     const usedSeedLogs = [];
 
@@ -761,8 +843,44 @@ async function plantFromBagSeeds(landsToPlant) {
         if (remainingLandIds.length === 0) break;
 
         const plantSize = Math.max(1, Number(seed.plantSize || 1));
+        const isLargeSeed = plantSize >= LARGE_SEED_PRIORITY_MIN_SIZE;
+        const largeSeedWaitState = isLargeSeed ? getOrCreateLargeSeedWaitState(seed) : null;
         const maxPlantCount = getBagSeedPlantCapacity(seed, remainingLandIds.length);
-        if (maxPlantCount <= 0) continue;
+        if (maxPlantCount <= 0) {
+            if (isLargeSeed && !largeSeedWaitState.expired) {
+                waitingForLargeSeed = {
+                    seedId: seed.seedId,
+                    name: seed.name,
+                    plantSize,
+                    availableLandCount: remainingLandIds.length,
+                    expiresAt: largeSeedWaitState.expiresAt,
+                };
+                fallbackAllowed = false;
+                if (markLargeSeedWaitShortage(largeSeedWaitState)) {
+                    log('种植', `${plantSize}x${plantSize} 种子「${seed.name}」需要 ${plantSize * plantSize} 块连续空地，当前仅 ${remainingLandIds.length} 块；先保留空地等待，最多等待 10 分钟`, {
+                        module: 'farm',
+                        event: '大种子优先等待',
+                        result: 'waiting',
+                        seedId: seed.seedId,
+                        plantSize,
+                        availableLandCount: remainingLandIds.length,
+                        expiresAt: largeSeedWaitState.expiresAt,
+                    });
+                }
+                break;
+            }
+            if (isLargeSeed && markLargeSeedWaitTimeout(largeSeedWaitState)) {
+                log('种植', `${plantSize}x${plantSize} 种子「${seed.name}」等待超时，本轮恢复其他种子补种`, {
+                    module: 'farm',
+                    event: '大种子优先等待',
+                    result: 'timeout',
+                    seedId: seed.seedId,
+                    plantSize,
+                    availableLandCount: remainingLandIds.length,
+                });
+            }
+            continue;
+        }
 
         const result = await plantSeeds(seed.seedId, remainingLandIds, { maxPlantCount });
         const currentOccupied = (Array.isArray(result.occupiedLandIds) ? result.occupiedLandIds : []).map(Number).filter(id => id > 0);
@@ -776,16 +894,52 @@ async function plantFromBagSeeds(landsToPlant) {
         }
 
         if (result.planted < maxPlantCount && remainingLandIds.length > 0) {
+            if (isLargeSeed && result.hadRealError === false) {
+                if (!largeSeedWaitState.expired) {
+                    waitingForLargeSeed = {
+                        seedId: seed.seedId,
+                        name: seed.name,
+                        plantSize,
+                        availableLandCount: remainingLandIds.length,
+                        expiresAt: largeSeedWaitState.expiresAt,
+                    };
+                    fallbackAllowed = false;
+                    if (markLargeSeedWaitShortage(largeSeedWaitState)) {
+                        log('种植', `${plantSize}x${plantSize} 种子「${seed.name}」暂未找到连续空地，保留 ${remainingLandIds.length} 块空地继续等待，最多再等 ${Math.max(1, Math.ceil((largeSeedWaitState.expiresAt - Date.now()) / 60000))} 分钟`, {
+                            module: 'farm',
+                            event: '大种子优先等待',
+                            result: 'waiting',
+                            seedId: seed.seedId,
+                            plantSize,
+                            availableLandCount: remainingLandIds.length,
+                            expiresAt: largeSeedWaitState.expiresAt,
+                        });
+                    }
+                    break;
+                }
+                if (markLargeSeedWaitTimeout(largeSeedWaitState)) {
+                    log('种植', `${plantSize}x${plantSize} 种子「${seed.name}」等待超时，本轮恢复其他种子补种`, {
+                        module: 'farm',
+                        event: '大种子优先等待',
+                        result: 'timeout',
+                        seedId: seed.seedId,
+                        plantSize,
+                        availableLandCount: remainingLandIds.length,
+                    });
+                }
+            }
             // 仅在有真正异常错误时才禁止回退（2x2 布局预期错误不阻断回退）
             const isPureLayoutFailure = result.hadRealError === false && result.planted === 0;
             if (!isPureLayoutFailure) {
                 fallbackAllowed = false;
             }
-            logWarn('种植', `背包种子 ${seed.name} 实际种植 ${result.planted}/${maxPlantCount}，${isPureLayoutFailure ? '没有满足种植条件的土地，本轮执行第二优先策略' : '为避免误购商店种子，本轮不执行第二优先策略'}`, {
-                seedId: seed.seedId,
-                requested: maxPlantCount,
-                planted: result.planted,
-            });
+            if (!isLargeSeed || result.hadRealError) {
+                logWarn('种植', `背包种子 ${seed.name} 实际种植 ${result.planted}/${maxPlantCount}，${isPureLayoutFailure ? '没有满足种植条件的土地，本轮执行第二优先策略' : '为避免误购商店种子，本轮不执行第二优先策略'}`, {
+                    seedId: seed.seedId,
+                    requested: maxPlantCount,
+                    planted: result.planted,
+                });
+            }
         }
     }
 
@@ -805,6 +959,7 @@ async function plantFromBagSeeds(landsToPlant) {
         plantedLandIds: [...new Set(plantedLandIds)],
         totalPlanted,
         occupiedCount,
+        waitingForLargeSeed,
     };
 }
 
@@ -2051,4 +2206,12 @@ module.exports = {
     sortBagSeedsForPlanting,
     getBagSeedPlantCapacity,
     encodePlantRequest,
+    __privateFarmFns: {
+        LARGE_SEED_PRIORITY_MIN_SIZE,
+        LARGE_SEED_WAIT_MS,
+        getLargeSeedWaitKey,
+        getOrCreateLargeSeedWaitState,
+        resetLargeSeedWaitStates,
+        plantFromBagSeeds,
+    },
 };
