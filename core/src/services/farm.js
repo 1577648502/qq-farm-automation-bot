@@ -4,7 +4,7 @@
 
 const protobuf = require('protobufjs');
 const { CONFIG, PlantPhase, PHASE_NAMES } = require('../config/config');
-const { getPlantNameBySeedId, getPlantName, getPlantExp, formatGrowTime, getPlantGrowTime, getAllSeeds, getPlantById, getPlantBySeedId, getSeedImageBySeedId, resolveMutationInfo, getAllMutantTypes } = require('../config/gameConfig');
+const { getPlantNameBySeedId, getPlantName, getPlantExp, formatGrowTime, getPlantGrowTime, getAllSeeds, getPlantById, getPlantBySeedId, getSeedImageBySeedId, resolveMutationInfo, isGoldenPlant } = require('../config/gameConfig');
 const { isAutomationOn, getPreferredSeed, getAutomation, getPlantingStrategy, getBagSeedPriority, getBagSeedFallbackStrategy, getPlantSeedExclude, getFertilizerBuyOrganicCount, getFertilizerBuyOrganicThresholdHours, getFertilizerBuyNormalCount, getFertilizerBuyNormalThresholdHours, getFertilizerBuyCheckIntervalMinutes } = require('../models/store');
 const { sendMsgAsync, getUserState, networkEvents, getWsErrorState } = require('../utils/network');
 const { types } = require('../utils/proto');
@@ -1070,65 +1070,20 @@ async function getLandsDetail() {
             if (seedId === 29999) continue;
             const seedImage = seedId > 0 ? getSeedImageBySeedId(seedId) : '';
             const plantSize = Math.max(1, toNum(plantCfg && plantCfg.size) || 1);
-            const mutantConfigIds = plant.mutant_config_ids ? plant.mutant_config_ids.map(function(v) { return Number(v); }).filter(function(v) { return v > 0; }) : [];
+            const mutantConfigIds = Array.isArray(plant.mutant_config_ids) ? plant.mutant_config_ids : [];
 
-            // 变异检测
-            const mutationInfo = resolveMutationInfo(plantId, mutantConfigIds);
-            let isMutant = mutationInfo ? mutationInfo.isMutant : false;
+            // 变异检测: 合并植物级与阶段级 mutant_config_id, 按服务端枚举精确解析。
+            const mutationInfo = resolveMutationInfo(plantId, mutantConfigIds, plant.phases);
+            const isMutant = mutationInfo ? mutationInfo.isMutant : false;
             const isGolden = mutationInfo ? mutationInfo.isGolden : isGoldenPlant(plantId);
-            let mutationType = null;
-            let mutationQuality = null;
-            let mutationKey = null;
-
-            if (mutationInfo && mutationInfo.mutationType) {
-                mutationType = mutationInfo.mutationType;
-                mutationQuality = mutationInfo.mutationQuality;
-                mutationKey = mutationInfo.mutationKey;
-            }
-            // 服务端明确给了变异配置ID 但名字没解析出来(新变异/基础效果类, 如冰冻/爱心) →
-            // 也要在地块上标出来, 不能因为"名字未识别"就当成没变异
-            if (!mutationType && mutantConfigIds.length > 0) {
-                isMutant = true;
-                mutationType = '变异';
-                mutationQuality = '未知';
-                mutationKey = `UNKNOWN_${mutantConfigIds.join('_')}`;
-            }
-
-            // Also check for phase-level mutations (阶段级变异)
-            if (!mutationType && mutantConfigIds.length === 0 && Array.isArray(plant.phases)) {
-                for (var pi = 0; pi < plant.phases.length; pi++) {
-                    var ph = plant.phases[pi];
-                    if (ph && ph.mutants && ph.mutants.length > 0) {
-                        // Phase has actual mutation data, mark as mutant
-                        isMutant = true;
-                        var mutantTypes = getAllMutantTypes();
-                        if (mutantTypes) {
-                            var keys = Object.keys(mutantTypes);
-                            for (var ki = 0; ki < keys.length; ki++) {
-                                var mt = keys[ki];
-                                var mcfg = mutantTypes[mt];
-                                if (mcfg && (!mcfg.qualityRank || mcfg.qualityRank > 2)) {
-                                    // phase-level growth mutations
-                                    mutationType = mt;
-                                    mutationQuality = mcfg.quality || '?';
-                                    mutationKey = mt;
-                                    break;
-                                }
-                            }
-                            if (mutationType) break;
-                        }
-                    }
-                }
-            }
-
-            // Determine mutation key for display
-            if (mutationType && !mutationKey) {
-                if (mutationType === '月华' || mutationType === '黄金') {
-                    mutationKey = mutationType + '_' + mutationQuality;
-                } else {
-                    mutationKey = mutationType;
-                }
-            }
+            const mutationType = mutationInfo ? mutationInfo.mutationType : null;
+            const mutationQuality = mutationInfo ? mutationInfo.mutationQuality : null;
+            const mutationKey = mutationInfo ? mutationInfo.mutationKey : null;
+            const mutationEffect = mutationInfo ? mutationInfo.mutationEffect : null;
+            const mutationIcon = mutationInfo ? mutationInfo.mutationIcon : null;
+            const mutationColor = mutationInfo ? mutationInfo.mutationColor : null;
+            const mutationDescription = mutationInfo ? mutationInfo.mutationDescription : null;
+            const mutations = mutationInfo && Array.isArray(mutationInfo.mutations) ? mutationInfo.mutations : [];
             const totalSeason = Math.max(1, toNum(plantCfg && plantCfg.seasons) || 1);
             const currentSeasonRaw = toNum(plant.season);
             const currentSeason = currentSeasonRaw > 0 ? Math.min(currentSeasonRaw, totalSeason) : 1;
@@ -1167,9 +1122,14 @@ async function getLandsDetail() {
                 stealable: !!plant.stealable,
                 isMutant: isMutant,
                 isGolden: isGolden,
-                mutationType: mutationType,
-                mutationQuality: mutationQuality,
-                mutationKey: mutationKey,
+                mutationType,
+                mutationQuality,
+                mutationKey,
+                mutationEffect,
+                mutationIcon,
+                mutationColor,
+                mutationDescription,
+                mutations,
                 level,
                 maxLevel,
                 landsLevel,
@@ -1778,44 +1738,26 @@ async function runFarmOperation(opType) {
                 if (harvestReply && harvestReply.land) {
                     for (var hi = 0; hi < harvestReply.land.length; hi++) {
                         var rl = harvestReply.land[hi];
-                        if (rl && rl.plant && rl.plant.mutant_config_ids && rl.plant.mutant_config_ids.length > 0) {
-                            var configIds = rl.plant.mutant_config_ids.map(function(v) { return Number(v); }).filter(function(v) { return v > 0; });
-                            if (configIds.length > 0) {
-                                var mi = resolveMutationInfo(Number(rl.plant.id) || 0, configIds);
-                                if (mi && mi.mutationType) {
-                                    mutantCrops.push({
-                                        landId: Number(rl.id),
-                                        plantName: rl.plant.name || '',
-                                        mutationType: mi.mutationType,
-                                        mutationQuality: mi.mutationQuality,
-                                        mutationKey: mi.mutationKey || mi.mutationType,
-                                    });
-                                }
-                            }
-                        }
-                        // Also check phase-level mutations
-                        if (rl && rl.plant && rl.plant.phases) {
-                            for (var pi = 0; pi < rl.plant.phases.length; pi++) {
-                                var ph = rl.plant.phases[pi];
-                                if (ph && ph.mutants && ph.mutants.length > 0) {
-                                    // Phase has mutation data
-                                    if (!mutantCrops.some(function(ex) { return ex.landId === Number(rl.id); })) {
-                                        mutantCrops.push({
-                                            landId: Number(rl.id),
-                                            plantName: rl.plant.name || '',
-                                            mutationType: '未知变异',
-                                            mutationQuality: '无',
-                                            mutationKey: '',
-                                        });
-                                    }
-                                    break;
-                                }
-                            }
+                        if (!rl || !rl.plant) continue;
+                        var configIds = Array.isArray(rl.plant.mutant_config_ids) ? rl.plant.mutant_config_ids : [];
+                        var mi = resolveMutationInfo(Number(rl.plant.id) || 0, configIds, rl.plant.phases);
+                        if (mi && mi.isMutant && mi.mutationType) {
+                            mutantCrops.push({
+                                landId: Number(rl.id),
+                                plantName: rl.plant.name || '',
+                                mutationType: mi.mutationType,
+                                mutationQuality: mi.mutationQuality,
+                                mutationKey: mi.mutationKey || mi.mutationType,
+                                mutationEffect: mi.mutationEffect,
+                            });
                         }
                     }
                 }
                 if (mutantCrops.length > 0) {
-                    var mutantNames = mutantCrops.map(function(mc) { return mc.mutationType + '(' + mc.plantName + ')'; }).join(', ');
+                    var mutantNames = mutantCrops.map(function(mc) {
+                        var effect = mc.mutationEffect ? ', ' + mc.mutationEffect : '';
+                        return mc.mutationType + '(' + mc.plantName + effect + ')';
+                    }).join(', ');
                     log('变异', '收获发现变异作物: ' + mutantNames, {
                         module: 'farm',
                         event: '变异收获',

@@ -1,5 +1,5 @@
 ﻿<script setup lang="ts">
-import { computed, ref, onMounted, onUnmounted, watchEffect } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watchEffect } from 'vue'
 
 
 
@@ -78,15 +78,87 @@ function doAction(act: LandAction) {
 
 
 const land = computed(() => props.land)
-// 变异标签: 服务端给的 mutationType 已是"变异"(配置ID存在但名字未识别)时不再重复加"变异"二字
-const mutationLabel = computed(() => {
-  const t = String((land.value as any)?.mutationType || '').trim()
-  if (!t) return '变异'
-  if (t.startsWith('变异')) return t                        // 变异#14 等未识别枚举
-  if (t === '变异') return '变异(类型待识别)'
-  const base = t.includes('_') ? t.split('_')[0] : t        // 黄金_天工 → 黄金 (与游戏显示一致)
+interface MutationDisplay {
+  name: string
+  label: string
+  quality?: string
+  effect?: string
+  icon?: string
+  color?: string
+  description?: string
+}
+
+function formatMutationLabel(value: any) {
+  const t = String(value || '').trim()
+  if (!t)
+    return '变异'
+  if (t.startsWith('变异'))
+    return t // 变异#14 等未识别枚举
+  if (t === '变异')
+    return '变异(类型待识别)'
+  const base = t.includes('_') ? t.split('_')[0] : t // 黄金_天工 → 黄金 (与游戏显示一致)
   return `${base}变异`
+}
+
+const mutationItems = computed<MutationDisplay[]>(() => {
+  const l: any = land.value || {}
+  const source = Array.isArray(l.mutations) ? l.mutations : []
+  const items = source
+    .map((mutation: any): MutationDisplay | null => {
+      const name = String(mutation?.name || '').trim()
+      if (!name)
+        return null
+      return {
+        name,
+        label: formatMutationLabel(name),
+        quality: mutation.quality || undefined,
+        effect: mutation.effect || undefined,
+        icon: mutation.icon || undefined,
+        color: mutation.color || undefined,
+        description: mutation.description || undefined,
+      }
+    })
+    .filter((mutation: MutationDisplay | null): mutation is MutationDisplay => !!mutation)
+
+  if (items.length === 0 && l.mutationType) {
+    items.push({
+      name: String(l.mutationType),
+      label: formatMutationLabel(l.mutationType),
+      quality: l.mutationQuality || undefined,
+      effect: l.mutationEffect || undefined,
+      icon: l.mutationIcon || undefined,
+      color: l.mutationColor || undefined,
+      description: l.mutationDescription || undefined,
+    })
+  }
+  if (items.length === 0 && l.isGolden) {
+    items.push({ name: '黄金', label: '黄金变异', effect: '黄金果实', icon: '⭐', color: '#FF6B35' })
+  }
+  return items
 })
+
+const mutationPanelStyle = computed(() => {
+  const color = String(mutationItems.value[0]?.color || '#6B7280')
+  const alpha = /^#[0-9a-f]{6}$/i.test(color) ? color : '#6B7280'
+  return {
+    borderColor: `${alpha}66`,
+    backgroundColor: `${alpha}14`,
+  }
+})
+
+function getMutationQualityClass(quality?: string) {
+  if (quality === '天工')
+    return 'bg-orange-100 text-orange-700 dark:bg-orange-900/40 dark:text-orange-300'
+  if (quality === '珍品')
+    return 'bg-purple-100 text-purple-700 dark:bg-purple-900/40 dark:text-purple-300'
+  if (quality === '稀有')
+    return 'bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300'
+  return 'bg-gray-200/80 text-gray-600 dark:bg-gray-700 dark:text-gray-300'
+}
+
+function getMutationQualityLabel(quality?: string) {
+  return quality === '未知' ? '待确认' : quality
+}
 const now = ref(Date.now())
 let timer: ReturnType<typeof setInterval> | null = null
 
@@ -265,7 +337,6 @@ function getPlantSizeText(land: any) {
 
 
 
-    <div v-if="land.isGolden" class="w-full text-center text-[10px] font-bold text-amber-600 dark:text-amber-400">★ 黄金变异 ★</div>
     <div class="mb-0.5 mt-0.5 w-full text-center text-[10px] text-gray-500">
       <span v-if="land.matureInSec > 0" class="text-orange-500">
         预计 {{ formatTime(land.matureInSec) }} 后成熟
@@ -296,11 +367,32 @@ function getPlantSizeText(land: any) {
 
 
 
-    <div v-if="land.isMutant && land.mutationType" class="flex items-center justify-center gap-0.5 text-[10px] px-1 truncate max-w-full">
-      <span v-if="land.mutationQuality === '天工'" class="rounded bg-orange-100 px-1 text-orange-700 dark:bg-orange-900/30 dark:text-orange-400 font-medium">天工</span>
-      <span v-else-if="land.mutationQuality === '珍品'" class="rounded bg-purple-100 px-1 text-purple-700 dark:bg-purple-900/30 dark:text-purple-400 font-medium">珍品</span>
-      <span v-else-if="land.mutationQuality === '稀有'" class="rounded bg-blue-100 px-1 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400 font-medium">稀有</span>
-      <span class="text-gray-600 dark:text-gray-400">{{ mutationLabel }}</span>
+    <div
+      v-if="mutationItems.length"
+      class="mt-1 w-full overflow-hidden rounded-md border px-1.5 py-1 text-[10px] space-y-1"
+      :style="mutationPanelStyle"
+    >
+      <div
+        v-for="item in mutationItems"
+        :key="`${item.name}-${item.effect || ''}`"
+        class="min-w-0 leading-tight"
+        :title="item.description || `${item.label}${item.effect ? ` · ${item.effect}` : ''}`"
+      >
+        <div class="flex min-w-0 items-center justify-center gap-1">
+          <span class="shrink-0" :style="{ color: item.color || '#6B7280' }" aria-hidden="true">{{ item.icon || '?' }}</span>
+          <span class="min-w-0 truncate font-semibold text-gray-700 dark:text-gray-200">{{ item.label }}</span>
+          <span
+            v-if="item.quality && item.quality !== '无'"
+            class="shrink-0 rounded px-1 font-medium"
+            :class="getMutationQualityClass(item.quality)"
+          >
+            {{ getMutationQualityLabel(item.quality) }}
+          </span>
+        </div>
+        <div v-if="item.effect" class="mt-0.5 break-words text-center text-[9px] text-gray-600 dark:text-gray-300">
+          {{ item.effect }}
+        </div>
+      </div>
     </div>
     <div class="mb-1 text-[10px] text-gray-400">
       季数 {{ land.totalSeason > 0 ? (`${land.currentSeason}/${land.totalSeason}`) : '-/-' }}

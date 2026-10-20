@@ -17,7 +17,6 @@ const plantMap = new Map();  // id -> plant
 const seedToPlant = new Map();  // seed_id -> plant
 const fruitToPlant = new Map();  // fruit_id -> plant (果实ID -> 植物)
 let itemInfoConfig = null;
-let mutantTypesConfig = null;
 const mutantTypeMap = new Map();
 let mutantTypesData = null;
 
@@ -51,11 +50,35 @@ function getMutantByEnumId(enumId) {
     if (!id) return null;
     for (const [name, cfg] of mutantTypeMap) {
         const ids = Array.isArray(cfg.enumIds) ? cfg.enumIds : [];
-        if (ids.includes(id)) return { name, quality: cfg.quality || '无', qualityRank: Number(cfg.qualityRank) || 0, key: name };
+        if (ids.includes(id)) {
+            return {
+                name,
+                quality: cfg.quality || '无',
+                qualityRank: Number(cfg.qualityRank) || 0,
+                key: name,
+                effect: cfg.effect || '',
+                description: cfg.description || '',
+                probability: Number(cfg.probability) || 0,
+                color: cfg.color || '#6B7280',
+                icon: cfg.icon || '?',
+                enumId: id,
+            };
+        }
     }
     const unknownMap = (mutantTypesData && mutantTypesData.unknownEnumIds) || {};
-    if (unknownMap[String(id)]) return { name: `变异#${id}`, quality: '未知', qualityRank: 9, key: `UNKNOWN_${id}` };
-    return null;
+    const unknown = unknownMap[String(id)] || {};
+    return {
+        name: `变异#${id}`,
+        quality: '未知',
+        qualityRank: 9,
+        key: `UNKNOWN_${id}`,
+        effect: '效果待确认',
+        description: unknown.note || '服务端下发了未收录的变异配置',
+        probability: 0,
+        color: '#6B7280',
+        icon: '?',
+        enumId: id,
+    };
 }
 
 function getAllMutantTypes() {
@@ -162,7 +185,7 @@ function getMutationTypeByFruitId(fruitId) {
         const item = itemInfoMap.get(Number(fruitId) || 0);
         const level = Number(item && item.level) || 0;
         const quality = level >= 200 ? "天工" : (level >= 100 ? "珍品" : "稀有");
-        return { type: "黄金", quality: quality };
+        return { type: "黄金", quality };
     }
     return null;
 }
@@ -170,12 +193,31 @@ function getMutationTypeByFruitId(fruitId) {
 /**
  * 综合解析变异信息 - 主入口
  */
-function resolveMutationInfo(plantId, mutantConfigIds) {
+function resolveMutationInfo(plantId, mutantConfigIds, phases) {
     const plant = plantMap.get(plantId);
     const plantName = plant ? plant.name : "";
     const configs = getPlantMutantConfig(plantId);
     const isGolden = isGoldenPlant(plantId);
     const confidence = [];
+    const normalizedIds = [];
+    const appendId = (value) => {
+        const id = value && typeof value.toNumber === 'function' ? value.toNumber() : Number(value);
+        if (Number(id) > 0 && !normalizedIds.includes(Number(id))) normalizedIds.push(Number(id));
+    };
+
+    if (Array.isArray(mutantConfigIds)) {
+        for (const id of mutantConfigIds) appendId(id);
+    }
+    if (Array.isArray(phases)) {
+        for (const phase of phases) {
+            if (!phase || !Array.isArray(phase.mutants)) continue;
+            for (const mutant of phase.mutants) {
+                if (mutant && mutant.mutant_config_id !== undefined && mutant.mutant_config_id !== null) {
+                    appendId(mutant.mutant_config_id);
+                }
+            }
+        }
+    }
 
     // Check each possible mutation target
     for (const cfg of configs) {
@@ -184,13 +226,13 @@ function resolveMutationInfo(plantId, mutantConfigIds) {
         const mType = determineMutationType(plantId, cfg.targetPlantId, plantName, targetName);
         if (mType) {
             const q = determineMutationQuality(mType, targetPlant ? Number(targetPlant.exp) || 0 : 0);
-            const mKey = mType === "荷华" ? (mType + "_" + q) : (mType === "黄金" ? (mType + "_" + q) : mType);
+            const mKey = mType === "荷华" || mType === "黄金" ? `${mType}_${q}` : mType;
             confidence.push({
                 mutationType: mType,
                 mutationKey: mKey,
                 quality: q,
                 targetPlantId: cfg.targetPlantId,
-                targetName: targetName,
+                targetName,
                 phase: cfg.phase,
                 weight: cfg.probability,
             });
@@ -214,51 +256,39 @@ function resolveMutationInfo(plantId, mutantConfigIds) {
         selfQuality = determineMutationQuality(selfType, plant ? Number(plant.exp) || 0 : 0);
     }
 
-    // Determine display type - only when actual mutation occurred
-    const hasMutantConfigIds = Array.isArray(mutantConfigIds) && mutantConfigIds.length > 0;
-    let displayType = null;
-    let displayQuality = null;
-    if (hasMutantConfigIds && confidence.length > 0) {
-        // Try to match actual mutation config IDs to determine which mutation occurred
-        const ids = mutantConfigIds.map(Number).filter(Boolean);
-        for (const cfg of configs) {
-            if (ids.includes(Number(cfg.targetPlantId)) || ids.includes(Number(cfg.plan_id))) {
-                const found = confidence.find(c => c.targetPlantId === cfg.targetPlantId);
-                if (found) {
-                    displayType = found.mutationType;
-                    displayQuality = found.quality;
-                    break;
-                }
-            }
-        }
-        // Fallback: use first confidence entry if no match found
-        if (!displayType) {
-            displayType = confidence[0].mutationType;
-            displayQuality = confidence[0].quality;
-        }
-        // 兜底②: 用变异枚举 ID 直接映射(新变异的名字启发式认不出来时, 也能显示准确的类型/品质)
-        if (!displayType) {
-            for (const id of mutantConfigIds) {
-                const m = getMutantByEnumId(id);
-                if (m) {
-                    displayType = m.name;
-                    displayQuality = m.quality;
-                    break;
-                }
-            }
-        }
-    } else if (selfType) {
-        displayType = selfType;
-        displayQuality = selfQuality;
-    }
+    // 枚举 ID 是服务端下发的实际变异, 优先级高于植物名称/目标植物启发式。
+    // 阶段级 mutant_config_id 与 plant.mutant_config_ids 使用同一套枚举。
+    const enumMutations = normalizedIds
+        .map(id => getMutantByEnumId(id))
+        .filter(Boolean)
+        .sort((a, b) => (a.qualityRank - b.qualityRank) || (a.enumId - b.enumId));
+    const primaryEnumMutation = enumMutations[0] || null;
+    const confidenceMutation = confidence[0] || null;
+
+    const displayType = primaryEnumMutation
+        ? primaryEnumMutation.name
+        : (selfType || (confidenceMutation && confidenceMutation.mutationType) || null);
+    const displayQuality = primaryEnumMutation
+        ? primaryEnumMutation.quality
+        : (selfQuality || (confidenceMutation && confidenceMutation.quality) || null);
+    const displayKey = primaryEnumMutation
+        ? primaryEnumMutation.key
+        : (confidenceMutation && confidenceMutation.mutationKey) || displayType;
+    const resolvedIsGolden = isGolden || String(displayType || '').startsWith('黄金');
 
     return {
-        isMutant: (Array.isArray(mutantConfigIds) && mutantConfigIds.length > 0) || !!selfType,
-        isGolden: isGolden,
+        isMutant: normalizedIds.length > 0 || !!selfType,
+        isGolden: resolvedIsGolden,
         mutationType: displayType,
         mutationQuality: displayQuality,
-        confidence: confidence,
-        mutantConfigIds: Array.isArray(mutantConfigIds) ? mutantConfigIds.map(Number).filter(Boolean) : [],
+        mutationKey: displayKey,
+        mutationEffect: primaryEnumMutation ? primaryEnumMutation.effect : (displayType === '黄金' ? '黄金果实' : null),
+        mutationIcon: primaryEnumMutation ? primaryEnumMutation.icon : (displayType === '黄金' ? '⭐' : null),
+        mutationColor: primaryEnumMutation ? primaryEnumMutation.color : (displayType === '黄金' ? '#FF6B35' : null),
+        mutationDescription: primaryEnumMutation ? primaryEnumMutation.description : null,
+        mutations: enumMutations,
+        confidence,
+        mutantConfigIds: normalizedIds,
     };
 }
 
@@ -324,7 +354,7 @@ function loadConfigs() {
                 for (const [typeName, typeConfig] of Object.entries(types)) {
                     mutantTypeMap.set(typeName, typeConfig);
                 }
-                console.warn('[配置] 已加载变异类型配置 (' + mutantTypeMap.size + ' 种)');
+                console.warn(`[配置] 已加载变异类型配置 (${mutantTypeMap.size} 种)`);
             }
         }
     } catch (e) {

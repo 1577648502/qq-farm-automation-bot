@@ -19,6 +19,18 @@ export interface Land {
   mutationType?: string
   mutationQuality?: string
   mutationKey?: string
+  mutationEffect?: string
+  mutationIcon?: string
+  mutationColor?: string
+  mutationDescription?: string
+  mutations?: Array<{
+    name: string
+    quality?: string
+    effect?: string
+    icon?: string
+    color?: string
+    description?: string
+  }>
   [key: string]: any
 }
 
