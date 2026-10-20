@@ -83,11 +83,11 @@ function handleOperate(opType: string) {
 }
 
 const operations = [
-  { type: 'harvest', label: '收获', icon: 'i-carbon-wheat', color: 'bg-blue-600 hover:bg-blue-700' },
-  { type: 'clear', label: '除草/虫', icon: 'i-carbon-clean', color: 'bg-teal-600 hover:bg-teal-700' },
-  { type: 'plant', label: '种植', icon: 'i-carbon-sprout', color: 'bg-green-600 hover:bg-green-700' },
-  { type: 'upgrade', label: '升级土地', icon: 'i-carbon-upgrade', color: 'bg-purple-600 hover:bg-purple-700' },
-  { type: 'all', label: '一键全收', icon: 'i-carbon-flash', color: 'bg-orange-600 hover:bg-orange-700' },
+  { type: 'harvest', label: '收获', icon: 'i-carbon-wheat', color: 'border-amber-200 bg-amber-50 text-amber-700 hover:bg-amber-100 dark:border-amber-800 dark:bg-amber-900/30 dark:text-amber-300 dark:hover:bg-amber-900/50' },
+  { type: 'clear', label: '除草/虫', icon: 'i-carbon-clean', color: 'border-teal-200 bg-teal-50 text-teal-700 hover:bg-teal-100 dark:border-teal-800 dark:bg-teal-900/30 dark:text-teal-300 dark:hover:bg-teal-900/50' },
+  { type: 'plant', label: '种植', icon: 'i-carbon-sprout', color: 'border-green-200 bg-green-50 text-green-700 hover:bg-green-100 dark:border-green-800 dark:bg-green-900/30 dark:text-green-300 dark:hover:bg-green-900/50' },
+  { type: 'upgrade', label: '升级土地', icon: 'i-carbon-upgrade', color: 'border-violet-200 bg-violet-50 text-violet-700 hover:bg-violet-100 dark:border-violet-800 dark:bg-violet-900/30 dark:text-violet-300 dark:hover:bg-violet-900/50' },
+  { type: 'all', label: '一键全收', icon: 'i-carbon-flash', color: 'border-orange-600 bg-orange-600 text-white shadow-sm hover:border-orange-700 hover:bg-orange-700' },
 ]
 
 async function refresh() {
@@ -142,16 +142,18 @@ onUnmounted(() => {
           <div class="i-carbon-grid text-xl" />
           土地详情
         </h3>
-        <div class="flex flex-nowrap gap-2 overflow-x-auto pb-1 scrollbar-none snap-x snap-mandatory sm:flex-wrap sm:overflow-visible sm:pb-0">
+        <div class="w-full min-w-0 flex flex-nowrap gap-2 overflow-x-auto pb-1 scrollbar-none snap-x snap-mandatory sm:w-auto sm:flex-wrap sm:justify-end sm:overflow-visible sm:pb-0">
           <button
             v-for="op in operations"
             :key="op.type"
-            class="min-h-[44px] flex items-center justify-center gap-1.5 rounded px-3 py-2 text-sm text-white transition whitespace-nowrap snap-start disabled:cursor-not-allowed disabled:opacity-50"
+            type="button"
+            class="min-h-[40px] flex items-center justify-center gap-1.5 rounded-lg border px-3 py-2 text-sm font-medium transition-colors whitespace-nowrap snap-start focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/40 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50"
             :class="op.color"
             :disabled="operating"
+            :aria-label="op.label"
             @click="handleOperate(op.type)"
           >
-            <div :class="op.icon" />
+            <i :class="op.icon" class="shrink-0 text-base" aria-hidden="true" />
             {{ op.label }}
           </button>
         </div>

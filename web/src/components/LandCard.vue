@@ -8,35 +8,66 @@ const props = defineProps<{
   seeds?: any[]
 }>()
 const emit = defineEmits<{ (e: 'operate', payload: { op: string, seedId?: number, fertilizerId?: number }): void }>()
+
+type LandActionTone = 'water' | 'weed' | 'bug' | 'harvest' | 'fertilizer' | 'organic' | 'danger' | 'plant' | 'upgrade' | 'unlock'
+type LandAction = {
+  op: string
+  label: string
+  tip: string
+  icon: string
+  tone: LandActionTone
+  fertilizerId?: number
+}
+
+const ACTION_TONE_CLASSES: Record<LandActionTone, string> = {
+  water: 'border-sky-200 bg-sky-50 text-sky-700 hover:border-sky-300 hover:bg-sky-100 dark:border-sky-800 dark:bg-sky-900/30 dark:text-sky-300 dark:hover:bg-sky-900/50',
+  weed: 'border-emerald-200 bg-emerald-50 text-emerald-700 hover:border-emerald-300 hover:bg-emerald-100 dark:border-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-300 dark:hover:bg-emerald-900/50',
+  bug: 'border-rose-200 bg-rose-50 text-rose-700 hover:border-rose-300 hover:bg-rose-100 dark:border-rose-800 dark:bg-rose-900/30 dark:text-rose-300 dark:hover:bg-rose-900/50',
+  harvest: 'border-amber-200 bg-amber-50 text-amber-700 hover:border-amber-300 hover:bg-amber-100 dark:border-amber-800 dark:bg-amber-900/30 dark:text-amber-300 dark:hover:bg-amber-900/50',
+  fertilizer: 'border-cyan-200 bg-cyan-50 text-cyan-700 hover:border-cyan-300 hover:bg-cyan-100 dark:border-cyan-800 dark:bg-cyan-900/30 dark:text-cyan-300 dark:hover:bg-cyan-900/50',
+  organic: 'border-lime-200 bg-lime-50 text-lime-700 hover:border-lime-300 hover:bg-lime-100 dark:border-lime-800 dark:bg-lime-900/30 dark:text-lime-300 dark:hover:bg-lime-900/50',
+  danger: 'border-red-200 bg-red-50 text-red-700 hover:border-red-300 hover:bg-red-100 dark:border-red-800 dark:bg-red-900/30 dark:text-red-300 dark:hover:bg-red-900/50',
+  plant: 'border-green-200 bg-green-50 text-green-700 hover:border-green-300 hover:bg-green-100 dark:border-green-800 dark:bg-green-900/30 dark:text-green-300 dark:hover:bg-green-900/50',
+  upgrade: 'border-violet-200 bg-violet-50 text-violet-700 hover:border-violet-300 hover:bg-violet-100 dark:border-violet-800 dark:bg-violet-900/30 dark:text-violet-300 dark:hover:bg-violet-900/50',
+  unlock: 'border-blue-200 bg-blue-50 text-blue-700 hover:border-blue-300 hover:bg-blue-100 dark:border-blue-800 dark:bg-blue-900/30 dark:text-blue-300 dark:hover:bg-blue-900/50',
+}
+
+const ACTION_BUTTON_BASE = 'min-h-8 w-full flex items-center justify-center gap-1 rounded-md border px-1.5 py-1 text-[11px] font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/40 disabled:cursor-not-allowed disabled:opacity-45'
+
 // 这块地能做哪些操作(按地块状态给)
 const landActions = computed(() => {
   const l: any = land.value || {}
-  const acts: Array<{ op: string, label: string, tip: string, fertilizerId?: number }> = []
+  const acts: LandAction[] = []
   if (l.status === 'locked') {
-    acts.push({ op: 'unlock', label: '解锁', tip: '解锁这块地' })
+    acts.push({ op: 'unlock', label: '解锁', tip: '解锁这块地', icon: 'i-carbon-unlocked', tone: 'unlock' })
     return acts
   }
-  if (l.needWater) acts.push({ op: 'water', label: '浇水', tip: '给这块地浇水' })
-  if (l.needWeed) acts.push({ op: 'weed', label: '除草', tip: '清除这块地的杂草' })
-  if (l.needBug) acts.push({ op: 'bug', label: '除虫', tip: '清除这块地的虫害' })
-  if (l.status === 'harvestable' || l.canHarvest) acts.push({ op: 'harvest', label: '收获', tip: '收获这块地' })
+  if (l.needWater) acts.push({ op: 'water', label: '浇水', tip: '给这块地浇水', icon: 'i-carbon-rain-drop', tone: 'water' })
+  if (l.needWeed) acts.push({ op: 'weed', label: '除草', tip: '清除这块地的杂草', icon: 'i-carbon-clean', tone: 'weed' })
+  if (l.needBug) acts.push({ op: 'bug', label: '除虫', tip: '清除这块地的虫害', icon: 'i-carbon-warning-alt', tone: 'bug' })
+  if (l.status === 'harvestable' || l.canHarvest) acts.push({ op: 'harvest', label: '收获', tip: '收获这块地', icon: 'i-carbon-wheat', tone: 'harvest' })
   if (l.plantName) {
-    acts.push({ op: 'fertilize', label: '普通肥', tip: '给这块地施普通化肥', fertilizerId: 1011 })
-    acts.push({ op: 'fertilize', label: '有机肥', tip: '给这块地施有机化肥', fertilizerId: 1012 })
-    acts.push({ op: 'clear', label: '铲除', tip: '铲除这块地的作物' })
+    acts.push({ op: 'fertilize', label: '普通肥', tip: '给这块地施普通化肥', icon: 'i-carbon-chemistry', tone: 'fertilizer', fertilizerId: 1011 })
+    acts.push({ op: 'fertilize', label: '有机肥', tip: '给这块地施有机化肥', icon: 'i-carbon-growth', tone: 'organic', fertilizerId: 1012 })
+    acts.push({ op: 'clear', label: '铲除', tip: '铲除这块地的作物', icon: 'i-carbon-trash-can', tone: 'danger' })
   } else if (l.status !== 'locked') {
-    acts.push({ op: 'plant', label: '种植', tip: '在这块地种下所选种子' })
+    acts.push({ op: 'plant', label: '种植', tip: '在这块地种下所选种子', icon: 'i-carbon-sprout', tone: 'plant' })
   }
-  acts.push({ op: 'upgrade', label: '升级', tip: '升级这块地(消耗金币)' })
+  acts.push({ op: 'upgrade', label: '升级', tip: '升级这块地(消耗金币)', icon: 'i-carbon-upgrade', tone: 'upgrade' })
   return acts
 })
+
+function getActionButtonClass(action: LandAction) {
+  return `${ACTION_BUTTON_BASE} ${ACTION_TONE_CLASSES[action.tone]}`
+}
+
 // 种植用的种子(取 seeds prop 的第一项为默认)
 const pickedSeedId = ref<number>(0)
 watchEffect(() => {
   const list = (props.seeds || []) as any[]
   if (!pickedSeedId.value && list.length) pickedSeedId.value = Number(list[0]?.goodsId || list[0]?.seedId || list[0]?.id) || 0
 })
-function doAction(act: { op: string, label: string, tip: string, fertilizerId?: number }) {
+function doAction(act: LandAction) {
   emit('operate', {
     op: act.op,
     seedId: act.op === 'plant' ? pickedSeedId.value : undefined,
@@ -278,11 +309,16 @@ function getPlantSizeText(land: any) {
 
 
     <!-- 单地块操作 -->
-    <div class="mt-1 flex flex-wrap items-center justify-center gap-0.5">
+    <div
+      class="mt-2 grid w-full gap-1 border-t border-gray-200/80 pt-2 dark:border-gray-700"
+      :class="landActions.length === 1 ? 'grid-cols-1' : 'grid-cols-2'"
+    >
       <template v-if="landActions.some(a => a.op === 'plant')">
         <select
           v-model.number="pickedSeedId"
-          class="max-w-[80px] rounded border border-gray-300 bg-white px-0.5 text-[9px] dark:border-gray-600 dark:bg-gray-800"
+          class="col-span-full min-h-8 w-full rounded-md border border-gray-300 bg-white px-2 text-[11px] text-gray-700 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200"
+          aria-label="选择种植种子"
+          title="选择种植种子"
           @click.stop
         >
           <option v-for="sd in (seeds || [])" :key="sd.goodsId || sd.seedId || sd.id" :value="Number(sd.goodsId || sd.seedId || sd.id)">
@@ -292,12 +328,15 @@ function getPlantSizeText(land: any) {
       </template>
       <button
         v-for="act in landActions"
-        :key="act.op"
-        class="rounded bg-gray-100 px-1 text-[9px] text-gray-700 transition hover:bg-blue-100 hover:text-blue-700 disabled:opacity-50 dark:bg-gray-800 dark:text-gray-300 dark:hover:bg-blue-900/40"
+        :key="`${act.op}-${act.fertilizerId || act.label}`"
+        type="button"
+        :class="getActionButtonClass(act)"
         :title="act.tip"
+        :aria-label="act.tip"
         :disabled="(act.op === 'plant' && !pickedSeedId)"
         @click.stop="doAction(act)"
       >
+        <i :class="act.icon" class="shrink-0 text-sm" aria-hidden="true" />
         {{ act.label }}
       </button>
     </div>
