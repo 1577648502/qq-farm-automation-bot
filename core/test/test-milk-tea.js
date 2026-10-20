@@ -3261,7 +3261,7 @@ sendImpl = async (service, method, body) => {
             && /1034149|排行榜读取失败/.test(failed.reason), failed);
     }
 
-    section('20. 活动 List 快照、商店已购/限购与任务条件元数据');
+    section('20. 活动 List 快照、商店已购/限购与店铺升级奖励');
     {
         const fixedNow = Date.UTC(2026, 9, 19, 4, 0, 0);
         milkTea.__testing.setShopClock(() => fixedNow);
@@ -3334,7 +3334,7 @@ sendImpl = async (service, method, body) => {
         const main = await milkTea.getMainStatus(true);
         const shop = await milkTea.getShopGoods();
         const tasks = await milkTea.getTasks();
-        check('主店/商店/任务连续读取只发送一次 ActivityService.List',
+        check('主店/商店/升级奖励连续读取只发送一次 ActivityService.List',
             main.ok === true && shop.ok === true && tasks.ok === true
             && sent.filter((x) => x.method === 'List').length === 1,
             sent.map((x) => x.method || x.cmd));
@@ -3352,14 +3352,20 @@ sendImpl = async (service, method, body) => {
             goods301.soldOut === true && goods308.soldOut === true
             && goods311.soldOut === false, [goods301, goods308, goods311]);
 
-        check('任务 #2 条件文本/类型/序号/值完整解析',
+        check('升级奖励档位与奖励明细完整解析',
+            tasks.kind === 'store-upgrade-rewards'
+            && tasks.tasks[0].level === 9001
+            && tasks.tasks[0].rewards[0].id === 1041
+            && tasks.tasks[0].rewards[0].count === 50,
+            tasks.tasks[0]);
+        check('升级奖励内部条件字段完整保留',
             tasks.tasks[0].conditionText === '累计制作 3 杯奶茶'
             && tasks.tasks[0].conditionType === 7
             && tasks.tasks[0].taskIndex === 4
             && tasks.tasks[0].conditionValue === 3
             && tasks.tasks[0].conditionMet === null,
             tasks.tasks[0]);
-        check('任务条件参数不冒充当前完成状态',
+        check('升级奖励内部条件参数不冒充当前完成状态',
             tasks.tasks[1].conditionValue === 0 && tasks.tasks[1].conditionMet === null,
             tasks.tasks[1]);
 
@@ -3517,16 +3523,16 @@ sendImpl = async (service, method, body) => {
             throw new Error(`缺失活动体用例不应发送 ${req.method || `cmd=${req.cmd}`}`);
         };
         const shopMissing = await milkTea.getShopGoods();
-        const taskMissing = await milkTea.getTasks();
+        const upgradeRewardsMissing = await milkTea.getTasks();
         check('活动 List 缺少 #102 时商店返回 ok:false',
             shopMissing.ok === false && /#102/.test(shopMissing.reason), shopMissing);
-        check('活动 List 缺少 #122 时任务返回 ok:false',
-            taskMissing.ok === false && /#122/.test(taskMissing.reason), taskMissing);
+        check('活动 List 缺少 #122 时升级奖励返回 ok:false',
+            upgradeRewardsMissing.ok === false && /#122/.test(upgradeRewardsMissing.reason), upgradeRewardsMissing);
 
         sent.length = 0;
         const claimOne = await milkTea.claimTask(9001);
         const claimAll = await milkTea.claimAllTasks();
-        check('未抓到领取协议时 claimTask/claimAllTasks 均零请求禁用',
+        check('旧领取接口确认升级奖励无领取协议后仍保持零请求',
             claimOne.skipped === true && claimAll.skipped === true && sent.length === 0,
             { claimOne, claimAll, sent });
     }

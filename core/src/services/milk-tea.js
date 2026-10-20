@@ -39,9 +39,10 @@
  *   商品: {#1 ID, #2 repeated 内容物, #3 repeated 价格, #4 限购, #5 已购,
  *          #7/#8 名称/描述, #11 限购类型, #12 类型, #13 解锁条件}
  *   解锁只认 #13.#3===1; 无 #13 表示无限制。#13.#5 可展示需求等级。
- * 任务(0103): List 子活动 #122 = {#2 汇总, #3(repeated) 任务}
- *   任务: {#1 ID, #2 条件, #3 repeated 奖励, #4 状态(1进行中/2可领/3已领)}
- *   领取协议尚未抓到, claimTask/claimAllTasks 一律禁用, 不发送候选请求。
+ * 店铺升级奖励(0103): List 子活动 #122 = {#2 汇总, #3(repeated) 档位奖励}
+ *   档位: {#1 等级, #2 内部检查条件, #3 repeated 奖励, #4 状态(1未解锁/2已达成)}
+ *   实测 #1=1..13 对应店铺 Lv1..Lv13; #2 统一为"活动检查", 不是玩家任务。
+ *   奖励在店铺升级时自动发放, 无领取协议; claimTask/claimAllTasks 仅保留旧接口兼容。
  * 收银台(cmd55/#160): #1 等级, #2 累计营业额, #3 下一级门槛, #4=172800, #9 当前在岗员工,
  *   #10 当日品类销量, #19 repeated 待领取收益, #22/#24 当日累计杯数(两侧同值),
  *   #23 repeated 长期累计收益, #25 repeated 累计品类销量。
@@ -159,7 +160,7 @@ function getCraftableFruitIds() {
 }
 const CMD_CRAFT_REAL = 62;   // 制作奶茶(工坊加工): 请求 #167 = {#1: 果实 uid 列表(packed varint)}
 const SHOP_BODY_FIELD = 102;// 商店列表所在字段
-const TASK_BODY_FIELD = 122;// 任务列表所在字段
+const UPGRADE_REWARD_BODY_FIELD = 122;// 店铺升级奖励档位所在字段
 
 function itemLabel(id, count) {
     const it = getItemById(toNum(id));
@@ -1089,16 +1090,16 @@ async function buyShopGoods(goodsId, count = 1) {
     return { ok: true, goodsId: id, count: actualCount, got, cost };
 }
 
-/** 任务列表: 与主状态共用 ActivityService.List 中的 #122。 */
+/** 店铺升级奖励档位: 与主状态共用 ActivityService.List 中的 #122。 */
 async function getTasks() {
     const snapshot = await getActivityListSnapshot();
     if (!snapshot.ok) return { ok: false, reason: snapshot.reason, tasks: [] };
-    if (!snapshot.taskActivity) return { ok: false, reason: '活动列表未返回奶茶任务 #122', tasks: [] };
+    if (!snapshot.taskActivity) return { ok: false, reason: '活动列表未返回奶茶升级奖励 #122', tasks: [] };
     const tasks = [];
     try {
         const act = parseTop(snapshot.taskActivity);
-        const box = findField(act, TASK_BODY_FIELD);
-        if (!box || box.w !== 2) return { ok: false, reason: '任务列表缺少 #122 容器', tasks: [] };
+        const box = findField(act, UPGRADE_REWARD_BODY_FIELD);
+        if (!box || box.w !== 2) return { ok: false, reason: '升级奖励列表缺少 #122 容器', tasks: [] };
         for (const it of parseTop(box.v)) {
             if (it.f !== 3 || it.w !== 2) continue;
             const f = parseTop(it.v);
@@ -1123,20 +1124,21 @@ async function getTasks() {
             }
             tasks.push({
                 id,
+                level: id,
                 status: toInt((findField(f, 4) || {}).v),
                 conditionText,
                 conditionType,
                 taskIndex,
                 conditionValue,
-                // #2.#4 是条件参数，不是当前进度，无法据此判断任务是否完成。
+                // #2 是客户端内部检查条件, 不是玩家任务进度。
                 conditionMet: null,
                 rewards,
             });
         }
     } catch (e) {
-        return { ok: false, reason: `解析任务列表失败: ${e.message}`, tasks: [] };
+        return { ok: false, reason: `解析升级奖励列表失败: ${e.message}`, tasks: [] };
     }
-    return { ok: true, tasks };
+    return { ok: true, kind: 'store-upgrade-rewards', tasks };
 }
 
 /** 好友列表(给"可选好友"用): 复用好友服务(带缓存)。
@@ -2717,18 +2719,16 @@ async function getMilkCouponBalance(force = false) {
     return 0;
 }
 
-/**
- * 任务领取命令尚未抓到。保留列表解析用于展示，但禁止发送候选命令。
- */
+/** 旧任务领取接口兼容占位；#122 实际为店铺升级奖励，升级时自动发放。 */
 async function claimTask(taskId) {
     const id = toInt(taskId);
-    if (!id) return { ok: false, reason: '缺少任务序号' };
-    return { ok: false, skipped: true, taskId: id, reason: '领取协议尚未抓包，已禁用' };
+    if (!id) return { ok: false, reason: '缺少升级奖励档位' };
+    return { ok: false, skipped: true, taskId: id, reason: '店铺升级奖励自动发放，无领取协议' };
 }
 
-/** 领取所有"可领"的任务(status=2) */
+/** 旧批量领取接口兼容占位；不发送任何请求。 */
 async function claimAllTasks() {
-    return { ok: false, skipped: true, claimed: [], reason: '领取协议尚未抓包，已禁用' };
+    return { ok: false, skipped: true, claimed: [], reason: '店铺升级奖励自动发放，无领取协议' };
 }
 
 /** 批量雇佣: 优先好友并用系统员工兜底；满员时不发送 cmd57。 */

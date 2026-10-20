@@ -5,7 +5,7 @@
  * ① 顶部信息: 店铺/等级/待领取收益/奶茶券余额/累计营业额/结算期开始
  * ② 种子商店: 拾物小铺式卡片, 按货币分组, 卡内填数量兑换; 等级不足/已限购置灰
  * ③ 雇佣好友: 可折叠, 支持勾选优先好友 + 自动雇佣
- * ④ 任务: 卡片式展示; 领取协议未确认, 页面不发送领取请求
+ * ④ 店铺升级奖励: #122 按店铺等级展示, 升级时自动发放, 无领取操作
  * 自动化开关与"立即执行"在 设置 → 自动控制
  *
  * 协议见 core/src/services/milk-tea.js
@@ -301,29 +301,32 @@ function rewardText(r: any) {
   return count > 0 ? `${label}×${count}` : label
 }
 
-function taskStatusText(task: any) {
-  if (task?.statusText) return String(task.statusText)
-  const status = Number(task?.status)
-  if (status === 1) return '进行中'
-  if (status === 2) return '可领取'
-  if (status === 3) return '已领取'
-  return '状态未知'
+function upgradeRewardLevelOf(reward: any) {
+  return Number(reward?.level ?? reward?.id) || 0
 }
 
-function taskStatusClass(task: any) {
-  const status = Number(task?.status)
-  if (status === 2) return 'bg-amber-50 text-amber-700 dark:bg-amber-900/20 dark:text-amber-300'
-  if (status === 3) return 'bg-gray-100 text-gray-500 dark:bg-gray-700 dark:text-gray-300'
-  return 'bg-sky-50 text-sky-700 dark:bg-sky-900/30 dark:text-sky-300'
+function upgradeRewardState(reward: any) {
+  const rewardLevel = upgradeRewardLevelOf(reward)
+  const currentLevel = Number(upgradeRewardLevel.value) || 0
+  if (currentLevel > 0 && rewardLevel > 0) {
+    if (rewardLevel <= currentLevel)
+      return { text: '已达成', class: 'bg-emerald-50 text-emerald-700 dark:bg-emerald-900/20 dark:text-emerald-300' }
+    if (rewardLevel === currentLevel + 1)
+      return { text: '下一档', class: 'bg-amber-50 text-amber-700 dark:bg-amber-900/20 dark:text-amber-300' }
+    return { text: '待解锁', class: 'bg-gray-100 text-gray-500 dark:bg-gray-700 dark:text-gray-300' }
+  }
+  if (Number(reward?.status) === 2)
+    return { text: '已达成', class: 'bg-emerald-50 text-emerald-700 dark:bg-emerald-900/20 dark:text-emerald-300' }
+  return { text: '待解锁', class: 'bg-gray-100 text-gray-500 dark:bg-gray-700 dark:text-gray-300' }
 }
 
-function taskRewardsText(task: any) {
-  const list = Array.isArray(task?.rewards)
-    ? task.rewards
-    : Array.isArray(task?.reward)
-      ? task.reward
+function upgradeRewardsText(reward: any) {
+  const list = Array.isArray(reward?.rewards)
+    ? reward.rewards
+    : Array.isArray(reward?.reward)
+      ? reward.reward
       : []
-  return list.map((reward: any) => rewardText(reward)).filter(Boolean).join('、') || '奖励待确认'
+  return list.map((item: any) => rewardText(item)).filter(Boolean).join('、') || '奖励明细未返回'
 }
 
 /** 在岗员工按班次结束时间实时倒计时；静态 remainSeconds 仅作为缺少 endAt 时的回退。 */
@@ -355,6 +358,10 @@ function employeeTypeLabel(e: any) {
 }
 
 const storeLevel = computed(() => Number(status.value?.storeLevel) || 0)
+const upgradeRewardLevel = computed(() => {
+  const detailLevel = Number(upgradeInfo.value?.ok ? upgradeInfo.value.level : 0)
+  return detailLevel || storeLevel.value
+})
 const totalRevenue = computed(() => Number(status.value?.value) || 0)
 const cashierDetail = computed(() => status.value?.cashierDetail || {})
 const featuredRecipe = computed(() => {
@@ -1962,18 +1969,19 @@ onUnmounted(() => {
       </div>
     </section>
 
-    <!-- 活动任务 -->
+    <!-- 店铺升级奖励 -->
     <section class="order-5 col-span-full rounded-lg border border-gray-200 bg-white p-4 shadow-sm dark:border-gray-700 dark:bg-gray-800 xl:col-span-1">
       <div class="mb-3 flex flex-wrap items-center justify-between gap-2">
         <div class="min-w-0">
-          <h3 class="text-sm text-gray-900 font-medium dark:text-white">活动任务</h3>
-          <p class="mt-0.5 text-xs text-gray-500 dark:text-gray-400">
-            共 {{ tasks.length }} 项
+          <h3 class="text-sm text-gray-900 font-medium dark:text-white">店铺升级奖励</h3>
+          <p class="mt-0.5 break-words text-xs text-gray-500 dark:text-gray-400">
+            共 {{ tasks.length }} 档
+            <span v-if="upgradeRewardLevel"> · 当前 Lv{{ upgradeRewardLevel }}</span>
           </p>
         </div>
         <BaseButton variant="secondary" size="sm" class="shrink-0 whitespace-nowrap" :loading="tasksLoading" @click="loadTasks">
           <i class="i-carbon-renew mr-1 text-base" />
-          刷新任务
+          刷新奖励
         </BaseButton>
       </div>
 
@@ -1984,40 +1992,30 @@ onUnmounted(() => {
         {{ tasksError }}
       </div>
       <div v-else-if="!tasks.length" class="rounded border border-dashed border-gray-200 px-3 py-4 text-xs text-gray-500 dark:border-gray-700 dark:text-gray-400">
-        暂无任务
+        暂无升级奖励
       </div>
       <div v-else class="space-y-2">
         <div
-          v-for="task in tasks"
-          :key="task.id"
+          v-for="reward in tasks"
+          :key="reward.id"
           class="min-w-0 rounded border border-gray-200 px-3 py-2.5 dark:border-gray-700"
         >
           <div class="flex min-w-0 items-start justify-between gap-2">
             <div class="min-w-0">
               <div class="break-words text-sm text-gray-900 font-medium dark:text-gray-100">
-                任务 #{{ task.id }}
+                升级至 Lv{{ upgradeRewardLevelOf(reward) }}
               </div>
             </div>
             <span
               class="shrink-0 whitespace-nowrap rounded px-1.5 py-0.5 text-[10px]"
-              :class="taskStatusClass(task)"
+              :class="upgradeRewardState(reward).class"
             >
-              {{ taskStatusText(task) }}
+              {{ upgradeRewardState(reward).text }}
             </span>
           </div>
           <div class="mt-2 flex min-w-0 flex-wrap items-start gap-x-2 gap-y-1 text-xs">
             <span class="shrink-0 text-gray-500 dark:text-gray-400">奖励</span>
-            <span class="min-w-0 break-words text-gray-700 dark:text-gray-200">{{ taskRewardsText(task) }}</span>
-          </div>
-          <div v-if="Number(task.status) === 2" class="mt-2 flex justify-end">
-            <BaseButton
-              variant="secondary"
-              size="sm"
-              disabled
-              title="任务领取协议尚未确认，暂不发送请求"
-            >
-              领取待确认
-            </BaseButton>
+            <span class="min-w-0 break-words text-gray-700 dark:text-gray-200">{{ upgradeRewardsText(reward) }}</span>
           </div>
         </div>
       </div>
