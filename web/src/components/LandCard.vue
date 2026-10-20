@@ -10,7 +10,7 @@ const props = defineProps<{
 const emit = defineEmits<{ (e: 'operate', payload: { op: string, seedId?: number, fertilizerId?: number }): void }>()
 
 type LandActionTone = 'water' | 'weed' | 'bug' | 'harvest' | 'fertilizer' | 'organic' | 'danger' | 'plant' | 'upgrade' | 'unlock'
-type LandAction = {
+interface LandAction {
   op: string
   label: string
   tip: string
@@ -20,19 +20,19 @@ type LandAction = {
 }
 
 const ACTION_TONE_CLASSES: Record<LandActionTone, string> = {
-  water: 'border-sky-200 bg-sky-50 text-sky-700 hover:border-sky-300 hover:bg-sky-100 dark:border-sky-800 dark:bg-sky-900/30 dark:text-sky-300 dark:hover:bg-sky-900/50',
-  weed: 'border-emerald-200 bg-emerald-50 text-emerald-700 hover:border-emerald-300 hover:bg-emerald-100 dark:border-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-300 dark:hover:bg-emerald-900/50',
-  bug: 'border-rose-200 bg-rose-50 text-rose-700 hover:border-rose-300 hover:bg-rose-100 dark:border-rose-800 dark:bg-rose-900/30 dark:text-rose-300 dark:hover:bg-rose-900/50',
-  harvest: 'border-amber-200 bg-amber-50 text-amber-700 hover:border-amber-300 hover:bg-amber-100 dark:border-amber-800 dark:bg-amber-900/30 dark:text-amber-300 dark:hover:bg-amber-900/50',
-  fertilizer: 'border-cyan-200 bg-cyan-50 text-cyan-700 hover:border-cyan-300 hover:bg-cyan-100 dark:border-cyan-800 dark:bg-cyan-900/30 dark:text-cyan-300 dark:hover:bg-cyan-900/50',
-  organic: 'border-lime-200 bg-lime-50 text-lime-700 hover:border-lime-300 hover:bg-lime-100 dark:border-lime-800 dark:bg-lime-900/30 dark:text-lime-300 dark:hover:bg-lime-900/50',
-  danger: 'border-red-200 bg-red-50 text-red-700 hover:border-red-300 hover:bg-red-100 dark:border-red-800 dark:bg-red-900/30 dark:text-red-300 dark:hover:bg-red-900/50',
-  plant: 'border-green-200 bg-green-50 text-green-700 hover:border-green-300 hover:bg-green-100 dark:border-green-800 dark:bg-green-900/30 dark:text-green-300 dark:hover:bg-green-900/50',
-  upgrade: 'border-violet-200 bg-violet-50 text-violet-700 hover:border-violet-300 hover:bg-violet-100 dark:border-violet-800 dark:bg-violet-900/30 dark:text-violet-300 dark:hover:bg-violet-900/50',
-  unlock: 'border-blue-200 bg-blue-50 text-blue-700 hover:border-blue-300 hover:bg-blue-100 dark:border-blue-800 dark:bg-blue-900/30 dark:text-blue-300 dark:hover:bg-blue-900/50',
+  water: 'border-sky-400/30 bg-sky-400/10 text-sky-600 hover:border-sky-400/70 hover:bg-sky-400/20 dark:text-sky-300',
+  weed: 'border-emerald-400/30 bg-emerald-400/10 text-emerald-600 hover:border-emerald-400/70 hover:bg-emerald-400/20 dark:text-emerald-300',
+  bug: 'border-rose-400/30 bg-rose-400/10 text-rose-600 hover:border-rose-400/70 hover:bg-rose-400/20 dark:text-rose-300',
+  harvest: 'border-amber-400/30 bg-amber-400/10 text-amber-600 hover:border-amber-400/70 hover:bg-amber-400/20 dark:text-amber-300',
+  fertilizer: 'border-cyan-400/30 bg-cyan-400/10 text-cyan-600 hover:border-cyan-400/70 hover:bg-cyan-400/20 dark:text-cyan-300',
+  organic: 'border-lime-400/30 bg-lime-400/10 text-lime-600 hover:border-lime-400/70 hover:bg-lime-400/20 dark:text-lime-300',
+  danger: 'border-red-400/30 bg-red-400/10 text-red-600 hover:border-red-400/70 hover:bg-red-400/20 dark:text-red-300',
+  plant: 'border-green-400/30 bg-green-400/10 text-green-600 hover:border-green-400/70 hover:bg-green-400/20 dark:text-green-300',
+  upgrade: 'border-violet-400/30 bg-violet-400/10 text-violet-600 hover:border-violet-400/70 hover:bg-violet-400/20 dark:text-violet-300',
+  unlock: 'border-blue-400/30 bg-blue-400/10 text-blue-600 hover:border-blue-400/70 hover:bg-blue-400/20 dark:text-blue-300',
 }
 
-const ACTION_BUTTON_BASE = 'min-h-8 w-full flex items-center justify-center gap-1 rounded-md border px-1.5 py-1 text-[11px] font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/40 disabled:cursor-not-allowed disabled:opacity-45'
+const ACTION_BUTTON_BASE = 'land-action-button font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/40 disabled:cursor-not-allowed disabled:opacity-40'
 
 // 这块地能做哪些操作(按地块状态给)
 const landActions = computed(() => {
@@ -306,7 +306,7 @@ function getPlantSizeText(land: any) {
 
 <template>
   <div
-    class="relative min-h-[120px] sm:min-h-[140px] flex flex-col items-center border rounded-lg p-1.5 sm:p-2 transition dark:border-gray-700 hover:shadow-md"
+    class="land-card group relative min-h-[120px] sm:min-h-[140px] flex flex-col items-center border rounded-lg p-1.5 sm:p-2 transition dark:border-gray-700 hover:z-20 hover:shadow-md focus-within:z-20"
     :class="getLandStatusClass(land)"
   >
     <div class="absolute left-1 top-1 text-[10px] text-gray-400 font-mono">
@@ -400,38 +400,6 @@ function getPlantSizeText(land: any) {
 
 
 
-    <!-- 单地块操作 -->
-    <div
-      class="mt-2 grid w-full gap-1 border-t border-gray-200/80 pt-2 dark:border-gray-700"
-      :class="landActions.length === 1 ? 'grid-cols-1' : 'grid-cols-2'"
-    >
-      <template v-if="landActions.some(a => a.op === 'plant')">
-        <select
-          v-model.number="pickedSeedId"
-          class="col-span-full min-h-8 w-full rounded-md border border-gray-300 bg-white px-2 text-[11px] text-gray-700 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200"
-          aria-label="选择种植种子"
-          title="选择种植种子"
-          @click.stop
-        >
-          <option v-for="sd in (seeds || [])" :key="sd.goodsId || sd.seedId || sd.id" :value="Number(sd.goodsId || sd.seedId || sd.id)">
-            {{ sd.name || ('#' + (sd.goodsId || sd.seedId || sd.id)) }}
-          </option>
-        </select>
-      </template>
-      <button
-        v-for="act in landActions"
-        :key="`${act.op}-${act.fertilizerId || act.label}`"
-        type="button"
-        :class="getActionButtonClass(act)"
-        :title="act.tip"
-        :aria-label="act.tip"
-        :disabled="(act.op === 'plant' && !pickedSeedId)"
-        @click.stop="doAction(act)"
-      >
-        <i :class="act.icon" class="shrink-0 text-sm" aria-hidden="true" />
-        {{ act.label }}
-      </button>
-    </div>
     <!-- Status Badges -->
     <div class="mt-auto flex origin-bottom scale-85 sm:scale-90 gap-0.5 text-[9px] sm:text-[10px]">
       <span v-if="land.needWater" class="rounded bg-blue-100 px-0.5 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400">水</span>
@@ -440,12 +408,192 @@ function getPlantSizeText(land: any) {
       <!-- For friends view -->
       <span v-if="land.status === 'harvestable'" class="rounded bg-orange-100 px-0.5 text-orange-700 dark:bg-orange-900/30 dark:text-orange-400">可偷</span>
     </div>
+
+    <div class="land-action-hint" aria-hidden="true">
+      <div class="i-carbon-settings-adjust text-sm" />
+    </div>
+
+    <!-- 单地块操作 -->
+    <div class="land-action-dock">
+      <div v-if="landActions.some(a => a.op === 'plant')" class="mb-1.5">
+        <select
+          v-model.number="pickedSeedId"
+          class="land-seed-select"
+          aria-label="选择种植种子"
+          title="选择种植种子"
+          @click.stop
+        >
+          <option v-for="sd in (seeds || [])" :key="sd.goodsId || sd.seedId || sd.id" :value="Number(sd.goodsId || sd.seedId || sd.id)">
+            {{ sd.name || ('#' + (sd.goodsId || sd.seedId || sd.id)) }}
+          </option>
+        </select>
+      </div>
+      <div class="flex flex-wrap items-center justify-center gap-1">
+        <button
+          v-for="act in landActions"
+          :key="`${act.op}-${act.fertilizerId || act.label}`"
+          type="button"
+          :class="getActionButtonClass(act)"
+          :aria-label="act.tip"
+          :data-tip="act.label"
+          :disabled="(act.op === 'plant' && !pickedSeedId)"
+          @click.stop="doAction(act)"
+        >
+          <i :class="act.icon" class="shrink-0 text-sm" aria-hidden="true" />
+          <span class="land-action-label">{{ act.label }}</span>
+        </button>
+      </div>
+    </div>
   </div>
 </template>
 
 
 
 <style scoped>
+.land-action-dock {
+  position: relative;
+  z-index: 30;
+  width: 100%;
+  margin-top: 0.5rem;
+  border: 1px solid rgb(148 163 184 / 0.3);
+  border-radius: 0.75rem;
+  background: rgb(255 255 255 / 0.9);
+  padding: 0.35rem;
+  box-shadow: 0 10px 28px rgb(15 23 42 / 0.14);
+  backdrop-filter: blur(12px);
+}
+
+.land-action-hint {
+  display: none;
+  position: absolute;
+  right: 0.45rem;
+  bottom: 0.45rem;
+  z-index: 10;
+  height: 1.5rem;
+  width: 1.5rem;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid rgb(148 163 184 / 0.25);
+  border-radius: 9999px;
+  background: rgb(255 255 255 / 0.72);
+  color: rgb(100 116 139);
+  opacity: 0.75;
+  pointer-events: none;
+  transition: opacity 0.18s ease;
+}
+
+.land-action-button {
+  position: relative;
+  display: flex;
+  height: 2.25rem;
+  min-width: 2.25rem;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.05rem;
+  border-width: 1px;
+  border-radius: 0.55rem;
+  padding: 0 0.25rem;
+}
+
+.land-action-label {
+  font-size: 8px;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.land-seed-select {
+  width: 100%;
+  min-height: 1.75rem;
+  border: 1px solid rgb(148 163 184 / 0.4);
+  border-radius: 0.45rem;
+  background: rgb(255 255 255 / 0.88);
+  padding: 0 0.5rem;
+  color: rgb(51 65 85);
+  font-size: 10px;
+  outline: none;
+}
+
+.land-seed-select:focus {
+  border-color: rgb(59 130 246 / 0.8);
+  box-shadow: 0 0 0 2px rgb(59 130 246 / 0.16);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .land-action-dock {
+    position: absolute;
+    right: 0.5rem;
+    bottom: 0.5rem;
+    left: 0.5rem;
+    width: auto;
+    margin-top: 0;
+    opacity: 0;
+    pointer-events: none;
+    transform: translateY(0.4rem) scale(0.98);
+    transition: opacity 0.18s ease, transform 0.18s ease;
+  }
+
+  .land-card:hover .land-action-dock,
+  .land-card:focus-within .land-action-dock {
+    opacity: 1;
+    pointer-events: auto;
+    transform: translateY(0) scale(1);
+  }
+
+  .land-action-hint {
+    display: flex;
+  }
+
+  .land-card:hover .land-action-hint,
+  .land-card:focus-within .land-action-hint {
+    opacity: 0;
+  }
+
+  .land-action-button {
+    height: 2rem;
+    min-width: 2rem;
+    border-radius: 9999px;
+    padding: 0;
+  }
+
+  .land-action-label {
+    display: none;
+  }
+
+  .land-action-button::after {
+    content: attr(data-tip);
+    position: absolute;
+    bottom: calc(100% + 0.4rem);
+    left: 50%;
+    z-index: 50;
+    border-radius: 0.35rem;
+    background: rgb(15 23 42 / 0.94);
+    padding: 0.2rem 0.4rem;
+    color: white;
+    font-size: 9px;
+    line-height: 1.2;
+    opacity: 0;
+    pointer-events: none;
+    transform: translate(-50%, 0.2rem);
+    transition: opacity 0.12s ease, transform 0.12s ease;
+    white-space: nowrap;
+  }
+
+  .land-action-button:hover::after,
+  .land-action-button:focus-visible::after {
+    opacity: 1;
+    transform: translate(-50%, 0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .land-action-dock,
+  .land-action-button::after,
+  .land-action-hint {
+    transition: none;
+  }
+}
+
 .rainbow-progress-bar {
   width: 80%;
   margin: 0 auto;
@@ -561,6 +709,26 @@ function getPlantSizeText(land: any) {
       inset 0 2px 4px rgba(255, 255, 255, 0.2),
       inset 0 -1px 2px rgba(0, 0, 0, 0.2);
   }
+}
+</style>
+
+<style>
+.dark .land-action-dock {
+  border-color: rgb(148 163 184 / 0.24);
+  background: rgb(17 24 39 / 0.92);
+  box-shadow: 0 12px 30px rgb(0 0 0 / 0.32);
+}
+
+.dark .land-action-hint {
+  border-color: rgb(148 163 184 / 0.32);
+  background: rgb(30 41 59 / 0.9);
+  color: rgb(203 213 225);
+}
+
+.dark .land-seed-select {
+  border-color: rgb(100 116 139 / 0.55);
+  background: rgb(30 41 59 / 0.92);
+  color: rgb(226 232 240);
 }
 </style>
 
