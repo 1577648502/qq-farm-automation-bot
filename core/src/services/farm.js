@@ -24,7 +24,7 @@ let externalSchedulerMode = false;
 let fertilizerBuyCheckTimer = null;
 let lastFertilizerBuyCheckAt = 0;
 const farmScheduler = createScheduler('farm');
-const LARGE_SEED_PRIORITY_MIN_SIZE = 4;
+const LARGE_SEED_PRIORITY_MIN_SIZE = 2;
 const LARGE_SEED_WAIT_MS = 10 * 60 * 1000;
 const largeSeedWaitStates = new Map();
 
