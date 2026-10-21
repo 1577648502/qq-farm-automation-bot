@@ -1,51 +1,27 @@
 {
   "mutationTypes": {
-    "月华": {
-      "quality": "天工",
-      "qualityRank": 0,
-      "effect": "装扮",
-      "description": "种植琉璃宝荷有概率出现，产出月华宝荷装扮",
-      "probability": 6.6,
-      "color": "#FF6B35",
-      "icon": "🌙",
+    "哈哈小南瓜": {
+      "quality": "珍品",
+      "qualityRank": 1,
+      "effect": "变异为哈哈小南瓜",
+      "description": "作物生长过程中触发南瓜变异，产出哈哈小南瓜",
+      "probability": 8.51,
+      "color": "#A855F7",
+      "icon": "🎃",
       "enumIds": [
-        10
+        6
       ]
     },
-    "塔塔": {
+    "哈哈南瓜塔": {
       "quality": "天工",
       "qualityRank": 0,
-      "effect": "装扮",
-      "description": "种植哈哈南瓜有概率出现，产出哈哈南瓜塔装扮",
-      "probability": 6.6,
+      "effect": "变异为哈哈南瓜塔",
+      "description": "作物生长过程中触发南瓜塔变异，产出哈哈南瓜塔",
+      "probability": 7.6,
       "color": "#FF6B35",
       "icon": "🗼",
       "enumIds": [
-        11
-      ]
-    },
-    "荷华_珍品": {
-      "quality": "珍品",
-      "qualityRank": 1,
-      "effect": "荷花",
-      "description": "种植荷风游记稀有种子有概率出现，产出荷花",
-      "probability": 13.28,
-      "color": "#A855F7",
-      "icon": "🌼",
-      "enumIds": [
-        8
-      ]
-    },
-    "荷华_稀有": {
-      "quality": "稀有",
-      "qualityRank": 2,
-      "effect": "荷花",
-      "description": "种植荷风游记稀有种子有概率出现，产出荷花",
-      "probability": 9.63,
-      "color": "#3B82F6",
-      "icon": "🌼",
-      "enumIds": [
-        9
+        7
       ]
     },
     "黄金_天工": {
@@ -60,28 +36,76 @@
         5
       ]
     },
-    "黄金_珍品": {
+    "荷花": {
       "quality": "珍品",
       "qualityRank": 1,
-      "effect": "黄金果实",
-      "description": "稀有作物生长过程中随机出现，产出黄金果实",
-      "probability": 8.51,
+      "effect": "变异为荷花",
+      "description": "种植荷风游记相关作物时有概率出现，产出荷花",
+      "probability": 13.28,
       "color": "#A855F7",
-      "icon": "⭐",
+      "icon": "🌼",
       "enumIds": [
-        6
+        8
       ]
     },
-    "黄金_稀有": {
+    "月华宝荷": {
+      "quality": "天工",
+      "qualityRank": 0,
+      "effect": "变异为月华宝荷",
+      "description": "种植荷风游记相关作物时有概率出现，产出月华宝荷",
+      "probability": 9.63,
+      "color": "#FF6B35",
+      "icon": "🌙",
+      "enumIds": [
+        9
+      ]
+    },
+    "绵绵糖果": {
       "quality": "稀有",
       "qualityRank": 2,
-      "effect": "黄金果实",
-      "description": "稀有作物生长过程中随机出现，产出黄金果实",
-      "probability": 7.6,
+      "effect": "变异为绵绵糖果",
+      "description": "作物生长过程中触发绵绵变异，产出绵绵糖果",
+      "probability": 6.6,
       "color": "#3B82F6",
-      "icon": "⭐",
+      "icon": "🍬",
       "enumIds": [
-        7
+        10
+      ]
+    },
+    "蝶梦星铃": {
+      "quality": "天工",
+      "qualityRank": 0,
+      "effect": "变异为蝶梦星铃",
+      "description": "作物生长过程中触发蝶梦变异，产出蝶梦星铃",
+      "probability": 6.6,
+      "color": "#FF6B35",
+      "icon": "🔔",
+      "enumIds": [
+        11
+      ]
+    },
+    "闪电": {
+      "quality": "无",
+      "qualityRank": 3,
+      "effect": "闪电变异",
+      "description": "使用闪电变异瓶或触发闪电变异后，作物会进入闪电变异状态",
+      "probability": 0,
+      "color": "#38BDF8",
+      "icon": "⚡",
+      "enumIds": [
+        15
+      ]
+    },
+    "比熊棉花糖": {
+      "quality": "天工",
+      "qualityRank": 0,
+      "effect": "变异为比熊棉花糖",
+      "description": "作物生长过程中触发比熊棉花糖变异，产出比熊棉花糖",
+      "probability": 6.6,
+      "color": "#FF6B35",
+      "icon": "☁️",
+      "enumIds": [
+        16
       ]
     },
     "冰冻": {
@@ -166,12 +190,6 @@
   "unknownEnumIds": {
     "14": {
       "note": "抓包实测出现过, 名字待确认(疑似新品质/新变异)"
-    },
-    "15": {
-      "note": "抓包实测出现过, 名字待确认(常与黄金·xx 种子同时出现)"
-    },
-    "16": {
-      "note": "抓包实测出现过, 名字待确认"
     }
   }
 }

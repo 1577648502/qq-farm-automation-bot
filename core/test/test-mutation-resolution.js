@@ -19,12 +19,14 @@ const expected = [
     [3, '暗化', '无', '果实售价×2'],
     [4, '湿润', '无', '果实数量×2'],
     [5, '黄金_天工', '天工', '黄金果实'],
-    [6, '黄金_珍品', '珍品', '黄金果实'],
-    [7, '黄金_稀有', '稀有', '黄金果实'],
-    [8, '荷华_珍品', '珍品', '荷花'],
-    [9, '荷华_稀有', '稀有', '荷花'],
-    [10, '月华', '天工', '装扮'],
-    [11, '塔塔', '天工', '装扮'],
+    [6, '哈哈小南瓜', '珍品', '变异为哈哈小南瓜'],
+    [7, '哈哈南瓜塔', '天工', '变异为哈哈南瓜塔'],
+    [8, '荷花', '珍品', '变异为荷花'],
+    [9, '月华宝荷', '天工', '变异为月华宝荷'],
+    [10, '绵绵糖果', '稀有', '变异为绵绵糖果'],
+    [11, '蝶梦星铃', '天工', '变异为蝶梦星铃'],
+    [15, '闪电', '无', '闪电变异'],
+    [16, '比熊棉花糖', '天工', '变异为比熊棉花糖'],
 ];
 
 section('1. 已知变异枚举均返回完整展示信息');
@@ -58,6 +60,11 @@ check('未知枚举仍有类型', unknown.mutationType === '变异#14', unknown)
 check('未知枚举标记为变异', unknown.isMutant === true, unknown);
 check('未知枚举有占位效果', unknown.mutationEffect === '效果待确认', unknown);
 check('未知枚举有说明', !!unknown.mutationDescription, unknown);
+
+const lightning = gameConfig.resolveMutationInfo(PLANT_ID, [15]);
+check('茱萸闪电变异识别为闪电', lightning.mutationType === '闪电', lightning);
+check('闪电变异效果已确认', lightning.mutationEffect === '闪电变异', lightning);
+check('闪电变异品质已确认', lightning.mutationQuality === '无', lightning);
 
 const unseen = gameConfig.getMutantByEnumId(99);
 check('未列入配置的新 ID 也返回占位信息', unseen && unseen.name === '变异#99', unseen);

@@ -3,9 +3,9 @@
  *
  * 规则(2026-09-30 新增):
  *   · automation.sell 打开后才会自动卖果实(原有行为)
- *   · 黄金果实(物品名含"黄金" 如 黄金果 / 黄金·xx, 或带黄金_天工/珍品/稀有变异 枚举 5/6/7)
+ *   · 黄金果实(物品名/资源路径含黄金, 或带黄金变异枚举 5)
  *     **默认保留**; 只有设置里勾了 sellGoldenFruit 才会一起卖
- *   · 非黄金的品质变异(月华/塔塔/荷华等)继续保留(原有行为)
+ *   · 非黄金的品质变异(哈哈小南瓜/绵绵糖果/荷花等)继续保留
  *
  * 运行: node test/test-sell-fruit.js
  */
@@ -19,12 +19,12 @@ isolateDataDir(SB, 'sell-fruit-test');
 (async () => {
     const { types } = require(`${SB}/src/utils/proto`);
     await require(`${SB}/src/utils/proto`).loadProto();
-    // 背包内容: 普通果实 / 黄金果(名字含黄金) / 黄金_天工变异果实 / 月华变异果实(非黄金) / 非果实道具
+    // 背包内容: 普通果实 / 黄金果 / 黄金变异果实 / 绵绵糖果变异果实 / 非果实道具
     const BAG = [
         { id: 40002, count: 10 },                       // 白萝卜(普通果实)
         { id: 40304, count: 2 },                        // 黄金果(名字含黄金)
         { id: 40065, count: 3, mutant_types: [5] },     // 大蒜 + 黄金_天工
-        { id: 40064, count: 4, mutant_types: [10] },    // 大葱 + 月华(非黄金品质变异)
+        { id: 40064, count: 4, mutant_types: [10] },    // 大葱 + 绵绵糖果(非黄金品质变异)
         { id: 40165, count: 5 },                        // 茱萸(Plant.json 缺条目, 由 ItemInfo 兜底)
         { id: 80001, count: 9 },                        // 化肥(非果实, type 7)
     ];
@@ -61,8 +61,9 @@ isolateDataDir(SB, 'sell-fruit-test');
     section('1. 识别"黄金果实"');
     check('黄金果(名字含黄金)', wh.isGoldenFruitItem({ id: 40304 }, 40304) === true);
     check('黄金_天工变异(枚举5)', wh.isGoldenFruitItem({ id: 40065, mutant_types: [5] }, 40065) === true);
-    check('黄金_珍品变异(枚举6)', wh.isGoldenFruitItem({ id: 40065, mutant_types: [6] }, 40065) === true);
-    check('月华变异(枚举10)不是黄金', wh.isGoldenFruitItem({ id: 40064, mutant_types: [10] }, 40064) === false);
+    check('哈哈小南瓜变异(枚举6)不是黄金', wh.isGoldenFruitItem({ id: 40065, mutant_types: [6] }, 40065) === false);
+    check('黄金与哈哈小南瓜组合仍识别为黄金', wh.isGoldenFruitItem({ id: 40065, mutant_types: [5, 6] }, 40065) === true);
+    check('绵绵糖果变异(枚举10)不是黄金', wh.isGoldenFruitItem({ id: 40064, mutant_types: [10] }, 40064) === false);
     check('普通果实不是黄金', wh.isGoldenFruitItem({ id: 40002 }, 40002) === false);
 
     section('2. 未勾选: 黄金果实全部保留, 普通果实照卖');
@@ -75,7 +76,7 @@ isolateDataDir(SB, 'sell-fruit-test');
         check('新果实(茱萸)被卖出', ids.includes(40165), ids);
         check('黄金果(40304)被保留', !ids.includes(40304), ids);
         check('黄金_天工果实被保留', !ids.includes(40065), ids);
-        check('月华变异果实被保留', !ids.includes(40064), ids);
+        check('绵绵糖果变异果实被保留', !ids.includes(40064), ids);
         check('非果实道具不参与', !ids.includes(80001), ids);
     }
 
@@ -89,7 +90,7 @@ isolateDataDir(SB, 'sell-fruit-test');
         check('新果实(茱萸)仍被卖出', ids.includes(40165), ids);
         check('黄金果(40304)也卖出', ids.includes(40304), ids);
         check('黄金_天工果实也卖出', ids.includes(40065), ids);
-        check('月华变异仍保留(非黄金)', !ids.includes(40064), ids);
+        check('绵绵糖果变异仍保留(非黄金)', !ids.includes(40064), ids);
         check('非果实道具不参与', !ids.includes(80001), ids);
     }
 

@@ -4,7 +4,7 @@
  */
 
 const protobuf = require('protobufjs');
-const { getFruitName, getPlantByFruitId, getPlantBySeedId, getItemById, getItemImageById, getSeedImageBySeedId, getAllMutantTypes, getMutationTypeByFruitId } = require('../config/gameConfig');
+const { getFruitName, getPlantByFruitId, getPlantBySeedId, getItemById, getItemImageById, getSeedImageBySeedId, getMutantByEnumId, getMutationTypeByFruitId } = require('../config/gameConfig');
 const { isAutomationOn, getSellGoldenFruit } = require('../models/store');
 const { sendMsgAsync, networkEvents, getUserState } = require('../utils/network');
 const { types } = require('../utils/proto');
@@ -12,24 +12,8 @@ const { toLong, toNum, log, logWarn, sleep } = require('../utils/utils');
 const { updateStatusGold } = require('./status');
 
 
-// QQ 服务端变异类型枚举值 → 名称映射
-// QQ 枚举顺序：基础效果(冰冻/爱心/暗化/湿润)在前，品质变异(月华/塔塔/荷华/黄金)在后
-const QQ_MUTANT_ENUM_MAP = Object.freeze({
-    1: "冰冻",
-    2: "爱心",
-    3: "暗化",
-    4: "湿润",
-    5: "黄金_天工",
-    6: "黄金_珍品",
-    7: "黄金_稀有",
-    8: "荷华_珍品",
-    9: "荷华_稀有",
-    10: "月华",
-    11: "塔塔",
-});
-
-// 黄金果实相关的变异枚举(5/6/7 = 黄金_天工/珍品/稀有); 物品名含"黄金"的也算
-const GOLDEN_MUTANT_ENUM_IDS = new Set([5, 6, 7]);
+// 黄金变异枚举; 物品名或资源路径含黄金标识的也算
+const GOLDEN_MUTANT_ENUM_IDS = new Set([5]);
 
 const SELL_BATCH_SIZE = 15;
 const FERTILIZER_RELATED_IDS = new Set([
@@ -369,20 +353,12 @@ function getItemMutantTypes(item, id) {
     const itemMutantTypes = [];
     if (item && item.mutant_types && item.mutant_types.length > 0) {
         try {
-            const allMuts = getAllMutantTypes();
-            if (allMuts) {
-                const mtNames = Object.keys(allMuts);
-                for (let mi = 0; mi < item.mutant_types.length; mi++) {
-                    const mtv = Number(item.mutant_types[mi]);
-                    if (mtv > 0) {
-                        var mapped = QQ_MUTANT_ENUM_MAP[mtv];
-                        if (mapped) { mapped = mapped.replace(/_(天工|珍品|稀有)$/, ""); }
-                        if (mapped) {
-                            itemMutantTypes.push(mapped);
-                        } else {
-                            itemMutantTypes.push('mutant_' + mtv);
-                        }
-                    }
+            for (let mi = 0; mi < item.mutant_types.length; mi++) {
+                const mtv = Number(item.mutant_types[mi]);
+                if (mtv > 0) {
+                    const mutation = getMutantByEnumId(mtv);
+                    const mapped = mutation && String(mutation.name || '').replace(/_(天工|珍品|稀有)$/, '');
+                    itemMutantTypes.push(mapped || `mutant_${mtv}`);
                 }
             }
         } catch (e) {}
@@ -520,17 +496,18 @@ async function getBagDetail() {
  * 检查并出售所有果实
  */
 /**
- * 是不是"黄金果实": 物品名含"黄金"(如 黄金果 / 黄金·爱心果),
- * 或带黄金变异(黄金_天工/珍品/稀有, 枚举 5/6/7)
+ * 是不是"黄金果实": 物品名/资源路径含黄金标识, 或带黄金变异枚举 5
  */
 function isGoldenFruitItem(item, id) {
     const info = getItemById(id) || {};
     if (/黄金/.test(String(info.name || ''))) return true;
+    if (String(info.asset_name || '').startsWith('gold/')) return true;
     const mts = (item && item.mutant_types) || [];
     for (let i = 0; i < mts.length; i++) {
         const mid = Number(mts[i]);
         if (mid > 0 && GOLDEN_MUTANT_ENUM_IDS.has(mid)) return true;
-        const mName = QQ_MUTANT_ENUM_MAP[mid];
+        const mutation = mid > 0 ? getMutantByEnumId(mid) : null;
+        const mName = mutation && mutation.name;
         if (mName && /黄金/.test(String(mName))) return true;
     }
     return false;
@@ -559,30 +536,24 @@ async function sellAllFruits() {
             const itemInfo = getItemById(id);
             const itemType = itemInfo ? (Number(itemInfo.type) || 0) : 0;
             if (itemType !== 6 && itemType !== 17) continue;
-            // Skip decorative/quality mutant items (月华/塔塔/荷华/黄金) - keep in bag
+            // 品质变异果实默认保留, 是否出售由品种和设置决定
             var hasQualityMutant = false;
             if (item.mutant_types && item.mutant_types.length > 0) {
                 try {
-                    var mtMap = getAllMutantTypes();
-                    if (mtMap) {
-                        var mtNames = Object.keys(mtMap);
-                        for (var smi = 0; smi < item.mutant_types.length; smi++) {
-                            var smId = Number(item.mutant_types[smi]);
-                            if (smId > 0) {
-                                var mtName = QQ_MUTANT_ENUM_MAP[smId];
-                                if (mtName) { var cfg = mtMap[mtName];
-                                if (cfg && (cfg.quality === '天工' || cfg.quality === '珍品' || cfg.quality === '稀有')) {
-                                    hasQualityMutant = true;
-                                    log('仓库', `品质变异物品: ${getFruitName(id)} x${count} (${mtName}) — 是否出售取决于"连黄金果实一起卖"设置`, {
-                                        module: 'warehouse',
-                                        event: 'quality_mutant_item',
-                                        result: 'evaluated',
-                                        itemId: id,
-                                        count: count,
-                                    });
-                                    break;
-                            }                                }
-                            }
+                    for (var smi = 0; smi < item.mutant_types.length; smi++) {
+                        var smId = Number(item.mutant_types[smi]);
+                        if (smId <= 0) continue;
+                        var mutation = getMutantByEnumId(smId);
+                        if (mutation && (mutation.quality === '天工' || mutation.quality === '珍品' || mutation.quality === '稀有')) {
+                            hasQualityMutant = true;
+                            log('仓库', `品质变异物品: ${getFruitName(id)} x${count} (${mutation.name}) — 是否出售取决于"连黄金果实一起卖"设置`, {
+                                module: 'warehouse',
+                                event: 'quality_mutant_item',
+                                result: 'evaluated',
+                                itemId: id,
+                                count: count,
+                            });
+                            break;
                         }
                     }
                 } catch (e) {}
@@ -593,7 +564,7 @@ async function sellAllFruits() {
             if (goldenItem && !sellGolden) {
                 continue;
             }
-            // 勾了"连黄金果实一起卖"时, 黄金果实自身的品质变异(黄金_天工/珍品/稀有)不再拦它
+            // 勾了"连黄金果实一起卖"时, 黄金果实自身的品质变异不再拦它
             const allowGolden = goldenItem && sellGolden;
             if ((!hasQualityMutant || allowGolden) && isSellableItem(item) && count > 0) {
                 toSell.push(item);
