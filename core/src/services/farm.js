@@ -25,6 +25,7 @@ let fertilizerBuyCheckTimer = null;
 let lastFertilizerBuyCheckAt = 0;
 const farmScheduler = createScheduler('farm');
 const LARGE_SEED_PRIORITY_MIN_SIZE = 2;
+const LARGE_SEED_WAIT_MS = 10 * 60 * 1000;
 const largeSeedWaitStates = new Map();
 
 // ============ 农场 API ============
@@ -756,14 +757,19 @@ function getOrCreateLargeSeedWaitState(seed, now = Date.now(), accountId = proce
             plantSize,
             lastObservedCount: count,
             startedAt: now,
+            expiresAt: now + LARGE_SEED_WAIT_MS,
             shortageLogged: false,
+            timeoutLogged: false,
         };
         largeSeedWaitStates.set(key, state);
     } else {
         state.lastObservedCount = count;
     }
 
-    return { ...state };
+    return {
+        ...state,
+        expired: now >= state.expiresAt,
+    };
 }
 
 function markLargeSeedWaitShortage(state, accountId = process.env.FARM_ACCOUNT_ID || 'default') {
@@ -772,6 +778,15 @@ function markLargeSeedWaitShortage(state, accountId = process.env.FARM_ACCOUNT_I
     if (!current) return false;
     const wasLogged = !!current.shortageLogged;
     current.shortageLogged = true;
+    return !wasLogged;
+}
+
+function markLargeSeedWaitTimeout(state, accountId = process.env.FARM_ACCOUNT_ID || 'default') {
+    const key = getLargeSeedWaitKey(state && state.seedId, accountId);
+    const current = largeSeedWaitStates.get(key);
+    if (!current) return false;
+    const wasLogged = !!current.timeoutLogged;
+    current.timeoutLogged = true;
     return !wasLogged;
 }
 
@@ -823,9 +838,6 @@ async function plantFromBagSeeds(landsToPlant) {
     let waitingForLargeSeed = null;
     const plantedLandIds = [];
     const usedSeedLogs = [];
-    let remainingLargeSeedCount = usableSeeds
-        .filter(seed => Math.max(1, Number(seed && seed.plantSize) || 1) >= LARGE_SEED_PRIORITY_MIN_SIZE)
-        .reduce((sum, seed) => sum + Math.max(0, Number(seed && seed.count) || 0), 0);
 
     for (const seed of usableSeeds) {
         if (remainingLandIds.length === 0) break;
@@ -833,31 +845,39 @@ async function plantFromBagSeeds(landsToPlant) {
         const plantSize = Math.max(1, Number(seed.plantSize || 1));
         const isLargeSeed = plantSize >= LARGE_SEED_PRIORITY_MIN_SIZE;
         const largeSeedWaitState = isLargeSeed ? getOrCreateLargeSeedWaitState(seed) : null;
-        if (!isLargeSeed && remainingLargeSeedCount > 0) {
-            fallbackAllowed = false;
-            break;
-        }
         const maxPlantCount = getBagSeedPlantCapacity(seed, remainingLandIds.length);
         if (maxPlantCount <= 0) {
-            if (isLargeSeed) {
+            if (isLargeSeed && !largeSeedWaitState.expired) {
                 waitingForLargeSeed = {
                     seedId: seed.seedId,
                     name: seed.name,
                     plantSize,
                     availableLandCount: remainingLandIds.length,
+                    expiresAt: largeSeedWaitState.expiresAt,
                 };
                 fallbackAllowed = false;
                 if (markLargeSeedWaitShortage(largeSeedWaitState)) {
-                    log('种植', `${plantSize}x${plantSize} 种子「${seed.name}」需要 ${plantSize * plantSize} 块连续空地，当前仅 ${remainingLandIds.length} 块；背包仍有可用大种子，持续保留空地等待`, {
+                    log('种植', `${plantSize}x${plantSize} 种子「${seed.name}」需要 ${plantSize * plantSize} 块连续空地，当前仅 ${remainingLandIds.length} 块；先保留空地等待，最多等待 10 分钟`, {
                         module: 'farm',
                         event: '大种子优先等待',
                         result: 'waiting',
                         seedId: seed.seedId,
                         plantSize,
                         availableLandCount: remainingLandIds.length,
+                        expiresAt: largeSeedWaitState.expiresAt,
                     });
                 }
                 break;
+            }
+            if (isLargeSeed && markLargeSeedWaitTimeout(largeSeedWaitState)) {
+                log('种植', `${plantSize}x${plantSize} 种子「${seed.name}」等待超时，本轮恢复其他种子补种`, {
+                    module: 'farm',
+                    event: '大种子优先等待',
+                    result: 'timeout',
+                    seedId: seed.seedId,
+                    plantSize,
+                    availableLandCount: remainingLandIds.length,
+                });
             }
             continue;
         }
@@ -871,39 +891,44 @@ async function plantFromBagSeeds(landsToPlant) {
             plantedLandIds.push(...currentPlantedLandIds);
             remainingLandIds = remainingLandIds.filter(id => !currentOccupied.includes(id));
             usedSeedLogs.push(`${seed.name}${plantSize > 1 ? `(${plantSize}x${plantSize})` : ''}x${result.planted}`);
-            if (isLargeSeed) {
-                remainingLargeSeedCount = Math.max(0, remainingLargeSeedCount - result.planted);
-            }
-        }
-
-        if (isLargeSeed) {
-            const remainingSeedCount = Math.max(0, Number(seed.count || 0) - result.planted);
-            if (remainingSeedCount > 0 && remainingLandIds.length > 0) {
-                waitingForLargeSeed = {
-                    seedId: seed.seedId,
-                    name: seed.name,
-                    plantSize,
-                    availableLandCount: remainingLandIds.length,
-                    remainingSeedCount,
-                };
-                fallbackAllowed = false;
-                if (markLargeSeedWaitShortage(largeSeedWaitState)) {
-                    log('种植', `${plantSize}x${plantSize} 种子「${seed.name}」已种 ${result.planted} 颗，背包仍有 ${remainingSeedCount} 颗；保留 ${remainingLandIds.length} 块空地持续等待`, {
-                        module: 'farm',
-                        event: '大种子优先等待',
-                        result: 'waiting',
-                        seedId: seed.seedId,
-                        plantSize,
-                        availableLandCount: remainingLandIds.length,
-                        remainingSeedCount,
-                    });
-                }
-                break;
-            }
         }
 
         if (result.planted < maxPlantCount && remainingLandIds.length > 0) {
-            // 非布局类的真实异常阻止后续商店补种，避免误购。
+            if (isLargeSeed && result.hadRealError === false) {
+                if (!largeSeedWaitState.expired) {
+                    waitingForLargeSeed = {
+                        seedId: seed.seedId,
+                        name: seed.name,
+                        plantSize,
+                        availableLandCount: remainingLandIds.length,
+                        expiresAt: largeSeedWaitState.expiresAt,
+                    };
+                    fallbackAllowed = false;
+                    if (markLargeSeedWaitShortage(largeSeedWaitState)) {
+                        log('种植', `${plantSize}x${plantSize} 种子「${seed.name}」暂未找到连续空地，保留 ${remainingLandIds.length} 块空地继续等待，最多再等 ${Math.max(1, Math.ceil((largeSeedWaitState.expiresAt - Date.now()) / 60000))} 分钟`, {
+                            module: 'farm',
+                            event: '大种子优先等待',
+                            result: 'waiting',
+                            seedId: seed.seedId,
+                            plantSize,
+                            availableLandCount: remainingLandIds.length,
+                            expiresAt: largeSeedWaitState.expiresAt,
+                        });
+                    }
+                    break;
+                }
+                if (markLargeSeedWaitTimeout(largeSeedWaitState)) {
+                    log('种植', `${plantSize}x${plantSize} 种子「${seed.name}」等待超时，本轮恢复其他种子补种`, {
+                        module: 'farm',
+                        event: '大种子优先等待',
+                        result: 'timeout',
+                        seedId: seed.seedId,
+                        plantSize,
+                        availableLandCount: remainingLandIds.length,
+                    });
+                }
+            }
+            // 仅在有真正异常错误时才禁止回退（2x2 布局预期错误不阻断回退）
             const isPureLayoutFailure = result.hadRealError === false && result.planted === 0;
             if (!isPureLayoutFailure) {
                 fallbackAllowed = false;
@@ -2183,6 +2208,7 @@ module.exports = {
     encodePlantRequest,
     __privateFarmFns: {
         LARGE_SEED_PRIORITY_MIN_SIZE,
+        LARGE_SEED_WAIT_MS,
         getLargeSeedWaitKey,
         getOrCreateLargeSeedWaitState,
         resetLargeSeedWaitStates,
