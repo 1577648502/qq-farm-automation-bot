@@ -1,9 +1,10 @@
 /**
- * 2x2 种子有限等待回归测试
+ * 2x2 种子持续优先等待回归测试
  *
  * 目标:
- *   · 有 2x2 种子时，先留出有限时间等 4 格连续空地，不让 1x1 种子立即占满
- *   · 等待超时后恢复普通种子补种，避免永久空置
+ *   · 背包仍有 2x2 种子时，持续保留空地等待，不让 1x1 种子占满
+ *   · 只种下一颗 2x2 后，如果背包里还有同类种子，也继续优先等待
+ *   · 2x2 种子全部种完后，剩余空地仍可按普通种子补种
  *   · 2x2 种子优先于手动排序，但多个 2x2 之间仍尊重用户排序
  */
 const { setupSandbox, isolateDataDir, createChecker } = require('./harness');
@@ -44,7 +45,9 @@ network.sendMsgAsync = async (_service, method, body) => {
                 id: seedId,
                 phases: [{ phase: 1, begin_time: Math.floor(Date.now() / 1000) }],
             },
-            slave_land_ids: [],
+            slave_land_ids: seedId === largeSeedA.seedId || seedId === largeSeedB.seedId
+                ? [landId + 1, landId + 2, landId + 3]
+                : [],
         }],
     })).finish();
     return { body: replyBody };
@@ -54,7 +57,6 @@ const farm = require(`${SB}/src/services/farm`);
 const {
     sortBagSeedsForPlanting,
     __privateFarmFns: {
-        LARGE_SEED_WAIT_MS,
         getOrCreateLargeSeedWaitState,
         resetLargeSeedWaitStates,
         plantFromBagSeeds,
@@ -86,7 +88,7 @@ async function run() {
     check('2x2 内部尊重手动顺序', sorted[0].seedId === largeSeedB.seedId && sorted[1].seedId === largeSeedA.seedId, sorted.map(seed => seed.seedId));
     check('普通种子保持手动顺序', sorted.slice(2).map(seed => seed.seedId).join(',') === `${smallSeed.seedId},${otherSmallSeed.seedId}`, sorted.map(seed => seed.seedId));
 
-    section('2. 2x2 空地不足时有限等待');
+    section('2. 2x2 空地不足时持续等待');
     resetScenario([largeSeedA, smallSeed], []);
     const waiting = await plantFromBagSeeds([1, 2, 3]);
     check('本轮不种普通种子', plantRequests.length === 0, plantRequests);
@@ -100,23 +102,38 @@ async function run() {
     const layoutWaiting = await plantFromBagSeeds([1, 2, 3, 4]);
     check('尝试所有 2x2 候选主地块', plantRequests.length === 4 && plantRequests.every(item => item.seedId === largeSeedA.seedId), plantRequests);
     check('布局失败后不种 1x1', layoutWaiting.totalPlanted === 0 && layoutWaiting.remainingLandIds.length === 4, layoutWaiting);
-    check('布局失败后继续有限等待', layoutWaiting.fallbackAllowed === false && layoutWaiting.waitingForLargeSeed && layoutWaiting.waitingForLargeSeed.seedId === largeSeedA.seedId, layoutWaiting);
+    check('布局失败后继续持续等待', layoutWaiting.fallbackAllowed === false && layoutWaiting.waitingForLargeSeed && layoutWaiting.waitingForLargeSeed.seedId === largeSeedA.seedId, layoutWaiting);
 
-    section('4. 等待超时后恢复普通种子');
+    section('4. 超过原等待时间后仍不恢复普通种子');
     resetScenario([largeSeedA, smallSeed], []);
-    getOrCreateLargeSeedWaitState(largeSeedA, Date.now() - LARGE_SEED_WAIT_MS - 1, 'default');
-    const timedOut = await plantFromBagSeeds([1, 2, 3]);
-    check('超时后种植普通种子', timedOut.totalPlanted === 3, timedOut);
-    check('普通种子逐块提交', plantRequests.length === 3 && plantRequests.every(item => item.seedId === smallSeed.seedId), plantRequests);
-    check('超时后不再返回等待状态', timedOut.waitingForLargeSeed === null, timedOut.waitingForLargeSeed);
-    check('超时后允许后续回退', timedOut.fallbackAllowed === true, timedOut.fallbackAllowed);
+    getOrCreateLargeSeedWaitState(largeSeedA, Date.now() - 24 * 60 * 60 * 1000, 'default');
+    const persistentWaiting = await plantFromBagSeeds([1, 2, 3]);
+    check('旧计时已过仍不种普通种子', plantRequests.length === 0 && persistentWaiting.totalPlanted === 0, { persistentWaiting, plantRequests });
+    check('继续保留全部空地', persistentWaiting.remainingLandIds.length === 3, persistentWaiting.remainingLandIds);
+    check('仍返回大种子等待状态', persistentWaiting.waitingForLargeSeed && persistentWaiting.waitingForLargeSeed.seedId === largeSeedA.seedId, persistentWaiting.waitingForLargeSeed);
+    check('仍禁止后续回退', persistentWaiting.fallbackAllowed === false, persistentWaiting.fallbackAllowed);
 
-    section('5. 没有 2x2 时行为不变');
+    section('5. 种下一颗后背包仍有 2x2 时继续等待');
+    resetScenario([{ ...largeSeedA, count: 2 }, smallSeed], []);
+    const partialLarge = await plantFromBagSeeds([1, 2, 3, 4, 5, 6]);
+    check('只先种下一颗 2x2', partialLarge.totalPlanted === 1 && plantRequests.length === 1 && plantRequests[0].seedId === largeSeedA.seedId, { partialLarge, plantRequests });
+    check('2x2 占满四块土地', partialLarge.occupiedCount === 4 && partialLarge.remainingLandIds.join(',') === '5,6', partialLarge);
+    check('剩余大种子继续等待', partialLarge.waitingForLargeSeed && partialLarge.waitingForLargeSeed.remainingSeedCount === 1, partialLarge.waitingForLargeSeed);
+    check('不拿 1x1 填剩余空地', partialLarge.fallbackAllowed === false, partialLarge.fallbackAllowed);
+
+    section('6. 2x2 全部种完后恢复普通种子');
+    resetScenario([{ ...largeSeedA, count: 2 }, smallSeed], []);
+    const largeThenSmall = await plantFromBagSeeds([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
+    check('先种完两颗 2x2', plantRequests.slice(0, 2).every(item => item.seedId === largeSeedA.seedId), plantRequests);
+    check('剩余空地由 1x1 补种', plantRequests.length === 6 && plantRequests.slice(2).every(item => item.seedId === smallSeed.seedId), plantRequests);
+    check('没有剩余大种子等待状态', largeThenSmall.waitingForLargeSeed === null, largeThenSmall.waitingForLargeSeed);
+
+    section('7. 没有 2x2 时行为不变');
     resetScenario([smallSeed, otherSmallSeed], [otherSmallSeed.seedId, smallSeed.seedId]);
     const normalSorted = sortBagSeedsForPlanting(bagSeeds, priorityList);
     check('仍按手动优先级种植', normalSorted.map(seed => seed.seedId).join(',') === `${otherSmallSeed.seedId},${smallSeed.seedId}`, normalSorted.map(seed => seed.seedId));
 
-    section('6. 账号等待状态互不影响');
+    section('8. 账号等待状态互不影响');
     resetLargeSeedWaitStates('account-a');
     resetLargeSeedWaitStates('account-b');
     const nowA = 1_000_000;
