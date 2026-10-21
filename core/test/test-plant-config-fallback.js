@@ -21,14 +21,47 @@ check('种子 ID 为 20165', plant && plant.seed_id === 20165, plant);
 check('生长时间为 12 小时', gameConfig.getPlantGrowTime(1020165) === 43200, gameConfig.getPlantGrowTime(1020165));
 check('经验为 1680', gameConfig.getPlantExp(1020165) === 1680, gameConfig.getPlantExp(1020165));
 
-section('2. 种子反查与图标映射');
+section('2. 森野黄金芽缺失生长配置时使用服务端数据兜底');
+const goldenBud = gameConfig.getPlantById(1029005);
+check('森野黄金芽使用 2×2 兜底配置', goldenBud && goldenBud.size === 2, goldenBud);
+check('森野黄金芽种子 ID 正确', goldenBud && goldenBud.seed_id === 29005, goldenBud);
+check('静态配置缺失生长时长', gameConfig.getPlantGrowTime(1029005) === 0, gameConfig.getPlantGrowTime(1029005));
+check(
+    '服务端 grow_sec 可补全总生长时长',
+    gameConfig.getPlantGrowTime(1029005, { grow_sec: 43200 }) === 43200,
+    gameConfig.getPlantGrowTime(1029005, { grow_sec: 43200 })
+);
+check(
+    '无 grow_sec 时可按阶段时间差补全',
+    gameConfig.getPlantGrowTime(1029005, {
+        phases: [
+            { phase: 1, begin_time: 1792000000 },
+            { phase: 2, begin_time: 1792010000 },
+            { phase: 6, begin_time: 1792043200, end_time: 1792050000 },
+        ],
+    }) === 43200,
+    gameConfig.getPlantGrowTime(1029005, {
+        phases: [
+            { phase: 1, begin_time: 1792000000 },
+            { phase: 2, begin_time: 1792010000 },
+            { phase: 6, begin_time: 1792043200, end_time: 1792050000 },
+        ],
+    })
+);
+check(
+    '已有静态生长配置优先，不被服务端值覆盖',
+    gameConfig.getPlantGrowTime(1020165, { grow_sec: 1 }) === 43200,
+    gameConfig.getPlantGrowTime(1020165, { grow_sec: 1 })
+);
+
+section('3. 种子反查与图标映射');
 const plantBySeed = gameConfig.getPlantBySeedId(20165);
 const seedImage = decodeURIComponent(gameConfig.getSeedImageBySeedId(20165));
 check('种子 20165 可反查植物', plantBySeed && plantBySeed.id === 1020165, plantBySeed);
 check('种子名称可反查', gameConfig.getPlantNameBySeedId(20165) === '茱萸');
 check('种子图标存在', seedImage.endsWith('/20165_茱萸_Crop_165_Seed.png'), seedImage);
 
-section('3. 其他 Plant.json 缺口由 ItemInfo 自动兜底');
+section('4. 其他 Plant.json 缺口由 ItemInfo 自动兜底');
 const inferredPlant = gameConfig.getPlantById(1020107);
 const inferredImage = decodeURIComponent(gameConfig.getSeedImageBySeedId(20107));
 check('仙人掌名称可推导', gameConfig.getPlantName(1020107) === '仙人掌', gameConfig.getPlantName(1020107));
@@ -36,11 +69,11 @@ check('仙人掌种子 ID 可推导', inferredPlant && inferredPlant.seed_id ===
 check('缺失经验字段按 0 处理', gameConfig.getPlantExp(1020107) === 0, gameConfig.getPlantExp(1020107));
 check('仙人掌图标存在', inferredImage.endsWith('/20107_仙人掌_Crop_107_Seed.png'), inferredImage);
 
-section('4. 官方配置与未知植物行为不变');
+section('5. 官方配置与未知植物行为不变');
 check('白萝卜仍使用官方配置', gameConfig.getPlantName(1020002) === '白萝卜', gameConfig.getPlantName(1020002));
 check('未知植物仍显示占位名', gameConfig.getPlantName(1999999) === '植物1999999', gameConfig.getPlantName(1999999));
 
-section('5. Plant.json 缺失果实可按 ItemInfo 反查');
+section('6. Plant.json 缺失果实可按 ItemInfo 反查');
 const missingFruits = [
     [40092, 20092, 1020092, '稀世琉璃果'],
     [40107, 20107, 1020107, '仙人掌'],
@@ -62,7 +95,7 @@ for (const [fruitId, seedId, plantId, name] of missingFruits) {
     check(`${name} 果实名称正确`, gameConfig.getFruitName(fruitId) === name, gameConfig.getFruitName(fruitId));
 }
 
-section('6. 背包果实分类与出售识别');
+section('7. 背包果实分类与出售识别');
 const bagDetail = warehouse.__privateWarehouseFns.buildBagDetailFromItems([
     { id: 40165, count: 2, uid: 90001 },
     { id: 80001, count: 1, uid: 90002 },

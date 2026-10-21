@@ -554,22 +554,48 @@ function getPlantNameBySeedId(seedId) {
 
 /**
  * 获取植物的生长时间（秒）
+ * 静态配置缺失时，使用服务端下发的 grow_sec 或阶段时间差兜底。
  * @param {number} plantId - 植物ID
+ * @param {object} runtimePlant - 服务端 PlantInfo
  */
-function getPlantGrowTime(plantId) {
+function getPlantGrowTime(plantId, runtimePlant) {
     const plant = plantMap.get(plantId) || getFallbackPlantById(plantId);
-    if (!plant || !plant.grow_phases) return 0;
-    
-    // 解析 "种子:30;发芽:30;成熟:0;" 格式
-    const phases = plant.grow_phases.split(';').filter(p => p);
-    let totalSeconds = 0;
-    for (const phase of phases) {
-        const match = phase.match(/:(\d+)/);
-        if (match) {
-            totalSeconds += Number.parseInt(match[1]);
+    if (plant && plant.grow_phases) {
+        // 解析 "种子:30;发芽:30;成熟:0;" 格式
+        const phases = plant.grow_phases.split(';').filter(p => p);
+        let totalSeconds = 0;
+        for (const phase of phases) {
+            const match = phase.match(/:(\d+)/);
+            if (match) {
+                totalSeconds += Number.parseInt(match[1]);
+            }
         }
+        if (totalSeconds > 0) return totalSeconds;
     }
-    return totalSeconds;
+
+    if (!runtimePlant) return 0;
+    const growSec = toPositiveSeconds(runtimePlant.grow_sec);
+    if (growSec > 0) return growSec;
+
+    const phases = Array.isArray(runtimePlant.phases) ? runtimePlant.phases : [];
+    if (phases.length < 2) return 0;
+    const beginTimes = phases
+        .map(phase => toPositiveSeconds(phase && phase.begin_time))
+        .filter(Boolean);
+    if (beginTimes.length < 2) return 0;
+
+    const firstBegin = Math.min(...beginTimes);
+    const maturePhase = phases.find(phase => Number(phase && phase.phase) === 6);
+    const matureBegin = toPositiveSeconds(maturePhase && maturePhase.begin_time);
+    const lastBegin = Math.max(...beginTimes);
+    const growTime = (matureBegin || lastBegin) - firstBegin;
+    return growTime > 0 ? growTime : 0;
+}
+
+function toPositiveSeconds(value) {
+    const number = value && typeof value.toNumber === 'function' ? value.toNumber() : Number(value);
+    if (!Number.isFinite(number) || number <= 0) return 0;
+    return Math.floor(number > 1e12 ? number / 1000 : number);
 }
 
 /**

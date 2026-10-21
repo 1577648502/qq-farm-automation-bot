@@ -1248,7 +1248,7 @@ async function getLandsDetail() {
                 : null;
             const matureBegin = maturePhase ? toTimeSec(maturePhase.begin_time) : 0;
             const matureInSec = matureBegin > nowSec ? (matureBegin - nowSec) : 0;
-            const totalGrowTime = getPlantGrowTime(plantId);
+            const totalGrowTime = getPlantGrowTime(plantId, plant);
 
             let landStatus = 'growing';
             if (phaseVal === PlantPhase.MATURE) landStatus = 'harvestable';
