@@ -2,11 +2,11 @@
 import type { Card, UserCard } from '@/stores/user'
 import { computed, onMounted, ref, watch } from 'vue'
 import api from '@/api'
+import ConfirmModal from '@/components/ConfirmModal.vue'
 import BaseButton from '@/components/ui/BaseButton.vue'
 import BaseInput from '@/components/ui/BaseInput.vue'
 import BaseSelect from '@/components/ui/BaseSelect.vue'
 import BaseSwitch from '@/components/ui/BaseSwitch.vue'
-import ConfirmModal from '@/components/ConfirmModal.vue'
 import { useToastStore } from '@/stores/toast'
 import { useUserStore } from '@/stores/user'
 
@@ -14,7 +14,7 @@ const userStore = useUserStore()
 const toast = useToastStore()
 
 const activeTab = ref<'card' | 'user' | 'log' | 'system'>(
-  (localStorage.getItem('admin-active-tab') as 'card' | 'user' | 'log' | 'system') || 'card'
+  (localStorage.getItem('admin-active-tab') as 'card' | 'user' | 'log' | 'system') || 'card',
 )
 
 watch(activeTab, (newTab) => {
@@ -143,7 +143,8 @@ async function fetchCardClaimStatus() {
 }
 
 async function toggleCardClaimStatus(enabled: boolean | undefined) {
-  if (enabled === undefined) return
+  if (enabled === undefined)
+    return
   cardClaimLoading.value = true
   try {
     const res = await api.post('/api/admin/card-claim/status', { enabled })
@@ -288,8 +289,9 @@ async function copyCode(code: string) {
 
 async function copySelectedCards() {
   const codes = Array.from(selectedCards.value)
-  if (codes.length === 0) return
-  
+  if (codes.length === 0)
+    return
+
   try {
     const text = codes.join('\n')
     if (navigator.clipboard && navigator.clipboard.writeText) {
@@ -626,24 +628,26 @@ function getEventLabel(event: string): string {
 }
 
 function getEventClass(event: string): string {
-  return event === 'login_success' 
-    ? 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200' 
+  return event === 'login_success'
+    ? 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200'
     : 'bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200'
 }
 
 function getErrorTypeLabel(errorType: string | null): string {
-  if (!errorType) return '-'
+  if (!errorType)
+    return '-'
   const labels: Record<string, string> = {
-    'rate_limit': '速率限制',
-    'locked': '账户锁定',
-    'invalid_credentials': '凭证错误',
+    rate_limit: '速率限制',
+    locked: '账户锁定',
+    invalid_credentials: '凭证错误',
   }
   return labels[errorType] || errorType
 }
 
 function parseBrowser(userAgent: string): string {
-  if (!userAgent || userAgent === 'unknown') return '未知'
-  
+  if (!userAgent || userAgent === 'unknown')
+    return '未知'
+
   if (userAgent.includes('Edg/')) {
     const match = userAgent.match(/Edg\/([\d.]+)/)
     return `Edge ${match ? match[1] : ''}`
@@ -663,7 +667,7 @@ function parseBrowser(userAgent: string): string {
   if (userAgent.includes('MSIE') || userAgent.includes('Trident/')) {
     return 'IE'
   }
-  
+
   return '其他'
 }
 
@@ -715,12 +719,15 @@ async function handleSaveActivityConfig() {
     })
     if (data?.ok) {
       showAlert('活动配置已保存，前端菜单已同步更新', 'primary')
-    } else {
+    }
+    else {
       showAlert(data?.error || '保存失败', 'danger')
     }
-  } catch (e: any) {
+  }
+  catch (e: any) {
     showAlert(`保存失败: ${e.message || '未知错误'}`, 'danger')
-  } finally {
+  }
+  finally {
     activitySaving.value = false
   }
 }
@@ -808,9 +815,11 @@ async function handleResetSystemConfig() {
 
 // ========== qcby 自动取码配置 ==========
 interface QcbyAccountRow { accountId: string, wxid: string, ref: string, appid: string, protocol: string }
+interface QcbyRefreshState { loading: boolean, ok?: boolean, message: string }
 
 const qcbyConfigSaving = ref(false)
 const qcbyConfigLoading = ref(false)
+const qcbyRefreshStates = ref<Record<string, QcbyRefreshState>>({})
 
 const qcbyProtocolOptions = [
   { label: 'mywc（公开无鉴权，用 wxid）', value: 'mywc' },
@@ -844,6 +853,30 @@ const qcbyIntervalSec = computed({
   },
 })
 
+const qcbyBoundAccountCount = computed(() => localQcbyConfig.value.accounts
+  .filter(row => row.accountId && (row.wxid || row.ref))
+  .length)
+
+const qcbyDuplicateAccountIds = computed(() => {
+  const counts = new Map<string, number>()
+  for (const row of localQcbyConfig.value.accounts) {
+    const accountId = String(row.accountId || '').trim()
+    if (accountId)
+      counts.set(accountId, (counts.get(accountId) || 0) + 1)
+  }
+  return new Set([...counts.entries()].filter(([, count]) => count > 1).map(([accountId]) => accountId))
+})
+
+const enabledActivityCount = computed(() => [
+  localSystemConfig.value.activityHeFeng,
+  localSystemConfig.value.activityQingNiang,
+  localSystemConfig.value.activityQianXing,
+  localSystemConfig.value.activityYuLuoChengShi,
+  localSystemConfig.value.activityGongYiXiaoHongHua,
+  localSystemConfig.value.activityMengChong,
+  localSystemConfig.value.activityMilkTea,
+].filter(Boolean).length)
+
 async function fetchQcbyAccountOptions() {
   try {
     const { data } = await api.get('/api/accounts')
@@ -869,12 +902,12 @@ async function loadQcbyConfig() {
         ...data.data,
         accounts: Array.isArray(data.data.accounts)
           ? data.data.accounts.map((a: any) => ({
-            accountId: String(a.accountId || ''),
-            wxid: String(a.wxid || ''),
-            ref: String(a.ref || ''),
-            appid: String(a.appid || ''),
-            protocol: String(a.protocol || ''),
-          }))
+              accountId: String(a.accountId || ''),
+              wxid: String(a.wxid || ''),
+              ref: String(a.ref || ''),
+              appid: String(a.appid || ''),
+              protocol: String(a.protocol || ''),
+            }))
           : [],
       }
     }
@@ -892,7 +925,81 @@ function addQcbyAccount() {
 }
 
 function removeQcbyAccount(index: number) {
-  localQcbyConfig.value.accounts.splice(index, 1)
+  const [removed] = localQcbyConfig.value.accounts.splice(index, 1)
+  if (removed?.accountId)
+    delete qcbyRefreshStates.value[removed.accountId]
+}
+
+function qcbyAccountLabel(accountId: string) {
+  return qcbyAccountOptions.value.find(option => option.value === accountId)?.label || accountId
+}
+
+function qcbyEffectiveProtocol(row: QcbyAccountRow) {
+  return row.protocol || localQcbyConfig.value.protocol || 'mywc'
+}
+
+function qcbyUsesRef(row: QcbyAccountRow) {
+  return qcbyEffectiveProtocol(row) === 'yyb'
+}
+
+function qcbyRowIssue(row: QcbyAccountRow) {
+  const accountId = String(row.accountId || '').trim()
+  if (!accountId)
+    return '请选择农场账号'
+  if (qcbyDuplicateAccountIds.value.has(accountId))
+    return '该账号存在重复绑定'
+  if (qcbyUsesRef(row) && !row.ref.trim())
+    return '请填写 ref'
+  if (!qcbyUsesRef(row) && !row.wxid.trim())
+    return '请填写 wxid'
+  if (!row.appid.trim() && !localQcbyConfig.value.appid.trim())
+    return '请填写默认 appid 或该账号的 appid'
+  if (!localQcbyConfig.value.baseUrl.trim())
+    return '请填写服务地址'
+  return ''
+}
+
+function qcbyRefreshState(accountId: string): QcbyRefreshState | undefined {
+  return qcbyRefreshStates.value[accountId]
+}
+
+async function handleRefreshQcbyAccount(row: QcbyAccountRow) {
+  const accountId = String(row.accountId || '').trim()
+  const issue = qcbyRowIssue(row)
+  if (issue) {
+    toast.warning(issue)
+    return
+  }
+
+  qcbyRefreshStates.value[accountId] = { loading: true, message: '正在保存配置并取码...' }
+  try {
+    const { data } = await api.post(
+      `/api/admin/qcby-config/accounts/${encodeURIComponent(accountId)}/refresh`,
+      localQcbyConfig.value,
+    )
+    if (data?.ok) {
+      const action = data.refresh?.action
+      const message = action === 'started'
+        ? '已取码并启动账号'
+        : action === 'restarted'
+          ? '已取码并重启会话'
+          : action === 'updated_only'
+            ? '已取码，当前会话保持不变'
+            : '已取码并更新账号'
+      qcbyRefreshStates.value[accountId] = { loading: false, ok: true, message }
+      toast.success(`${qcbyAccountLabel(accountId)}：${message}`)
+    }
+    else {
+      const message = data?.error || data?.refresh?.reason || '热更新失败'
+      qcbyRefreshStates.value[accountId] = { loading: false, ok: false, message }
+      toast.error(message)
+    }
+  }
+  catch (e: any) {
+    const message = e?.response?.data?.error || e.message || '热更新失败'
+    qcbyRefreshStates.value[accountId] = { loading: false, ok: false, message }
+    toast.error(message)
+  }
 }
 
 async function handleSaveQcbyConfig() {
@@ -943,7 +1050,7 @@ onMounted(() => {
 
     <div class="border border-gray-200 rounded-lg bg-white shadow dark:border-gray-700 dark:bg-gray-800">
       <div class="border-b border-gray-200 dark:border-gray-700">
-        <nav class="flex flex-nowrap gap-1 overflow-x-auto pb-1 snap-x snap-mandatory scrollbar-none sm:flex-wrap sm:overflow-visible sm:pb-0 p-2">
+        <nav class="scrollbar-none flex flex-nowrap snap-x snap-mandatory gap-1 overflow-x-auto p-2 pb-1 sm:flex-wrap sm:overflow-visible sm:pb-0">
           <button
             v-for="tab in tabs"
             :key="tab.key"
@@ -963,7 +1070,7 @@ onMounted(() => {
       <div class="p-4">
         <!-- 卡密管理 -->
         <div v-if="activeTab === 'card'" class="space-y-4">
-          <div class="flex flex-col sm:flex-row items-start sm:items-center gap-2 sm:gap-0 justify-between">
+          <div class="flex flex-col items-start justify-between gap-2 sm:flex-row sm:items-center sm:gap-0">
             <h3 class="text-lg text-gray-800 font-semibold dark:text-gray-200">
               卡密管理
             </h3>
@@ -978,7 +1085,7 @@ onMounted(() => {
           </div>
 
           <!-- 卡密领取功能开关 -->
-          <div class="flex items-center justify-between rounded-lg border border-gray-200 bg-white p-4 dark:border-gray-700 dark:bg-gray-800">
+          <div class="flex items-center justify-between border border-gray-200 rounded-lg bg-white p-4 dark:border-gray-700 dark:bg-gray-800">
             <div>
               <h4 class="text-sm text-gray-900 font-medium dark:text-white">
                 卡密领取功能
@@ -1281,7 +1388,7 @@ onMounted(() => {
 
         <!-- 用户管理 -->
         <div v-else-if="activeTab === 'user'" class="space-y-4">
-          <div class="flex flex-col sm:flex-row items-start sm:items-center gap-2 sm:gap-0 justify-between">
+          <div class="flex flex-col items-start justify-between gap-2 sm:flex-row sm:items-center sm:gap-0">
             <h3 class="text-lg text-gray-900 font-bold dark:text-gray-100">
               用户管理
             </h3>
@@ -1481,7 +1588,7 @@ onMounted(() => {
 
         <!-- 登录日志 -->
         <div v-else-if="activeTab === 'log'" class="space-y-4">
-          <div class="flex flex-col sm:flex-row items-start sm:items-center gap-2 sm:gap-0 justify-between">
+          <div class="flex flex-col items-start justify-between gap-2 sm:flex-row sm:items-center sm:gap-0">
             <h3 class="text-lg text-gray-900 font-bold dark:text-gray-100">
               登录日志
             </h3>
@@ -1504,7 +1611,7 @@ onMounted(() => {
             </div>
           </div>
 
-          <div class="overflow-hidden rounded-lg border border-gray-200 bg-white dark:border-gray-700 dark:bg-gray-800">
+          <div class="overflow-hidden border border-gray-200 rounded-lg bg-white dark:border-gray-700 dark:bg-gray-800">
             <div class="overflow-x-auto">
               <table class="min-w-full divide-y divide-gray-200 dark:divide-gray-700">
                 <thead class="bg-gray-50 dark:bg-gray-900">
@@ -1607,44 +1714,68 @@ onMounted(() => {
         </div>
 
         <!-- 系统配置 -->
-        <div v-else-if="activeTab === 'system'" class="space-y-4">
-          <h3 class="text-lg text-gray-900 font-bold dark:text-gray-100">
-            系统配置
-          </h3>
+        <div v-else-if="activeTab === 'system'" class="mx-auto max-w-6xl space-y-5">
+          <div class="flex flex-wrap items-end justify-between gap-3">
+            <div>
+              <h3 class="text-lg text-gray-900 font-bold dark:text-gray-100">
+                系统设置
+              </h3>
+              <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
+                管理客户端参数、活动入口与 qcby 取码服务
+              </p>
+            </div>
+            <div class="inline-flex items-center gap-2 rounded-full bg-green-50 px-3 py-1 text-xs text-green-700 dark:bg-green-500/10 dark:text-green-300">
+              <span class="h-1.5 w-1.5 rounded-full bg-green-500" />
+              保存后立即生效
+            </div>
+          </div>
 
-          <div class="space-y-4">
-            <div class="border border-gray-200 rounded-lg bg-white p-4 dark:border-gray-700 dark:bg-gray-800">
-              <h4 class="mb-3 flex items-center gap-2 text-base text-gray-900 font-bold dark:text-gray-100">
-                <div class="i-carbon-settings" />
-                系统配置
-              </h4>
+          <section class="border border-gray-200 rounded-lg bg-white dark:border-gray-700 dark:bg-gray-800">
+            <div class="flex flex-wrap items-start justify-between gap-3 border-b border-gray-100 p-4 dark:border-gray-700/70 sm:p-5">
+              <div class="min-w-0 flex items-start gap-3">
+                <div class="h-9 w-9 flex shrink-0 items-center justify-center rounded-md bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-300">
+                  <div class="i-carbon-settings text-lg" />
+                </div>
+                <div class="min-w-0">
+                  <h4 class="text-base text-gray-900 font-semibold dark:text-gray-100">
+                    客户端参数
+                  </h4>
+                  <p class="mt-0.5 text-xs text-gray-500 dark:text-gray-400">
+                    连接游戏网关时使用的基础环境
+                  </p>
+                </div>
+              </div>
+              <div class="rounded-md bg-gray-100 px-2.5 py-1 text-xs text-gray-600 dark:bg-gray-700 dark:text-gray-300">
+                {{ localSystemConfig.platform.toUpperCase() }} · {{ localSystemConfig.os }}
+              </div>
+            </div>
 
-              <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
+            <div class="p-4 space-y-4 sm:p-5">
+              <div class="grid grid-cols-1 gap-3 md:grid-cols-2">
                 <BaseInput
                   v-model="localSystemConfig.serverUrl"
                   label="服务器地址"
                   type="text"
                   placeholder="wss://..."
-                  class="col-span-2"
+                  class="md:col-span-2"
                 />
                 <BaseInput
                   v-model="localSystemConfig.clientVersion"
                   label="客户端版本"
                   type="text"
                   placeholder="1.10.0.13_20260417"
-                  class="col-span-2"
+                  class="md:col-span-2"
                 />
                 <div class="flex flex-col gap-1.5">
                   <label class="text-sm text-gray-700 font-medium dark:text-gray-300">平台</label>
-                  <div class="flex gap-2">
+                  <div class="w-fit inline-flex gap-1 rounded-md bg-gray-100 p-1 dark:bg-gray-900/60">
                     <button
                       v-for="option in platformOptions"
                       :key="option.value"
-                      class="rounded-lg px-3 py-1.5 text-sm transition-all"
+                      class="min-w-16 rounded px-3 py-1.5 text-sm transition-colors"
                       :class="localSystemConfig.platform === option.value
-                        ? 'text-white shadow-sm'
-                        : 'bg-gray-100 text-gray-700 hover:bg-gray-200 dark:bg-gray-700 dark:text-gray-300 dark:hover:bg-gray-600'"
-                      :style="localSystemConfig.platform === option.value ? { backgroundColor: 'var(--theme-primary)' } : {}"
+                        ? 'bg-white text-gray-900 shadow-sm dark:bg-gray-700 dark:text-white'
+                        : 'text-gray-500 hover:text-gray-800 dark:text-gray-400 dark:hover:text-gray-200'"
                       @click="localSystemConfig.platform = option.value"
                     >
                       {{ option.label }}
@@ -1653,15 +1784,14 @@ onMounted(() => {
                 </div>
                 <div class="flex flex-col gap-1.5">
                   <label class="text-sm text-gray-700 font-medium dark:text-gray-300">系统</label>
-                  <div class="flex gap-2">
+                  <div class="w-fit inline-flex gap-1 rounded-md bg-gray-100 p-1 dark:bg-gray-900/60">
                     <button
                       v-for="option in osOptions"
                       :key="option.value"
-                      class="rounded-lg px-3 py-1.5 text-sm transition-all"
+                      class="min-w-16 rounded px-3 py-1.5 text-sm transition-colors"
                       :class="localSystemConfig.os === option.value
-                        ? 'text-white shadow-sm'
-                        : 'bg-gray-100 text-gray-700 hover:bg-gray-200 dark:bg-gray-700 dark:text-gray-300 dark:hover:bg-gray-600'"
-                      :style="localSystemConfig.os === option.value ? { backgroundColor: 'var(--theme-primary)' } : {}"
+                        ? 'bg-white text-gray-900 shadow-sm dark:bg-gray-700 dark:text-white'
+                        : 'text-gray-500 hover:text-gray-800 dark:text-gray-400 dark:hover:text-gray-200'"
                       @click="localSystemConfig.os = option.value"
                     >
                       {{ option.label }}
@@ -1669,249 +1799,364 @@ onMounted(() => {
                   </div>
                 </div>
               </div>
+            </div>
 
-              <div class="mt-3 flex justify-end gap-2">
-                <BaseButton
-                  variant="secondary"
-                  size="sm"
-                  :loading="systemConfigSaving"
-                  @click="handleResetSystemConfig"
-                >
-                  重置
-                </BaseButton>
-                <BaseButton
-                  variant="primary"
-                  size="sm"
-                  :loading="systemConfigSaving"
-                  @click="handleSaveSystemConfig"
-                >
-                  保存
-                </BaseButton>
+            <div class="flex flex-wrap justify-end gap-2 border-t border-gray-100 px-4 py-3 dark:border-gray-700/70 sm:px-5">
+              <BaseButton
+                variant="secondary"
+                size="sm"
+                :loading="systemConfigSaving"
+                @click="handleResetSystemConfig"
+              >
+                恢复默认
+              </BaseButton>
+              <BaseButton
+                variant="primary"
+                size="sm"
+                :loading="systemConfigSaving"
+                @click="handleSaveSystemConfig"
+              >
+                保存参数
+              </BaseButton>
+            </div>
+          </section>
+
+          <section class="border border-gray-200 rounded-lg bg-white dark:border-gray-700 dark:bg-gray-800">
+            <div class="flex flex-wrap items-start justify-between gap-3 border-b border-gray-100 p-4 dark:border-gray-700/70 sm:p-5">
+              <div class="min-w-0 flex items-start gap-3">
+                <div class="h-9 w-9 flex shrink-0 items-center justify-center rounded-md bg-amber-50 text-amber-600 dark:bg-amber-500/10 dark:text-amber-300">
+                  <div class="i-carbon-events text-lg" />
+                </div>
+                <div class="min-w-0">
+                  <h4 class="text-base text-gray-900 font-semibold dark:text-gray-100">
+                    活动入口
+                  </h4>
+                  <p class="mt-0.5 text-xs text-gray-500 dark:text-gray-400">
+                    控制侧边栏中显示的活动页面
+                  </p>
+                </div>
+              </div>
+              <div class="rounded-md bg-amber-50 px-2.5 py-1 text-xs text-amber-700 dark:bg-amber-500/10 dark:text-amber-300">
+                {{ enabledActivityCount }} / 7 已开启
               </div>
             </div>
 
-            <div class="border border-gray-200 rounded-lg bg-white p-4 dark:border-gray-700 dark:bg-gray-800">
-              <h4 class="mb-3 flex items-center gap-2 text-base text-gray-900 font-bold dark:text-gray-100">
-                <div class="i-carbon-events" />
-                活动开关
-              </h4>
-              <div class="flex flex-col gap-3">
-                <div class="flex items-center justify-between rounded-lg border border-gray-200 bg-white p-4 dark:border-gray-700 dark:bg-gray-800">
-                  <div>
-                    <h4 class="text-sm text-gray-900 font-medium dark:text-white">
-                      荷风游记
-                    </h4>
-                    <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
-                      关闭后前端菜单隐藏「荷风游记」入口
-                    </p>
-                  </div>
-                  <BaseSwitch v-model="localSystemConfig.activityHeFeng" />
+            <div class="px-4 divide-y divide-gray-100 sm:px-5 dark:divide-gray-700/70">
+              <div class="min-h-14 flex items-center justify-between gap-4 py-3">
+                <div class="min-w-0">
+                  <h5 class="text-sm text-gray-900 font-medium dark:text-white">
+                    荷风游记
+                  </h5>
+                  <p class="mt-0.5 truncate text-xs text-gray-500 dark:text-gray-400">
+                    侧边栏活动入口
+                  </p>
                 </div>
-                <div class="flex items-center justify-between rounded-lg border border-gray-200 bg-white p-4 dark:border-gray-700 dark:bg-gray-800">
-                  <div>
-                    <h4 class="text-sm text-gray-900 font-medium dark:text-white">
-                      青酿换万金
-                    </h4>
-                    <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
-                      关闭后前端菜单隐藏「青酿换万金」入口
-                    </p>
-                  </div>
-                  <BaseSwitch v-model="localSystemConfig.activityQingNiang" />
-                </div>
-                <div class="flex items-center justify-between rounded-lg border border-gray-200 bg-white p-4 dark:border-gray-700 dark:bg-gray-800">
-                  <div>
-                    <h4 class="text-sm text-gray-900 font-medium dark:text-white">
-                      千星游记
-                    </h4>
-                    <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
-                      关闭后前端菜单隐藏「千星游记」入口
-                    </p>
-                  </div>
-                  <BaseSwitch v-model="localSystemConfig.activityQianXing" />
-                </div>
-                <div class="flex items-center justify-between rounded-lg border border-gray-200 bg-white p-4 dark:border-gray-700 dark:bg-gray-800">
-                  <div>
-                    <h4 class="text-sm text-gray-900 font-medium dark:text-white">
-                      雨落成诗
-                    </h4>
-                    <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
-                      关闭后前端菜单隐藏「雨落成诗」入口
-                    </p>
-                  </div>
-                  <BaseSwitch v-model="localSystemConfig.activityYuLuoChengShi" />
-                </div>
-                <div class="flex items-center justify-between rounded-lg border border-gray-200 bg-white p-4 dark:border-gray-700 dark:bg-gray-800">
-                  <div>
-                    <h4 class="text-sm text-gray-900 font-medium dark:text-white">
-                      公益小红花
-                    </h4>
-                    <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
-                      关闭后前端菜单隐藏「公益小红花」入口
-                    </p>
-                  </div>
-                  <BaseSwitch v-model="localSystemConfig.activityGongYiXiaoHongHua" />
-                </div>
-                <div class="flex items-center justify-between rounded-lg border border-gray-200 bg-white p-4 dark:border-gray-700 dark:bg-gray-800">
-                  <div>
-                    <h4 class="text-sm text-gray-900 font-medium dark:text-white">
-                      萌宠游记
-                    </h4>
-                    <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
-                      关闭后前端菜单隐藏「萌宠游记」入口
-                    </p>
-                  </div>
-                  <BaseSwitch v-model="localSystemConfig.activityMengChong" />
-                </div>
-                <div class="flex items-center justify-between rounded-lg border border-gray-200 bg-white p-4 dark:border-gray-700 dark:bg-gray-800">
-                  <div>
-                    <h4 class="text-sm text-gray-900 font-medium dark:text-white">
-                      奶茶热销中
-                    </h4>
-                    <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
-                      关闭后前端菜单隐藏「奶茶热销中」入口（10/15–11/16 期间的活动）
-                    </p>
-                  </div>
-                  <BaseSwitch v-model="localSystemConfig.activityMilkTea" />
-                </div>
+                <BaseSwitch v-model="localSystemConfig.activityHeFeng" />
               </div>
-
-              <div class="mt-4 flex justify-end gap-2">
-                <BaseButton
-                  variant="secondary"
-                  size="sm"
-                  :loading="activitySaving"
-                  @click="handleResetActivityConfig"
-                >
-                  重置
-                </BaseButton>
-                <BaseButton
-                  variant="primary"
-                  size="sm"
-                  :loading="activitySaving"
-                  @click="handleSaveActivityConfig"
-                >
-                  保存活动配置
-                </BaseButton>
+              <div class="min-h-14 flex items-center justify-between gap-4 py-3">
+                <div class="min-w-0">
+                  <h5 class="text-sm text-gray-900 font-medium dark:text-white">
+                    青酿换万金
+                  </h5>
+                  <p class="mt-0.5 truncate text-xs text-gray-500 dark:text-gray-400">
+                    侧边栏活动入口
+                  </p>
+                </div>
+                <BaseSwitch v-model="localSystemConfig.activityQingNiang" />
+              </div>
+              <div class="min-h-14 flex items-center justify-between gap-4 py-3">
+                <div class="min-w-0">
+                  <h5 class="text-sm text-gray-900 font-medium dark:text-white">
+                    千星游记
+                  </h5>
+                  <p class="mt-0.5 truncate text-xs text-gray-500 dark:text-gray-400">
+                    侧边栏活动入口
+                  </p>
+                </div>
+                <BaseSwitch v-model="localSystemConfig.activityQianXing" />
+              </div>
+              <div class="min-h-14 flex items-center justify-between gap-4 py-3">
+                <div class="min-w-0">
+                  <h5 class="text-sm text-gray-900 font-medium dark:text-white">
+                    雨落成诗
+                  </h5>
+                  <p class="mt-0.5 truncate text-xs text-gray-500 dark:text-gray-400">
+                    侧边栏活动入口
+                  </p>
+                </div>
+                <BaseSwitch v-model="localSystemConfig.activityYuLuoChengShi" />
+              </div>
+              <div class="min-h-14 flex items-center justify-between gap-4 py-3">
+                <div class="min-w-0">
+                  <h5 class="text-sm text-gray-900 font-medium dark:text-white">
+                    公益小红花
+                  </h5>
+                  <p class="mt-0.5 truncate text-xs text-gray-500 dark:text-gray-400">
+                    侧边栏活动入口
+                  </p>
+                </div>
+                <BaseSwitch v-model="localSystemConfig.activityGongYiXiaoHongHua" />
+              </div>
+              <div class="min-h-14 flex items-center justify-between gap-4 py-3">
+                <div class="min-w-0">
+                  <h5 class="text-sm text-gray-900 font-medium dark:text-white">
+                    萌宠游记
+                  </h5>
+                  <p class="mt-0.5 truncate text-xs text-gray-500 dark:text-gray-400">
+                    侧边栏活动入口
+                  </p>
+                </div>
+                <BaseSwitch v-model="localSystemConfig.activityMengChong" />
+              </div>
+              <div class="min-h-14 flex items-center justify-between gap-4 py-3">
+                <div class="min-w-0">
+                  <h5 class="text-sm text-gray-900 font-medium dark:text-white">
+                    奶茶热销中
+                  </h5>
+                  <p class="mt-0.5 truncate text-xs text-gray-500 dark:text-gray-400">
+                    限时活动入口
+                  </p>
+                </div>
+                <BaseSwitch v-model="localSystemConfig.activityMilkTea" />
               </div>
             </div>
 
-            <div class="border border-gray-200 rounded-lg bg-white p-4 dark:border-gray-700 dark:bg-gray-800">
-              <h4 class="mb-3 flex items-center gap-2 text-base text-gray-900 font-bold dark:text-gray-100">
-                <div class="i-carbon-password" />
-                qcby 自动取码
-              </h4>
+            <div class="flex flex-wrap justify-end gap-2 border-t border-gray-100 px-4 py-3 dark:border-gray-700/70 sm:px-5">
+              <BaseButton
+                variant="secondary"
+                size="sm"
+                :loading="activitySaving"
+                @click="handleResetActivityConfig"
+              >
+                全部开启
+              </BaseButton>
+              <BaseButton
+                variant="primary"
+                size="sm"
+                :loading="activitySaving"
+                @click="handleSaveActivityConfig"
+              >
+                保存活动
+              </BaseButton>
+            </div>
+          </section>
 
-              <div class="mb-3 rounded p-2 text-xs" style="background-color: rgba(var(--theme-primary-rgb, 59, 130, 246), 0.1); color: var(--theme-primary);">
-                <div>• 通过 qcby-vxcode 协议服务周期性获取「经典农场」小程序 code，自动应用到对应账号（免扫码）</div>
-                <div>• 账号绑定：从下拉选择农场账号，mywc/vx 填 wxid，yyb 填 ref</div>
-                <div>• 保存后立即热重载生效，无需重启项目</div>
-              </div>
-
-              <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
-                <div class="col-span-2 flex flex-wrap gap-6">
-                  <BaseSwitch v-model="localQcbyConfig.enabled" label="启用自动取码" />
-                  <BaseSwitch v-model="localQcbyConfig.runOnStart" label="启动/保存后立即取一次" />
+          <section class="border border-gray-200 rounded-lg bg-white dark:border-gray-700 dark:bg-gray-800">
+            <div class="flex flex-wrap items-start justify-between gap-3 border-b border-gray-100 p-4 dark:border-gray-700/70 sm:p-5">
+              <div class="min-w-0 flex items-start gap-3">
+                <div class="h-9 w-9 flex shrink-0 items-center justify-center rounded-md bg-blue-50 text-blue-600 dark:bg-blue-500/10 dark:text-blue-300">
+                  <div class="i-carbon-password text-lg" />
                 </div>
-                <BaseInput
-                  v-model="localQcbyConfig.baseUrl"
-                  label="服务地址 (baseUrl)"
-                  type="text"
-                  placeholder="http://127.0.0.1:8110"
-                  class="col-span-2"
-                />
-                <BaseSelect
-                  v-model="localQcbyConfig.protocol"
-                  label="默认协议"
-                  :options="qcbyProtocolOptions"
-                />
-                <BaseInput
-                  v-model="qcbyIntervalSec"
-                  label="取码间隔（秒）"
-                  type="number"
-                  placeholder="300"
-                />
-                <BaseInput
-                  v-model="localQcbyConfig.appid"
-                  label="默认 appid"
-                  type="text"
-                  placeholder="wx0132aa93a8b214ae"
-                />
-                <BaseInput
-                  v-model="localQcbyConfig.codePath"
-                  label="code 提取路径（codePath，可选）"
-                  type="text"
-                  placeholder="如 Data.Code"
-                />
-                <BaseInput
-                  v-model="localQcbyConfig.authHeader"
-                  label="鉴权头（authHeader，可选）"
-                  type="text"
-                  placeholder="Header-Name: value 或 Cookie 值"
-                  class="col-span-2"
-                />
+                <div class="min-w-0">
+                  <h4 class="text-base text-gray-900 font-semibold dark:text-gray-100">
+                    qcby 自动取码
+                  </h4>
+                  <p class="mt-0.5 text-xs text-gray-500 dark:text-gray-400">
+                    按账号绑定取码身份，支持单账号热更新
+                  </p>
+                </div>
+              </div>
+              <div class="flex flex-wrap gap-2">
+                <span
+                  class="rounded-md px-2.5 py-1 text-xs"
+                  :class="localQcbyConfig.enabled
+                    ? 'bg-green-50 text-green-700 dark:bg-green-500/10 dark:text-green-300'
+                    : 'bg-gray-100 text-gray-500 dark:bg-gray-700 dark:text-gray-300'"
+                >
+                  {{ localQcbyConfig.enabled ? '自动取码已启用' : '自动取码已关闭' }}
+                </span>
+                <span class="rounded-md bg-blue-50 px-2.5 py-1 text-xs text-blue-700 dark:bg-blue-500/10 dark:text-blue-300">
+                  {{ qcbyBoundAccountCount }} 个账号
+                </span>
+              </div>
+            </div>
+
+            <div class="p-4 space-y-4 sm:p-5">
+              <div class="flex flex-wrap items-center gap-x-6 gap-y-3">
+                <BaseSwitch v-model="localQcbyConfig.enabled" label="启用自动取码" />
+                <BaseSwitch v-model="localQcbyConfig.runOnStart" label="启动时立即取码" />
               </div>
 
-              <div class="mt-4">
-                <div class="mb-2 flex items-center justify-between">
-                  <span class="text-sm text-gray-700 font-medium dark:text-gray-300">账号绑定</span>
+              <div>
+                <div class="mb-3 flex items-center gap-2">
+                  <span class="text-sm text-gray-900 font-semibold dark:text-gray-100">服务连接</span>
+                  <span class="h-px flex-1 bg-gray-100 dark:bg-gray-700/70" />
+                </div>
+                <div class="grid grid-cols-1 gap-3 md:grid-cols-2">
+                  <BaseInput
+                    v-model="localQcbyConfig.baseUrl"
+                    label="服务地址"
+                    type="text"
+                    placeholder="http://127.0.0.1:8110"
+                    class="md:col-span-2"
+                  />
+                  <BaseSelect
+                    v-model="localQcbyConfig.protocol"
+                    label="默认协议"
+                    :options="qcbyProtocolOptions"
+                  />
+                  <BaseInput
+                    v-model="qcbyIntervalSec"
+                    label="取码间隔（秒）"
+                    type="number"
+                    placeholder="300"
+                  />
+                  <BaseInput
+                    v-model="localQcbyConfig.appid"
+                    label="默认 appid"
+                    type="text"
+                    placeholder="wx0132aa93a8b214ae"
+                  />
+                  <BaseInput
+                    v-model="localQcbyConfig.codePath"
+                    label="code 提取路径"
+                    type="text"
+                    placeholder="可选，例如 Data.Code"
+                  />
+                  <BaseInput
+                    v-model="localQcbyConfig.authHeader"
+                    label="鉴权头"
+                    type="text"
+                    placeholder="可选，Header-Name: value 或 Cookie"
+                    class="md:col-span-2"
+                  />
+                </div>
+              </div>
+
+              <div class="border-t border-gray-100 pt-4 dark:border-gray-700/70">
+                <div class="mb-3 flex flex-wrap items-center justify-between gap-2">
+                  <div>
+                    <span class="text-sm text-gray-900 font-semibold dark:text-gray-100">账号绑定</span>
+                    <span class="ml-2 text-xs text-gray-400">{{ localQcbyConfig.accounts.length }} 条配置</span>
+                  </div>
                   <BaseButton variant="secondary" size="sm" @click="addQcbyAccount">
+                    <div class="i-carbon-add mr-1.5" />
                     添加账号
                   </BaseButton>
                 </div>
 
                 <div
                   v-if="!localQcbyConfig.accounts.length"
-                  class="rounded border border-gray-300 border-dashed p-3 text-center text-xs text-gray-400 dark:border-gray-600"
+                  class="border border-gray-300 rounded-md border-dashed px-4 py-8 text-center text-sm text-gray-400 dark:border-gray-600"
                 >
-                  暂无绑定，点击「添加账号」为农场账号配置取码身份
+                  暂无账号绑定
                 </div>
 
-                <div
-                  v-for="(row, index) in localQcbyConfig.accounts"
-                  :key="index"
-                  class="mb-2 rounded-lg border border-gray-200 p-3 dark:border-gray-700"
-                >
-                  <div class="grid grid-cols-1 sm:grid-cols-2 gap-2 text-sm">
-                    <BaseSelect
-                      v-model="row.accountId"
-                      label="农场账号"
-                      :options="qcbyAccountOptions"
-                      placeholder="选择账号"
-                    />
-                    <BaseSelect
-                      v-model="row.protocol"
-                      label="协议（可选）"
-                      :options="qcbyProtocolRowOptions"
-                    />
-                    <BaseInput
-                      v-model="row.wxid"
-                      label="wxid（mywc/vx）"
-                      type="text"
-                      placeholder="微信 wxid"
-                    />
-                    <BaseInput
-                      v-model="row.ref"
-                      label="ref（yyb）"
-                      type="text"
-                      placeholder="应用宝 ref"
-                    />
-                    <BaseInput
-                      v-model="row.appid"
-                      label="appid（可选，覆盖默认）"
-                      type="text"
-                      placeholder="留空则继承默认 appid"
-                      class="col-span-2"
-                    />
-                  </div>
-                  <div class="mt-2 flex justify-end">
-                    <BaseButton variant="danger" size="sm" @click="removeQcbyAccount(index)">
-                      删除
-                    </BaseButton>
-                  </div>
+                <div v-else class="space-y-3">
+                  <article
+                    v-for="(row, index) in localQcbyConfig.accounts"
+                    :key="`${row.accountId}-${index}`"
+                    class="border border-gray-200 rounded-lg p-3 dark:border-gray-700 sm:p-4"
+                  >
+                    <div class="mb-3 flex flex-wrap items-center justify-between gap-2">
+                      <div class="min-w-0 flex items-center gap-2">
+                        <span class="h-6 w-6 flex shrink-0 items-center justify-center rounded-md bg-gray-100 text-xs text-gray-500 dark:bg-gray-700 dark:text-gray-300">
+                          {{ index + 1 }}
+                        </span>
+                        <span class="truncate text-sm text-gray-700 font-medium dark:text-gray-200">
+                          {{ row.accountId ? qcbyAccountLabel(row.accountId) : '未选择账号' }}
+                        </span>
+                        <span
+                          v-if="row.accountId"
+                          class="rounded px-1.5 py-0.5 text-[11px]"
+                          :class="qcbyRowIssue(row)
+                            ? 'bg-amber-50 text-amber-700 dark:bg-amber-500/10 dark:text-amber-300'
+                            : 'bg-green-50 text-green-700 dark:bg-green-500/10 dark:text-green-300'"
+                        >
+                          {{ qcbyRowIssue(row) ? '待完善' : '已就绪' }}
+                        </span>
+                      </div>
+                      <button
+                        type="button"
+                        class="h-8 w-8 inline-flex items-center justify-center rounded-md text-gray-400 transition-colors hover:bg-red-50 hover:text-red-600 dark:hover:bg-red-500/10"
+                        title="删除该账号配置"
+                        @click="removeQcbyAccount(index)"
+                      >
+                        <div class="i-carbon-trash-can" />
+                      </button>
+                    </div>
+
+                    <div class="grid grid-cols-1 gap-3 md:grid-cols-12">
+                      <BaseSelect
+                        v-model="row.accountId"
+                        label="农场账号"
+                        :options="qcbyAccountOptions"
+                        placeholder="选择账号"
+                        class="md:col-span-5"
+                      />
+                      <BaseSelect
+                        v-model="row.protocol"
+                        label="协议"
+                        :options="qcbyProtocolRowOptions"
+                        class="md:col-span-3"
+                      />
+                      <BaseInput
+                        v-if="qcbyUsesRef(row)"
+                        v-model="row.ref"
+                        label="ref"
+                        type="text"
+                        placeholder="应用宝 ref"
+                        class="md:col-span-4"
+                      />
+                      <BaseInput
+                        v-else
+                        v-model="row.wxid"
+                        label="wxid"
+                        type="text"
+                        placeholder="微信 wxid"
+                        class="md:col-span-4"
+                      />
+                      <BaseInput
+                        v-model="row.appid"
+                        label="账号 appid（可选）"
+                        type="text"
+                        placeholder="留空继承默认 appid"
+                        class="md:col-span-8"
+                      />
+                      <div class="flex flex-col justify-end gap-1.5 md:col-span-4">
+                        <BaseButton
+                          variant="outline"
+                          size="sm"
+                          block
+                          :loading="qcbyRefreshState(row.accountId)?.loading"
+                          :disabled="!!qcbyRowIssue(row)"
+                          title="保存当前配置，并只为该账号立即取码"
+                          @click="handleRefreshQcbyAccount(row)"
+                        >
+                          <div v-if="!qcbyRefreshState(row.accountId)?.loading" class="i-carbon-renew mr-1.5" />
+                          热更新
+                        </BaseButton>
+                      </div>
+                    </div>
+
+                    <div class="mt-3 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs">
+                      <template v-if="qcbyRefreshState(row.accountId)?.loading">
+                        <div class="i-svg-spinners-ring-resize text-blue-500" />
+                        <span class="text-blue-600 dark:text-blue-300">{{ qcbyRefreshState(row.accountId)?.message }}</span>
+                      </template>
+                      <template v-else-if="qcbyRefreshState(row.accountId)?.message">
+                        <div
+                          class="h-1.5 w-1.5 rounded-full"
+                          :class="qcbyRefreshState(row.accountId)?.ok ? 'bg-green-500' : 'bg-red-500'"
+                        />
+                        <span :class="qcbyRefreshState(row.accountId)?.ok ? 'text-green-600 dark:text-green-300' : 'text-red-600 dark:text-red-300'">
+                          {{ qcbyRefreshState(row.accountId)?.message }}
+                        </span>
+                      </template>
+                      <span v-else :class="qcbyRowIssue(row) ? 'text-amber-600 dark:text-amber-300' : 'text-gray-400'">
+                        {{ qcbyRowIssue(row) || `${qcbyEffectiveProtocol(row).toUpperCase()} · 配置完整` }}
+                      </span>
+                    </div>
+                  </article>
                 </div>
               </div>
+            </div>
 
-              <div class="mt-3 flex justify-end gap-2">
+            <div class="flex flex-wrap items-center justify-between gap-2 border-t border-gray-100 px-4 py-3 dark:border-gray-700/70 sm:px-5">
+              <p class="text-xs text-gray-400">
+                单账号“热更新”只刷新当前账号，不会触发其他账号登录
+              </p>
+              <div class="flex flex-wrap justify-end gap-2">
                 <BaseButton
                   variant="secondary"
                   size="sm"
@@ -1926,11 +2171,11 @@ onMounted(() => {
                   :loading="qcbyConfigSaving"
                   @click="handleSaveQcbyConfig"
                 >
-                  保存并热更新
+                  保存并热更新全部
                 </BaseButton>
               </div>
             </div>
-          </div>
+          </section>
         </div>
       </div>
     </div>
