@@ -2315,6 +2315,46 @@ app.use('/api', (req, res, next) => {
         }
     });
 
+    // 保存当前配置并只为指定账号立即取码，其他账号不触发启动取码
+    app.post('/api/admin/qcby-config/accounts/:accountId/refresh', authRequired, adminRequired, async (req, res) => {
+        const accountId = String(req.params.accountId || '').trim();
+        if (!accountId) {
+            return res.status(400).json({ ok: false, error: '缺少账号 ID' });
+        }
+        try {
+            const saved = saveQcbyCodeConfig(req.body || {});
+            if (!saved.accounts.some(item => item.accountId === accountId)) {
+                return res.status(400).json({ ok: false, error: '该账号尚未绑定 qcby 取码身份' });
+            }
+
+            let reload = { ok: false, reason: 'reload_not_supported' };
+            if (provider && typeof provider.reloadQcbyScheduler === 'function') {
+                reload = provider.reloadQcbyScheduler({ triggerStartupRefresh: false });
+            }
+            if (!reload.ok) {
+                return res.status(500).json({ ok: false, error: reload.reason || '取码调度器热更新失败', reload });
+            }
+
+            let refresh = { ok: false, reason: 'refresh_not_supported' };
+            if (provider && typeof provider.refreshQcbyAccount === 'function') {
+                refresh = await provider.refreshQcbyAccount(accountId);
+            }
+            const reasonText = refresh.ok ? '' : ({
+                no_mapping: '该账号尚未绑定 qcby 取码身份',
+                missing_base_url: '缺少 qcby 服务地址',
+                missing_appid: '缺少 appid',
+                missing_wxid: '缺少 wxid',
+                missing_ref: '缺少 ref',
+                in_progress: '该账号正在取码，请稍后再试',
+                refresh_unavailable: '运行器暂不可用',
+                scheduler_unavailable: '取码调度器尚未初始化',
+            }[refresh.reason] || refresh.reason || '取码失败');
+            res.json({ ok: refresh.ok, data: saved, reload, refresh, error: reasonText });
+        } catch (e) {
+            res.status(500).json({ ok: false, error: e.message });
+        }
+    });
+
     // ============ 卡密管理 API（仅管理员） ============
 
     // 获取所有卡密

@@ -168,6 +168,7 @@ function createRuntimeEngine(options = {}) {
 
   // 暴露 qcby 取码调度器热重载能力，供管理面板保存配置后立即生效（免重启）
   dataProvider.reloadQcbyScheduler = reloadQcbyScheduler
+  dataProvider.refreshQcbyAccount = refreshQcbyAccount
 
   runtimeEvents.on('log', (entry) => {
     if (onLog) onLog(entry, entry && entry.accountId ? entry.accountId : '', entry && entry.accountName ? entry.accountName : '')
@@ -246,23 +247,41 @@ function createRuntimeEngine(options = {}) {
   }
 
   // 重新加载 qcby 取码配置并重建调度器（停旧 → 读盘 → 重建 → 启动），实现免重启热更新
-  function reloadQcbyScheduler() {
+  function reloadQcbyScheduler(options = {}) {
     try {
       if (qcbyScheduler) qcbyScheduler.stop()
       const qcbyConfig = loadQcbyCodeConfig()
+      const triggerStartupRefresh = options.triggerStartupRefresh !== false
       qcbyScheduler = createQcbyCodeScheduler({
-        config: qcbyConfig,
+        config: triggerStartupRefresh ? qcbyConfig : { ...qcbyConfig, runOnStart: false },
         refreshAccountCode: dataProvider.refreshAccountCode,
         saveAccountCode: (accountId, code) => store.addOrUpdateAccount({ id: accountId, code }),
         log,
       })
       const started = qcbyScheduler.start()
       log('系统', `qcby 取码配置已热重载（启用=${qcbyConfig.enabled}，账号=${qcbyConfig.accounts.length}，运行=${started}）`)
-      return { ok: true, started, enabled: qcbyConfig.enabled, accounts: qcbyConfig.accounts.length }
+      return {
+        ok: true,
+        started,
+        enabled: qcbyConfig.enabled,
+        accounts: qcbyConfig.accounts.length,
+        triggerStartupRefresh,
+      }
     } catch (err) {
       const reason = err && err.message ? err.message : String(err)
       log('系统', 'qcby 取码调度器热重载失败: ' + reason)
       return { ok: false, reason }
+    }
+  }
+
+  function refreshQcbyAccount(accountId) {
+    try {
+      if (!qcbyScheduler || typeof qcbyScheduler.refreshAccount !== 'function') {
+        return Promise.resolve({ ok: false, reason: 'scheduler_unavailable' })
+      }
+      return qcbyScheduler.refreshAccount(accountId)
+    } catch (err) {
+      return Promise.resolve({ ok: false, reason: err && err.message ? err.message : String(err) })
     }
   }
 
@@ -281,6 +300,7 @@ function createRuntimeEngine(options = {}) {
     callWorkerApi,
     refreshWorkerCode,
     reloadQcbyScheduler,
+    refreshQcbyAccount,
     log,
     addAccountLog,
   }

@@ -11,6 +11,7 @@ function createQcbyCodeScheduler(options = {}) {
     const config = options.config || {};
     const refreshAccountCode = typeof options.refreshAccountCode === 'function' ? options.refreshAccountCode : null;
     const saveAccountCode = typeof options.saveAccountCode === 'function' ? options.saveAccountCode : null;
+    const fetchCode = typeof options.fetchCode === 'function' ? options.fetchCode : fetchFarmCode;
     const rawLog = typeof options.log === 'function' ? options.log : null;
     const logInfo = (msg) => (rawLog ? rawLog('qcby取码', msg) : console.log('[qcby取码]', msg));
 
@@ -30,6 +31,7 @@ function createQcbyCodeScheduler(options = {}) {
         const mapping = (Array.isArray(config.accounts) ? config.accounts : [])
             .find(m => String(m && m.accountId).trim() === id);
         if (!mapping) return { ok: false, reason: 'no_mapping' };
+        if (running.has(id)) return { ok: false, reason: 'in_progress' };
         if (!config.baseUrl) return { ok: false, reason: 'missing_base_url' };
         const appid = mapping.appid || config.appid;
         if (!appid) return { ok: false, reason: 'missing_appid' };
@@ -38,7 +40,7 @@ function createQcbyCodeScheduler(options = {}) {
         if (inFlightFetch.has(id)) return inFlightFetch.get(id);
         const task = (async () => {
             try {
-                const result = await fetchFarmCode({
+                const result = await fetchCode({
                     baseUrl: config.baseUrl,
                     protocol: mapping.protocol || config.protocol,
                     wxid: mapping.wxid,
@@ -66,23 +68,27 @@ function createQcbyCodeScheduler(options = {}) {
     }
 
     async function fetchAndApply(mapping) {
-        const accountId = mapping.accountId;
-        if (running.has(accountId)) return; // 防重入：上一轮未结束则跳过
+        const accountId = String(mapping && mapping.accountId || '').trim();
+        if (!accountId) return { ok: false, reason: 'invalid_account' };
+        if (running.has(accountId) || inFlightFetch.has(accountId)) return { ok: false, reason: 'in_progress' }; // 防重入：上一轮未结束则跳过
+        if (!config.baseUrl) return { ok: false, reason: 'missing_base_url' };
+        const appid = mapping.appid || config.appid;
+        if (!appid) return { ok: false, reason: 'missing_appid' };
         running.add(accountId);
         try {
-            const result = await fetchFarmCode({
+            const result = await fetchCode({
                 baseUrl: config.baseUrl,
                 protocol: mapping.protocol || config.protocol,
                 wxid: mapping.wxid,
                 ref: mapping.ref,
-                appid: mapping.appid || config.appid,
+                appid,
                 authHeader: config.authHeader,
                 codePath: config.codePath,
             });
 
             if (!result.ok) {
                 logInfo(`账号 ${accountId} 取 code 失败: ${result.reason}`);
-                return;
+                return { ok: false, reason: result.reason || 'fetch_failed' };
             }
 
             const short = String(result.code).slice(0, 8);
@@ -90,21 +96,44 @@ function createQcbyCodeScheduler(options = {}) {
 
             if (!refreshAccountCode) {
                 logInfo(`账号 ${accountId} 无法应用：refreshAccountCode 未注入`);
-                return;
+                return { ok: false, reason: 'refresh_unavailable' };
             }
 
             const applied = await refreshAccountCode(accountId, result.code);
             if (applied && applied.ok) {
                 const action = applied.started ? '启动' : applied.restarted ? '重启' : '更新';
                 logInfo(`账号 ${accountId} 已用新 code ${action}成功`);
+                return {
+                    ok: true,
+                    action: applied.started
+                        ? 'started'
+                        : applied.restarted
+                            ? 'restarted'
+                            : applied.skipped
+                                ? 'updated_only'
+                                : 'updated',
+                };
             } else {
-                logInfo(`账号 ${accountId} 应用 code 失败: ${(applied && applied.reason) || 'unknown'}`);
+                const reason = (applied && applied.reason) || 'apply_failed';
+                logInfo(`账号 ${accountId} 应用 code 失败: ${reason}`);
+                return { ok: false, reason };
             }
         } catch (err) {
-            logInfo(`账号 ${accountId} 处理异常: ${err && err.message ? err.message : String(err)}`);
+            const reason = err && err.message ? err.message : String(err);
+            logInfo(`账号 ${accountId} 处理异常: ${reason}`);
+            return { ok: false, reason: 'exception:' + reason };
         } finally {
             running.delete(accountId);
         }
+    }
+
+    function refreshAccount(accountId) {
+        const id = String(accountId || '').trim();
+        if (!id) return Promise.resolve({ ok: false, reason: 'invalid_account' });
+        const mapping = (Array.isArray(config.accounts) ? config.accounts : [])
+            .find(m => String(m && m.accountId).trim() === id);
+        if (!mapping) return Promise.resolve({ ok: false, reason: 'no_mapping' });
+        return fetchAndApply(mapping);
     }
 
     function start() {
@@ -140,7 +169,7 @@ function createQcbyCodeScheduler(options = {}) {
         timers.clear();
     }
 
-    return { start, stop, fetchAndApply, fetchCodeOnly };
+    return { start, stop, fetchAndApply, fetchCodeOnly, refreshAccount };
 }
 
 module.exports = { createQcbyCodeScheduler };
