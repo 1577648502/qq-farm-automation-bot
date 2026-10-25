@@ -3399,6 +3399,7 @@ sendImpl = async (service, method, body) => {
                             itemId: 20525,
                             limitCount: 4,
                             purchasedCount: serverPurchased,
+                            restrictionType: 1,
                             name: '增量测试商品',
                         }),
                     ]),
@@ -3459,7 +3460,7 @@ sendImpl = async (service, method, body) => {
         serverPurchased = 0;
         const nextDay = await milkTea.getShopGoods();
         const nextDayGoods = nextDay.goods.find((x) => x.goodsId === 311);
-        check('北京时间跨日后清空本地商店已购与售罄状态',
+        check('北京时间跨日后清空日限额商品本地已购与售罄状态',
             nextDayGoods.purchasedCount === 0 && nextDayGoods.boughtCount === 0
             && nextDayGoods.soldOut === false, nextDayGoods);
     }
@@ -3614,6 +3615,144 @@ sendImpl = async (service, method, body) => {
                 alreadyComplete.boughtCount === 0 && alreadyComplete.skipped === true
                 && sent.filter((x) => x.cmd === 1 && x.group === GROUP_SHOP).length === 0,
                 { result: alreadyComplete, sent: sent.map((x) => x.method || x.cmd) });
+        } finally {
+            warehouse.getBag = originalGetBag;
+            warehouse.getBagItems = originalGetBagItems;
+            milkTea.__testing.resetCurrencyCache();
+        }
+    }
+
+    {
+        let now = Date.UTC(2026, 9, 19, 6, 0, 0);
+        milkTea.__testing.setShopClock(() => now);
+        milkTea.__testing.resetShopState();
+        milkTea.__testing.clearMainStatusCache();
+        milkTea.__testing.resetCurrencyCache();
+        const originalGetBag = warehouse.getBag;
+        const originalGetBagItems = warehouse.getBagItems;
+        const state = Buffer.concat([
+            varintField(1, 1792200000),
+            bytesField(2, '森野跨日限额测试店'),
+            varintField(4, 15),
+        ]);
+        const goods = [
+            { goodsId: 301, itemId: 20525, currencyId: 1001, unitPrice: 10000, limitCount: 108, restrictionType: 4, name: '森野甜莓种子' },
+            { goodsId: 307, itemId: 20529, currencyId: 1001, unitPrice: 20000, limitCount: 36, restrictionType: 1, name: '森野芭乐种子' },
+        ];
+        try {
+            warehouse.getBag = async () => ({});
+            warehouse.getBagItems = () => [{ id: 1001, count: 100000 }];
+            router = async (req) => {
+                if (req.method === 'List') {
+                    return activityListReply([
+                        mainActivity(state),
+                        // 模拟跨日后仍返回已购数为 0 的旧 List 快照。
+                        shopActivity(goods.map((g) => shopGoods({ ...g, purchasedCount: 0 }))),
+                    ]);
+                }
+                if (req.cmd === 1 && req.group === GROUP_SHOP) {
+                    const payload = mg.parseTop(req.payload);
+                    const goodsId = toInt((payload.find((x) => x.f === 1) || {}).v);
+                    const count = toInt((payload.find((x) => x.f === 2) || {}).v);
+                    const target = goods.find((g) => g.goodsId === goodsId);
+                    return operateReply(1, {
+                        group: GROUP_SHOP,
+                        result: Buffer.concat([
+                            bytesField(1, Buffer.concat([
+                                varintField(1, target.itemId),
+                                varintField(2, count),
+                            ])),
+                            bytesField(2, Buffer.concat([
+                                varintField(1, target.currencyId),
+                                varintField(2, target.unitPrice * count),
+                            ])),
+                        ]),
+                        resultField: 101,
+                    });
+                }
+                throw new Error(`森野跨日限额用例收到 ${req.method || `cmd=${req.cmd}`}`);
+            };
+
+            const firstDay = await milkTea.buyDailySeeds(1);
+            now = Date.UTC(2026, 9, 19, 16, 1, 0); // 北京时间次日 00:01
+            const staleAfterMidnight = await milkTea.getShopGoods();
+            const permanent = staleAfterMidnight.goods.find((x) => x.goodsId === 301);
+            const daily = staleAfterMidnight.goods.find((x) => x.goodsId === 307);
+            check('北京时间跨日后每日限额清零，永久限额与旧快照防重记录保留',
+                firstDay.boughtCount === 2
+                && permanent && permanent.boughtCount === 1
+                && daily && daily.boughtCount === 0,
+                { firstDay, permanent, daily });
+
+            sent.length = 0;
+            const secondDay = await milkTea.buyDailySeeds(1);
+            const requestedGoodsIds = sent
+                .filter((x) => x.cmd === 1 && x.group === GROUP_SHOP)
+                .map((x) => {
+                    const payload = mg.parseTop(x.payload);
+                    return toInt((payload.find((y) => y.f === 1) || {}).v);
+                });
+            check('跨日后只补购日限额商品，永久限额商品不会再次购买',
+                secondDay.boughtCount === 1 && requestedGoodsIds.join(',') === '307',
+                { result: secondDay, requestedGoodsIds });
+        } finally {
+            warehouse.getBag = originalGetBag;
+            warehouse.getBagItems = originalGetBagItems;
+            milkTea.__testing.resetCurrencyCache();
+        }
+    }
+
+    {
+        let now = Date.UTC(2026, 9, 19, 6, 30, 0);
+        milkTea.__testing.setShopClock(() => now);
+        milkTea.__testing.resetShopState();
+        milkTea.__testing.clearMainStatusCache();
+        milkTea.__testing.resetCurrencyCache();
+        const originalGetBag = warehouse.getBag;
+        const originalGetBagItems = warehouse.getBagItems;
+        const state = Buffer.concat([
+            varintField(1, 1792200000),
+            bytesField(2, '森野跨日售罄测试店'),
+            varintField(4, 15),
+        ]);
+        try {
+            warehouse.getBag = async () => ({});
+            warehouse.getBagItems = () => [{ id: 1001, count: 100000 }];
+            router = async (req) => {
+                if (req.method === 'List') {
+                    return activityListReply([
+                        mainActivity(state),
+                        shopActivity([
+                            shopGoods({ goodsId: 301, itemId: 20525, currencyId: 1001, unitPrice: 10000, limitCount: 108, restrictionType: 4, name: '森野甜莓种子' }),
+                            shopGoods({ goodsId: 307, itemId: 20529, currencyId: 1001, unitPrice: 20000, limitCount: 36, restrictionType: 1, name: '森野芭乐种子' }),
+                        ]),
+                    ]);
+                }
+                if (req.cmd === 1 && req.group === GROUP_SHOP) {
+                    return operateReply(1, {
+                        group: GROUP_SHOP,
+                        errorCode: 1034007,
+                        result: null,
+                        resultField: 101,
+                    });
+                }
+                throw new Error(`森野跨日售罄用例收到 ${req.method || `cmd=${req.cmd}`}`);
+            };
+
+            await milkTea.buyDailySeeds(1);
+            const soldOutBeforeMidnight = await milkTea.getShopGoods();
+            const permanentBefore = soldOutBeforeMidnight.goods.find((x) => x.goodsId === 301);
+            const dailyBefore = soldOutBeforeMidnight.goods.find((x) => x.goodsId === 307);
+            now = Date.UTC(2026, 9, 19, 16, 2, 0); // 北京时间次日 00:02
+            const soldOutAfterMidnight = await milkTea.getShopGoods();
+            const permanentAfter = soldOutAfterMidnight.goods.find((x) => x.goodsId === 301);
+            const dailyAfter = soldOutAfterMidnight.goods.find((x) => x.goodsId === 307);
+            check('跨日后清除日限额售罄状态，同时保留永久限额售罄状态',
+                permanentBefore && permanentBefore.soldOut === true
+                && dailyBefore && dailyBefore.soldOut === true
+                && permanentAfter && permanentAfter.soldOut === true
+                && dailyAfter && dailyAfter.soldOut === false,
+                { permanentBefore, dailyBefore, permanentAfter, dailyAfter });
         } finally {
             warehouse.getBag = originalGetBag;
             warehouse.getBagItems = originalGetBagItems;

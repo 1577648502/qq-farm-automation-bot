@@ -684,6 +684,9 @@ async function getShopGoods() {
             const limitCount = toInt((findField(f, 4) || {}).v);
             const purchasedCount = toInt((findField(f, 5) || {}).v);
             const restrictionType = toInt((findField(f, 11) || {}).v);
+            if (restrictionType > 0 || !shopRestrictionTypes.has(goodsId)) {
+                shopRestrictionTypes.set(goodsId, restrictionType);
+            }
             const kindField = findField(f, 12);
             const kind = kindField && kindField.w === 2 ? kindField.v.toString('utf8') : '';
             const itemDef = getItemById(itemId);
@@ -731,18 +734,25 @@ function markShopGoodsSoldOut(goodsId) { if (goodsId) shopSoldOut.add(toInt(good
 /** 本次进程内各商品已兑换数量，用于补足刚购买后仍返回旧快照的服务端状态。 */
 const shopBought = new Map();
 const shopBoughtBase = new Map();
+const shopRestrictionTypes = new Map();
 let shopStateDay = '';
 let shopNow = () => Date.now();
+const SHOP_RESTRICTION_DAILY = 1;
 
 function ensureShopDay() {
     const today = String(beijingDayStart(Math.floor(shopNow() / 1000)));
     if (shopStateDay === today) return;
     const dayChanged = !!shopStateDay && shopStateDay !== today;
     shopStateDay = today;
-    shopSoldOut.clear();
-    shopBought.clear();
-    shopBoughtBase.clear();
-    if (dayChanged) clearMainStatusCache();
+    if (dayChanged) {
+        for (const [goodsId, restrictionType] of shopRestrictionTypes) {
+            if (restrictionType !== SHOP_RESTRICTION_DAILY) continue;
+            shopSoldOut.delete(goodsId);
+            shopBought.delete(goodsId);
+            shopBoughtBase.delete(goodsId);
+        }
+        clearMainStatusCache();
+    }
 }
 
 /** 兑换/购买商品(数量必填) —— 实测 {#101: {#1: 商品ID, #2: 数量}} */
@@ -978,6 +988,7 @@ async function upgradeStore() {
 }
 
 async function buyDailySeeds(perSeed = 1) {
+    ensureShopDay();
     const targetPerSeed = Math.max(1, Math.min(9999, toInt(perSeed) || 1));
     const st = await getMainStatus().catch(() => null);
     if (st && isSettling(st)) return { ok: false, skipped: true, reason: '结算期, 不兑换' };
@@ -3427,6 +3438,7 @@ module.exports = {
             shopSoldOut.clear();
             shopBought.clear();
             shopBoughtBase.clear();
+            shopRestrictionTypes.clear();
         },
         resetCurrencyCache() {
             currencyBalanceCache = { at: 0, ok: false, value: null };

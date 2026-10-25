@@ -2563,7 +2563,7 @@ async function onBackupFileChange(ev: Event) {
                 <BaseInput
                   v-if="localAutomationSettings.milkTeaAutoBuySeed"
                   v-model.number="localAutomationSettings.milkTeaSeedBuyCount"
-                  label="每种每日购买份数"
+                  label="每种购买份数"
                   type="number"
                   min="1"
                   max="9999"
@@ -2578,7 +2578,7 @@ async function onBackupFileChange(ev: Event) {
                 />
               </div>
               <template #note>
-                手动操作（领收益 / 制作奶茶 / 领工资 / 互动一次）和参数（店名、互动事项）都在左侧栏「奶茶热销中」页面。
+                购买份数：永久限购累计达到该数量；日限购每天购买该数量。手动操作（领收益 / 制作奶茶 / 领工资 / 互动一次）和参数（店名、互动事项）都在左侧栏「奶茶热销中」页面。
               </template>
             </AutoTaskCard>
 

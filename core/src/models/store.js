@@ -256,9 +256,9 @@ const DEFAULT_ACCOUNT_CONFIG = {
     milkTeaAutoTask: false,           // 自动领取任务奖励(领取命令待确认, 默认关)
     milkTeaAutoInteract: false,       // 自动互动(需"自己被好友雇佣")
     milkTeaAutoWage: true,            // 自动领兼职工资(cmd 64, 纯收益; 需被雇佣)
-    milkTeaAutoBuySeed: false,        // **每日自动兑换种子**(一天一次, 商店组 cmd=1)
+    milkTeaAutoBuySeed: false,        // **自动兑换种子**(永久限购累计补齐, 日限购每日补齐, 商店组 cmd=1)
     milkTeaAutoUpgrade: true,         // **自动升级店铺**(营业额达标即升, cmd=61)
-    milkTeaSeedBuyCount: 1,           // 每种活动种子每天兑换几份
+    milkTeaSeedBuyCount: 1,           // 每种活动种子购买目标(永久限购累计/日限购每日)
     milkTeaInteractType: 2,           // 互动类型(#2), 默认推荐 2(花式摇杯)
     milkTeaEmployerGid: '',           // 旧版配置兼容字段；互动目标只认刷新 #168.#1
     sellGoldenFruit: false,           // 自动卖果实时是否连黄金果实一起卖(默认保留)
