@@ -751,6 +751,7 @@ const localAutomationSettings = ref({
   milkTeaAutoInteract: false,
   milkTeaAutoWage: true,
   milkTeaAutoBuySeed: false,
+  milkTeaSeedBuyCount: 1,
   milkTeaAutoUpgrade: true,
   milkTeaInteractType: 2,
   sellGoldenFruit: false,
@@ -1146,6 +1147,7 @@ function syncLocalAutomationSettings(submitted?: any) {
     localAutomationSettings.value.milkTeaAutoInteract = settings.value.milkTeaAutoInteract ?? false
     localAutomationSettings.value.milkTeaAutoWage = settings.value.milkTeaAutoWage !== false
     localAutomationSettings.value.milkTeaAutoBuySeed = !!settings.value.milkTeaAutoBuySeed
+    localAutomationSettings.value.milkTeaSeedBuyCount = Math.max(1, Math.min(9999, Number(settings.value.milkTeaSeedBuyCount) || 1))
     localAutomationSettings.value.milkTeaAutoUpgrade = settings.value.milkTeaAutoUpgrade !== false
     localAutomationSettings.value.milkTeaInteractType = settings.value.milkTeaInteractType ?? 2
     localAutomationSettings.value.sellGoldenFruit = settings.value.sellGoldenFruit ?? false
@@ -2557,7 +2559,16 @@ async function onBackupFileChange(ev: Event) {
                 <BaseSwitch v-model="localAutomationSettings.milkTeaCraft" label="自动制作奶茶（全部果实）" />
                 <BaseSwitch v-model="localAutomationSettings.milkTeaAutoInteract" label="自动互动（被雇佣后）" />
                 <BaseSwitch v-model="localAutomationSettings.milkTeaAutoWage" label="自动领兼职工资（被雇佣后）" />
-                <BaseSwitch v-model="localAutomationSettings.milkTeaAutoBuySeed" label="每日自动购买森野黄金芽种子（1份/天）" />
+                <BaseSwitch v-model="localAutomationSettings.milkTeaAutoBuySeed" label="自动购买森野系列种子（已解锁且等级达标）" />
+                <BaseInput
+                  v-if="localAutomationSettings.milkTeaAutoBuySeed"
+                  v-model.number="localAutomationSettings.milkTeaSeedBuyCount"
+                  label="每种每日购买份数"
+                  type="number"
+                  min="1"
+                  max="9999"
+                  class="w-full sm:w-52"
+                />
                 <BaseSwitch v-model="localAutomationSettings.milkTeaAutoUpgrade" label="自动升级店铺（营业额达标即升）" />
                 <BaseSelect
                   v-model="localAutomationSettings.milkTeaHireDuration"

@@ -107,11 +107,12 @@ function shopGoods({
         bytesField(12, kind),
     ];
     if (unlocked === false || requireLevel > 0 || conditionText) {
-        fields.push(bytesField(13, Buffer.concat([
+        const unlockFields = [
             bytesField(2, conditionText),
-            varintField(3, unlocked === false ? 0 : 1),
             varintField(5, requireLevel),
-        ])));
+        ];
+        if (unlocked === false) unlockFields.splice(1, 0, varintField(3, 0));
+        fields.push(bytesField(13, Buffer.concat(unlockFields)));
     }
     return bytesField(2, Buffer.concat(fields));
 }
@@ -3512,6 +3513,500 @@ sendImpl = async (service, method, body) => {
         milkTea.__testing.setShopClock(() => Date.now());
         milkTea.__testing.resetShopState();
         milkTea.__testing.clearMainStatusCache();
+    }
+
+    section('21. 森野系列种子自动购买');
+    {
+        const fixedNow = Date.UTC(2026, 9, 19, 6, 0, 0);
+        milkTea.__testing.setShopClock(() => fixedNow);
+        milkTea.__testing.resetShopState();
+        milkTea.__testing.clearMainStatusCache();
+        milkTea.__testing.resetCurrencyCache();
+        const originalGetBag = warehouse.getBag;
+        const originalGetBagItems = warehouse.getBagItems;
+        const state = Buffer.concat([
+            varintField(1, 1792200000),
+            bytesField(2, '森野自动购买测试店'),
+            varintField(4, 15),
+        ]);
+        const seedGoods = [
+            { goodsId: 301, itemId: 20525, currencyId: 1001, unitPrice: 10000, limitCount: 108, requireLevel: 0, name: '森野甜莓种子' },
+            { goodsId: 302, itemId: 20526, currencyId: 1001, unitPrice: 10000, limitCount: 108, requireLevel: 3, name: '森野白桃种子' },
+            { goodsId: 303, itemId: 20527, currencyId: 1001, unitPrice: 10000, limitCount: 108, requireLevel: 5, name: '森野甜橙种子' },
+            { goodsId: 304, itemId: 20528, currencyId: 1001, unitPrice: 10000, limitCount: 108, requireLevel: 7, name: '森野红柚种子' },
+            { goodsId: 305, itemId: 20021, currencyId: 1001, unitPrice: 10000, limitCount: 108, requireLevel: 9, name: '森野可可豆种子' },
+            { goodsId: 306, itemId: 21435, currencyId: 1001, unitPrice: 20000, limitCount: 108, requireLevel: 11, name: '森野柿子种子' },
+            { goodsId: 307, itemId: 20529, currencyId: 1001, unitPrice: 20000, limitCount: 36, requireLevel: 13, name: '森野芭乐种子' },
+            { goodsId: 308, itemId: 29005, currencyId: 1041, unitPrice: 8000, limitCount: 1, requireLevel: 0, name: '森野黄金芽种子' },
+        ];
+        const byGoodsId = new Map(seedGoods.map((g) => [g.goodsId, g]));
+        try {
+            warehouse.getBag = async () => ({});
+            warehouse.getBagItems = () => [
+                { id: 1001, count: 100000 },
+                { id: 1041, count: 8000 },
+            ];
+            router = async (req) => {
+                if (req.method === 'List') {
+                    return activityListReply([
+                        mainActivity(state),
+                        shopActivity(seedGoods.map((g) => shopGoods({
+                            ...g,
+                            purchasedCount: 0,
+                            conditionText: g.requireLevel ? `店铺等级` : '',
+                        }))),
+                    ]);
+                }
+                if (req.cmd === 1 && req.group === GROUP_SHOP) {
+                    const payload = mg.parseTop(req.payload);
+                    const goodsId = toInt((payload.find((x) => x.f === 1) || {}).v);
+                    const count = toInt((payload.find((x) => x.f === 2) || {}).v);
+                    const target = byGoodsId.get(goodsId);
+                    return operateReply(1, {
+                        group: GROUP_SHOP,
+                        result: Buffer.concat([
+                            bytesField(1, Buffer.concat([
+                                varintField(1, target.itemId),
+                                varintField(2, count),
+                            ])),
+                            bytesField(2, Buffer.concat([
+                                varintField(1, target.currencyId),
+                                varintField(2, target.unitPrice * count),
+                            ])),
+                        ]),
+                        resultField: 101,
+                    });
+                }
+                throw new Error(`森野 8 种购买用例收到 ${req.method || `cmd=${req.cmd}`}`);
+            };
+
+            activityLogs.length = 0;
+            sent.length = 0;
+            const boughtAll = await milkTea.buyDailySeeds(1);
+            const shop = await milkTea.getShopGoods();
+            const goods302 = shop.goods.find((g) => g.goodsId === 302);
+            const buyRequests = sent.filter((x) => x.cmd === 1 && x.group === GROUP_SHOP);
+            const requestedGoodsIds = buyRequests.map((x) => {
+                const payload = mg.parseTop(x.payload);
+                return toInt((payload.find((y) => y.f === 1) || {}).v);
+            });
+            const balances = await milkTea.getCurrencyBalances();
+            check('8 种森野种子均按设置份数购买',
+                boughtAll.ok === true && boughtAll.boughtCount === 8
+                && boughtAll.bought.length === 8 && buyRequests.length === 8
+                && requestedGoodsIds.join(',') === '301,302,303,304,305,306,307,308',
+                { result: boughtAll, requestedGoodsIds });
+            check('真实抓包中缺少 #13.#3 时 302~307 不会被误判未解锁',
+                goods302.unlocked === true && goods302.requireLevel === 3,
+                goods302);
+            check('金币与奶茶券按实际成交在本轮内扣减',
+                boughtAll.spentGold === 90000 && boughtAll.spentCoupon === 8000
+                && balances.gold === 10000 && balances.milkCoupon === 0,
+                { result: boughtAll, balances });
+            check('8 种购买汇总为一条活动日志',
+                activityLogs.filter((x) => /森野种子自动购买/.test(x.msg)).length === 1
+                && activityLogs.some((x) => /8 种\/8 份/.test(x.msg)),
+                activityLogs.map((x) => x.msg));
+
+            sent.length = 0;
+            const alreadyComplete = await milkTea.buyDailySeeds(1);
+            check('旧 List 快照下也不会重复购买同一天已补齐的种子',
+                alreadyComplete.boughtCount === 0 && alreadyComplete.skipped === true
+                && sent.filter((x) => x.cmd === 1 && x.group === GROUP_SHOP).length === 0,
+                { result: alreadyComplete, sent: sent.map((x) => x.method || x.cmd) });
+        } finally {
+            warehouse.getBag = originalGetBag;
+            warehouse.getBagItems = originalGetBagItems;
+            milkTea.__testing.resetCurrencyCache();
+        }
+    }
+
+    {
+        const fixedNow = Date.UTC(2026, 9, 19, 7, 0, 0);
+        milkTea.__testing.setShopClock(() => fixedNow);
+        milkTea.__testing.resetShopState();
+        milkTea.__testing.clearMainStatusCache();
+        milkTea.__testing.resetCurrencyCache();
+        const originalGetBag = warehouse.getBag;
+        const originalGetBagItems = warehouse.getBagItems;
+        const state = Buffer.concat([
+            varintField(1, 1792200000),
+            bytesField(2, '森野余额校验测试店'),
+            varintField(4, 7),
+        ]);
+        try {
+            warehouse.getBag = async () => ({});
+            warehouse.getBagItems = () => [
+                { id: 1001, count: 25000 },
+                { id: 1041, count: 0 },
+            ];
+            router = async (req) => {
+                if (req.method === 'List') {
+                    return activityListReply([
+                        mainActivity(state),
+                        shopActivity([
+                            shopGoods({ goodsId: 301, itemId: 20525, currencyId: 1001, unitPrice: 10000, limitCount: 108, name: '森野甜莓种子' }),
+                            shopGoods({ goodsId: 302, itemId: 20526, currencyId: 1001, unitPrice: 20000, limitCount: 108, requireLevel: 3, name: '森野白桃种子' }),
+                            shopGoods({ goodsId: 303, itemId: 20527, currencyId: 1041, unitPrice: 8000, limitCount: 108, requireLevel: 5, name: '森野甜橙种子' }),
+                            shopGoods({ goodsId: 304, itemId: 20528, currencyId: 1001, unitPrice: 10000, limitCount: 108, unlocked: false, requireLevel: 7, name: '森野红柚种子' }),
+                            shopGoods({ goodsId: 305, itemId: 20021, currencyId: 1001, unitPrice: 10000, limitCount: 108, requireLevel: 9, name: '森野可可豆种子' }),
+                            shopGoods({ goodsId: 306, itemId: 21435, currencyId: 1001, unitPrice: 20000, limitCount: 108, purchasedCount: 108, requireLevel: 11, name: '森野柿子种子' }),
+                            shopGoods({ goodsId: 308, itemId: 29005, currencyId: 1041, unitPrice: 8000, limitCount: 1, name: '森野黄金芽种子' }),
+                        ]),
+                    ]);
+                }
+                if (req.cmd === 1 && req.group === GROUP_SHOP) {
+                    const payload = mg.parseTop(req.payload);
+                    const count = toInt((payload.find((x) => x.f === 2) || {}).v);
+                    return operateReply(1, {
+                        group: GROUP_SHOP,
+                        result: Buffer.concat([
+                            bytesField(1, Buffer.concat([varintField(1, 20525), varintField(2, count)])),
+                            bytesField(2, Buffer.concat([varintField(1, 1001), varintField(2, count * 10000)])),
+                        ]),
+                        resultField: 101,
+                    });
+                }
+                throw new Error(`森野余额校验用例收到 ${req.method || `cmd=${req.cmd}`}`);
+            };
+
+            sent.length = 0;
+            const limited = await milkTea.buyDailySeeds(1);
+            const buyRequests = sent.filter((x) => x.cmd === 1 && x.group === GROUP_SHOP);
+            const skipReasons = limited.skippedGoods.map((x) => x.reason).join('；');
+            check('未解锁、等级不足、售罄与余额不足分别跳过',
+                limited.boughtCount === 1 && limited.ok === true
+                && /未解锁/.test(skipReasons) && /店铺 Lv7 < Lv9/.test(skipReasons)
+                && /限购/.test(skipReasons) && /金币不足/.test(skipReasons)
+                && /奶茶券不足/.test(skipReasons), limited);
+            check('本轮首个商品扣减后余额不足，后续商品不再超支发请求',
+                buyRequests.length === 1, {
+                    requests: buyRequests.length,
+                    skippedGoods: limited.skippedGoods,
+                });
+        } finally {
+            warehouse.getBag = originalGetBag;
+            warehouse.getBagItems = originalGetBagItems;
+            milkTea.__testing.resetCurrencyCache();
+        }
+    }
+
+    {
+        const fixedNow = Date.UTC(2026, 9, 19, 7, 30, 0);
+        milkTea.__testing.setShopClock(() => fixedNow);
+        milkTea.__testing.resetShopState();
+        milkTea.__testing.clearMainStatusCache();
+        milkTea.__testing.resetCurrencyCache();
+        const originalGetBag = warehouse.getBag;
+        const originalGetBagItems = warehouse.getBagItems;
+        try {
+            warehouse.getBag = async () => ({});
+            warehouse.getBagItems = () => [{ id: 1001, count: 50000 }];
+            router = async (req) => {
+                if (req.method === 'List') {
+                    return activityListReply([
+                        mainActivity(Buffer.concat([
+                            varintField(1, 1792200000),
+                            bytesField(2, '森野成交价测试店'),
+                            varintField(4, 3),
+                        ])),
+                        shopActivity([
+                            shopGoods({
+                                goodsId: 301,
+                                itemId: 20525,
+                                currencyId: 1001,
+                                unitPrice: 10000,
+                                limitCount: 108,
+                                name: '森野甜莓种子',
+                            }),
+                        ]),
+                    ]);
+                }
+                if (req.cmd === 1 && req.group === GROUP_SHOP) {
+                    return operateReply(1, {
+                        group: GROUP_SHOP,
+                        result: Buffer.concat([
+                            bytesField(1, Buffer.concat([
+                                varintField(1, 20525),
+                                varintField(2, 1),
+                            ])),
+                            bytesField(2, Buffer.concat([
+                                varintField(1, 1001),
+                                varintField(2, 12345),
+                            ])),
+                        ]),
+                        resultField: 101,
+                    });
+                }
+                throw new Error(`森野成交价用例收到 ${req.method || `cmd=${req.cmd}`}`);
+            };
+
+            const bought = await milkTea.buyDailySeeds(1);
+            const balances = await milkTea.getCurrencyBalances();
+            check('余额与花费按 Operate 响应总价扣减，而非使用 List 单价',
+                bought.ok === true && bought.boughtCount === 1
+                && bought.spentGold === 12345 && balances.gold === 37655,
+                { result: bought, balances });
+        } finally {
+            warehouse.getBag = originalGetBag;
+            warehouse.getBagItems = originalGetBagItems;
+            milkTea.__testing.resetCurrencyCache();
+        }
+    }
+
+    {
+        const fixedNow = Date.UTC(2026, 9, 19, 8, 0, 0);
+        milkTea.__testing.setShopClock(() => fixedNow);
+        milkTea.__testing.resetShopState();
+        milkTea.__testing.clearMainStatusCache();
+        milkTea.__testing.resetCurrencyCache();
+        const originalGetBag = warehouse.getBag;
+        const originalGetBagItems = warehouse.getBagItems;
+        const state = Buffer.concat([
+            varintField(1, 1792200000),
+            bytesField(2, '森野部分成交测试店'),
+            varintField(4, 13),
+        ]);
+        let sold301 = 0;
+        const parseBuyRequests = () => sent
+            .filter((x) => x.cmd === 1 && x.group === GROUP_SHOP)
+            .map((x) => {
+                const payload = mg.parseTop(x.payload);
+                return {
+                    goodsId: toInt((payload.find((y) => y.f === 1) || {}).v),
+                    count: toInt((payload.find((y) => y.f === 2) || {}).v),
+                };
+            });
+        try {
+            warehouse.getBag = async () => ({});
+            warehouse.getBagItems = () => [{ id: 1001, count: 100000 }];
+            router = async (req) => {
+                if (req.method === 'List') {
+                    return activityListReply([
+                        mainActivity(state),
+                        shopActivity([
+                            shopGoods({ goodsId: 301, itemId: 20525, currencyId: 1001, unitPrice: 10000, limitCount: 108, name: '森野甜莓种子' }),
+                            shopGoods({ goodsId: 302, itemId: 20526, currencyId: 1001, unitPrice: 10000, limitCount: 5, purchasedCount: 4, requireLevel: 3, name: '森野白桃种子' }),
+                        ]),
+                    ]);
+                }
+                if (req.cmd === 1 && req.group === GROUP_SHOP) {
+                    const payload = mg.parseTop(req.payload);
+                    const goodsId = toInt((payload.find((x) => x.f === 1) || {}).v);
+                    const requested = toInt((payload.find((x) => x.f === 2) || {}).v);
+                    let actual = requested;
+                    if (goodsId === 301) {
+                        sold301 += 1;
+                        actual = sold301 === 1 ? 1 : requested;
+                    }
+                    return operateReply(1, {
+                        group: GROUP_SHOP,
+                        result: Buffer.concat([
+                            bytesField(1, Buffer.concat([
+                                varintField(1, goodsId === 301 ? 20525 : 20526),
+                                varintField(2, actual),
+                            ])),
+                            bytesField(2, Buffer.concat([
+                                varintField(1, 1001),
+                                varintField(2, actual * 10000),
+                            ])),
+                        ]),
+                        resultField: 101,
+                    });
+                }
+                throw new Error(`森野部分成交用例收到 ${req.method || `cmd=${req.cmd}`}`);
+            };
+
+            sent.length = 0;
+            const firstRound = await milkTea.buyDailySeeds(6);
+            check('剩余限购会把请求数量从设置份数截断',
+                firstRound.boughtCount === 2
+                && JSON.stringify(parseBuyRequests()) === JSON.stringify([
+                    { goodsId: 301, count: 6 },
+                    { goodsId: 302, count: 1 },
+                ]), { result: firstRound, requests: parseBuyRequests() });
+
+            sent.length = 0;
+            const secondRound = await milkTea.buyDailySeeds(6);
+            check('服务端少成交后下一轮只补差额且不再购买已售罄商品',
+                secondRound.boughtCount === 5
+                && JSON.stringify(parseBuyRequests()) === JSON.stringify([
+                    { goodsId: 301, count: 5 },
+                ]), { result: secondRound, requests: parseBuyRequests() });
+
+            sent.length = 0;
+            const thirdRound = await milkTea.buyDailySeeds(6);
+            check('所有商品补齐后后续轮次零购买请求',
+                thirdRound.boughtCount === 0 && thirdRound.skipped === true
+                && parseBuyRequests().length === 0,
+                { result: thirdRound, requests: parseBuyRequests() });
+        } finally {
+            warehouse.getBag = originalGetBag;
+            warehouse.getBagItems = originalGetBagItems;
+            milkTea.__testing.resetCurrencyCache();
+        }
+    }
+
+    {
+        const fixedNow = Date.UTC(2026, 9, 19, 9, 30, 0);
+        milkTea.__testing.setShopClock(() => fixedNow);
+        milkTea.__testing.resetShopState();
+        milkTea.__testing.clearMainStatusCache();
+        milkTea.__testing.resetCurrencyCache();
+        const originalGetBag = warehouse.getBag;
+        const originalGetBagItems = warehouse.getBagItems;
+        try {
+            warehouse.getBag = async () => ({});
+            warehouse.getBagItems = () => [{ id: 1001, count: 50000 }];
+            router = async (req) => {
+                if (req.method === 'List') {
+                    return activityListReply([
+                        mainActivity(Buffer.concat([
+                            varintField(1, 1792200000),
+                            bytesField(2, '森野未知错误测试店'),
+                            varintField(4, 3),
+                        ])),
+                        shopActivity([
+                            shopGoods({
+                                goodsId: 301,
+                                itemId: 20525,
+                                currencyId: 1001,
+                                unitPrice: 10000,
+                                limitCount: 108,
+                                name: '森野甜莓种子',
+                            }),
+                        ]),
+                    ]);
+                }
+                if (req.cmd === 1 && req.group === GROUP_SHOP) {
+                    return operateReply(1, {
+                        group: GROUP_SHOP,
+                        errorCode: 1034999,
+                        result: null,
+                        resultField: 101,
+                    });
+                }
+                throw new Error(`森野未知错误用例收到 ${req.method || `cmd=${req.cmd}`}`);
+            };
+
+            sent.length = 0;
+            const first = await milkTea.buyDailySeeds(1);
+            const second = await milkTea.buyDailySeeds(1);
+            const shop = await milkTea.getShopGoods();
+            const goods = shop.goods.find((x) => x.goodsId === 301);
+            const buyRequests = sent.filter((x) => x.cmd === 1 && x.group === GROUP_SHOP);
+            check('普通购买失败不会被永久标记售罄，下一轮仍会重试',
+                first.ok === false && first.failed.length === 1
+                && second.ok === false && second.failed.length === 1
+                && buyRequests.length === 2 && goods && goods.soldOut === false,
+                { first, second, buyRequests: buyRequests.length, goods });
+        } finally {
+            warehouse.getBag = originalGetBag;
+            warehouse.getBagItems = originalGetBagItems;
+            milkTea.__testing.resetCurrencyCache();
+        }
+    }
+
+    {
+        milkTea.__testing.setShopClock(() => Date.now());
+        milkTea.__testing.resetShopState();
+        milkTea.__testing.clearMainStatusCache();
+        milkTea.__testing.resetCurrencyCache();
+        const originalGetBag = warehouse.getBag;
+        try {
+            warehouse.getBag = async () => {
+                throw new Error('背包读取失败');
+            };
+            router = async (req) => {
+                if (req.method === 'List') {
+                    return activityListReply([
+                        mainActivity(Buffer.concat([
+                            varintField(1, 1792200000),
+                            bytesField(2, '森野背包失败测试店'),
+                            varintField(4, 15),
+                        ])),
+                        shopActivity([
+                            shopGoods({ goodsId: 301, itemId: 20525, currencyId: 1001, unitPrice: 10000, limitCount: 108, name: '森野甜莓种子' }),
+                        ]),
+                    ]);
+                }
+                throw new Error(`森野背包失败用例不应发送 ${req.method || `cmd=${req.cmd}`}`);
+            };
+            sent.length = 0;
+            const noBag = await milkTea.buyDailySeeds(1);
+            check('余额读取失败时不盲目发送购买请求',
+                noBag.ok === false && noBag.skipped === true
+                && /余额失败/.test(noBag.reason)
+                && sent.filter((x) => x.cmd === 1 && x.group === GROUP_SHOP).length === 0,
+                { result: noBag, sent: sent.map((x) => x.method || x.cmd) });
+        } finally {
+            warehouse.getBag = originalGetBag;
+            milkTea.__testing.resetCurrencyCache();
+        }
+    }
+
+    {
+        const fixedNow = Date.UTC(2026, 9, 19, 9, 0, 0);
+        milkTea.__testing.setShopClock(() => fixedNow);
+        milkTea.__testing.resetShopState();
+        milkTea.__testing.clearMainStatusCache();
+        milkTea.__testing.resetCurrencyCache();
+        const originalGetBag = warehouse.getBag;
+        const originalGetBagItems = warehouse.getBagItems;
+        try {
+            warehouse.getBag = async () => ({});
+            warehouse.getBagItems = () => [{ id: 1001, count: 100000 }];
+            router = async (req) => {
+                if (req.method === 'List') {
+                    return activityListReply([
+                        mainActivity(Buffer.concat([
+                            varintField(1, 1792200000),
+                            bytesField(2, '森野失败隔离测试店'),
+                            varintField(4, 3),
+                        ])),
+                        shopActivity([
+                            shopGoods({ goodsId: 301, itemId: 20525, currencyId: 1001, unitPrice: 10000, limitCount: 108, name: '森野甜莓种子' }),
+                            shopGoods({ goodsId: 302, itemId: 20526, currencyId: 1001, unitPrice: 10000, limitCount: 108, requireLevel: 3, name: '森野白桃种子' }),
+                        ]),
+                    ]);
+                }
+                if (req.cmd === 1 && req.group === GROUP_SHOP) {
+                    const payload = mg.parseTop(req.payload);
+                    const goodsId = toInt((payload.find((x) => x.f === 1) || {}).v);
+                    if (goodsId === 301) {
+                        return operateReply(1, {
+                            group: GROUP_SHOP,
+                            errorCode: 1034149,
+                            result: null,
+                            resultField: 101,
+                        });
+                    }
+                    return operateReply(1, {
+                        group: GROUP_SHOP,
+                        result: Buffer.concat([
+                            bytesField(1, Buffer.concat([varintField(1, 20526), varintField(2, 1)])),
+                            bytesField(2, Buffer.concat([varintField(1, 1001), varintField(2, 10000)])),
+                        ]),
+                        resultField: 101,
+                    });
+                }
+                throw new Error(`森野失败隔离用例收到 ${req.method || `cmd=${req.cmd}`}`);
+            };
+            activityLogs.length = 0;
+            const partialFailure = await milkTea.buyDailySeeds(1);
+            check('单个商品失败不会中断其余商品，并保留下一轮重试状态',
+                partialFailure.ok === false && partialFailure.partial === true
+                && partialFailure.boughtCount === 1 && partialFailure.failed.length === 1,
+                partialFailure);
+            check('部分成功日志同时列出成功与失败商品',
+                activityLogs.some((x) => /森野种子自动购买 1 种\/1 份/.test(x.msg)
+                    && /失败 森野甜莓种子/.test(x.msg)),
+                activityLogs.map((x) => x.msg));
+        } finally {
+            warehouse.getBag = originalGetBag;
+            warehouse.getBagItems = originalGetBagItems;
+            milkTea.__testing.resetCurrencyCache();
+        }
     }
 
     {

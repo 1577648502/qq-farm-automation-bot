@@ -126,9 +126,6 @@ const MILK_TEA_SEED_IDS = [20525, 20526, 20527, 20528, 20021, 21435, 20529, 2900
 //     301 20525 甜莓 / 302 20526 白桃 / 303 20527 甜橙 / 304 20528 红柚 / 305 20021 可可豆
 //     306 21435 柿子 / 307 20529 芭乐 / 308 29005 黄金芽 / 309 20522 金币果 / 310 20523 经验蘑菇
 const EXCHANGE_SEED_IDS = [20525, 20526, 20527, 20528, 20021, 21435, 20529, 29005, 20522, 20523];
-// **每日自动兑换**只买这一种: 森野黄金芽种子(商品308, 物品29005, 8000 奶茶券, 限购1)
-const DAILY_BUY_SEED_ID = 29005;
-
 /**
  * 可加工果实 → 配方 id。
  * 抓包(cmd=58)确认配方 #2..#9 与 MILK_TEA_SEED_IDS 顺序一一对应；
@@ -677,8 +674,10 @@ async function getShopGoods() {
                 const cond = findField(uf, 2);
                 const need = toInt((findField(uf, 5) || {}).v);
                 if (cond && cond.w === 2) unlockText = cond.v.toString('utf8') + (need ? ` ≥${need}` : '');
-                // 抓包确认: #13.#3 是解锁标志；条件文本/#5 只用于展示需求。
-                unlocked = toInt((findField(uf, 3) || {}).v) === 1;
+                // 抓包确认: 有 #13.#3 时它才是显式解锁标志；字段缺省表示服务端未单独标记，
+                // 等级要求由 #13.#5 + 主状态店等级判断。不能把缺省值误读成 0，否则 302~307 全被误锁。
+                const unlockState = findField(uf, 3);
+                unlocked = !(unlockState && unlockState.w === 0 && toInt(unlockState.v) === 0);
                 requireLevel = need;
             }
             // 限购(#4) / 已购(#5) / 限制类型(#11) / 类型(#12: seed=种子, exchange=装扮兑换, 空=道具)
@@ -688,8 +687,13 @@ async function getShopGoods() {
             const kindField = findField(f, 12);
             const kind = kindField && kindField.w === 2 ? kindField.v.toString('utf8') : '';
             const itemDef = getItemById(itemId);
-            // 旧 List 快照可能落后于刚成功的购买，因此服务端已购数与本地增量取较大值。
-            const boughtCount = Math.max(purchasedCount, shopBought.get(goodsId) || 0);
+            // List 快照可能落后于刚成功的购买。记录首次看到的服务端已购数，
+            // 与本地累计增量相加后再和服务端当前值取较大值，兼容快照未更新和已更新两种情况。
+            if (!shopBoughtBase.has(goodsId)) shopBoughtBase.set(goodsId, purchasedCount);
+            const boughtCount = Math.max(
+                purchasedCount,
+                (shopBoughtBase.get(goodsId) || 0) + (shopBought.get(goodsId) || 0),
+            );
             goods.push({
                 goodsId,
                 boughtCount,
@@ -726,6 +730,7 @@ function markShopGoodsSoldOut(goodsId) { if (goodsId) shopSoldOut.add(toInt(good
 
 /** 本次进程内各商品已兑换数量，用于补足刚购买后仍返回旧快照的服务端状态。 */
 const shopBought = new Map();
+const shopBoughtBase = new Map();
 let shopStateDay = '';
 let shopNow = () => Date.now();
 
@@ -736,14 +741,16 @@ function ensureShopDay() {
     shopStateDay = today;
     shopSoldOut.clear();
     shopBought.clear();
+    shopBoughtBase.clear();
     if (dayChanged) clearMainStatusCache();
 }
 
 /** 兑换/购买商品(数量必填) —— 实测 {#101: {#1: 商品ID, #2: 数量}} */
 /**
- * 每日兑换种子 —— **只兑换森野黄金芽种子**(商品308/物品29005), 买 perSeed 份(默认 1), 一天一次
+ * 每日兑换森野系列种子。
  * 实测(20261016-195923): 兑换 = 商店组 2026110102 cmd=1, payload #101 = {#1 商品id, #2 数量};
  *   响应 #101 = {#1 = {物品id, 数量}, #2 = {货币id, 总价}}
+ * 每次轮询按“每种补到 perSeed 份”幂等执行，可承接部分成功、升级解锁和余额恢复。
  */
 /**
  * 店铺升级信息(cmd=55 收银台详情的 box 标量, 实测 20261017-062113):
@@ -971,43 +978,171 @@ async function upgradeStore() {
 }
 
 async function buyDailySeeds(perSeed = 1) {
-    const st0 = await getMainStatus().catch(() => null);
-    if (st0 && isSettling(st0)) return { ok: false, skipped: true, reason: '结算期, 不兑换' };
+    const targetPerSeed = Math.max(1, Math.min(9999, toInt(perSeed) || 1));
+    const st = await getMainStatus().catch(() => null);
+    if (st && isSettling(st)) return { ok: false, skipped: true, reason: '结算期, 不兑换' };
     const shop = await getShopGoods();
     if (!shop.ok) return { ok: false, reason: shop.reason || '读取商店失败' };
-    const seeds = (shop.goods || []).filter(
-        (g) => toInt(g.itemId) === DAILY_BUY_SEED_ID && g.unlocked !== false,
-    );
-    if (!seeds.length) return { ok: false, skipped: true, reason: '商店里没有森野黄金芽种子' };
-    const bought = [];
-    let spent = 0;
-    let done = false;   // 是否"今天确实已经买过"(含限购)
-    for (const g of seeds) {
-        const n = Math.max(1, toInt(perSeed) || 1);
-        const r = await buyShopGoods(g.goodsId, n);
-        if (r && r.ok) {
-            bought.push(`${g.name}×${toInt(r.count) || n}`);
-            spent += toInt(r.cost && r.cost.amount) || 0;
-        } else if (r && /限购|已满|上限|已售|已购|已兑换|已领|1034007/.test(String(r.reason))) {
-            // 今天已经买过/限购: 视为"当日已完成"(实测: 手动买过之后再自动买 → code=1034007)
-            done = true;
-        } else if (r) {
-            log('活动', `奶茶热销中: 兑换「${g.name}」失败 — ${shortErr(r.reason)}`, { module: 'activity', event: '奶茶热销中', result: 'warn' });
-        }
-        await sleep(700);
+    const seeds = (shop.goods || [])
+        .filter((g) => MILK_TEA_SEED_IDS.includes(toInt(g.itemId)))
+        .sort((a, b) => toInt(a.goodsId) - toInt(b.goodsId));
+    if (!seeds.length) {
+        return { ok: false, skipped: true, reason: '商店里没有森野系列种子', bought: [], skippedGoods: [] };
     }
-    if (!bought.length) {
-        return done
-            ? { ok: false, skipped: true, alreadyDone: true, reason: '今天已经买过森野黄金芽种子' }
-            : { ok: false, reason: '森野黄金芽种子兑换未成功(下一轮重试)' };
+
+    const wallet = await getCurrencyBalances(true);
+    if (!wallet.ok) {
+        return {
+            ok: false,
+            skipped: true,
+            reason: `读取金币/奶茶券余额失败, 本轮不购买: ${wallet.reason || '未知原因'}`,
+            bought: [],
+            skippedGoods: [],
+        };
     }
-    log('活动', `奶茶热销中: 每日兑换种子 → ${bought.join('、')}${spent ? ` (花费 ${spent})` : ''}`, {
-        module: 'activity', event: '奶茶热销中', result: 'ok',
+
+    const out = {
+        ok: true,
+        bought: [],
+        boughtCount: 0,
+        spentGold: 0,
+        spentCoupon: 0,
+        spentOther: 0,
+        skippedGoods: [],
+        failed: [],
+        alreadyDone: false,
+    };
+    const currentLevel = toInt(st && st.storeLevel);
+    const balances = {
+        [GOLD_ID]: toInt(wallet.gold),
+        [MILK_COUPON_ID]: toInt(wallet.milkCoupon),
+    };
+    const skip = (g, reason) => out.skippedGoods.push({
+        goodsId: g.goodsId,
+        itemId: g.itemId,
+        name: g.name,
+        reason,
     });
-    return { ok: true, bought, spent };
+
+    for (const g of seeds) {
+        const limit = toInt(g.limitCount);
+        const alreadyBought = Math.max(toInt(g.purchasedCount), toInt(g.boughtCount));
+        if (g.soldOut || (limit > 0 && alreadyBought >= limit)) {
+            skip(g, '已达到限购');
+            continue;
+        }
+        if (g.unlocked === false) {
+            skip(g, '未解锁');
+            continue;
+        }
+        const requiredLevel = toInt(g.requireLevel);
+        if (requiredLevel > 0 && currentLevel < requiredLevel) {
+            skip(g, currentLevel > 0
+                ? `店铺 Lv${currentLevel} < Lv${requiredLevel}`
+                : `店铺等级未知, 需 Lv${requiredLevel}`);
+            continue;
+        }
+        const targetCount = limit > 0 ? Math.min(targetPerSeed, limit) : targetPerSeed;
+        const need = Math.max(0, targetCount - alreadyBought);
+        if (need <= 0) {
+            skip(g, '已达到设置数量');
+            continue;
+        }
+
+        const currencyId = toInt(g.currencyId);
+        const unitPrice = Math.max(0, toInt(g.unitPrice));
+        const estimatedCost = unitPrice * need;
+        const currencyName = currencyId === GOLD_ID
+            ? '金币'
+            : currencyId === MILK_COUPON_ID
+                ? '奶茶券'
+                : ((getItemById(currencyId) || {}).name || `货币#${currencyId}`);
+        if (currencyId !== GOLD_ID && currencyId !== MILK_COUPON_ID) {
+            skip(g, `不支持自动校验${currencyName}余额`);
+            continue;
+        }
+        if (balances[currencyId] < estimatedCost) {
+            skip(g, `${currencyName}不足(需 ${estimatedCost}, 现有 ${balances[currencyId]})`);
+            continue;
+        }
+
+        const r = await buyShopGoods(g.goodsId, need, { logSuccess: false });
+        if (r && r.ok) {
+            const actualCount = Math.max(1, toInt(r.count) || need);
+            const actualCost = r.cost && toInt(r.cost.amount) > 0
+                ? toInt(r.cost.amount)
+                : unitPrice * actualCount;
+            balances[currencyId] = Math.max(0, balances[currencyId] - actualCost);
+            applyCurrencySpend(currencyId, actualCost);
+            if (currencyId === GOLD_ID) out.spentGold += actualCost;
+            else if (currencyId === MILK_COUPON_ID) out.spentCoupon += actualCost;
+            else out.spentOther += actualCost;
+            out.boughtCount += actualCount;
+            out.bought.push(`${g.name}×${actualCount}`);
+            await sleep(700);
+        } else if (r && /限购|已满|上限|已售|已购|已兑换|已领|1034007/.test(String(r.reason))) {
+            skip(g, '服务器判定已达到限购');
+        } else {
+            out.failed.push({ goodsId: g.goodsId, itemId: g.itemId, name: g.name, reason: shortErr(r && r.reason) });
+        }
+    }
+
+    const skipText = summarizeSeedSkips(out.skippedGoods);
+    const spendParts = [];
+    if (out.spentGold) spendParts.push(`金币 ${out.spentGold}`);
+    if (out.spentCoupon) spendParts.push(`奶茶券 ${out.spentCoupon}`);
+    if (out.spentOther) spendParts.push(`其他货币 ${out.spentOther}`);
+    if (out.bought.length) {
+        const failedText = out.failed.length
+            ? `；失败 ${out.failed.map((x) => `${x.name}(${x.reason})`).join('、')}`
+            : '';
+        log('活动', `奶茶热销中: 森野种子自动购买 ${out.bought.length} 种/${out.boughtCount} 份 → ${out.bought.join('、')}${spendParts.length ? `；花费 ${spendParts.join('、')}` : ''}${skipText ? `；跳过 ${skipText}` : ''}${failedText}`, {
+            module: 'activity',
+            event: '奶茶热销中',
+            result: out.failed.length ? 'warn' : 'ok',
+            boughtCount: out.boughtCount,
+            failedCount: out.failed.length,
+            skippedCount: out.skippedGoods.length,
+        });
+    } else if (out.failed.length) {
+        const failedText = out.failed.map((x) => `${x.name}(${x.reason})`).join('、');
+        const key = `failed:${shopStateDay}:${targetPerSeed}:${currentLevel}:${failedText}`;
+        logSeedSummaryOnce(key, 'warn', `奶茶热销中: 森野种子自动购买未完成, 下轮重试 → ${failedText}${skipText ? `；同时跳过 ${skipText}` : ''}`);
+    } else {
+        const key = `skip:${shopStateDay}:${targetPerSeed}:${currentLevel}:${skipText}`;
+        logSeedSummaryOnce(key, 'skip', `奶茶热销中: 森野种子本轮无需购买 → ${skipText}`);
+    }
+
+    out.alreadyDone = out.bought.length === 0 && out.failed.length === 0;
+    out.ok = out.failed.length === 0;
+    out.skipped = out.alreadyDone;
+    if (out.failed.length && out.bought.length) out.partial = true;
+    return out;
 }
 
-async function buyShopGoods(goodsId, count = 1) {
+function summarizeSeedSkips(skipped) {
+    if (!skipped || !skipped.length) return '';
+    const groups = new Map();
+    for (const item of skipped) {
+        const key = item.reason === '已达到设置数量' ? '已补齐'
+            : item.reason === '已达到限购' ? '限购'
+                : item.reason === '未解锁' ? '未解锁'
+                    : /店铺/.test(item.reason) ? '等级不足'
+                        : /不足/.test(item.reason) ? '余额不足'
+                            : item.reason;
+        groups.set(key, (groups.get(key) || 0) + 1);
+    }
+    return [...groups.entries()].map(([reason, count]) => `${reason}${count}种`).join('、');
+}
+
+let seedSummaryLogKey = '';
+function logSeedSummaryOnce(key, result, msg) {
+    if (!key || key === seedSummaryLogKey) return;
+    seedSummaryLogKey = key;
+    log('活动', msg, { module: 'activity', event: '奶茶热销中', result });
+}
+
+async function buyShopGoods(goodsId, count = 1, opts = {}) {
     ensureShopDay();
     const st0 = await getMainStatus().catch(() => null);
     if (st0 && isSettling(st0)) return { ok: false, reason: '活动已进入结算期(11/15–11/16), 不能兑换活动种子' };
@@ -1049,9 +1184,13 @@ async function buyShopGoods(goodsId, count = 1) {
         if (target && target.requireLevel > 0) {
             const st = await getMainStatus();
             const lv = toNum(st.storeLevel) || 0;
-            // 等级读不到时(<=0)不拦, 免得误锁; 交给服务端判断(报错也会原样透出)
-            if (lv > 0 && lv < target.requireLevel) {
-                return { ok: false, reason: `「${target.name}」需要奶茶店等级 ≥${target.requireLevel}（当前 Lv${lv}）` };
+            if (lv < target.requireLevel) {
+                return {
+                    ok: false,
+                    reason: lv > 0
+                        ? `「${target.name}」需要奶茶店等级 ≥${target.requireLevel}（当前 Lv${lv}）`
+                        : `「${target.name}」需要奶茶店等级 ≥${target.requireLevel}（当前等级未知）`,
+                };
             }
         }
     } catch (e) {
@@ -1084,9 +1223,11 @@ async function buyShopGoods(goodsId, count = 1) {
     }
     const actualCount = got && got.count > 0 ? got.count : n;
     shopBought.set(id, (shopBought.get(id) || 0) + actualCount);
-    log('活动', `奶茶热销中: 兑换 ${actualCount} 个商品#${id}${got ? ` → ${itemLabel(got.id, got.count)}` : ''}${cost ? `, 花费 ${cost.amount} ${(getItemById(cost.currencyId) || {}).name || ''}` : ''}`, {
-        module: 'activity', event: '奶茶热销中', result: 'ok', goodsId: id, count: actualCount,
-    });
+    if (opts.logSuccess !== false) {
+        log('活动', `奶茶热销中: 兑换 ${actualCount} 个商品#${id}${got ? ` → ${itemLabel(got.id, got.count)}` : ''}${cost ? `, 花费 ${cost.amount} ${(getItemById(cost.currencyId) || {}).name || ''}` : ''}`, {
+            module: 'activity', event: '奶茶热销中', result: 'ok', goodsId: id, count: actualCount,
+        });
+    }
     return { ok: true, goodsId: id, count: actualCount, got, cost };
 }
 
@@ -2701,22 +2842,65 @@ async function getCashierStatus() {
     return out;
 }
 
-/** 奶茶券余额(背包里的 1041); 加 60s 缓存, 避免每次读状态都打一次背包请求 */
-let couponCache = { at: 0, value: 0 };
-async function getMilkCouponBalance(force = false) {
-    if (!force && couponCache.at && (Date.now() - couponCache.at) < 60000) return couponCache.value;
+/** 金币/奶茶券余额缓存；自动购买会强制刷新一次背包，购买后本地扣减。 */
+let currencyBalanceCache = { at: 0, ok: false, value: null };
+async function getCurrencyBalances(force = false) {
+    if (!force && currencyBalanceCache.at && (Date.now() - currencyBalanceCache.at) < 60000) {
+        return currencyBalanceCache.value;
+    }
     try {
         const { getBag, getBagItems } = require('./warehouse');
         const bag = await getBag();
+        const byId = new Map();
         for (const it of getBagItems(bag)) {
-            if (toNum(it && it.id) === MILK_COUPON_ID) {
-                couponCache = { at: Date.now(), value: toNum(it.count) || 0 };
-                return couponCache.value;
-            }
+            const id = toNum(it && it.id);
+            if (!id) continue;
+            byId.set(id, (byId.get(id) || 0) + (toNum(it && it.count) || 0));
         }
-    } catch (e) { /* 读不到就当 0 */ }
-    couponCache = { at: Date.now(), value: 0 };
-    return 0;
+        const value = {
+            ok: true,
+            gold: byId.get(GOLD_ID) || 0,
+            milkCoupon: byId.get(MILK_COUPON_ID) || 0,
+            byId,
+        };
+        currencyBalanceCache = { at: Date.now(), ok: true, value };
+        return value;
+    } catch (e) {
+        const value = {
+            ok: false,
+            gold: 0,
+            milkCoupon: 0,
+            byId: new Map(),
+            reason: shortErr(e && e.message),
+        };
+        currencyBalanceCache = { at: Date.now(), ok: false, value };
+        return value;
+    }
+}
+
+function applyCurrencySpend(currencyId, amount) {
+    const id = toNum(currencyId);
+    const spent = Math.max(0, toNum(amount));
+    if (!id || !spent || !currencyBalanceCache.ok || !currencyBalanceCache.value) return;
+    const previous = currencyBalanceCache.value;
+    const byId = new Map(previous.byId);
+    const nextAmount = Math.max(0, (byId.get(id) || 0) - spent);
+    byId.set(id, nextAmount);
+    currencyBalanceCache = {
+        at: Date.now(),
+        ok: true,
+        value: {
+            ...previous,
+            gold: id === GOLD_ID ? nextAmount : previous.gold,
+            milkCoupon: id === MILK_COUPON_ID ? nextAmount : previous.milkCoupon,
+            byId,
+        },
+    };
+}
+
+async function getMilkCouponBalance(force = false) {
+    const balances = await getCurrencyBalances(force);
+    return balances.ok ? balances.milkCoupon : 0;
 }
 
 /** 旧任务领取接口兼容占位；#122 实际为店铺升级奖励，升级时自动发放。 */
@@ -3017,7 +3201,6 @@ function stepGap() {
     return sleep(ms);
 }
 
-let lastSeedBuyDay = '';
 let interactSkipLoggedKey = '';   // 已记录过"本班暂不可互动"的班次(避免每 10 分钟刷一条)
 const interactCooldown = new Map();   // 班次key → 下次可尝试时间(只在服务端返回 1034147 后写 10 分钟)
 const interactCompletedShifts = new Set(); // 成功互动后的进程内兜底；权威状态以 #168.#1.#12 为准
@@ -3085,28 +3268,11 @@ async function runMilkTeaOnce(opts = {}) {
         out.steps.push({ step: 'speaker', ...r });
         await stepGap();
     }
-    // 每日兑换种子(一天一次; 日期用状态里的服务器时间算, 取不到才用本地)
+    // 森野种子每次都按服务端已购数幂等补齐；部分成功/升级解锁/余额恢复后下一轮继续。
     if (opts.autoBuySeed) {
-        const dayKey = (() => {
-            const t = toInt(st && st.at) > 0 ? toInt(st.at) : Math.floor(Date.now() / 1000);
-            const d = new Date((t + 8 * 3600) * 1000);
-            return `${d.getUTCFullYear()}-${d.getUTCMonth() + 1}-${d.getUTCDate()}`;
-        })();
-        if (lastSeedBuyDay !== dayKey) {
-            const r = await buyDailySeeds(opts.seedBuyCount || 1);
-            out.steps.push({ step: 'buyDailySeeds', ...r });
-            // 只有"确实买到"或"服务端说今天已买过"才标记当天完成;
-            // 其它失败**不标记**, 下一轮继续试(用户要求: 第一次失败不能标记)
-            if (r.ok || r.alreadyDone) {
-                lastSeedBuyDay = dayKey;
-                if (r.alreadyDone) {
-                    log('活动', `奶茶热销中: 今天已买过森野黄金芽种子, 当天不再尝试`, { module: 'activity', event: '奶茶热销中', result: 'skip' });
-                }
-            }
-            await stepGap();
-        } else {
-            out.steps.push({ step: 'buyDailySeeds', ok: false, skipped: true, reason: `今天(${dayKey})已兑换过` });
-        }
+        const r = await buyDailySeeds(opts.seedBuyCount || 1);
+        out.steps.push({ step: 'buyDailySeeds', ...r });
+        await stepGap();
     }
 
 
@@ -3260,6 +3426,10 @@ module.exports = {
             shopStateDay = '';
             shopSoldOut.clear();
             shopBought.clear();
+            shopBoughtBase.clear();
+        },
+        resetCurrencyCache() {
+            currencyBalanceCache = { at: 0, ok: false, value: null };
         },
     },
     getMainStatus,
@@ -3302,8 +3472,10 @@ module.exports = {
     claimTask,
     claimAllTasks,
     getCashierStatus,
+    getCurrencyBalances,
     getMilkCouponBalance,
     MILK_COUPON_ID,
+    GOLD_ID,
     isSettling,
     runMilkTea,
 };

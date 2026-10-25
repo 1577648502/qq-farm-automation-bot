@@ -98,6 +98,7 @@ export interface SettingsState {
   milkTeaAutoInteract: boolean
   milkTeaAutoWage: boolean
   milkTeaAutoBuySeed: boolean
+  milkTeaSeedBuyCount: number
   milkTeaAutoUpgrade: boolean
   milkTeaInteractType: number
   sellGoldenFruit: boolean
@@ -157,6 +158,7 @@ function createDefaultSettings(): SettingsState {
     milkTeaAutoInteract: false,
     milkTeaAutoWage: true,
     milkTeaAutoBuySeed: false,
+    milkTeaSeedBuyCount: 1,
     milkTeaAutoUpgrade: true,
     milkTeaInteractType: 2,
     sellGoldenFruit: false,
@@ -318,6 +320,7 @@ export const useSettingStore = defineStore('setting', () => {
       settings.value.milkTeaAutoInteract = d.milkTeaAutoInteract ?? false
       settings.value.milkTeaAutoWage = d.milkTeaAutoWage !== false
       settings.value.milkTeaAutoBuySeed = !!d.milkTeaAutoBuySeed
+      settings.value.milkTeaSeedBuyCount = Math.max(1, Math.min(9999, Number(d.milkTeaSeedBuyCount) || 1))
       settings.value.milkTeaAutoUpgrade = d.milkTeaAutoUpgrade !== false
       settings.value.milkTeaInteractType = Number(d.milkTeaInteractType) || 2
       settings.value.sellGoldenFruit = d.sellGoldenFruit ?? false
@@ -399,6 +402,7 @@ export const useSettingStore = defineStore('setting', () => {
         milkTeaAutoInteract: newSettings.milkTeaAutoInteract,
         milkTeaAutoWage: newSettings.milkTeaAutoWage,
         milkTeaAutoBuySeed: newSettings.milkTeaAutoBuySeed,
+        milkTeaSeedBuyCount: newSettings.milkTeaSeedBuyCount,
         milkTeaAutoUpgrade: newSettings.milkTeaAutoUpgrade,
         milkTeaInteractType: newSettings.milkTeaInteractType,
         sellGoldenFruit: newSettings.sellGoldenFruit,

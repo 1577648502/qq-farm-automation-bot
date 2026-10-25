@@ -2089,7 +2089,7 @@ app.use('/api', (req, res, next) => {
                 : true;
             const milkTeaCfg = (id && typeof store.getMilkTeaConfig === 'function')
                 ? store.getMilkTeaConfig(id)
-                : { enabled: true, cashier: true, craft: true, speaker: false, storeName: '奶茶小铺', hireGids: [], autoHire: false, autoTask: false, autoInteract: false, autoWage: true, autoBuySeed: false, autoUpgrade: true, interactType: 2 };
+                : { enabled: true, cashier: true, craft: true, speaker: false, storeName: '奶茶小铺', hireGids: [], autoHire: false, autoTask: false, autoInteract: false, autoWage: true, autoBuySeed: false, autoUpgrade: true, seedBuyCount: 1, interactType: 2 };
             const happyShareEnabled = (id && typeof store.getHappyShareEnabled === 'function')
                 ? store.getHappyShareEnabled(id)
                 : true;
@@ -2162,6 +2162,7 @@ app.use('/api', (req, res, next) => {
                     milkTeaAutoInteract: !!milkTeaCfg.autoInteract,
                     milkTeaAutoWage: milkTeaCfg.autoWage !== false,
                     milkTeaAutoBuySeed: !!milkTeaCfg.autoBuySeed,
+                    milkTeaSeedBuyCount: Math.max(1, Math.min(9999, Number(milkTeaCfg.seedBuyCount) || 1)),
                     milkTeaAutoUpgrade: milkTeaCfg.autoUpgrade !== false,
                     milkTeaInteractType: milkTeaCfg.interactType || 2,
                     // 看广告礼包(跳过广告直接领)
