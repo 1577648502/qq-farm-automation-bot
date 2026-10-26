@@ -244,7 +244,9 @@ async function shareCharity() {
     let code = 0;
     try {
         const rep = types.ReportShareReply.decode(repReplyBody);
-        code = toNum(rep && rep.result && rep.result.code);
+        const results = Array.isArray(rep && rep.result) ? rep.result : [rep && rep.result].filter(Boolean);
+        const success = results.find(item => toNum(item && item.code) === 1);
+        code = success ? 1 : toNum(results[0] && results[0].code);
     } catch (_) { /* 忽略 */ }
     if (code !== 1) {
         return { shared: false, reason: `ReportShare 未成功 (code=${code})` };

@@ -27,7 +27,7 @@ const { getActivityOverview, drawLottery, drawActivity, claimBattlePassRewards, 
 const { performDailyMonthCardGift, getMonthCardDailyState } = require('../services/monthcard');
 const { performDailyVipGift, getVipDailyState } = require('../services/qqvip');
 const { createScheduler, getSchedulerRegistrySnapshot } = require('../services/scheduler');
-const { performDailyShare, getShareDailyState } = require('../services/share');
+const { performDailyShare, performDailyWechatGift, getShareDailyState } = require('../services/share');
 const { setInitialValues, resetSessionGains, recordOperation, initStatsWithPersistence, saveStats } = require('../services/stats');
 const { initStatusBar, setStatusPlatform, statusData } = require('../services/status');
 const { setRecordGoldExpHook } = require('../services/status');
@@ -190,6 +190,7 @@ async function runDailyRoutines(force = false) {
         // 以下功能默认启用，不再检查开关
         await checkAndClaimEmails(force);
         await performDailyShare(force);
+        await performDailyWechatGift(force);
         await performDailyMonthCardGift(force);
         await buyFreeGifts(force);
         await performDailyVipGift(force);

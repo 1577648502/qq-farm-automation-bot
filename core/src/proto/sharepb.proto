@@ -25,7 +25,10 @@ message ReportShareRequest {
 }
 
 message ReportShareReply {
-    ReportShareResult result = 1;
+    // 抓包(2026-10-15)一次响应可能包含多个 result:
+    //   [{code=1, reward=...}, {code=102, reward={}}]
+    // 旧定义按单值消息解析时，后一个 102 会覆盖成功结果，导致分享被误判失败。
+    repeated ReportShareResult result = 1;
 }
 
 message ReportShareResult {
