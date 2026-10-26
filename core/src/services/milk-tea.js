@@ -668,6 +668,7 @@ async function getShopGoods() {
             const unitPrice = toInt((findField(priceFields, 2) || {}).v);
             let unlockText = '';
             let requireLevel = 0;      // 需要的奶茶店等级(0 = 无要求)
+            let currentLevelAtList = 0;
             let unlocked = true;
             let explicitUnlocked = false;
             if (unlock && unlock.w === 2) {
@@ -675,12 +676,13 @@ async function getShopGoods() {
                 const cond = findField(uf, 2);
                 const need = toInt((findField(uf, 5) || {}).v);
                 if (cond && cond.w === 2) unlockText = cond.v.toString('utf8') + (need ? ` ≥${need}` : '');
-                // 抓包确认: 有 #13.#3 时它才是显式解锁标志；字段缺省表示服务端未单独标记，
-                // 等级要求由 #13.#5 + 主状态店等级判断。不能把缺省值误读成 0，否则 302~307 全被误锁。
+                // 抓包确认: #13 存在时只有 #3=1 表示已解锁；缺省 #3 表示条件未满足。
+                // #4 是列表返回时的店铺等级，#5 是展示用所需等级，均不能替代 #3 做本地判定。
                 const unlockState = findField(uf, 3);
                 explicitUnlocked = !!unlockState && unlockState.w === 0 && toInt(unlockState.v) === 1;
-                unlocked = !(unlockState && unlockState.w === 0 && toInt(unlockState.v) === 0);
+                unlocked = explicitUnlocked;
                 requireLevel = need;
+                currentLevelAtList = toInt((findField(uf, 4) || {}).v);
             }
             // 限购(#4) / 已购(#5) / 限制类型(#11) / 类型(#12: seed=种子, exchange=装扮兑换, 空=道具)
             const limitCount = toInt((findField(f, 4) || {}).v);
@@ -722,6 +724,7 @@ async function getShopGoods() {
                 explicitUnlocked,
                 unlockText,
                 requireLevel,
+                currentLevelAtList,
             });
         }
     } catch (e) {
@@ -742,33 +745,12 @@ let shopStateDay = '';
 let shopNow = () => Date.now();
 const SHOP_RESTRICTION_DAILY = 1;
 
-/** List 与收银台都可能短暂滞后；店铺等级只增不减，取两者较高值。 */
-async function resolveCurrentStoreLevel(status) {
-    const listedLevel = toInt(status && status.storeLevel);
-    const info = await getUpgradeInfo().catch(() => null);
-    const currentLevel = toInt(info && info.ok && info.level);
-    return Math.max(listedLevel, currentLevel);
-}
-
-/**
- * #13.#3===1 是服务端明确解锁，优先级高于 #13.#5 展示的等级要求。
- * 缺少 #13.#3 时才用店铺等级做本地兜底，避免把已解锁商品再次拦下。
- */
-function shopGoodsUnlockCheck(goods, currentLevel) {
+/** 解锁状态完全以服务端 #13.#3 的解析结果为准。 */
+function shopGoodsUnlockCheck(goods) {
     if (!goods) return { ok: false, reason: '未找到商品' };
-    if (goods.explicitUnlocked === true) return { ok: true };
-    if (goods.unlocked === false) return { ok: false, reason: '未解锁' };
-    const requiredLevel = toInt(goods.requireLevel);
-    const level = toInt(currentLevel);
-    if (requiredLevel > 0 && level < requiredLevel) {
-        return {
-            ok: false,
-            reason: level > 0
-                ? `店铺 Lv${level} < Lv${requiredLevel}`
-                : `店铺等级未知, 需 Lv${requiredLevel}`,
-        };
-    }
-    return { ok: true };
+    return goods.unlocked === true
+        ? { ok: true }
+        : { ok: false, reason: '未解锁' };
 }
 
 function ensureShopDay() {
@@ -1056,7 +1038,6 @@ async function buyDailySeeds(perSeed = 1) {
         failed: [],
         alreadyDone: false,
     };
-    const currentLevel = await resolveCurrentStoreLevel(st);
     const balances = {
         [GOLD_ID]: toInt(wallet.gold),
         [MILK_COUPON_ID]: toInt(wallet.milkCoupon),
@@ -1075,7 +1056,7 @@ async function buyDailySeeds(perSeed = 1) {
             skip(g, '已达到限购');
             continue;
         }
-        const unlock = shopGoodsUnlockCheck(g, currentLevel);
+        const unlock = shopGoodsUnlockCheck(g);
         if (!unlock.ok) {
             skip(g, unlock.reason);
             continue;
@@ -1106,7 +1087,6 @@ async function buyDailySeeds(perSeed = 1) {
 
         const r = await buyShopGoods(g.goodsId, need, {
             logSuccess: false,
-            currentStoreLevel: currentLevel,
         });
         if (r && r.ok) {
             const actualCount = Math.max(1, toInt(r.count) || need);
@@ -1147,10 +1127,10 @@ async function buyDailySeeds(perSeed = 1) {
         });
     } else if (out.failed.length) {
         const failedText = out.failed.map((x) => `${x.name}(${x.reason})`).join('、');
-        const key = `failed:${shopStateDay}:${targetPerSeed}:${currentLevel}:${failedText}`;
+        const key = `failed:${shopStateDay}:${targetPerSeed}:${failedText}`;
         logSeedSummaryOnce(key, 'warn', `奶茶热销中: 森野种子自动购买未完成, 下轮重试 → ${failedText}${skipText ? `；同时跳过 ${skipText}` : ''}`);
     } else {
-        const key = `skip:${shopStateDay}:${targetPerSeed}:${currentLevel}:${skipText}`;
+        const key = `skip:${shopStateDay}:${targetPerSeed}:${skipText}`;
         logSeedSummaryOnce(key, 'skip', `奶茶热销中: 森野种子本轮无需购买 → ${skipText}`);
     }
 
@@ -1219,11 +1199,7 @@ async function buyShopGoods(goodsId, count = 1, opts = {}) {
             n = Math.min(n, remaining);
         }
         if (target) {
-            const currentStoreLevel = toInt(opts.currentStoreLevel);
-            const lv = currentStoreLevel > 0
-                ? currentStoreLevel
-                : await resolveCurrentStoreLevel(await getMainStatus());
-            const unlock = shopGoodsUnlockCheck(target, lv);
+            const unlock = shopGoodsUnlockCheck(target);
             if (!unlock.ok) {
                 return { ok: false, reason: `「${target.name}」尚未解锁：${unlock.reason}` };
             }
