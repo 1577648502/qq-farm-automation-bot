@@ -3521,7 +3521,6 @@ sendImpl = async (service, method, body) => {
         const fixedNow = Date.UTC(2026, 9, 19, 6, 0, 0);
         milkTea.__testing.setShopClock(() => fixedNow);
         milkTea.__testing.resetShopState();
-        milkTea.__testing.resetStoreLevelHint();
         milkTea.__testing.clearMainStatusCache();
         milkTea.__testing.resetCurrencyCache();
         const originalGetBag = warehouse.getBag;
@@ -3730,23 +3729,22 @@ sendImpl = async (service, method, body) => {
             warehouse.getBagItems = originalGetBagItems;
             milkTea.__testing.setShopClock(() => Date.now());
             milkTea.__testing.resetShopState();
-            milkTea.__testing.resetStoreLevelHint();
             milkTea.__testing.clearMainStatusCache();
             milkTea.__testing.resetCurrencyCache();
         }
     }
 
-    section('23. 升级响应等级兜底旧商店快照');
+    section('23. 自动购种使用收银台当前等级');
     {
         const fixedNow = Date.UTC(2026, 9, 19, 10, 30, 0);
         milkTea.__testing.setShopClock(() => fixedNow);
         milkTea.__testing.resetShopState();
-        milkTea.__testing.resetStoreLevelHint();
         milkTea.__testing.clearMainStatusCache();
         milkTea.__testing.resetCurrencyCache();
         const originalGetBag = warehouse.getBag;
         const originalGetBagItems = warehouse.getBagItems;
         let listedLevel = 8;
+        let cashierLevel = 9;
         const buyRequests = [];
         try {
             warehouse.getBag = async () => ({});
@@ -3775,17 +3773,11 @@ sendImpl = async (service, method, body) => {
                 if (req.cmd === 55) {
                     return operateReply(55, {
                         result: cashierDetailResult({
-                            level: listedLevel,
+                            level: cashierLevel,
                             revenue: 100000,
                             nextLevelRevenue: 50000,
                         }),
                         resultField: 160,
-                    });
-                }
-                if (req.cmd === 61) {
-                    return operateReply(61, {
-                        result: varintField(1, 9),
-                        resultField: 166,
                     });
                 }
                 if (req.cmd === 1 && req.group === GROUP_SHOP) {
@@ -3811,39 +3803,27 @@ sendImpl = async (service, method, body) => {
                 throw new Error(`升级响应等级兜底用例收到 ${req.method || `cmd=${req.cmd}`}`);
             };
 
-            const commonOpts = {
-                cashier: false,
-                craft: false,
-                speaker: false,
-                autoInteract: false,
-                autoWage: false,
-                autoHire: false,
-                autoBuySeed: true,
-                seedBuyCount: 1,
-            };
-            const firstRun = await milkTea.runMilkTea({ ...commonOpts, autoUpgrade: true });
-            const firstBuy = firstRun.steps.find((x) => x.step === 'buyDailySeeds');
-            const upgrade = firstRun.steps.find((x) => x.step === 'upgradeStore');
-            listedLevel = 8;
-            const secondRun = await milkTea.runMilkTea({ ...commonOpts, autoUpgrade: false });
-            const secondBuy = secondRun.steps.find((x) => x.step === 'buyDailySeeds');
-            check('升级响应明确 Lv9 但后续 List 仍为 Lv8 时，下一轮仍立即购买新解锁种子',
-                firstBuy && firstBuy.boughtCount === 0
-                && upgrade && upgrade.ok === true && upgrade.level === 9
-                && secondBuy && secondBuy.boughtCount === 1
+            const staleStatus = await milkTea.getMainStatus(true);
+            sent.length = 0;
+            const bought = await milkTea.buyDailySeeds(1);
+            const cashierCalls = sent.filter((x) => x.cmd === 55).length;
+            check('List 仍为 Lv8 且没有升级响应缓存时，按收银台 Lv9 购买新解锁种子',
+                staleStatus && staleStatus.storeLevel === 8
+                && cashierCalls === 1
+                && bought && bought.boughtCount === 1
                 && JSON.stringify(buyRequests) === JSON.stringify([{ goodsId: 305, count: 1 }]), {
+                    staleStatus,
                     listedLevel,
+                    cashierLevel,
+                    cashierCalls,
                     buyRequests,
-                    firstBuy,
-                    upgrade,
-                    secondBuy,
+                    bought,
                 });
         } finally {
             warehouse.getBag = originalGetBag;
             warehouse.getBagItems = originalGetBagItems;
             milkTea.__testing.setShopClock(() => Date.now());
             milkTea.__testing.resetShopState();
-            milkTea.__testing.resetStoreLevelHint();
             milkTea.__testing.clearMainStatusCache();
             milkTea.__testing.resetCurrencyCache();
         }
