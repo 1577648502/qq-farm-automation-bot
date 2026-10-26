@@ -990,7 +990,8 @@ async function upgradeStore() {
 async function buyDailySeeds(perSeed = 1) {
     ensureShopDay();
     const targetPerSeed = Math.max(1, Math.min(9999, toInt(perSeed) || 1));
-    const st = await getMainStatus().catch(() => null);
+    // 店铺升级后可能立即解锁新种子，必须绕过 20 秒 List 缓存读取最新等级。
+    const st = await getMainStatus(true).catch(() => null);
     if (st && isSettling(st)) return { ok: false, skipped: true, reason: '结算期, 不兑换' };
     const shop = await getShopGoods();
     if (!shop.ok) return { ok: false, reason: shop.reason || '读取商店失败' };

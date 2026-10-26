@@ -3622,6 +3622,118 @@ sendImpl = async (service, method, body) => {
         }
     }
 
+    section('22. 自动购种刷新升级后的店铺等级');
+    {
+        const defaultAutoBuySeed = store.getMilkTeaConfig(process.env.FARM_ACCOUNT_ID).autoBuySeed;
+        store.applyConfigSnapshot(
+            { milkTeaAutoBuySeed: true, milkTeaSeedBuyCount: 3 },
+            { persist: false, accountId: process.env.FARM_ACCOUNT_ID },
+        );
+        const savedAutoBuyConfig = store.getMilkTeaConfig(process.env.FARM_ACCOUNT_ID);
+        check('自动购种开关和每种份数保存后可正确读回',
+            defaultAutoBuySeed === false
+            && savedAutoBuyConfig.autoBuySeed === true
+            && savedAutoBuyConfig.seedBuyCount === 3,
+            { defaultAutoBuySeed, savedAutoBuyConfig });
+
+        const fixedNow = Date.UTC(2026, 9, 19, 10, 0, 0);
+        milkTea.__testing.setShopClock(() => fixedNow);
+        milkTea.__testing.resetShopState();
+        milkTea.__testing.clearMainStatusCache();
+        milkTea.__testing.resetCurrencyCache();
+        const originalGetBag = warehouse.getBag;
+        const originalGetBagItems = warehouse.getBagItems;
+        let level = 8;
+        try {
+            warehouse.getBag = async () => ({});
+            warehouse.getBagItems = () => [{ id: 1001, count: 100000 }];
+            router = async (req) => {
+                if (req.method === 'List') {
+                    return activityListReply([
+                        mainActivity(Buffer.concat([
+                            varintField(1, 1792200000),
+                            bytesField(2, '森野升级购种测试店'),
+                            varintField(4, level),
+                        ])),
+                        shopActivity([
+                            shopGoods({
+                                goodsId: 305,
+                                itemId: 20021,
+                                currencyId: 1001,
+                                unitPrice: 10000,
+                                limitCount: 108,
+                                requireLevel: 9,
+                                name: '森野可可豆种子',
+                            }),
+                        ]),
+                    ]);
+                }
+                if (req.cmd === 1 && req.group === GROUP_SHOP) {
+                    const payload = mg.parseTop(req.payload);
+                    const goodsId = toInt((payload.find((x) => x.f === 1) || {}).v);
+                    const count = toInt((payload.find((x) => x.f === 2) || {}).v);
+                    return operateReply(1, {
+                        group: GROUP_SHOP,
+                        result: Buffer.concat([
+                            bytesField(1, Buffer.concat([
+                                varintField(1, goodsId === 305 ? 20021 : 0),
+                                varintField(2, count),
+                            ])),
+                            bytesField(2, Buffer.concat([
+                                varintField(1, 1001),
+                                varintField(2, count * 10000),
+                            ])),
+                        ]),
+                        resultField: 101,
+                    });
+                }
+                throw new Error(`自动购种升级刷新用例收到 ${req.method || `cmd=${req.cmd}`}`);
+            };
+
+            const cachedLevel8 = await milkTea.getMainStatus(true);
+            level = 9;
+            sent.length = 0;
+            const out = await milkTea.runMilkTea({
+                cashier: false,
+                craft: false,
+                speaker: false,
+                autoInteract: false,
+                autoUpgrade: false,
+                autoWage: false,
+                autoHire: false,
+                autoBuySeed: true,
+                seedBuyCount: 1,
+            });
+            const listCalls = sent.filter((x) => x.method === 'List').length;
+            const buyRequests = sent
+                .filter((x) => x.cmd === 1 && x.group === GROUP_SHOP)
+                .map((x) => {
+                    const payload = mg.parseTop(x.payload);
+                    return {
+                        goodsId: toInt((payload.find((y) => y.f === 1) || {}).v),
+                        count: toInt((payload.find((y) => y.f === 2) || {}).v),
+                    };
+                });
+            const buyStep = out.steps.find((x) => x.step === 'buyDailySeeds');
+            check('自动购种会重新读取店铺状态，升级到 Lv9 后立即购买新解锁种子',
+                cachedLevel8.ok === true && cachedLevel8.storeLevel === 8
+                && listCalls >= 2 && buyStep && buyStep.boughtCount === 1
+                && JSON.stringify(buyRequests) === JSON.stringify([{ goodsId: 305, count: 1 }]), {
+                    cachedLevel8,
+                    listCalls,
+                    buyRequests,
+                    out,
+                });
+        } finally {
+            warehouse.getBag = originalGetBag;
+            warehouse.getBagItems = originalGetBagItems;
+            milkTea.__testing.setShopClock(() => Date.now());
+            milkTea.__testing.resetShopState();
+            milkTea.__testing.clearMainStatusCache();
+            milkTea.__testing.resetCurrencyCache();
+        }
+    }
+
     {
         let now = Date.UTC(2026, 9, 19, 6, 0, 0);
         milkTea.__testing.setShopClock(() => now);

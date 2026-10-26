@@ -68,6 +68,8 @@ const hireDuration = ref<number>(1)
 const hireGids = ref<string[]>([])
 const autoHire = ref(false)
 const autoInteract = ref(false)
+const autoBuySeed = ref(false)
+const seedBuyCount = ref(1)
 const friendsOpen = ref(false)   // 只折叠「好友列表」
 const hireSaving = ref(false)
 /** 互动事项(与后端一致) */
@@ -102,6 +104,8 @@ function hireConfigPayload() {
     hireGids: hireGids.value.map(String),
     autoHire: !!autoHire.value,
     autoInteract: !!autoInteract.value,
+    autoBuySeed: !!autoBuySeed.value,
+    seedBuyCount: Math.max(1, Math.min(9999, Number(seedBuyCount.value) || 1)),
     interactType: Number(interactType.value) || 2,
     storeName: String(storeName.value || ''),
     hireDuration: normalizeMilkTeaHireDuration(hireDuration.value),
@@ -197,6 +201,8 @@ function resetMilkTeaPageState() {
   hireGids.value = []
   autoHire.value = false
   autoInteract.value = false
+  autoBuySeed.value = false
+  seedBuyCount.value = 1
   hireSaving.value = false
   hireDuration.value = 1
   interactType.value = 2
@@ -848,6 +854,8 @@ async function loadHireConfig() {
     hireGids.value = (d.hireGids || []).map((g: any) => String(g))
     autoHire.value = !!d.autoHire
     autoInteract.value = !!d.autoInteract
+    autoBuySeed.value = !!d.autoBuySeed
+    seedBuyCount.value = Math.max(1, Math.min(9999, Number(d.seedBuyCount) || 1))
     hireDuration.value = normalizeMilkTeaHireDuration(d.hireDuration ?? d.duration)
     if (d.interactType) interactType.value = Number(d.interactType) || 2
     if (d.storeName) storeName.value = String(d.storeName)
@@ -1225,7 +1233,7 @@ async function saveHireConfig() {
     const err = apiError(res, res.data?.data)
     if (err) { reportError('保存设置', err); return }
     hireConfigBaseline.value = JSON.stringify(payload)
-    toast.success(`已保存：优先员工 ${payload.hireGids.length} 位${payload.autoHire ? '，自动雇佣开' : ''}`)
+    toast.success(`已保存：优先员工 ${payload.hireGids.length} 位${payload.autoHire ? '，自动雇佣开' : ''}${payload.autoBuySeed ? '，自动购种开' : ''}`)
   } catch (e: any) {
     if (!isAccountContextCurrent(context))
       return
@@ -1690,6 +1698,20 @@ onUnmounted(() => {
             <div class="flex flex-wrap gap-x-4 gap-y-3 sm:col-span-2">
               <BaseSwitch v-model="autoHire" label="自动雇佣" />
               <BaseSwitch v-model="autoInteract" label="自动互动" />
+              <BaseSwitch v-model="autoBuySeed" label="自动购买森野种子" />
+              <label
+                v-if="autoBuySeed"
+                class="flex min-w-0 items-center gap-2 text-xs text-gray-600 dark:text-gray-300"
+              >
+                每种份数
+                <input
+                  v-model.number="seedBuyCount"
+                  type="number"
+                  min="1"
+                  max="9999"
+                  class="w-20 rounded border border-gray-300 bg-white px-2 py-1.5 text-sm dark:border-gray-600 dark:bg-gray-900"
+                >
+              </label>
             </div>
           </div>
           <BaseButton variant="primary" size="sm" :loading="hireSaving" @click="saveHireConfig">
