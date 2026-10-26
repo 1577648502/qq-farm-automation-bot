@@ -276,6 +276,9 @@ function firstCount(source: any, keys: string[]): number | null {
 function purchaseLimit(g: any) {
   return firstCount(g, ['limitCount', 'purchaseLimit', 'limit']) || 0
 }
+function goodsUnlockLevel(g: any) {
+  return firstCount(g, ['requireLevel', 'unlockLevel', 'levelRequirement']) || 0
+}
 function purchaseRemaining(g: any): number | null {
   const direct = firstCount(g, ['remainingCount', 'remainCount', 'remaining', 'leftCount', 'purchasableCount'])
   if (direct !== null) return direct
@@ -477,10 +480,10 @@ function isLocked(g: any) {
 }
 function lockReason(g: any) {
   const unlocked = explicitUnlocked(g)
-  if (unlocked === false)
-    return '未解锁'
-  const need = Number(g.requireLevel) || 0
-  return need > 0 ? `需等级 ≥${need}` : '未解锁'
+  const need = goodsUnlockLevel(g)
+  if (need > 0)
+    return unlocked === false ? `需店铺 Lv${need} 解锁` : `店铺 Lv${need} 解锁`
+  return unlocked === false ? '未解锁' : '条件未满足'
 }
 /** 已限购：兼容后端明确状态和服务端返回的剩余/已购数量。 */
 function isSoldOut(g: any) {
@@ -1945,9 +1948,20 @@ onUnmounted(() => {
                   >
                   <span class="truncate text-sm font-medium">{{ g.name }}</span>
                 </div>
-                <span class="shrink-0 rounded bg-gray-100 px-1.5 py-0.5 text-[10px] text-gray-500 dark:bg-gray-700 dark:text-gray-300">
-                  {{ kindLabel(g) }}
-                </span>
+                <div class="flex shrink-0 flex-col items-end gap-1">
+                  <span class="rounded bg-gray-100 px-1.5 py-0.5 text-[10px] text-gray-500 dark:bg-gray-700 dark:text-gray-300">
+                    {{ kindLabel(g) }}
+                  </span>
+                  <span
+                    v-if="goodsUnlockLevel(g)"
+                    class="whitespace-nowrap rounded px-1.5 py-0.5 text-[10px] font-medium"
+                    :class="isLocked(g)
+                      ? 'bg-amber-50 text-amber-700 dark:bg-amber-900/25 dark:text-amber-300'
+                      : 'bg-emerald-50 text-emerald-700 dark:bg-emerald-900/25 dark:text-emerald-300'"
+                  >
+                    店铺 Lv{{ goodsUnlockLevel(g) }} 解锁
+                  </span>
+                </div>
               </div>
               <div class="mt-1 flex-1 text-xs text-gray-500 dark:text-gray-400">
                 <template v-if="g.itemNameKnown">内容：{{ g.itemName }}<br></template>
