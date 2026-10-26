@@ -738,6 +738,26 @@ const shopRestrictionTypes = new Map();
 let shopStateDay = '';
 let shopNow = () => Date.now();
 const SHOP_RESTRICTION_DAILY = 1;
+const CONFIRMED_STORE_LEVEL_TTL_MS = 5 * 60 * 1000;
+let confirmedStoreLevelHint = null;
+
+/** 升级响应中的等级是动作成功后的权威结果，短暂兜底 List 延迟更新。 */
+function rememberConfirmedStoreLevel(level) {
+    const value = toInt(level);
+    if (value <= 0) return;
+    confirmedStoreLevelHint = { level: value, at: shopNow() };
+}
+
+function resolveCurrentStoreLevel(status) {
+    const listedLevel = toInt(status && status.storeLevel);
+    const hint = confirmedStoreLevelHint;
+    if (!hint) return listedLevel;
+    if (shopNow() - hint.at > CONFIRMED_STORE_LEVEL_TTL_MS || listedLevel >= hint.level) {
+        confirmedStoreLevelHint = null;
+        return listedLevel;
+    }
+    return hint.level;
+}
 
 function ensureShopDay() {
     const today = String(beijingDayStart(Math.floor(shopNow() / 1000)));
@@ -980,6 +1000,7 @@ async function upgradeStore() {
             }
         } catch (e) { /* 忽略 */ }
     }
+    rememberConfirmedStoreLevel(level);
     log('活动', `奶茶热销中: 店铺已升级到 Lv${level || '?'}${got.length ? ` (奖励 ${got.join('、')})` : ''}`, {
         module: 'activity', event: '奶茶热销中', result: 'ok',
     });
@@ -1024,7 +1045,7 @@ async function buyDailySeeds(perSeed = 1) {
         failed: [],
         alreadyDone: false,
     };
-    const currentLevel = toInt(st && st.storeLevel);
+    const currentLevel = resolveCurrentStoreLevel(st);
     const balances = {
         [GOLD_ID]: toInt(wallet.gold),
         [MILK_COUPON_ID]: toInt(wallet.milkCoupon),
@@ -1195,7 +1216,7 @@ async function buyShopGoods(goodsId, count = 1, opts = {}) {
         }
         if (target && target.requireLevel > 0) {
             const st = await getMainStatus();
-            const lv = toNum(st.storeLevel) || 0;
+            const lv = resolveCurrentStoreLevel(st);
             if (lv < target.requireLevel) {
                 return {
                     ok: false,
@@ -3440,6 +3461,9 @@ module.exports = {
             shopBought.clear();
             shopBoughtBase.clear();
             shopRestrictionTypes.clear();
+        },
+        resetStoreLevelHint() {
+            confirmedStoreLevelHint = null;
         },
         resetCurrencyCache() {
             currencyBalanceCache = { at: 0, ok: false, value: null };

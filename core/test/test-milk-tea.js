@@ -3521,6 +3521,7 @@ sendImpl = async (service, method, body) => {
         const fixedNow = Date.UTC(2026, 9, 19, 6, 0, 0);
         milkTea.__testing.setShopClock(() => fixedNow);
         milkTea.__testing.resetShopState();
+        milkTea.__testing.resetStoreLevelHint();
         milkTea.__testing.clearMainStatusCache();
         milkTea.__testing.resetCurrencyCache();
         const originalGetBag = warehouse.getBag;
@@ -3729,6 +3730,120 @@ sendImpl = async (service, method, body) => {
             warehouse.getBagItems = originalGetBagItems;
             milkTea.__testing.setShopClock(() => Date.now());
             milkTea.__testing.resetShopState();
+            milkTea.__testing.resetStoreLevelHint();
+            milkTea.__testing.clearMainStatusCache();
+            milkTea.__testing.resetCurrencyCache();
+        }
+    }
+
+    section('23. 升级响应等级兜底旧商店快照');
+    {
+        const fixedNow = Date.UTC(2026, 9, 19, 10, 30, 0);
+        milkTea.__testing.setShopClock(() => fixedNow);
+        milkTea.__testing.resetShopState();
+        milkTea.__testing.resetStoreLevelHint();
+        milkTea.__testing.clearMainStatusCache();
+        milkTea.__testing.resetCurrencyCache();
+        const originalGetBag = warehouse.getBag;
+        const originalGetBagItems = warehouse.getBagItems;
+        let listedLevel = 8;
+        const buyRequests = [];
+        try {
+            warehouse.getBag = async () => ({});
+            warehouse.getBagItems = () => [{ id: 1001, count: 100000 }];
+            router = async (req) => {
+                if (req.method === 'List') {
+                    return activityListReply([
+                        mainActivity(Buffer.concat([
+                            varintField(1, 1792200000),
+                            bytesField(2, '升级响应等级兜底测试店'),
+                            varintField(4, listedLevel),
+                        ])),
+                        shopActivity([
+                            shopGoods({
+                                goodsId: 305,
+                                itemId: 20021,
+                                currencyId: 1001,
+                                unitPrice: 10000,
+                                limitCount: 108,
+                                requireLevel: 9,
+                                name: '森野可可豆种子',
+                            }),
+                        ]),
+                    ]);
+                }
+                if (req.cmd === 55) {
+                    return operateReply(55, {
+                        result: cashierDetailResult({
+                            level: listedLevel,
+                            revenue: 100000,
+                            nextLevelRevenue: 50000,
+                        }),
+                        resultField: 160,
+                    });
+                }
+                if (req.cmd === 61) {
+                    return operateReply(61, {
+                        result: varintField(1, 9),
+                        resultField: 166,
+                    });
+                }
+                if (req.cmd === 1 && req.group === GROUP_SHOP) {
+                    const payload = mg.parseTop(req.payload);
+                    const goodsId = toInt((payload.find((x) => x.f === 1) || {}).v);
+                    const count = toInt((payload.find((x) => x.f === 2) || {}).v);
+                    buyRequests.push({ goodsId, count });
+                    return operateReply(1, {
+                        group: GROUP_SHOP,
+                        result: Buffer.concat([
+                            bytesField(1, Buffer.concat([
+                                varintField(1, 20021),
+                                varintField(2, count),
+                            ])),
+                            bytesField(2, Buffer.concat([
+                                varintField(1, 1001),
+                                varintField(2, count * 10000),
+                            ])),
+                        ]),
+                        resultField: 101,
+                    });
+                }
+                throw new Error(`升级响应等级兜底用例收到 ${req.method || `cmd=${req.cmd}`}`);
+            };
+
+            const commonOpts = {
+                cashier: false,
+                craft: false,
+                speaker: false,
+                autoInteract: false,
+                autoWage: false,
+                autoHire: false,
+                autoBuySeed: true,
+                seedBuyCount: 1,
+            };
+            const firstRun = await milkTea.runMilkTea({ ...commonOpts, autoUpgrade: true });
+            const firstBuy = firstRun.steps.find((x) => x.step === 'buyDailySeeds');
+            const upgrade = firstRun.steps.find((x) => x.step === 'upgradeStore');
+            listedLevel = 8;
+            const secondRun = await milkTea.runMilkTea({ ...commonOpts, autoUpgrade: false });
+            const secondBuy = secondRun.steps.find((x) => x.step === 'buyDailySeeds');
+            check('升级响应明确 Lv9 但后续 List 仍为 Lv8 时，下一轮仍立即购买新解锁种子',
+                firstBuy && firstBuy.boughtCount === 0
+                && upgrade && upgrade.ok === true && upgrade.level === 9
+                && secondBuy && secondBuy.boughtCount === 1
+                && JSON.stringify(buyRequests) === JSON.stringify([{ goodsId: 305, count: 1 }]), {
+                    listedLevel,
+                    buyRequests,
+                    firstBuy,
+                    upgrade,
+                    secondBuy,
+                });
+        } finally {
+            warehouse.getBag = originalGetBag;
+            warehouse.getBagItems = originalGetBagItems;
+            milkTea.__testing.setShopClock(() => Date.now());
+            milkTea.__testing.resetShopState();
+            milkTea.__testing.resetStoreLevelHint();
             milkTea.__testing.clearMainStatusCache();
             milkTea.__testing.resetCurrencyCache();
         }
