@@ -669,6 +669,7 @@ async function getShopGoods() {
             let unlockText = '';
             let requireLevel = 0;      // 需要的奶茶店等级(0 = 无要求)
             let unlocked = true;
+            let explicitUnlocked = false;
             if (unlock && unlock.w === 2) {
                 const uf = parseTop(unlock.v);
                 const cond = findField(uf, 2);
@@ -677,6 +678,7 @@ async function getShopGoods() {
                 // 抓包确认: 有 #13.#3 时它才是显式解锁标志；字段缺省表示服务端未单独标记，
                 // 等级要求由 #13.#5 + 主状态店等级判断。不能把缺省值误读成 0，否则 302~307 全被误锁。
                 const unlockState = findField(uf, 3);
+                explicitUnlocked = !!unlockState && unlockState.w === 0 && toInt(unlockState.v) === 1;
                 unlocked = !(unlockState && unlockState.w === 0 && toInt(unlockState.v) === 0);
                 requireLevel = need;
             }
@@ -717,6 +719,7 @@ async function getShopGoods() {
                 restrictionType,
                 kind,
                 unlocked,
+                explicitUnlocked,
                 unlockText,
                 requireLevel,
             });
@@ -739,12 +742,33 @@ let shopStateDay = '';
 let shopNow = () => Date.now();
 const SHOP_RESTRICTION_DAILY = 1;
 
-/** 收银台 cmd55 返回当前等级；活动 List 可能滞后，仅在查询失败时回退。 */
+/** List 与收银台都可能短暂滞后；店铺等级只增不减，取两者较高值。 */
 async function resolveCurrentStoreLevel(status) {
     const listedLevel = toInt(status && status.storeLevel);
     const info = await getUpgradeInfo().catch(() => null);
     const currentLevel = toInt(info && info.ok && info.level);
-    return currentLevel > 0 ? currentLevel : listedLevel;
+    return Math.max(listedLevel, currentLevel);
+}
+
+/**
+ * #13.#3===1 是服务端明确解锁，优先级高于 #13.#5 展示的等级要求。
+ * 缺少 #13.#3 时才用店铺等级做本地兜底，避免把已解锁商品再次拦下。
+ */
+function shopGoodsUnlockCheck(goods, currentLevel) {
+    if (!goods) return { ok: false, reason: '未找到商品' };
+    if (goods.explicitUnlocked === true) return { ok: true };
+    if (goods.unlocked === false) return { ok: false, reason: '未解锁' };
+    const requiredLevel = toInt(goods.requireLevel);
+    const level = toInt(currentLevel);
+    if (requiredLevel > 0 && level < requiredLevel) {
+        return {
+            ok: false,
+            reason: level > 0
+                ? `店铺 Lv${level} < Lv${requiredLevel}`
+                : `店铺等级未知, 需 Lv${requiredLevel}`,
+        };
+    }
+    return { ok: true };
 }
 
 function ensureShopDay() {
@@ -1051,15 +1075,9 @@ async function buyDailySeeds(perSeed = 1) {
             skip(g, '已达到限购');
             continue;
         }
-        if (g.unlocked === false) {
-            skip(g, '未解锁');
-            continue;
-        }
-        const requiredLevel = toInt(g.requireLevel);
-        if (requiredLevel > 0 && currentLevel < requiredLevel) {
-            skip(g, currentLevel > 0
-                ? `店铺 Lv${currentLevel} < Lv${requiredLevel}`
-                : `店铺等级未知, 需 Lv${requiredLevel}`);
+        const unlock = shopGoodsUnlockCheck(g, currentLevel);
+        if (!unlock.ok) {
+            skip(g, unlock.reason);
             continue;
         }
         const targetCount = limit > 0 ? Math.min(targetPerSeed, limit) : targetPerSeed;
@@ -1200,22 +1218,14 @@ async function buyShopGoods(goodsId, count = 1, opts = {}) {
             }
             n = Math.min(n, remaining);
         }
-        if (target && target.unlocked === false) {
-            const levelText = target.requireLevel > 0 ? `，需要奶茶店等级 ≥${target.requireLevel}` : '';
-            return { ok: false, reason: `「${target.name}」尚未解锁${levelText}` };
-        }
-        if (target && target.requireLevel > 0) {
+        if (target) {
             const currentStoreLevel = toInt(opts.currentStoreLevel);
             const lv = currentStoreLevel > 0
                 ? currentStoreLevel
                 : await resolveCurrentStoreLevel(await getMainStatus());
-            if (lv < target.requireLevel) {
-                return {
-                    ok: false,
-                    reason: lv > 0
-                        ? `「${target.name}」需要奶茶店等级 ≥${target.requireLevel}（当前 Lv${lv}）`
-                        : `「${target.name}」需要奶茶店等级 ≥${target.requireLevel}（当前等级未知）`,
-                };
+            const unlock = shopGoodsUnlockCheck(target, lv);
+            if (!unlock.ok) {
+                return { ok: false, reason: `「${target.name}」尚未解锁：${unlock.reason}` };
             }
         }
     } catch (e) {

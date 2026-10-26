@@ -87,6 +87,7 @@ function shopGoods({
     restrictionType = 0,
     kind = 'seed',
     unlocked = true,
+    explicitUnlocked = false,
     requireLevel = 0,
     conditionText = '',
 } = {}) {
@@ -106,12 +107,13 @@ function shopGoods({
         varintField(11, restrictionType),
         bytesField(12, kind),
     ];
-    if (unlocked === false || requireLevel > 0 || conditionText) {
+    if (explicitUnlocked || unlocked === false || requireLevel > 0 || conditionText) {
         const unlockFields = [
             bytesField(2, conditionText),
             varintField(5, requireLevel),
         ];
-        if (unlocked === false) unlockFields.splice(1, 0, varintField(3, 0));
+        if (explicitUnlocked) unlockFields.splice(1, 0, varintField(3, 1));
+        else if (unlocked === false) unlockFields.splice(1, 0, varintField(3, 0));
         fields.push(bytesField(13, Buffer.concat(unlockFields)));
     }
     return bytesField(2, Buffer.concat(fields));
@@ -3818,6 +3820,181 @@ sendImpl = async (service, method, body) => {
                     cashierCalls,
                     buyRequests,
                     bought,
+                });
+        } finally {
+            warehouse.getBag = originalGetBag;
+            warehouse.getBagItems = originalGetBagItems;
+            milkTea.__testing.setShopClock(() => Date.now());
+            milkTea.__testing.resetShopState();
+            milkTea.__testing.clearMainStatusCache();
+            milkTea.__testing.resetCurrencyCache();
+        }
+    }
+
+    section('24. 森野种子显式解锁与等级兜底');
+    {
+        const fixedNow = Date.UTC(2026, 9, 19, 11, 0, 0);
+        milkTea.__testing.setShopClock(() => fixedNow);
+        milkTea.__testing.resetShopState();
+        milkTea.__testing.clearMainStatusCache();
+        milkTea.__testing.resetCurrencyCache();
+        const originalGetBag = warehouse.getBag;
+        const originalGetBagItems = warehouse.getBagItems;
+        const state = Buffer.concat([
+            varintField(1, 1792200000),
+            bytesField(2, '显式解锁优先测试店'),
+            varintField(4, 8),
+        ]);
+        const goods = [
+            { goodsId: 304, itemId: 20528, currencyId: 1001, unitPrice: 10000, limitCount: 108, unlocked: false, requireLevel: 7, name: '森野红柚种子' },
+            { goodsId: 305, itemId: 20021, currencyId: 1001, unitPrice: 10000, limitCount: 108, explicitUnlocked: true, requireLevel: 9, name: '森野可可豆种子' },
+            { goodsId: 306, itemId: 21435, currencyId: 1001, unitPrice: 20000, limitCount: 108, explicitUnlocked: true, requireLevel: 11, name: '森野柿子种子' },
+            { goodsId: 307, itemId: 20529, currencyId: 1001, unitPrice: 20000, limitCount: 36, explicitUnlocked: true, requireLevel: 13, name: '森野芭乐种子' },
+        ];
+        const byGoodsId = new Map(goods.map((g) => [g.goodsId, g]));
+        try {
+            warehouse.getBag = async () => ({});
+            warehouse.getBagItems = () => [{ id: 1001, count: 1000000 }];
+            router = async (req) => {
+                if (req.method === 'List') {
+                    return activityListReply([
+                        mainActivity(state),
+                        shopActivity(goods.map((g) => shopGoods({ ...g }))),
+                    ]);
+                }
+                if (req.cmd === 55) {
+                    return operateReply(55, {
+                        result: cashierDetailResult({ level: 8, revenue: 100000, nextLevelRevenue: 200000 }),
+                        resultField: 160,
+                    });
+                }
+                if (req.cmd === 1 && req.group === GROUP_SHOP) {
+                    const payload = mg.parseTop(req.payload);
+                    const goodsId = toInt((payload.find((x) => x.f === 1) || {}).v);
+                    const count = toInt((payload.find((x) => x.f === 2) || {}).v);
+                    const target = byGoodsId.get(goodsId);
+                    return operateReply(1, {
+                        group: GROUP_SHOP,
+                        result: Buffer.concat([
+                            bytesField(1, Buffer.concat([
+                                varintField(1, target.itemId),
+                                varintField(2, count),
+                            ])),
+                            bytesField(2, Buffer.concat([
+                                varintField(1, target.currencyId),
+                                varintField(2, target.unitPrice * count),
+                            ])),
+                        ]),
+                        resultField: 101,
+                    });
+                }
+                throw new Error(`显式解锁优先用例收到 ${req.method || `cmd=${req.cmd}`}`);
+            };
+
+            sent.length = 0;
+            const bought = await milkTea.buyDailySeeds(1);
+            const requestedGoodsIds = sent
+                .filter((x) => x.cmd === 1 && x.group === GROUP_SHOP)
+                .map((x) => {
+                    const payload = mg.parseTop(x.payload);
+                    return toInt((payload.find((y) => y.f === 1) || {}).v);
+                });
+            const parsed = await milkTea.getShopGoods();
+            const explicitlyUnlocked = parsed.goods.find((g) => g.goodsId === 305);
+            check('#13.#3=1 明确解锁时忽略旧等级和展示用等级门槛',
+                explicitlyUnlocked && explicitlyUnlocked.explicitUnlocked === true
+                && bought.ok === true && bought.boughtCount === 3
+                && requestedGoodsIds.join(',') === '305,306,307', {
+                    explicitlyUnlocked,
+                    bought,
+                    requestedGoodsIds,
+                });
+            check('#13.#3=0 仍保持明确锁定并跳过',
+                bought.skippedGoods.some((g) => g.goodsId === 304 && g.reason === '未解锁'),
+                bought.skippedGoods);
+        } finally {
+            warehouse.getBag = originalGetBag;
+            warehouse.getBagItems = originalGetBagItems;
+            milkTea.__testing.resetCurrencyCache();
+        }
+    }
+
+    {
+        const fixedNow = Date.UTC(2026, 9, 19, 11, 30, 0);
+        milkTea.__testing.setShopClock(() => fixedNow);
+        milkTea.__testing.resetShopState();
+        milkTea.__testing.clearMainStatusCache();
+        milkTea.__testing.resetCurrencyCache();
+        const originalGetBag = warehouse.getBag;
+        const originalGetBagItems = warehouse.getBagItems;
+        let listedLevel = 9;
+        let cashierLevel = 8;
+        try {
+            warehouse.getBag = async () => ({});
+            warehouse.getBagItems = () => [{ id: 1001, count: 100000 }];
+            router = async (req) => {
+                if (req.method === 'List') {
+                    return activityListReply([
+                        mainActivity(Buffer.concat([
+                            varintField(1, 1792200000),
+                            bytesField(2, '等级来源取高测试店'),
+                            varintField(4, listedLevel),
+                        ])),
+                        shopActivity([
+                            shopGoods({
+                                goodsId: 305,
+                                itemId: 20021,
+                                currencyId: 1001,
+                                unitPrice: 10000,
+                                limitCount: 108,
+                                requireLevel: 9,
+                                name: '森野可可豆种子',
+                            }),
+                        ]),
+                    ]);
+                }
+                if (req.cmd === 55) {
+                    return operateReply(55, {
+                        result: cashierDetailResult({ level: cashierLevel, revenue: 100000, nextLevelRevenue: 200000 }),
+                        resultField: 160,
+                    });
+                }
+                if (req.cmd === 1 && req.group === GROUP_SHOP) {
+                    const payload = mg.parseTop(req.payload);
+                    const count = toInt((payload.find((x) => x.f === 2) || {}).v);
+                    return operateReply(1, {
+                        group: GROUP_SHOP,
+                        result: Buffer.concat([
+                            bytesField(1, Buffer.concat([varintField(1, 20021), varintField(2, count)])),
+                            bytesField(2, Buffer.concat([varintField(1, 1001), varintField(2, count * 10000)])),
+                        ]),
+                        resultField: 101,
+                    });
+                }
+                throw new Error(`等级来源取高用例收到 ${req.method || `cmd=${req.cmd}`}`);
+            };
+
+            const listHigher = await milkTea.buyDailySeeds(1);
+            check('List 为 Lv9、收银台短暂为 Lv8 时按较高等级购买',
+                listHigher.ok === true && listHigher.boughtCount === 1, listHigher);
+
+            milkTea.__testing.resetShopState();
+            milkTea.__testing.clearMainStatusCache();
+            milkTea.__testing.resetCurrencyCache();
+            warehouse.getBagItems = () => [{ id: 1001, count: 1000000 }];
+            listedLevel = 8;
+            cashierLevel = 8;
+            sent.length = 0;
+            const stillLocked = await milkTea.buyDailySeeds(1);
+            const requests = sent.filter((x) => x.cmd === 1 && x.group === GROUP_SHOP);
+            check('无 #13.#3 且两个等级来源均不足时仍跳过，防止无条件放开',
+                stillLocked.boughtCount === 0 && requests.length === 0
+                && stillLocked.skippedGoods.some((g) => g.goodsId === 305
+                    && g.reason === '店铺 Lv8 < Lv9'), {
+                    listedLevel,
+                    cashierLevel,
+                    stillLocked,
+                    requests,
                 });
         } finally {
             warehouse.getBag = originalGetBag;
