@@ -27,7 +27,7 @@ const { getActivityOverview, drawLottery, drawActivity, claimBattlePassRewards, 
 const { performDailyMonthCardGift, getMonthCardDailyState } = require('../services/monthcard');
 const { performDailyVipGift, getVipDailyState } = require('../services/qqvip');
 const { createScheduler, getSchedulerRegistrySnapshot } = require('../services/scheduler');
-const { performDailyShare, performDailyWechatGift, getShareDailyState } = require('../services/share');
+const { performDailyShare, performDailyWechatGift, getShareDailyState, getWechatGiftDailyState } = require('../services/share');
 const { setInitialValues, resetSessionGains, recordOperation, initStatsWithPersistence, saveStats } = require('../services/stats');
 const { initStatusBar, setStatusPlatform, statusData } = require('../services/status');
 const { setRecordGoldExpHook } = require('../services/status');
@@ -170,6 +170,9 @@ let wsErrorHandledAt = 0;
 let lastDailyRunDate = '';
 let keepRunningOnKickout = false;
 const workerScheduler = createScheduler('worker');
+// 抓包(20260909)显示 ReportShare{scene=0} 发出后约 20s 才收到 "游戏圈每日登录礼包" 邮件,
+// 留足余量再回去查邮箱。
+const WECHAT_GIFT_EMAIL_DELAY_MS = 45 * 1000;
 
 function isDailyRoutineEnabled(_auto) {
     // 每日任务默认启用，不再检查开关
@@ -190,7 +193,28 @@ async function runDailyRoutines(force = false) {
         // 以下功能默认启用，不再检查开关
         await checkAndClaimEmails(force);
         await performDailyShare(force);
-        await performDailyWechatGift(force);
+        // 微信礼包触发后服务端约 20s 才投递到邮箱; 上面那次 checkAndClaimEmails 已经跑过,
+        // 所以这里补一次延后复查, 否则当天礼包邮件永远没人领。
+        if (await performDailyWechatGift(force)) {
+            workerScheduler.setTimeoutTask('wechat_gift_email_recheck', WECHAT_GIFT_EMAIL_DELAY_MS, async () => {
+                if (!canRunTasks()) return;
+                const r = await checkAndClaimEmails(true);
+                if (r && r.claimed > 0) {
+                    log('分享', `微信礼包邮件已到账并领取 ${r.claimed} 封`, {
+                        module: 'task',
+                        event: 'wechat_game_gift',
+                        result: 'ok',
+                        count: r.claimed,
+                    });
+                } else {
+                    log('分享', '微信礼包邮件暂未到账，等下一次邮箱检查', {
+                        module: 'task',
+                        event: 'wechat_game_gift',
+                        result: 'none',
+                    });
+                }
+            });
+        }
         await performDailyMonthCardGift(force);
         await buyFreeGifts(force);
         await performDailyVipGift(force);
@@ -1672,6 +1696,7 @@ async function getDailyGiftOverview() {
     const email = getEmailDailyState ? getEmailDailyState() : { doneToday: false, lastCheckAt: 0 };
     const free = getFreeGiftDailyState ? getFreeGiftDailyState() : { doneToday: false, lastClaimAt: 0 };
     const share = getShareDailyState ? getShareDailyState() : { doneToday: false, lastClaimAt: 0 };
+    const wechatGift = getWechatGiftDailyState ? getWechatGiftDailyState() : { doneToday: false, lastClaimAt: 0 };
     const vip = getVipDailyState ? getVipDailyState() : { doneToday: false, lastClaimAt: 0 };
     const month = getMonthCardDailyState ? getMonthCardDailyState() : { doneToday: false, lastClaimAt: 0 };
 
@@ -1699,6 +1724,7 @@ async function getDailyGiftOverview() {
             { key: 'email_rewards', label: '邮箱奖励', enabled: true, doneToday: !!email.doneToday, lastAt: Number(email.lastCheckAt || 0) },
             { key: 'mall_free_gifts', label: '商城免费礼包', enabled: true, doneToday: !!free.doneToday, lastAt: Number(free.lastClaimAt || 0) },
             { key: 'daily_share', label: '分享礼包', enabled: true, doneToday: !!share.doneToday, lastAt: Number(share.lastClaimAt || 0) },
+            { key: 'wechat_game_gift', label: '微信礼包', enabled: true, doneToday: !!wechatGift.doneToday, lastAt: Number(wechatGift.lastClaimAt || 0) },
             {
                 key: 'vip_daily_gift',
                 label: '会员礼包',

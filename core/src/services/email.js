@@ -146,12 +146,31 @@ async function checkAndClaimEmails(force = false) {
             const boxType = normalizeBoxType(m && m.__boxType);
             try {
                 const rep = await claimEmail(boxType, String(m.id || ''));
-                if (Array.isArray(rep.items) && rep.items.length > 0) {
-                    rewards.push(...rep.items);
+                const items = (rep && Array.isArray(rep.items)) ? rep.items : [];
+                if (items.length > 0) {
+                    rewards.push(...items);
                 }
                 claimed += 1;
-            } catch {
-                // 单封失败静默
+                // 逐封记录领取结果, 便于确认微信礼包这类"触发后延迟投递"的邮件到底领到了没
+                const title = String((m && m.title) || '');
+                const rewardStr = getRewardSummary(items);
+                log('邮箱', rewardStr
+                    ? `[邮箱领取] 《${title}》→ ${rewardStr}`
+                    : `[邮箱领取] 《${title}》已领取`, {
+                    module: 'task',
+                    event: DAILY_KEY,
+                    result: 'ok',
+                    emailId: String(m.id || ''),
+                    title,
+                    items: items.map(it => ({ id: toNum(it.id), count: toNum(it.count) })),
+                });
+            } catch (e) {
+                log('邮箱', `[邮箱领取] 《${String((m && m.title) || '')}》失败: ${e.message}`, {
+                    module: 'task',
+                    event: DAILY_KEY,
+                    result: 'error',
+                    emailId: String(m.id || ''),
+                });
             }
         }
 
@@ -162,6 +181,7 @@ async function checkAndClaimEmails(force = false) {
                 event: DAILY_KEY,
                 result: 'ok',
                 count: claimed,
+                itemCount: rewards.length,
             });
             markDoneToday();
         }

@@ -218,8 +218,13 @@ module.exports = {
     reportWechatGameGift,
     getShareDailyState: () => ({
         key: DAILY_KEY,
-        doneToday: isDoneToday() && isWechatGiftDoneToday(),
+        doneToday: isDoneToday(),
         lastCheckAt,
-        lastClaimAt: Math.max(lastClaimAt, lastWechatGiftAt),
+        lastClaimAt,
+    }),
+    getWechatGiftDailyState: () => ({
+        key: WECHAT_GIFT_KEY,
+        doneToday: isWechatGiftDoneToday(),
+        lastClaimAt: lastWechatGiftAt,
     }),
 };

@@ -71,6 +71,28 @@ const DUPLICATE_RESULT_HEX = '0a0808011204081c10010a0408661200';
             report && report.body.toString('hex'));
     }
 
+    section('5. 每日礼包开关独立于分享状态');
+    {
+        // 微信礼包和每日分享是两个独立任务; 一个失败不能把另一个标成未完成。
+        check('暴露独立的礼包状态', typeof share.getWechatGiftDailyState === 'function');
+        check('礼包状态有独立 key',
+            share.getWechatGiftDailyState().key === 'wechat_game_gift',
+            share.getWechatGiftDailyState());
+        check('分享状态不再混入礼包字段',
+            share.getShareDailyState().key === 'daily_share', share.getShareDailyState());
+    }
+
+    section('6. 礼包触发后延迟复查邮箱');
+    {
+        // 抓包显示礼包邮件比 ReportShare 晚约 20s 送达, 且每日流程里
+        // checkAndClaimEmails 排在礼包触发之前 —— 不补一次复查就永远领不到。
+        const workerSource = require('fs').readFileSync(`${SB}/src/core/worker.js`, 'utf8');
+        check('worker 注册了礼包后的邮箱复查',
+            workerSource.includes('wechat_gift_email_recheck'), '未找到 wechat_gift_email_recheck');
+        check('复查发生在礼包触发成功之后',
+            workerSource.includes('performDailyWechatGift(force)'), '未找到触发判断');
+    }
+
     finish();
 })().catch((e) => {
     console.log('测试异常:', e && e.message);

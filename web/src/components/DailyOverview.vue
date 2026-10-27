@@ -10,6 +10,7 @@ const GIFT_ICONS: Record<string, string> = {
   email_rewards: 'i-carbon-email',
   mall_free_gifts: 'i-carbon-shopping-bag',
   daily_share: 'i-carbon-share',
+  wechat_game_gift: 'i-carbon-gift',
   vip_daily_gift: 'i-carbon-star',
   month_card_gift: 'i-carbon-calendar',
 }
