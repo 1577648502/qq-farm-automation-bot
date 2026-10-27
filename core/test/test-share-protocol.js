@@ -28,13 +28,13 @@ const DUPLICATE_RESULT_HEX = '0a0808011204081c10010a0408661200';
             reply.result.map(item => Number(item.code)));
     }
 
-    section('2. 微信礼包 scene=0 请求体');
+    section('2. 分享请求体 scene=42');
     {
         const body = types.ReportShareRequest.encode(types.ReportShareRequest.create({
             share_type: 1,
-            scene: 0,
+            scene: 42,
         })).finish();
-        check('编码为抓包中的 08012000', body.toString('hex') === '08012000', body.toString('hex'));
+        check('编码为抓包中的 0801202a', body.toString('hex') === '0801202a', body.toString('hex'));
     }
 
     const calls = [];
@@ -60,37 +60,15 @@ const DUPLICATE_RESULT_HEX = '0a0808011204081c10010a0408661200';
             calls.map(call => call.method));
     }
 
-    section('4. 每日/周末礼包使用 scene=0');
+    section('4. 分享状态暴露');
     {
-        calls.length = 0;
-        const ok = await share.performDailyWechatGift(true);
-        check('微信礼包触发成功', ok === true, ok);
-        const report = calls.find(call => call.method === 'ReportShare');
-        check('发送 ReportShare', !!report, calls.map(call => call.method));
-        check('请求体是 08012000', report && report.body.toString('hex') === '08012000',
-            report && report.body.toString('hex'));
-    }
-
-    section('5. 每日礼包开关独立于分享状态');
-    {
-        // 微信礼包和每日分享是两个独立任务; 一个失败不能把另一个标成未完成。
-        check('暴露独立的礼包状态', typeof share.getWechatGiftDailyState === 'function');
-        check('礼包状态有独立 key',
-            share.getWechatGiftDailyState().key === 'wechat_game_gift',
-            share.getWechatGiftDailyState());
-        check('分享状态不再混入礼包字段',
+        // 微信礼包功能已移除(微信侧领取走宿主的 acsactionexec, bot 无法参与),
+        // 分享状态只反映 gamepb 的每日分享任务。
+        check('分享状态 key 正确',
             share.getShareDailyState().key === 'daily_share', share.getShareDailyState());
-    }
-
-    section('6. 礼包触发后延迟复查邮箱');
-    {
-        // 抓包显示礼包邮件比 ReportShare 晚约 20s 送达, 且每日流程里
-        // checkAndClaimEmails 排在礼包触发之前 —— 不补一次复查就永远领不到。
-        const workerSource = require('fs').readFileSync(`${SB}/src/core/worker.js`, 'utf8');
-        check('worker 注册了礼包后的邮箱复查',
-            workerSource.includes('wechat_gift_email_recheck'), '未找到 wechat_gift_email_recheck');
-        check('复查发生在礼包触发成功之后',
-            workerSource.includes('performDailyWechatGift(force)'), '未找到触发判断');
+        check('不再暴露微信礼包状态',
+            typeof share.getWechatGiftDailyState === 'undefined',
+            Object.keys(share));
     }
 
     finish();

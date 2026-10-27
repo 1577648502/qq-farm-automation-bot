@@ -151,7 +151,7 @@ async function checkAndClaimEmails(force = false) {
                     rewards.push(...items);
                 }
                 claimed += 1;
-                // 逐封记录领取结果, 便于确认微信礼包这类"触发后延迟投递"的邮件到底领到了没
+                // 逐封记录领取结果, 便于核对每封邮件到底领到了什么
                 const title = String((m && m.title) || '');
                 const rewardStr = getRewardSummary(items);
                 log('邮箱', rewardStr

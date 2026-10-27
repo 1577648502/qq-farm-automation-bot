@@ -10,21 +10,16 @@ const { getItemById } = require('../config/gameConfig');
 // 分享参数 (2026-09-09 抓包 + 用户确认入口语义):
 //   share_type 固定=1; scene 区分入口:
 //     scene=42  游戏内【每日分享任务】(本模块用这个, 领奖走 ClaimShareReward)
-//     scene=0   微信游戏礼包入口 (每日可领, 另有周末档), 上报即得、无需 ClaimShareReward
 //   旧抓包(2026-09-01)的 15/1506 与"空请求体"均已失效, 服务端报 1000020 参数错误
 const SHARE_TYPE = 1;
 const SHARE_SCENE = 42;
-const WECHAT_GIFT_SCENE = 0;
 
 const DAILY_KEY = 'daily_share';
-const WECHAT_GIFT_KEY = 'wechat_game_gift';
 const CHECK_COOLDOWN_MS = 10 * 60 * 1000;
 
 let doneDateKey = '';
 let lastCheckAt = 0;
 let lastClaimAt = 0;
-let wechatGiftDoneDateKey = '';
-let lastWechatGiftAt = 0;
 
 function getDateKey() {
     const now = new Date();
@@ -40,10 +35,6 @@ function markDoneToday() {
 
 function isDoneToday() {
     return doneDateKey === getDateKey();
-}
-
-function isWechatGiftDoneToday() {
-    return wechatGiftDoneDateKey === getDateKey();
 }
 
 function isAlreadyClaimedError(err) {
@@ -88,10 +79,6 @@ function formatReportCodes(report) {
 
 async function reportShare() {
     return reportShareScene(SHARE_SCENE);
-}
-
-async function reportWechatGameGift() {
-    return reportShareScene(WECHAT_GIFT_SCENE);
 }
 
 async function claimShareReward() {
@@ -172,59 +159,15 @@ async function performDailyShare(force = false) {
     }
 }
 
-/**
- * 微信游戏礼包入口。
- * 抓包确认 ReportShare{share_type=1, scene=0} 会触发“游戏圈每日登录礼包”；
- * 周六同一次请求还会触发“游戏圈周末登录礼包”。礼包只进入邮箱，不在这里领取附件。
- */
-async function performDailyWechatGift(force = false) {
-    if (!force && isWechatGiftDoneToday()) return false;
-    try {
-        const report = await reportWechatGameGift();
-        const codes = formatReportCodes(report);
-        if (!hasSuccessfulReport(report)) {
-            log('分享', `微信礼包触发失败 (code=${codes})`, {
-                module: 'task',
-                event: WECHAT_GIFT_KEY,
-                result: 'error',
-            });
-            return false;
-        }
-        wechatGiftDoneDateKey = getDateKey();
-        lastWechatGiftAt = Date.now();
-        log('分享', '微信礼包已触发（每日礼包；周六同接口发放周末礼包）', {
-            module: 'task',
-            event: WECHAT_GIFT_KEY,
-            result: 'ok',
-            shareResults: codes,
-        });
-        return true;
-    } catch (e) {
-        log('分享', `微信礼包触发失败: ${e.message}`, {
-            module: 'task',
-            event: WECHAT_GIFT_KEY,
-            result: 'error',
-        });
-        return false;
-    }
-}
-
 module.exports = {
     performDailyShare,
-    performDailyWechatGift,
     // activity.shareSellQingniangBrew(青酿分享卖出) 需要它上报分享, 之前漏导出 →
     // 调用处拿到 undefined, 分享上报被 try/catch 吞掉, 静默拿不到 1.5 倍收益
     reportShare,
-    reportWechatGameGift,
     getShareDailyState: () => ({
         key: DAILY_KEY,
         doneToday: isDoneToday(),
         lastCheckAt,
         lastClaimAt,
-    }),
-    getWechatGiftDailyState: () => ({
-        key: WECHAT_GIFT_KEY,
-        doneToday: isWechatGiftDoneToday(),
-        lastClaimAt: lastWechatGiftAt,
     }),
 };
