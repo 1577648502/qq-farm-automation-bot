@@ -48,11 +48,18 @@ message LandUnlockCondition {
     // ... 其他条件字段
 }
 
-// 土地升级条件 (简化)
+// 土地升级消耗 (实测 2026-11-02: #1 物品ID, #2 数量; 1001=金币, 1005=金豆豆)
+message LandCost {
+    int64 item_id = 1;
+    int64 amount = 2;
+}
+
+// 土地升级条件 (实测 20261102 抓包 AllLands #8):
+//   #1 条件类型(1)   #2 需要的农场主等级   #3 repeated {物品ID, 数量}
 message LandUpgradeCondition {
-    int64 need_level = 1;
-    int64 need_gold = 2;
-    // ... 其他条件字段
+    int64 type = 1;
+    int64 need_level = 2;
+    repeated LandCost costs = 3;
 }
 
 // ============ 植物信息 ============

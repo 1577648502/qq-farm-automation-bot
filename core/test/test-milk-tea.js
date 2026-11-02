@@ -4144,7 +4144,8 @@ sendImpl = async (service, method, body) => {
                             shopGoods({ goodsId: 303, itemId: 20527, currencyId: 1041, unitPrice: 8000, limitCount: 108, requireLevel: 5, name: '森野甜橙种子' }),
                             shopGoods({ goodsId: 304, itemId: 20528, currencyId: 1001, unitPrice: 10000, limitCount: 108, unlocked: false, requireLevel: 7, name: '森野红柚种子' }),
                             shopGoods({ goodsId: 305, itemId: 20021, currencyId: 1001, unitPrice: 10000, limitCount: 108, unlocked: false, requireLevel: 9, name: '森野可可豆种子' }),
-                            shopGoods({ goodsId: 306, itemId: 21435, currencyId: 1001, unitPrice: 20000, limitCount: 108, purchasedCount: 108, requireLevel: 11, name: '森野柿子种子' }),
+                            // 已售罄但余额充足的商品, 必须被限购拦截(不能和余额不足混在一起)。
+                            shopGoods({ goodsId: 306, itemId: 21435, currencyId: 1001, unitPrice: 10000, limitCount: 108, purchasedCount: 108, requireLevel: 11, name: '森野柿子种子' }),
                             shopGoods({ goodsId: 308, itemId: 29005, currencyId: 1041, unitPrice: 8000, limitCount: 1, name: '森野黄金芽种子' }),
                         ]),
                     ]);
@@ -4494,6 +4495,7 @@ sendImpl = async (service, method, body) => {
                 partialFailure);
             check('部分成功日志同时列出成功与失败商品',
                 activityLogs.some((x) => /森野种子自动购买 1 种\/1 份/.test(x.msg)
+                    && /→ 森野白桃种子×1/.test(x.msg)
                     && /失败 森野甜莓种子/.test(x.msg)),
                 activityLogs.map((x) => x.msg));
         } finally {
@@ -4622,6 +4624,105 @@ sendImpl = async (service, method, body) => {
             && duplicateWhitelist.attempted === 1
             && sent.filter((x) => x.cmd === 57).length === 1,
             { result: duplicateWhitelist, sent: sent.map((x) => x.cmd) });
+    }
+
+    section('25. 2026-11-02 永久限购补充(同一 itemId 两件商品)');
+    {
+        const fixedNow = Date.UTC(2026, 10, 2, 4, 0, 0);
+        milkTea.__testing.setShopClock(() => fixedNow);
+        milkTea.__testing.resetShopState();
+        milkTea.__testing.clearMainStatusCache();
+        milkTea.__testing.resetCurrencyCache();
+        const originalGetBag = warehouse.getBag;
+        const originalGetBagItems = warehouse.getBagItems;
+        const state = Buffer.concat([
+            varintField(1, 1792200000),
+            bytesField(2, '森野永久限购补充店'),
+            varintField(4, 15),
+        ]);
+        // 真实抓包 20261102-110136: 301 限购 108 已买满, 同 itemId 的 339 限购 24 才买了 1。
+        const goods = [
+            { goodsId: 301, itemId: 20525, currencyId: 1001, unitPrice: 10000, limitCount: 108, purchasedCount: 108, restrictionType: 4, name: '森野甜莓种子' },
+            { goodsId: 339, itemId: 20525, currencyId: 1001, unitPrice: 10000, limitCount: 24, purchasedCount: 1, restrictionType: 4, name: '森野甜莓种子' },
+            { goodsId: 302, itemId: 20526, currencyId: 1001, unitPrice: 10000, limitCount: 108, purchasedCount: 108, restrictionType: 4, name: '森野白桃种子' },
+            // 第二件商品未解锁(#13 缺少 #3), 不应回退到已售罄的第一件商品。
+            { goodsId: 340, itemId: 20526, currencyId: 1001, unitPrice: 10000, limitCount: 24, purchasedCount: 0, restrictionType: 4, unlocked: false, requireLevel: 20, currentLevelAtList: 15, name: '森野白桃种子' },
+            // 未拆分的普通商品: 旧的按商品限购逻辑必须继续生效。
+            { goodsId: 308, itemId: 29005, currencyId: 1041, unitPrice: 8000, limitCount: 1, purchasedCount: 0, name: '森野黄金芽种子' },
+        ];
+        const byGoodsId = new Map(goods.map((g) => [g.goodsId, g]));
+        try {
+            warehouse.getBag = async () => ({});
+            warehouse.getBagItems = () => [
+                { id: 1001, count: 1000000 },
+                { id: 1041, count: 8000 },
+            ];
+            router = async (req) => {
+                if (req.method === 'List') {
+                    return activityListReply([
+                        mainActivity(state),
+                        shopActivity(goods.map((g) => shopGoods(g))),
+                    ]);
+                }
+                if (req.cmd === 1 && req.group === GROUP_SHOP) {
+                    const payload = mg.parseTop(req.payload);
+                    const goodsId = toInt((payload.find((x) => x.f === 1) || {}).v);
+                    const count = toInt((payload.find((x) => x.f === 2) || {}).v);
+                    const target = byGoodsId.get(goodsId);
+                    return operateReply(1, {
+                        group: GROUP_SHOP,
+                        result: Buffer.concat([
+                            bytesField(1, Buffer.concat([
+                                varintField(1, target.itemId),
+                                varintField(2, count),
+                            ])),
+                            bytesField(2, Buffer.concat([
+                                varintField(1, target.currencyId),
+                                varintField(2, target.unitPrice * count),
+                            ])),
+                        ]),
+                        resultField: 101,
+                    });
+                }
+                throw new Error(`永久限购补充用例收到 ${req.method || `cmd=${req.cmd}`}`);
+            };
+
+            sent.length = 0;
+            activityLogs.length = 0;
+            // 设置 120 份: 甜莓/白桃按 itemId 汇总后仍差 12 份, 才会触发第二件商品。
+            const result = await milkTea.buyDailySeeds(120);
+            const requestedGoodsIds = sent
+                .filter((x) => x.cmd === 1 && x.group === GROUP_SHOP)
+                .map((x) => {
+                    const payload = mg.parseTop(x.payload);
+                    return toInt((payload.find((y) => y.f === 1) || {}).v);
+                });
+            check('旧商品买满时从同 itemId 的第二件商品继续补足',
+                result.ok === true && requestedGoodsIds.includes(339)
+                && result.bought.some((x) => /甜莓/.test(x)),
+                { result, requestedGoodsIds });
+            check('已售罄的第一件商品不再发送购买请求',
+                !requestedGoodsIds.includes(301),
+                { requestedGoodsIds });
+            check('同一 itemId 的多件商品按累计已购计算，不做重复补足',
+                result.boughtCount === 12 && requestedGoodsIds.join(',') === '339,308',
+                { result, requestedGoodsIds });
+            check('第二件商品未解锁时不会再回退购买已售罄的第一件',
+                !requestedGoodsIds.includes(302) && !requestedGoodsIds.includes(340)
+                && result.skippedGoods.some((g) => g.goodsId === 340 && g.reason === '未解锁'),
+                { result, requestedGoodsIds });
+
+            sent.length = 0;
+            const again = await milkTea.buyDailySeeds(120);
+            check('达到设置份数后不再重复购买',
+                again.boughtCount === 0
+                && sent.filter((x) => x.cmd === 1 && x.group === GROUP_SHOP).length === 0,
+                { again, sent: sent.map((x) => x.method || x.cmd) });
+        } finally {
+            warehouse.getBag = originalGetBag;
+            warehouse.getBagItems = originalGetBagItems;
+            milkTea.__testing.resetCurrencyCache();
+        }
     }
 
     milkTea.__testing.setShopClock(() => Date.now());

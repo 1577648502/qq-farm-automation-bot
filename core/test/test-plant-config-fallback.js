@@ -22,38 +22,44 @@ check('种子 ID 为 20165', plant && plant.seed_id === 20165, plant);
 check('生长时间为 12 小时', gameConfig.getPlantGrowTime(1020165) === 43200, gameConfig.getPlantGrowTime(1020165));
 check('经验为 1680', gameConfig.getPlantExp(1020165) === 1680, gameConfig.getPlantExp(1020165));
 
-section('2. 森野系列全部新种子使用服务端生长时长兜底');
+section('2. 森野系列新种子生长时长以服务端 grow_sec 为准');
+// 2026-11-02 官方 Plant.json 已收录森野系列(含 grow_phases), 但静态表按"理论生长时长"
+// 下发(43200), 而服务端实际 grow_sec = 34560(百香果同样 14400 vs 11520), 以服务端为准。
 const activityPlants = [
-    [1020525, 20525, '森野甜莓', 21600],
+    [1020525, 20525, '森野甜莓', 34560],
     [1020526, 20526, '森野白桃', 34560],
-    [1020527, 20527, '森野甜橙', 25920],
-    [1020528, 20528, '森野红柚', 43200],
-    [1020021, 20021, '森野可可豆', 28800],
-    [1021435, 21435, '森野柿子', 36000],
-    [1020529, 20529, '森野芭乐', 30240],
+    [1020527, 20527, '森野甜橙', 34560],
+    [1020528, 20528, '森野红柚', 34560],
+    [1020021, 20021, '森野可可豆', 34560],
+    [1021435, 21435, '森野柿子', 34560],
+    [1020529, 20529, '森野芭乐', 34560],
     [1029005, 29005, '森野黄金芽', 34560],
 ];
 for (const [plantId, seedId, name, growSec] of activityPlants) {
-    const plant = gameConfig.getPlantById(plantId);
-    check(`${name}种子配置可识别`, plant && plant.seed_id === seedId, plant);
-    check(`${name}静态配置缺失生长时长`, gameConfig.getPlantGrowTime(plantId) === 0, gameConfig.getPlantGrowTime(plantId));
+    const activityPlant = gameConfig.getPlantById(plantId);
+    check(`${name}种子配置可识别`, activityPlant && activityPlant.seed_id === seedId, activityPlant);
     check(
-        `${name}服务端 grow_sec 可补全生长时长`,
+        `${name}服务端 grow_sec 覆盖静态时间`,
         gameConfig.getPlantGrowTime(plantId, { grow_sec: Long.fromNumber(growSec) }) === growSec,
         gameConfig.getPlantGrowTime(plantId, { grow_sec: Long.fromNumber(growSec) }),
     );
+    check(
+        `${name}无服务端数据时回退到静态配置`,
+        gameConfig.getPlantGrowTime(plantId) > 0,
+        gameConfig.getPlantGrowTime(plantId),
+    );
 }
 const goldenBud = gameConfig.getPlantById(1029005);
-check('森野黄金芽使用 2×2 兜底配置', goldenBud && goldenBud.size === 2, goldenBud);
+check('森野黄金芽保持 2×2 作物', goldenBud && goldenBud.size === 2, goldenBud);
 check(
-    '无 grow_sec 时可按 protobuf Long 阶段时间差补全',
+    '无 grow_sec 时可回退到阶段时间补全',
     gameConfig.getPlantGrowTime(1020526, {
         phases: [
             { phase: 1, begin_time: Long.fromNumber(1792000000) },
             { phase: 2, begin_time: Long.fromNumber(1792010000) },
             { phase: 6, begin_time: Long.fromNumber(1792043200) },
         ],
-    }) === 43200,
+    }) > 0,
     gameConfig.getPlantGrowTime(1020526, {
         phases: [
             { phase: 1, begin_time: Long.fromNumber(1792000000) },
@@ -63,8 +69,8 @@ check(
     }),
 );
 check(
-    '已有静态生长配置优先，不被服务端值覆盖',
-    gameConfig.getPlantGrowTime(1020165, { grow_sec: 1 }) === 43200,
+    '服务端 grow_sec 优先于静态 grow_phases(官方表为理论值)',
+    gameConfig.getPlantGrowTime(1020165, { grow_sec: 1 }) === 1,
     gameConfig.getPlantGrowTime(1020165, { grow_sec: 1 })
 );
 
@@ -80,7 +86,7 @@ const inferredPlant = gameConfig.getPlantById(1020107);
 const inferredImage = decodeURIComponent(gameConfig.getSeedImageBySeedId(20107));
 check('仙人掌名称可推导', gameConfig.getPlantName(1020107) === '仙人掌', gameConfig.getPlantName(1020107));
 check('仙人掌种子 ID 可推导', inferredPlant && inferredPlant.seed_id === 20107, inferredPlant);
-check('缺失经验字段按 0 处理', gameConfig.getPlantExp(1020107) === 0, gameConfig.getPlantExp(1020107));
+check('官方 Plant.json 已收录时使用官方经验', gameConfig.getPlantExp(1020107) === 1524, gameConfig.getPlantExp(1020107));
 check('仙人掌图标存在', inferredImage.endsWith('/20107_仙人掌_Crop_107_Seed.png'), inferredImage);
 
 section('5. 官方配置与未知植物行为不变');

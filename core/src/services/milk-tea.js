@@ -125,6 +125,9 @@ const MILK_TEA_SEED_IDS = [20525, 20526, 20527, 20528, 20021, 21435, 20529, 2900
 //  B. 兑换商店在售的活动种子(实测 20261016-195923 #102 商品301-310) = A + 金币果 + 经验蘑菇
 //     301 20525 甜莓 / 302 20526 白桃 / 303 20527 甜橙 / 304 20528 红柚 / 305 20021 可可豆
 //     306 21435 柿子 / 307 20529 芭乐 / 308 29005 黄金芽 / 309 20522 金币果 / 310 20523 经验蘑菇
+//  C. 2026-11-02 更新(#11 限制类型 4=永久累计): 给 6 款森野种子**补充永久限购次数**,
+//     同一 itemId 出现**两件商品**(301~306 限购 108 已买满 + 339~344 限购 24),
+//     所以自动购买必须按 itemId 汇总所有商品, 不能只看单件商品是否售罄。
 const EXCHANGE_SEED_IDS = [20525, 20526, 20527, 20528, 20021, 21435, 20529, 29005, 20522, 20523];
 /**
  * 可加工果实 → 配方 id。
@@ -1031,6 +1034,7 @@ async function buyDailySeeds(perSeed = 1) {
         ok: true,
         bought: [],
         boughtCount: 0,
+        boughtTypes: 0,
         spentGold: 0,
         spentCoupon: 0,
         spentOther: 0,
@@ -1042,6 +1046,8 @@ async function buyDailySeeds(perSeed = 1) {
         [GOLD_ID]: toInt(wallet.gold),
         [MILK_COUPON_ID]: toInt(wallet.milkCoupon),
     };
+    // 只有真正成交的 itemId 才计入"种", 避免日志出现 "2 种/1 份"。
+    const boughtItemIds = new Set();
     const skip = (g, reason) => out.skippedGoods.push({
         goodsId: g.goodsId,
         itemId: g.itemId,
@@ -1049,64 +1055,94 @@ async function buyDailySeeds(perSeed = 1) {
         reason,
     });
 
+    // 同一 itemId 可能有多件商品(2026-11-02: 6 款森野种子补了永久限购, 出现 301~306 + 339~344)。
+    // 购买目标按 **itemId 汇总** 计算, 再按商品 ID 顺序依次补足, 这样旧商品买满也能继续买新商品。
+    const seedGroups = new Map();
     for (const g of seeds) {
-        const limit = toInt(g.limitCount);
-        const alreadyBought = Math.max(toInt(g.purchasedCount), toInt(g.boughtCount));
-        if (g.soldOut || (limit > 0 && alreadyBought >= limit)) {
-            skip(g, '已达到限购');
-            continue;
-        }
-        const unlock = shopGoodsUnlockCheck(g);
-        if (!unlock.ok) {
-            skip(g, unlock.reason);
-            continue;
-        }
-        const targetCount = limit > 0 ? Math.min(targetPerSeed, limit) : targetPerSeed;
-        const need = Math.max(0, targetCount - alreadyBought);
+        const itemId = toInt(g.itemId);
+        if (!seedGroups.has(itemId)) seedGroups.set(itemId, []);
+        seedGroups.get(itemId).push(g);
+    }
+
+    for (const group of seedGroups.values()) {
+        group.sort((a, b) => toInt(a.goodsId) - toInt(b.goodsId));
+        const totalLimit = groupHaveUnlimited(group)
+            ? 0
+            : group.reduce((sum, g) => sum + Math.max(0, toInt(g.limitCount)), 0);
+        const boughtTotal = group.reduce(
+            (sum, g) => sum + Math.max(toInt(g.purchasedCount), toInt(g.boughtCount)),
+            0,
+        );
+        const targetCount = totalLimit > 0 ? Math.min(targetPerSeed, totalLimit) : targetPerSeed;
+        let need = Math.max(0, targetCount - boughtTotal);
         if (need <= 0) {
-            skip(g, '已达到设置数量');
+            // 区分"本轮份数已够"与"整个 itemId 已售罄", 避免把限购失败误报成已补齐。
+            const reason = totalLimit > 0 && boughtTotal >= totalLimit ? '已达到限购' : '已达到设置数量';
+            for (const g of group) skip(g, reason);
             continue;
         }
 
-        const currencyId = toInt(g.currencyId);
-        const unitPrice = Math.max(0, toInt(g.unitPrice));
-        const estimatedCost = unitPrice * need;
-        const currencyName = currencyId === GOLD_ID
-            ? '金币'
-            : currencyId === MILK_COUPON_ID
-                ? '奶茶券'
-                : ((getItemById(currencyId) || {}).name || `货币#${currencyId}`);
-        if (currencyId !== GOLD_ID && currencyId !== MILK_COUPON_ID) {
-            skip(g, `不支持自动校验${currencyName}余额`);
-            continue;
-        }
-        if (balances[currencyId] < estimatedCost) {
-            skip(g, `${currencyName}不足(需 ${estimatedCost}, 现有 ${balances[currencyId]})`);
-            continue;
-        }
+        for (const g of group) {
+            if (need <= 0) break;
+            const limit = Math.max(0, toInt(g.limitCount));
+            const alreadyBought = Math.max(toInt(g.purchasedCount), toInt(g.boughtCount));
+            if (g.soldOut || (limit > 0 && alreadyBought >= limit)) {
+                skip(g, '已达到限购');
+                continue;
+            }
+            const unlock = shopGoodsUnlockCheck(g);
+            if (!unlock.ok) {
+                skip(g, unlock.reason);
+                continue;
+            }
+            // 本件商品还能买多少(不限购商品按剩余目标买)
+            const room = limit > 0 ? Math.max(0, limit - alreadyBought) : need;
+            const want = Math.min(need, room);
+            if (want <= 0) continue;
 
-        const r = await buyShopGoods(g.goodsId, need, {
-            logSuccess: false,
-        });
-        if (r && r.ok) {
-            const actualCount = Math.max(1, toInt(r.count) || need);
-            const actualCost = r.cost && toInt(r.cost.amount) > 0
-                ? toInt(r.cost.amount)
-                : unitPrice * actualCount;
-            balances[currencyId] = Math.max(0, balances[currencyId] - actualCost);
-            applyCurrencySpend(currencyId, actualCost);
-            if (currencyId === GOLD_ID) out.spentGold += actualCost;
-            else if (currencyId === MILK_COUPON_ID) out.spentCoupon += actualCost;
-            else out.spentOther += actualCost;
-            out.boughtCount += actualCount;
-            out.bought.push(`${g.name}×${actualCount}`);
-            await sleep(700);
-        } else if (r && /限购|已满|上限|已售|已购|已兑换|已领|1034007/.test(String(r.reason))) {
-            skip(g, '服务器判定已达到限购');
-        } else {
-            out.failed.push({ goodsId: g.goodsId, itemId: g.itemId, name: g.name, reason: shortErr(r && r.reason) });
+            const currencyId = toInt(g.currencyId);
+            const unitPrice = Math.max(0, toInt(g.unitPrice));
+            const estimatedCost = unitPrice * want;
+            const currencyName = currencyId === GOLD_ID
+                ? '金币'
+                : currencyId === MILK_COUPON_ID
+                    ? '奶茶券'
+                    : ((getItemById(currencyId) || {}).name || `货币#${currencyId}`);
+            if (currencyId !== GOLD_ID && currencyId !== MILK_COUPON_ID) {
+                skip(g, `不支持自动校验${currencyName}余额`);
+                continue;
+            }
+            if (balances[currencyId] < estimatedCost) {
+                skip(g, `${currencyName}不足(需 ${estimatedCost}, 现有 ${balances[currencyId]})`);
+                continue;
+            }
+
+            const r = await buyShopGoods(g.goodsId, want, {
+                logSuccess: false,
+            });
+            if (r && r.ok) {
+                const actualCount = Math.max(1, toInt(r.count) || want);
+                const actualCost = r.cost && toInt(r.cost.amount) > 0
+                    ? toInt(r.cost.amount)
+                    : unitPrice * actualCount;
+                balances[currencyId] = Math.max(0, balances[currencyId] - actualCost);
+                applyCurrencySpend(currencyId, actualCost);
+                if (currencyId === GOLD_ID) out.spentGold += actualCost;
+                else if (currencyId === MILK_COUPON_ID) out.spentCoupon += actualCost;
+                else out.spentOther += actualCost;
+                out.boughtCount += actualCount;
+                boughtItemIds.add(toInt(g.itemId));
+                out.bought.push(`${g.name}×${actualCount}`);
+                need = Math.max(0, need - actualCount);
+                await sleep(700);
+            } else if (r && /限购|已满|上限|已售|已购|已兑换|已领|1034007/.test(String(r.reason))) {
+                skip(g, '服务器判定已达到限购');
+            } else {
+                out.failed.push({ goodsId: g.goodsId, itemId: g.itemId, name: g.name, reason: shortErr(r && r.reason) });
+            }
         }
     }
+    out.boughtTypes = boughtItemIds.size;
 
     const skipText = summarizeSeedSkips(out.skippedGoods);
     const spendParts = [];
@@ -1117,7 +1153,7 @@ async function buyDailySeeds(perSeed = 1) {
         const failedText = out.failed.length
             ? `；失败 ${out.failed.map((x) => `${x.name}(${x.reason})`).join('、')}`
             : '';
-        log('活动', `奶茶热销中: 森野种子自动购买 ${out.bought.length} 种/${out.boughtCount} 份 → ${out.bought.join('、')}${spendParts.length ? `；花费 ${spendParts.join('、')}` : ''}${skipText ? `；跳过 ${skipText}` : ''}${failedText}`, {
+        log('活动', `奶茶热销中: 森野种子自动购买 ${out.boughtTypes} 种/${out.boughtCount} 份 → ${out.bought.join('、')}${spendParts.length ? `；花费 ${spendParts.join('、')}` : ''}${skipText ? `；跳过 ${skipText}` : ''}${failedText}`, {
             module: 'activity',
             event: '奶茶热销中',
             result: out.failed.length ? 'warn' : 'ok',
@@ -1139,6 +1175,11 @@ async function buyDailySeeds(perSeed = 1) {
     out.skipped = out.alreadyDone;
     if (out.failed.length && out.bought.length) out.partial = true;
     return out;
+}
+
+/** 同一 itemId 下是否有不限购商品(limitCount=0); 有则按设置份数购买, 不受累计上限约束 */
+function groupHaveUnlimited(group) {
+    return (group || []).some((g) => Math.max(0, toInt(g.limitCount)) === 0);
 }
 
 function summarizeSeedSkips(skipped) {

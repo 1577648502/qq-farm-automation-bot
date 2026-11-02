@@ -17,6 +17,7 @@ interface LandAction {
   icon: string
   tone: LandActionTone
   fertilizerId?: number
+  disabled?: boolean
 }
 
 const ACTION_TONE_CLASSES: Record<LandActionTone, string> = {
@@ -53,7 +54,18 @@ const landActions = computed(() => {
   } else if (l.status !== 'locked') {
     acts.push({ op: 'plant', label: '种植', tip: '在这块地种下所选种子', icon: 'i-carbon-sprout', tone: 'plant' })
   }
-  acts.push({ op: 'upgrade', label: '升级', tip: '升级这块地(消耗金币)', icon: 'i-carbon-upgrade', tone: 'upgrade' })
+  // 2026-11-02 起服务端不再下发 could_upgrade: 用后端算出的 canUpgrade(等级/金币/金豆豆) 判断
+  const upgradeBlocked = l.canUpgrade === false || !!l.upgradeBlockedReason
+  acts.push({
+    op: 'upgrade',
+    label: '升级',
+    tip: upgradeBlocked
+      ? `暂不能升级：${l.upgradeBlockedReason || '条件未满足'}${l.upgradeCostText ? `（条件 ${l.upgradeCostText}）` : ''}`
+      : `升级这块地${l.upgradeCostText ? `（条件 ${l.upgradeCostText}）` : '(消耗金币)'}`,
+    icon: 'i-carbon-upgrade',
+    tone: 'upgrade',
+    disabled: upgradeBlocked,
+  })
   return acts
 })
 
@@ -221,6 +233,9 @@ function getLandStatusClass(land: any) {
     case 5: // 紫晶土地
       baseClass = 'bg-fuchsia-100/80 dark:bg-fuchsia-900/20 border-fuchsia-300 dark:border-fuchsia-600'
       break
+    case 6: // 蓝晶土地(2026-11-02 新增)
+      baseClass = 'bg-sky-100/80 dark:bg-sky-900/20 border-sky-300 dark:border-sky-600'
+      break
   }
 
 
@@ -280,6 +295,7 @@ function getLandTypeName(level: number) {
     3: '黑土地',
     4: '金土地',
     5: '紫晶土地',
+    6: '蓝晶土地',
   }
   return typeMap[Number(level) || 0] || ''
 }
@@ -354,6 +370,7 @@ function getPlantSizeText(land: any) {
     <div class="text-[10px] text-gray-400">
       {{ getLandTypeName(land.level) }}
       <span v-if="Number(land.level) === 5" class="ml-0.5 text-fuchsia-500" title="紫晶土地">&#9670;</span>
+      <span v-else-if="Number(land.level) >= 6" class="ml-0.5 text-sky-500" title="蓝晶土地">&#9670;</span>
     </div>
 
 
@@ -426,7 +443,7 @@ function getPlantSizeText(land: any) {
           :class="getActionButtonClass(act)"
           :aria-label="act.tip"
           :data-tip="act.label"
-          :disabled="(act.op === 'plant' && !pickedSeedId)"
+          :disabled="act.disabled || (act.op === 'plant' && !pickedSeedId)"
           @click.stop="doAction(act)"
         >
           <i :class="act.icon" class="shrink-0 text-sm" aria-hidden="true" />

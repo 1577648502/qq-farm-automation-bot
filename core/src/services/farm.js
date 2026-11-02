@@ -352,8 +352,9 @@ function summarizeLandDetails(lands) {
     return summary;
 }
 
-const ALL_FERTILIZER_LAND_TYPES = ['amethyst', 'gold', 'black', 'red', 'normal'];
+const ALL_FERTILIZER_LAND_TYPES = ['blue', 'amethyst', 'gold', 'black', 'red', 'normal'];
 const FERTILIZER_LAND_TYPE_LABELS = {
+    blue: '蓝晶土地',
     amethyst: '紫晶土地',
     gold: '金土地',
     black: '黑土地',
@@ -363,8 +364,9 @@ const FERTILIZER_LAND_TYPE_LABELS = {
 
 function getLandTypeByLevel(level) {
     const lv = toNum(level);
+    if (lv >= 6) return 'blue';      // 2026-11-02 新增 蓝晶土地(6级, 上限)
     if (lv === 5) return 'amethyst';
-    if (lv >= 4) return 'gold';
+    if (lv === 4) return 'gold';
     if (lv === 3) return 'black';
     if (lv === 2) return 'red';
     return 'normal';
@@ -1142,6 +1144,11 @@ async function getLandsDetail() {
             const landSize = toNum(land.land_size);
             const couldUnlock = !!land.could_unlock;
             const couldUpgrade = !!land.could_upgrade;
+            // 服务端 2026-11-02 起不再下发 could_upgrade: 自己按 level/max_level + #8 条件判断
+            const upgradeState = resolveLandUpgradeState(land);
+            const canUpgrade = upgradeState.upgradable;
+            const upgradeCostText = formatLandUpgradeCost(upgradeState);
+            const upgradeBlockedReason = upgradeState.missing.join('；');
             const {
                 sourceLand,
                 occupiedByMaster,
@@ -1161,6 +1168,9 @@ async function getLandsDetail() {
                     landSize,
                     couldUnlock,
                     couldUpgrade,
+                    canUpgrade,
+                    upgradeCostText,
+                    upgradeBlockedReason,
                     currentSeason: 0,
                     totalSeason: 0,
                     occupiedByMaster: false,
@@ -1185,6 +1195,9 @@ async function getLandsDetail() {
                     landSize,
                     couldUnlock,
                     couldUpgrade,
+                    canUpgrade,
+                    upgradeCostText,
+                    upgradeBlockedReason,
                     currentSeason: 0,
                     totalSeason: 0,
                     occupiedByMaster,
@@ -1208,6 +1221,9 @@ async function getLandsDetail() {
                     landSize,
                     couldUnlock,
                     couldUpgrade,
+                    canUpgrade,
+                    upgradeCostText,
+                    upgradeBlockedReason,
                     currentSeason: 0,
                     totalSeason: 0,
                     occupiedByMaster,
@@ -1291,6 +1307,9 @@ async function getLandsDetail() {
                 landSize,
                 couldUnlock,
                 couldUpgrade,
+                canUpgrade,
+                upgradeCostText,
+                upgradeBlockedReason,
                 occupiedByMaster,
                 masterLandId,
                 occupiedLandIds,
@@ -1482,6 +1501,83 @@ async function plantFromShop(landsToPlant, state, overrideStrategy) {
     return { plantedLands };
 }
 
+/**
+ * 解析土地升级条件 (实测 20261102-110136 抓包: AllLands #8)
+ *   #1 = 条件类型(1)   #2 = 需要的农场主等级   #3 = repeated {#1 物品ID, #2 数量}
+ * 物品 1001 = 金币, 1005 = 金豆豆
+ *
+ * ⚠ 2026-11-02 起服务端**不再下发 could_upgrade(#6)**: 满级地块没有 #8,
+ *   未满级地块带 #8 但不等于"能升级"(等级/货币可能不够), 所以必须自己判断。
+ */
+const LAND_COST_ITEM_LABELS = { 1001: '金币', 1005: '金豆豆' };
+
+function parseLandUpgradeCondition(condition) {
+    if (!condition || typeof condition !== 'object') return null;
+    const type = toNum(condition.type);
+    const needLevel = toNum(condition.need_level);
+    const costs = [];
+    for (const item of (Array.isArray(condition.costs) ? condition.costs : [])) {
+        const itemId = toNum(item && item.item_id);
+        const amount = toNum(item && item.amount);
+        if (!itemId || amount <= 0) continue;
+        costs.push({ itemId, amount, name: LAND_COST_ITEM_LABELS[itemId] || `物品#${itemId}` });
+    }
+    if (!needLevel && !costs.length) return null;
+    return { type, needLevel, costs };
+}
+
+/** 玩家当前持有的货币 (金币/金豆豆与条件物品 ID 对齐) */
+function getLandCostBalance(itemId) {
+    const state = getUserState() || {};
+    if (itemId === 1001) return toNum(state.gold);
+    if (itemId === 1005) return toNum(state.goldBean);
+    return 0;
+}
+
+/**
+ * 土地当前是否真的可以升级: 未满级 + 等级达标 + 货币足够。
+ * 返回 { upgradable, level, maxLevel, needLevel, costs, missing: [...] }
+ */
+function resolveLandUpgradeState(land) {
+    const level = toNum(land && land.level);
+    const maxLevel = toNum(land && land.max_level);
+    const cond = parseLandUpgradeCondition(land && land.upgrade_condition);
+    const missing = [];
+    if (!land || !land.unlocked) return { upgradable: false, level, maxLevel, needLevel: 0, costs: [], missing: ['未解锁'] };
+    if (maxLevel <= 0 || level >= maxLevel) {
+        return { upgradable: false, level, maxLevel, needLevel: 0, costs: [], missing: ['已满级'] };
+    }
+    const playerLevel = toNum((getUserState() || {}).level);
+    if (cond && cond.needLevel > 0 && playerLevel < cond.needLevel) {
+        missing.push(`需农场主 Lv${cond.needLevel}(当前 ${playerLevel})`);
+    }
+    for (const cost of (cond ? cond.costs : [])) {
+        const have = getLandCostBalance(cost.itemId);
+        if (have < cost.amount) {
+            missing.push(`${cost.name}不足(需 ${cost.amount}, 现有 ${have})`);
+        }
+    }
+    return {
+        upgradable: missing.length === 0,
+        level,
+        maxLevel,
+        needLevel: cond ? cond.needLevel : 0,
+        costs: cond ? cond.costs : [],
+        missing,
+    };
+}
+
+/** 升级条件的可读文本: "Lv125 + 金币 1亿 + 金豆豆 11350" */
+function formatLandUpgradeCost(upgradeState) {
+    if (!upgradeState) return '';
+    const parts = [];
+    if (upgradeState.needLevel > 0) parts.push(`农场主 Lv${upgradeState.needLevel}`);
+    for (const cost of (upgradeState.costs || [])) {
+        parts.push(`${cost.name} ${cost.amount}`);
+    }
+    return parts.join(' + ');
+}
+
 function getCurrentPhase(phases, debug, landLabel) {
     if (!phases || phases.length === 0) return null;
 
@@ -1534,7 +1630,8 @@ function analyzeLands(lands) {
             }
             continue;
         }
-        if (land.could_upgrade) {
+        // 服务端已不下发 could_upgrade(#6): 以 level < max_level + 条件(等级/货币)为准
+        if (resolveLandUpgradeState(land).upgradable) {
             result.upgradable.push(id);
         }
 
@@ -2026,7 +2123,8 @@ async function runFarmOperation(opType) {
                 try {
                     const reply = await upgradeLand(landId);
                     const newLevel = reply.land ? toNum(reply.land.level) : '?';
-                    log('升级', `土地#${landId} 升级成功 → 等级${newLevel}`, {
+                    const costText = formatLandUpgradeCost(resolveLandUpgradeState(reply.land || {}));
+                    log('升级', `土地#${landId} 升级成功 → 等级${newLevel}${costText ? ` (条件 ${costText})` : ''}`, {
                         module: 'farm', event: '升级土地', result: 'ok', landId, level: newLevel
                     });
                     upgraded++;
@@ -2041,6 +2139,19 @@ async function runFarmOperation(opType) {
                 actions.push(`升级${upgraded}`);
                 recordOperation('upgrade', upgraded);
             }
+        } else if (opType === 'upgrade') {
+            // 手动"升级土地"没找到可升级地块: 给出原因(满级 / 等级不足 / 货币不足), 避免以为没生效
+            const reasons = new Map();
+            for (const land of lands) {
+                if (!land || !land.unlocked) continue;
+                const st = resolveLandUpgradeState(land);
+                if (st.missing.length === 0) continue;
+                for (const reason of st.missing) reasons.set(reason, (reasons.get(reason) || 0) + 1);
+            }
+            const text = [...reasons.entries()].map(([reason, count]) => `${reason}×${count}`).join('、');
+            log('升级', `没有可升级的土地${text ? ` → ${text}` : ''}`, {
+                module: 'farm', event: '升级土地', result: 'skip',
+            });
         }
     }
 

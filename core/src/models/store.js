@@ -61,7 +61,9 @@ const PUSHOO_CHANNELS = new Set([
     'discord', 'wxpusher',
 ]);
 
-const DEFAULT_FERTILIZER_LAND_TYPES = ['amethyst', 'gold', 'black', 'red', 'normal'];
+const DEFAULT_FERTILIZER_LAND_TYPES = ['blue', 'amethyst', 'gold', 'black', 'red', 'normal'];
+// 2026-11-02 之前的"全部土地"勾选组合(没有蓝晶土地)
+const LEGACY_FERTILIZER_LAND_TYPES = ['amethyst', 'gold', 'black', 'red', 'normal'];
 const FERTILIZER_LAND_TYPE_SET = new Set(DEFAULT_FERTILIZER_LAND_TYPES);
 const INTERVAL_MAX_SEC = 86400;
 const DEFAULT_KNOWN_FRIEND_GID_SYNC_COOLDOWN_SEC = 300;
@@ -355,6 +357,12 @@ function normalizeFertilizerLandTypes(input, fallback = DEFAULT_FERTILIZER_LAND_
         if (!FERTILIZER_LAND_TYPE_SET.has(value)) continue;
         if (normalized.includes(value)) continue;
         normalized.push(value);
+    }
+    // 旧配置只勾了全部旧类型(紫晶/金/黑/红/普通) = 当时"全部土地"；
+    // 2026-11-02 新增蓝晶土地后把这种情况视为全选，避免新地块被排除。用户主动取消勾选则保持原样。
+    if (LEGACY_FERTILIZER_LAND_TYPES.length === normalized.length
+        && LEGACY_FERTILIZER_LAND_TYPES.every(type => normalized.includes(type))) {
+        return [...DEFAULT_FERTILIZER_LAND_TYPES];
     }
     return normalized;
 }

@@ -677,9 +677,10 @@ function syncLocalStrategySettings(submitted?: any) {
 const automationSaving = ref(false)
 let automationSaveRequest = 0
 
-const allFertilizerLandTypes = ['amethyst', 'gold', 'black', 'red', 'normal']
+const allFertilizerLandTypes = ['blue', 'amethyst', 'gold', 'black', 'red', 'normal']
 
 const fertilizerLandTypeOptions = [
+  { label: '蓝晶土地', value: 'blue' },
   { label: '紫晶土地', value: 'amethyst' },
   { label: '金土地', value: 'gold' },
   { label: '黑土地', value: 'black' },
@@ -698,6 +699,10 @@ function normalizeFertilizerLandTypes(input: unknown) {
       continue
     normalized.push(value)
   }
+  // 旧配置全选(无蓝晶土地)视为"全部土地"；用户主动取消勾选则保持原样
+  const legacy = allFertilizerLandTypes.filter(type => type !== 'blue')
+  if (normalized.length === legacy.length && legacy.every(type => normalized.includes(type)))
+    return [...allFertilizerLandTypes]
   return normalized
 }
 

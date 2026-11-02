@@ -559,6 +559,10 @@ function getPlantNameBySeedId(seedId) {
  * @param {object} runtimePlant - 服务端 PlantInfo
  */
 function getPlantGrowTime(plantId, runtimePlant) {
+    // ⚠ 实测 2026-11-02 抓包: 官方 Plant.json 的 grow_phases 是**理论值**(森野系列/百香果都写 43200/14400),
+    //   服务端实际下发 grow_sec = 34560/11520(±20% 成长加成), 有服务端值时必须优先, 否则会晚收。
+    const serverGrowSec = toPositiveSeconds(runtimePlant && runtimePlant.grow_sec);
+    if (serverGrowSec > 0) return serverGrowSec;
     const plant = plantMap.get(plantId) || getFallbackPlantById(plantId);
     if (plant && plant.grow_phases) {
         // 解析 "种子:30;发芽:30;成熟:0;" 格式
@@ -574,9 +578,6 @@ function getPlantGrowTime(plantId, runtimePlant) {
     }
 
     if (!runtimePlant) return 0;
-    const growSec = toPositiveSeconds(runtimePlant.grow_sec);
-    if (growSec > 0) return growSec;
-
     const phases = Array.isArray(runtimePlant.phases) ? runtimePlant.phases : [];
     if (phases.length < 2) return 0;
     const beginTimes = phases
