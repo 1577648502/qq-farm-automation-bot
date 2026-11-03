@@ -276,6 +276,80 @@ async function autoOpenFertilizerGiftPacks() {
     }
 }
 
+// 礼包自动开启: 物品表 type=11 且 can_use=1 即可打开(种子礼包/化肥礼包/宝箱等)
+// 无开关, 巡查时自动开启; 60s 节流避免每轮巡查都拉背包
+const GIFT_PACK_SCAN_INTERVAL_MS = 60 * 1000;
+let giftPackLastCheckAt = 0;
+
+function isGiftPackItemId(itemId) {
+    const info = getItemById(Number(itemId) || 0);
+    if (!info || typeof info !== 'object') return false;
+    return Number(info.type) === 11 && Number(info.can_use) === 1;
+}
+
+async function autoOpenGiftPacks() {
+    const now = Date.now();
+    if (now - giftPackLastCheckAt < GIFT_PACK_SCAN_INTERVAL_MS) {
+        return 0;
+    }
+    giftPackLastCheckAt = now;
+    try {
+        const bagReply = await getBag();
+        const bagItems = getBagItems(bagReply);
+        const packs = new Map();
+        for (const it of (bagItems || [])) {
+            const id = toNum(it && it.id);
+            const count = toNum(it && it.count);
+            if (id <= 0 || count <= 0 || !isGiftPackItemId(id)) continue;
+            packs.set(id, (packs.get(id) || 0) + count);
+        }
+        if (packs.size <= 0) return 0;
+
+        let opened = 0;
+        const details = [];
+        for (const [itemId, count] of packs.entries()) {
+            const itemInfo = getItemById(itemId);
+            const itemName = itemInfo && itemInfo.name ? String(itemInfo.name) : `礼包#${itemId}`;
+            try {
+                // 抓包实测: Use { item_id, count } 一次可整包打开(如 101622 x10)
+                const reply = await useItem(itemId, count);
+                const gotItems = (reply && reply.items) || [];
+                opened += count;
+                details.push(`${itemName}x${count}`);
+            } catch (e) {
+                logWarn('仓库', `开启礼包失败: ${itemName}: ${e.message}`, {
+                    module: 'warehouse',
+                    event: '开启礼包',
+                    result: 'error',
+                    itemId,
+                    count,
+                });
+            }
+            await sleep(200);
+        }
+        if (opened > 0) {
+            log('仓库', `自动开启背包礼包 x${opened}${details.length ? ` [${details.join('，')}]` : ''}`, {
+                module: 'warehouse',
+                event: '开启礼包',
+                result: 'ok',
+                count: opened,
+            });
+        }
+        return opened;
+    } catch (e) {
+        logWarn('仓库', `开启礼包失败: ${e.message}`, {
+            module: 'warehouse',
+            event: '开启礼包',
+            result: 'error',
+        });
+        return 0;
+    }
+}
+
+async function openGiftPacksSilently() {
+    return autoOpenGiftPacks();
+}
+
 async function openFertilizerGiftPacksSilently() {
     return autoOpenFertilizerGiftPacks();
 }
@@ -764,6 +838,7 @@ module.exports = {
     useItem,
     batchUseItems,
     openFertilizerGiftPacksSilently,
+    openGiftPacksSilently,
     getFertilizerGiftDailyState: () => ({
         key: 'fertilizer_gift_open',
         doneToday: fertilizerGiftDoneDateKey === getDateKey(),
