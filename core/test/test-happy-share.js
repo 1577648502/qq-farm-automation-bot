@@ -53,23 +53,68 @@ const F4 = {
     TIER: FRAMES4.find(f => f.idx === 262),    // 档位1 已领
 };
 
+// 2026-11-04 更新公告后的抓包: 档位扩到 8 档(80/110/130/150 起给奶茶券惊喜礼包),
+// 一次 cmd=71 把档位5+6 一起领掉, #154 返回两条奖励
+const CAP5 = path.join(__dirname, '..', '..', 'wx-code-grabber', 'captures', '20261105-010541_快乐不独享新.jsonl');
+const FRAMES5 = loadFrames(CAP5);
+const LIST5 = FRAMES5.find(f => f.idx === 52);   // ActivityService.List, 含 8 档状态
+const F5 = {
+    TIER: FRAMES5.find(f => f.idx === 129),       // cmd=71 回应: 档位5/6 变已领, #154 两条奖励
+};
+
 let phase = 0;                    // S3: 0:未领 1:已领快乐值 2:档位也领了
 let phase4 = 0;                   // S4: 同上
+let phase5 = 0;                   // 2026-11-05 新版: 0:档位5/6可领 2:已领
+let stubMode = 'legacy';          // legacy = 旧两期抓包; multi = 2026-11-05 新版(一次领多档)
 const calls = [];
 
 /** 装网络桩: 必须在 require 服务模块之前调用 */
 function installStub() {
+    const protobuf = require('protobufjs');
     const { types } = require(`${SB}/src/utils/proto`);
     const bodyOfHex = (hex) => Buffer.from(types.GateMessage.decode(Buffer.from(hex, 'hex')).body || []);
+    // 把 List 快照里的快乐不独享活动体取出来(它就是 Operate 响应 #3 的内容)
+    let happyActFromListCache;
+    const happyActFromList = () => {
+        if (happyActFromListCache === undefined) {
+            const mgx = require(`${SB}/src/services/mengchong`);
+            const list = mgx.parseTop(bodyOfHex(LIST5.hex)).find(x => x.f === 1).v;
+            const hit = mgx.parseTop(list)
+                .filter(x => x.f === 2 && x.w === 2)
+                .find((e) => {
+                    const head = mgx.parseTop(mgx.parseTop(e.v)[0].v);
+                    return Number((head.find(x => x.f === 1) || {}).v) === 2026110104;
+                });
+            happyActFromListCache = hit && hit.v;
+        }
+        return happyActFromListCache;
+    };
+    // 拼一个只有 #3(活动体) 的 Operate 响应
+    const asOpenReply = (activityBuf) => {
+        const w = protobuf.Writer.create();
+        w.uint32((3 << 3) | 2).bytes(activityBuf);
+        return w.finish();
+    };
     const net = require(`${SB}/src/utils/network`);
     net.sendMsgAsync = async (service, method, body) => {
         const key = `${service}.${method}`;
-        const mg0 = require(`${SB}/src/services/mengchong`);
-        const fsx = mg0.parseTop(Buffer.from(body));
+        const mgx = require(`${SB}/src/services/mengchong`);
+        const fsx = mgx.parseTop(Buffer.from(body));
         const group = Number((fsx.find(f => f.f === 1) || {}).v) || 0;
         const cmd = Number((fsx.find(f => f.f === 2) || {}).v) || 0;
         calls.push({ key, group, cmd });
         if (key === OPERATE) {
+            // ===== 2026-11-05 新版(8 档): 「一次请求领完所有可领档位」回放 =====
+            if (stubMode === 'multi') {
+                if (cmd === 70) {
+                    // phase5=0: List 快照(档位5/6 可领) → 已有的活动体, 再包一层 #3;
+                    // 否则直接用领档回应的完整 body(它自带 #3, 不能再包)
+                    return { body: phase5 === 0 ? asOpenReply(happyActFromList()) : bodyOfHex(F5.TIER.hex) };
+                }
+                if (cmd === 74) { phase5 = 1; throw new Error('新版回放不走 cmd=74'); }
+                if (cmd === 71) { phase5 = 2; return { body: bodyOfHex(F5.TIER.hex) }; }
+                throw new Error('新版桩未 stub 的 cmd: ' + cmd);
+            }
             // ===== S4 期(2026110104): 命令号 70/74/71 =====
             if (group === 2026110104) {
                 if (cmd === 70) return { body: bodyOfHex([F4.OPEN, F4.HAPPY, F4.TIER][phase4].hex) };
@@ -214,6 +259,64 @@ function installStub() {
             tier4.claimed);
 
         happy.setSeason(2026092501);   // 还原
+    }
+
+    section('10. 2026-11-04 更新公告: 8 档 + 一次领取多档 + 奶茶券惊喜礼包');
+    {
+        check('抓包含 List 快照与领档回应', !!LIST5 && !!F5.TIER);
+
+        stubMode = 'multi';
+        phase5 = 0;
+        happy.setSeason(2026110104);
+        calls.length = 0;
+
+        const st = await happy.getHappyStatus();
+        check('识别新版活动', st.ok === true, st);
+        check('快乐值 = 110', st.happy === 110, st.happy);
+        check('档位扩到 8 档', st.tiers.length === 8, st.tiers.length);
+        check('门槛 10/20/30/60/80/110/130/150',
+            JSON.stringify(st.tiers.map(t => t.need)) === JSON.stringify([10, 20, 30, 60, 80, 110, 130, 150]),
+            st.tiers.map(t => t.need));
+        check('档位3 改成 宣传喇叭×5(不再是点券×50)',
+            st.tiers[2].itemId === 1042 && st.tiers[2].count === 5, st.tiers[2]);
+        check('档位5/6 奖励 = 奶茶券惊喜礼包×1(101616)',
+            st.tiers[4].itemId === 101616 && st.tiers[5].itemId === 101616, [st.tiers[4], st.tiers[5]]);
+        check('档位7/8 未达成(状态1)', st.tiers[6].status === 1 && st.tiers[7].status === 1, [st.tiers[6], st.tiers[7]]);
+        check('可领档位 = 5、6', JSON.stringify(st.claimableTiers.map(t => t.tier)) === '[5,6]', st.claimableTiers);
+
+        // #154 多条目解析(纯函数)
+        {
+            const fs = mg.parseTop(bodyOf(F5.TIER.hex));
+            const hex = (fs.find(f => f.f === 154) || {}).v ? Buffer.from(fs.find(f => f.f === 154).v).toString('hex') : '';
+            const list = happy.__testing.parseRewardResults(hex);
+            check('#154 解析出 2 条奖励', list.length === 2, list);
+            check('奖励 = 有机化肥(8小时)×1 + 有机化肥(12小时)×1',
+                list[0] && list[0].id === 80013 && list[1] && list[1].id === 80014, list);
+            check('parseRewardResult 兼容旧调用(只取第一条)', happy.__testing.parseRewardResult(hex).id === 80013, null);
+        }
+
+        // ⚠ 核心: 只发一次 cmd=71
+        calls.length = 0;
+        const r = await happy.claimTierRewards();
+        check('领档位成功', r.ok === true, r);
+        check('一次领到 2 个档位', r.claimed.length === 2, r.claimed);
+        check('领的是档位5、6', JSON.stringify(r.claimed.map(c => c.tier)) === '[5,6]', r.claimed.map(c => c.tier));
+        check('**只发了一次 cmd=71**(服务端一次领完)',
+            calls.filter(c => c.group === 2026110104 && c.cmd === 71).length === 1, calls.map(c => `${c.group}:${c.cmd}`));
+        check('到账 2 条奖励(80013/80014)',
+            r.rewards.length === 2 && r.rewards[0].id === 80013 && r.rewards[1].id === 80014, r.rewards);
+        check('复核后档位5/6 = 已领(状态3)', r.claimedTiers.includes(5) && r.claimedTiers.includes(6), r.claimedTiers);
+        check('复核标志 verified', r.verified === true, r.verified);
+
+        // 再跑一次: 没有可领档位 → 跳过且不发请求
+        calls.length = 0;
+        const r2 = await happy.claimTierRewards();
+        check('无可领档位时跳过', r2.ok === true && r2.skipped === true, r2);
+        check('跳过时不发 cmd=71', calls.filter(c => c.cmd === 71).length === 0, calls.map(c => c.cmd));
+
+        stubMode = 'legacy';
+        phase5 = 0;
+        happy.setSeason(2026092501);
     }
 
     finish();

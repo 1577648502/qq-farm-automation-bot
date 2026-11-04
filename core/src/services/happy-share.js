@@ -21,6 +21,21 @@
  *   档位实测: 10 → 化肥(4小时)×1 · 20 → 有机化肥(8小时)×1 · 30 → 点券×50 · 60 → 90042×1
  *   活动头 #23 = 1 = 有待领(领取后消失)
  *
+ * ════════ 2026-11-04 更新公告后 (抓包 20261105-010541_快乐不独享新) ════════
+ * 公告: 「快乐不独享」新增奖励档位, 累计快乐值达标可领**奶茶券惊喜礼包**(101616);
+ *       礼包开启概率给化肥/有机化肥/点券100/蜜雪奶茶券, 奶茶券奖池限量、每人最多中一次。
+ * - 档位表从 4 档扩到 **8 档**: 同 group 2026110104、同状态容器 #120.#1、同 #5 结构, 无需改协议
+ *   10/20/30/60/80/110/130/150 →
+ *   化肥(4h)×1 / 有机化肥(8h)×1 / 宣传喇叭×5 / 人气装饰×1 /
+ *   奶茶券惊喜礼包×1 / ×1 / ×1 / ×1
+ *   ⚠ 旧抓包在 30 档给的是"点券×50", 新版换成了宣传喇叭×5 → **档位奖励一律以服务端状态为准**,
+ *     代码里不写死任何档位, 只认 #4 状态 == 2 的条目(本次改动的核心约束)。
+ * - #154(领档位结果) 从单条扩展到多条: **#2(repeated) = 奖励条目 {#1 物品ID, #2 数量, ...}**
+ *   (开头的 #1 是个 1~2 字节的标志位, 新旧抓包都一样, 语义未解出, 忽略即可)
+ *   2026-11-05 实测一次领 2 档 → #154 = {#1: ~, #2: 80013×1, #2: 80014×1}。旧解析只取第一条, 会漏报。
+ * - 福利: 领取到的 101616 属于背包 type=11/can_use=1, 仓库的"礼包自动开启"会顺手开掉,
+ *   不需要活动侧再发 Use 请求(活动结束后未领的档位就没了, 所以档位必须尽早领)。
+ *
  * 上行 payload 加密未见 → 一律空 payload 试发 + 状态双重校验
  */
 const { log, toNum, toInt, sleep } = require('../utils/utils');
@@ -63,6 +78,7 @@ const STATE_FIELD = 120;    // 活动体里的状态容器
 const TIER_UNREACHED = 1;   // 档位状态: 未达成
 const TIER_CLAIMABLE = 2;   // 档位状态: 可领
 const TIER_CLAIMED = 3;     // 档位状态: 已领
+const GIFT_PACK_ID = 101616; // 奶茶券惊喜礼包(2026-11-04 新增档位奖励; type=11/can_use=1, 由仓库负责开启)
 
 function itemLabel(id, count) {
     const it = getItemById(toNum(id));
@@ -109,17 +125,29 @@ function parseHappyState(activityBuf) {
     return out;
 }
 
-/** 从结果字段里解析 {#2: {物品ID, 数量}} 形式的奖励 */
-function parseRewardResult(resultHex) {
-    if (!resultHex) return null;
+/**
+ * 解析领取档位结果 #154 → 奖励清单 [{id, count, name, image}]
+ *   结构: {#1: 标志位, #2(repeated): {#1 物品ID, #2 数量, ...}}
+ * 2026-11-05 起一次可领多档 → 多条 #2; 拿不到时返回 []
+ */
+function parseRewardResults(resultHex) {
+    if (!resultHex) return [];
     const f = parseTop(Buffer.from(resultHex, 'hex'));
-    const box = findField(f, 2);
-    const amt = box && box.w === 2 ? parseTop(box.v) : null;
-    if (!amt) return null;
-    const id = toInt((findField(amt, 1) || {}).v);
-    const count = toInt((findField(amt, 2) || {}).v);
-    if (!id || !count) return null;
-    return { id, count, name: itemLabel(id, count), image: getItemImageById(id) };
+    const out = [];
+    for (const box of f) {
+        if (box.f !== 2 || box.w !== 2) continue;
+        const amt = parseTop(box.v);
+        const id = toInt((findField(amt, 1) || {}).v);
+        const count = toInt((findField(amt, 2) || {}).v);
+        if (!id || !count) continue;
+        out.push({ id, count, name: itemLabel(id, count), image: getItemImageById(id) });
+    }
+    return out;
+}
+
+/** 旧接口: 只取第一条奖励(#154 早期只有一条), 无奖励返回 null */
+function parseRewardResult(resultHex) {
+    return parseRewardResults(resultHex)[0] || null;
 }
 
 /** 读活动状态(打开活动 cmd=69, 顺带拿快乐包id) */
@@ -192,39 +220,76 @@ async function claimDailyHappy() {
     };
 }
 
-/** 领取所有可领的档位奖励(cmd=70) */
+/**
+ * 领取所有可领的档位奖励(cmd=71)
+ *
+ * ⚠ 2026-11-05 抓包纠正了旧实现的假设: **一次 cmd=71 会把当前所有可领档位一起领掉**。
+ *   实测: 档位5(80) 与档位6(110) 同为状态2 → 只发了一次 cmd=71, 两条都变成状态3。
+ *   旧代码是"每个可领档位发一次", 第二次就是空打(可能报错) → 改成**只发一次**。
+ *   奖励以 #154 的多条 #2 为准; 服务端会顺带把 101616 礼包开掉(实测直接回 80013/80014),
+ *   所以这里只报告、不再自己发 Use。
+ */
 async function claimTierRewards() {
     const st = await getHappyStatus();
     if (!st.ok) return { ok: false, reason: st.reason };
     const targets = st.claimableTiers || [];
     if (!targets.length) return { ok: true, claimed: [], skipped: true, reason: '没有达到门槛的档位', happy: st.happy, tiers: st.tiers };
-    const claimed = [];
-    for (const t of targets) {
-        const r = await operateRaw(activeGroup, activeSeason.claimTier, FIELD_TIER, Buffer.alloc(0));
-        if (r.errorCode !== 0) {
-            log('活动', `快乐不独享: 档位${t.tier} 领取失败 code=${r.errorCode}`, { module: 'activity', event: '快乐不独享', result: 'error' });
-            break;
-        }
-        const reward = parseRewardResult(r.resultHex);
-        claimed.push({ tier: t.tier, need: t.need, reward });
-        log('活动', `快乐不独享: 已领取档位${t.tier}(${t.need} 快乐值) → ${reward ? reward.name : '已发放'}`, {
-            module: 'activity', event: '快乐不独享', result: 'ok', tier: t.tier,
-        });
-        await sleep(1200);
+
+    // 一次领完(服务端会处理所有状态=2 的档位)
+    const r = await operateRaw(activeGroup, activeSeason.claimTier, FIELD_TIER, Buffer.alloc(0));
+    if (r.errorCode !== 0) {
+        return { ok: false, reason: `领取档位失败 code=${r.errorCode}`, claimed: [], happy: st.happy, tiers: st.tiers, targets };
     }
+    const rewards = parseRewardResults(r.resultHex);
+    await sleep(1200);
+
+    // 以"领取后状态"为准核对, 不轻信接口回报
     const after = await getHappyStatus().catch(() => null);
-    return { ok: true, claimed, happy: after && after.ok ? after.happy : st.happy, tiers: after && after.ok ? after.tiers : st.tiers };
+    const afterTiers = (after && after.ok) ? after.tiers : st.tiers;
+    const claimedTiers = afterTiers.filter(t => t.status === TIER_CLAIMED).map(t => t.tier);
+    const newlyClaimed = (after && after.ok)
+        ? targets.filter(t => claimedTiers.includes(t.tier))
+        : targets;   // 复核失败时按"准备领的档位"报告, 但置 verified=false
+
+    const claimed = newlyClaimed.map((t, i) => {
+        // 只有"到账条目数 == 领取档位数"时才敢按顺序对齐; 否则不硬套(避免日志误报档位↔奖励)
+        const aligned = rewards.length === newlyClaimed.length ? rewards[i] : null;
+        return { tier: t.tier, need: t.need, reward: aligned, rewards: aligned ? [aligned] : [] };
+    });
+    const allNames = rewards.map(x => x.name).join('+');
+    for (const c of claimed) {
+        log('活动', `快乐不独享: 已领取档位${c.tier}(${c.need} 快乐值)${c.reward ? ` → ${c.reward.name}` : ''}`, {
+            module: 'activity', event: '快乐不独享', result: 'ok', tier: c.tier,
+        });
+    }
+    if (rewards.length) {
+        log('活动', `快乐不独享: 本次到账 ${allNames}`, {
+            module: 'activity', event: '快乐不独享', result: 'ok', count: rewards.length,
+        });
+    }
+    return {
+        ok: claimed.length > 0,
+        verified: !!(after && after.ok),
+        claimed,
+        rewards,                       // 服务端实际到账(按返回顺序; 与档位的对应关系不保证)
+        claimedTiers,
+        happy: after && after.ok ? after.happy : st.happy,
+        tiers: afterTiers,
+        reason: claimed.length ? undefined : '接口成功但档位状态没变化, 请核对',
+    };
 }
 
 /**
  * 快乐不独享整体流程:
  *   ① 读状态(顺带确认活动还在) ② 领每日快乐值 ③ 领可以领的档位奖励
  * 每步都靠状态复核, 不会误报成功。
+ * 2026-11-04 更新后: 档位奖励里含「奶茶券惊喜礼包」(101616)。服务端在领取档位时可能直接开包,
+ * 也可能把礼包发进背包 —— 后者靠仓库的"礼包自动开启"(type=11 & can_use=1)兜底, 这里不重复发 Use。
  */
 async function checkAndRunHappyShare(force = false) {
     const before = await getHappyStatus();
     if (!before.ok) return { ok: false, reason: before.reason };
-    const out = { ok: true, before: { happy: before.happy, tiers: before.tiers }, daily: null, tiers: null };
+    const out = { ok: true, before: { happy: before.happy, tiers: before.tiers }, daily: null, tiers: null, pendingPacks: [] };
 
     // ② 每日快乐值: 已经有可领档位时也照样试一次(每天只成功一次, 失败无副作用)
     const daily = await claimDailyHappy();
@@ -233,6 +298,21 @@ async function checkAndRunHappyShare(force = false) {
     // ③ 档位奖励
     const tiers = await claimTierRewards();
     out.tiers = tiers;
+
+    // ④ 档位里还有"礼包"没被服务端当场开掉 → 交给仓库的开包流程(它自带节流 + 幂等)
+    //    实测(11-05): 服务端领档时直接把 101616 开成 80013/80014, #154 回的是开出来的东西;
+    //    这里只兜底"礼包原样进了背包"的情况。
+    out.pendingPacks = ((tiers && tiers.rewards) || []).filter(x => x.id === GIFT_PACK_ID);
+    if (out.pendingPacks.length) {
+        log('活动', `快乐不独享: 档位奖励含奶茶券惊喜礼包 x${out.pendingPacks.length}，交由仓库自动开启`, {
+            module: 'activity', event: '快乐不独享', result: 'ok', count: out.pendingPacks.length,
+        });
+        try {
+            // 懒加载: 避免服务层循环依赖(warehouse 不依赖 happy-share, 这里只是保险)
+            const { openGiftPacksSilently } = require('./warehouse');
+            out.openedPacks = await openGiftPacksSilently().catch(() => 0);
+        } catch { /* 开包失败不影响本次领取结果 */ }
+    }
 
     const gotSomething = (daily && daily.ok) || (tiers && tiers.claimed && tiers.claimed.length);
     out.ok = gotSomething || force;      // force 时即使没领到也算"流程跑通"
@@ -243,6 +323,7 @@ module.exports = {
     GROUP: GROUP_S4,
     GROUP_S3,
     GROUP_S4,
+    GIFT_PACK_ID,
     getActiveGroup: () => activeGroup,
     SUB_ID,
     SEASONS,
@@ -250,7 +331,7 @@ module.exports = {
     getActiveSeason: () => ({ ...activeSeason }),
     TIER_CLAIMABLE,
     TIER_CLAIMED,
-    __testing: { parseHappyState, parseRewardResult },
+    __testing: { parseHappyState, parseRewardResult, parseRewardResults },
     getHappyStatus,
     claimDailyHappy,
     claimTierRewards,

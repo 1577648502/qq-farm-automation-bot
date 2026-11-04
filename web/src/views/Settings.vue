@@ -2536,8 +2536,8 @@ async function onBackupFileChange(ev: Event) {
 
             <!-- 快乐不独享 -->
             <AutoTaskCard
-              title="快乐不独享 S4（10/15 起）"
-              desc="每日领快乐值 +5，攒够门槛自动领档位奖励"
+              title="快乐不独享 S4（10/15 起，11/04 已加档）"
+              desc="每日领快乐值 +5，攒够门槛自动领档位奖励（含奶茶券惊喜礼包，背包里自动开启）"
             >
               <template #switch>
                 <BaseSwitch v-model="localAutomationSettings.happyShareEnabled" label="启用" />
@@ -2549,7 +2549,7 @@ async function onBackupFileChange(ev: Event) {
                 <span v-if="happyResult" class="text-xs text-gray-600 dark:text-gray-300">{{ happyResult }}</span>
               </template>
               <template #note>
-                档位：10 → 化肥4h · 20 → 有机化肥8h · 30 → 点券×50 · 60 → 90042
+                8 档：10 化肥4h · 20 有机化肥8h · 30 宣传喇叭×5 · 60 人气装饰 · 80/110/130/150 奶茶券惊喜礼包（礼包会在背包里自动开启）
               </template>
             </AutoTaskCard>
 
