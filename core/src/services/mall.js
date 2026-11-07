@@ -3,6 +3,7 @@
  * 商城自动购买
  */
 
+const protobuf = require('protobufjs');
 const { sendMsgAsync, getUserState } = require('../utils/network');
 const { types } = require('../utils/proto');
 const { toNum, log, sleep } = require('../utils/utils');
@@ -56,15 +57,36 @@ function getDateKey() {
     return `${y}-${m}-${d}`;
 }
 
-async function getMallListBySlotType(slotType = 1) {
-    // ⚠ slot_type = 0 是合法的(2026-11-07 抓包: 限时商店的藏品礼包在 slot 0),
-    //   旧写法 `Number(slotType) || 1` 会把 0 当成假值改成 1 → 永远查不到 slot 0 的商品。
-    //   这里只在"完全没传/非法"时回落到 1, 0 原样保留。
+/**
+ * 拉商城列表
+ *
+ * ⚠ 2026-11-07 抓包(20261107-112023)纠正了两件此前搞错的事:
+ *   ① 真实客户端请求体是 6 字节: `08 <slot> 10 <flag> 18 01`
+ *      (#1 slot_type, #2 布尔标志, #3 恒为 1) —— 不是只有 #1。
+ *      slot=5 时是 `08 05 10 01 18 01`; slot=1 时是 `08 01 10 00 18 01`。
+ *   ② slot_type 必须 >= 1: proto3 会把 0 当默认值**整个字段省略**,
+ *      传 0 会发出**空请求体**, 服务端直接回 `1031002 商品不可购买`。
+ *      (上一版把 0 当成合法值放行, 就是这么炸的)
+ * 藏品礼包(1047/1048)在 **slot 5**, 不在 slot 0。
+ */
+const MALL_LIST_FLAG_FIELD = 2;
+const MALL_LIST_CONST_FIELD = 3;   // 恒为 1, 抓包 3 次请求都有
+const MALL_LIST_CONST_FIELD_VALUE = 1;
+
+async function getMallListBySlotType(slotType = 1, options = {}) {
     const raw = Number(slotType);
-    const slot = Number.isFinite(raw) && raw >= 0 ? Math.floor(raw) : 1;
-    const body = types.GetMallListBySlotTypeRequest.encode(types.GetMallListBySlotTypeRequest.create({
-        slot_type: slot,
-    })).finish();
+    const slot = Number.isFinite(raw) && raw >= 1 ? Math.floor(raw) : 1;
+    // #2 的语义未解出(实测 slot=5 为 1, slot=1 为 0), 按抓包给的默认值走, 可被 options 覆盖
+    const flag = options.flag === undefined
+        ? (slot === 5 ? 1 : 0)
+        : (Number(options.flag) ? 1 : 0);
+    // 手工拼字节: 客户端连 **值为 0 的 #2 也照发**(08 01 10 00 18 01),
+    // 用 protobufjs + .proto 编码会把 0 略掉, 与抓包不一致 → 这里显式写。
+    const writer = protobuf.Writer.create();
+    writer.uint32((1 << 3) | 0).int32(slot);                             // #1 slot_type
+    writer.uint32((MALL_LIST_FLAG_FIELD << 3) | 0).int32(flag ? 1 : 0);   // #2 标志
+    writer.uint32((MALL_LIST_CONST_FIELD << 3) | 0).int32(MALL_LIST_CONST_FIELD_VALUE); // #3 恒 1
+    const body = writer.finish();
     const { body: replyBody } = await sendMsgAsync('gamepb.mallpb.MallService', 'GetMallListBySlotType', body);
     return types.GetMallListBySlotTypeResponse.decode(replyBody);
 }
@@ -1023,11 +1045,12 @@ async function buyFreeGifts(force = false) {
  * ============ 限时礼包自动购买(2026-11-07 新需求) ============
  *
  * 抓包 `20261107-112023_典藏室和快乐独享领取` 实测:
- *   slot=0 (GetMallListBySlotType{slot_type:0}) 返回 **藏品礼包**
- *     1047 金豆豆藏品礼包  price={1005:428}  limit={#1:2(周期?), #2:3(已购), #3:50(限购)}
- *     1048 钻石藏品礼包    price={1004:40}   limit={#2:2, #3:50}
- *     1061/1062/1063 奶茶点券/每日/加速礼包(会同时在 slot=5 出现)
- *   slot=5 返回限时商店(20小时化肥 10001~10004 等, 属于旧品类, 不在这里买)
+ *   slot=5 (请求体 08 05 10 01 18 01) 返回限时商店, 其中含 **藏品礼包**:
+ *     1047 金豆豆藏品礼包  price={1005:300}  limit={#1:2, #2:3, #3:50} → 还能买 47
+ *     1048 钻石藏品礼包    price={1004:40}   limit={#1:2, #2:50}       → 还能买 50
+ *     1061/1062/1063 奶茶点券/每日/加速礼包
+ *     10001~10004 20/40 小时化肥(旧品类, 不在这里买)
+ *   ⚠ slot 必须是 >=1: proto3 会把 0 当默认值省略字段, 变成空请求体 → 服务端 1031002
  *
  * 规则(用户要求):
  *   · "看着上限买" → 每次都以服务端下发的 限购 - 已购 为准, 买满为止, 不写死数量
@@ -1035,7 +1058,7 @@ async function buyFreeGifts(force = false) {
  *   · 币种余额不足时按余额打折, 不硬买
  *   · 同一商品限购周期可能是"总计"(周期=4/2 看服务端), 买满后本进程当天不再重试
  */
-const LIMITED_PACK_SLOT = 0;              // slot 0 = 藏品礼包(11-07 抓包)
+const LIMITED_PACK_SLOT = 5;              // slot 5 = 限时商店/藏品礼包(11-07 抓包 08 05 10 01 18 01)
 const LIMITED_PACK_BUY_INTERVAL_MS = 700;   // 单个购买间隔(服务端要求逐次购买, 太快会被判风控)
 const LIMITED_PACK_GOODS_FALLBACK = [1047, 1048];   // 兜底: slot 查不到时按 goods_id 再找一遍
 let limitedPackMemory = { dateKey: '', bought: new Map() };   // goodsId → 本进程当天已买
@@ -1243,7 +1266,7 @@ async function checkAndBuyLimitedPacks(force = false) {
     }
     let packs = goodsList.filter(isCollectionPackGoods);
     if (!packs.length) {
-        // slot 0 没拿到(服务端可能换了 slot 号) → 兜底扫 slot 1~5 找同名礼包
+        // slot 5 没拿到(服务端可能换了 slot 号) → 兜底扫其它 slot 找同名礼包
         for (const slot of [1, 2, 3, 4, 5]) {
             try {
                 const list = await getMallGoodsList(slot);
@@ -1399,6 +1422,9 @@ module.exports = {
     buyLimitedPackToLimit,
     isCollectionPackGoods,
     parseMallLimit,
+    // 抓包对照/排查用: 商城列表请求体的实际字节
+    getMallListBySlotType,
+    getMallGoodsList,
     checkAndBuyFertilizerByThreshold,
     checkAndBuyFertilizerBoth,
     buyFreeGifts,

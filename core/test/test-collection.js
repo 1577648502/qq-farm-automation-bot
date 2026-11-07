@@ -5,7 +5,7 @@
  *   1. CollectionService.GetCollections 请求/响应解析(空壳也不再报错)
  *   2. 藏品目录: 5 个系列 × 6 款 = 30 款(type=35, 按 icon_collect_<系列>_<款式> 分组)
  *   3. 概览: 从背包反推拥有状态 / 展台 / 典藏收藏点
- *   4. 限时礼包 slot=0 的限购解析({1:2,2:3,3:50} 与 {1:2,2:50} 两种形态)
+ *   4. 限时礼包 slot=5 的限购解析({1:2,2:3,3:50} 与 {1:2,2:50} 两种形态)
  *   5. 按服务端上限买 + 买完发 ItemService.Use 开包(type=33 藏品礼包也要能自动开)
  *
  * 运行: node test/test-collection.js
@@ -44,7 +44,7 @@ function installMallStub() {
     const net = require(`${SB}/src/utils/network`);
     const { types } = require(`${SB}/src/utils/proto`);
     mallMod.getMallGoodsList = async (slotType = 1) => {
-        if (Number(slotType) !== 0) return [];
+        if (Number(slotType) !== 5) return [];
         const resp = types.GetMallListBySlotTypeResponse.decode(mallSlot0());
         return resp.goods_list.map((b) => types.MallGoods.decode(b));
     };
@@ -73,10 +73,10 @@ function installStub() {
             return { body: bodyOf('ItemService.Bag', 'S->C') };
         }
         if (key === 'gamepb.mallpb.MallService.GetMallListBySlotType') {
-            // slot=0 → 藏品礼包; 其它 slot 回一个空列表
+            // slot=5 → 限时商店(含藏品礼包); 其它 slot 回一个空列表
             const fields = require(`${SB}/src/services/mengchong`).parseTop(Buffer.from(body || []));
             const slot = Number((fields.find(x => x.f === 1) || {}).v || 0);
-            if (slot === 0) return { body: bodyOf('MallService.GetMallListBySlotType', 'S->C').length ? mallSlot0() : Buffer.alloc(0) };
+            if (slot === 5) return { body: bodyOf('MallService.GetMallListBySlotType', 'S->C').length ? mallSlot0() : Buffer.alloc(0) };
             return { body: Buffer.alloc(0) };
         }
         if (key === 'gamepb.mallpb.MallService.Purchase') {
@@ -89,7 +89,7 @@ function installStub() {
     };
 }
 
-/** slot=0 的商城响应: 抓包里第 3 条 GetMallListBySlotType 响应(43.49s, goods 9 个) */
+/** slot=5 的商城响应: 抓包里第 3 条 GetMallListBySlotType 响应(43.49s, goods 9 个) */
 function mallSlot0() {
     const list = FRAMES.filter(j => j.key.endsWith('GetMallListBySlotType') && j.dir === 'S->C');
     return Buffer.from(list[list.length - 1].bodyHex, 'hex');
@@ -155,17 +155,17 @@ function purchaseReply(reqBody) {
         check('每个系列都有 owned/total', ov.series.every(s => s.owned === 0 && s.total === 6), ov.series.map(s => [s.owned, s.total]));
     }
 
-    section('4. slot=0 限购解析');
+    section('4. slot=5 限购解析');
     {
         const goods = await mall.getMallCatalog ? null : null;
-        // 直接从 slot=0 回包里解出 1047 / 1048 的原始 #7
+        // 直接从 slot=5 回包里解出 1047 / 1048 的原始 #7
         const { types } = require(`${SB}/src/utils/proto`);
         const resp = types.GetMallListBySlotTypeResponse.decode(mallSlot0());
         const list = resp.goods_list.map(b => types.MallGoods.decode(b));
         const g1047 = list.find(g => Number(g.goods_id) === 1047);
         const g1048 = list.find(g => Number(g.goods_id) === 1048);
-        check('slot=0 里有 1047 金豆豆藏品礼包', !!g1047, list.map(g => Number(g.goods_id)));
-        check('slot=0 里有 1048 钻石藏品礼包', !!g1048, list.map(g => Number(g.goods_id)));
+        check('slot=5 里有 1047 金豆豆藏品礼包', !!g1047, list.map(g => Number(g.goods_id)));
+        check('slot=5 里有 1048 钻石藏品礼包', !!g1048, list.map(g => Number(g.goods_id)));
         check('1047 的 #7 = {1:2,2:3,3:50}',
             g1047 && Buffer.from(g1047.limit).toString('hex') === '080210031832',
             g1047 && Buffer.from(g1047.limit).toString('hex'));
@@ -174,6 +174,24 @@ function purchaseReply(reqBody) {
             g1048 && Buffer.from(g1048.limit).toString('hex'));
         check('两个都被识别为藏品礼包',
             mall.isCollectionPackGoods(g1047) && mall.isCollectionPackGoods(g1048));
+    }
+
+    section('4b. 商城列表请求体必须与抓包逐字节一致(1031002 的根因)');
+    {
+        // 抓包三种请求: slot5 → 08 05 10 01 18 01 / slot1 → 08 01 10 00 18 01
+        // 踩过的坑: ① proto3 把 slot=0 当默认值省略 → 发空请求体 → 1031002 商品不可购买
+        //           ② 用 .proto 编码会把值为 0 的 #2 也省略, 与客户端不一致
+        calls.length = 0;
+        await mall.getMallListBySlotType(5).catch(() => null);
+        await mall.getMallListBySlotType(1).catch(() => null);
+        await mall.getMallListBySlotType(0).catch(() => null);
+        const hexes = calls.filter(c => c.key === 'gamepb.mallpb.MallService.GetMallListBySlotType')
+            .map(c => c.body.toString('hex'));
+        check('slot=5 请求体 = 080510011801', hexes[0] === '080510011801', hexes[0]);
+        check('slot=1 请求体 = 080110001801', hexes[1] === '080110001801', hexes[1]);
+        check('slot=0 回落到 slot=1(绝不发空请求体)',
+            hexes[2] === '080110001801' && hexes[2] !== '', hexes[2]);
+        check('三次请求都不是空 body', hexes.every(h => h.length >= 8), hexes);
     }
 
     section('5. 按服务端上限买 + 买完开包');
