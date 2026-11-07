@@ -61,7 +61,10 @@ interface CollectionOverview {
   points: { collection: number, normal: number }
   display: SceneDisplay | null
   displays: SceneDisplay[]
-  score: { total: number, claimed: number, claimable: boolean }
+  level: number
+  unlockLevel: number
+  locked: boolean
+  score: { total: number, claimed: number, claimable: boolean | null }
 }
 
 const toast = useToastStore()
@@ -146,7 +149,9 @@ async function handleUpgrade(item: CollectionItem) {
 
 async function handleClaim() {
   const r = await post('/api/collection/claim-reward')
-  if (r) toast.success(`已领取评分奖励(覆盖到 ${r.claimedScore} 档)`)
+  if (!r) return
+  if (r.claimed === false) toast.info(r.reason || '当前没有可领取的评分奖励')
+  else toast.success(`已领取评分奖励(覆盖到 ${r.claimedScore} 档)`)
 }
 
 /** 一键: 展示 → 升星 → 领评分奖励 */
@@ -206,9 +211,17 @@ usePageRefresh('/collection', loadOverview)
     </div>
 
     <template v-if="overview">
+      <!-- 等级未达标 -->
+      <div
+        v-if="overview.locked"
+        class="rounded border border-yellow-300 bg-yellow-50 p-3 text-xs text-yellow-800 dark:border-yellow-700 dark:bg-yellow-900/30 dark:text-yellow-200"
+      >
+        典藏室 {{ overview.unlockLevel }} 级开启，当前 {{ overview.level }} 级，暂不可用。
+      </div>
+
       <!-- 服务器未连通提示 -->
       <div
-        v-if="!overview.serverOk"
+        v-if="!overview.serverOk && !overview.locked"
         class="rounded border border-yellow-300 bg-yellow-50 p-3 text-xs text-yellow-800 dark:border-yellow-700 dark:bg-yellow-900/30 dark:text-yellow-200"
       >
         未取到典藏室服务端数据(账号可能未运行)。下方星级/展示位信息不可用。
@@ -244,29 +257,24 @@ usePageRefresh('/collection', loadOverview)
       </div>
 
       <!-- 评分奖励 -->
-      <div
-        class="flex flex-wrap items-center justify-between gap-3 rounded-lg border p-4"
-        :class="overview.score.claimable
-          ? 'border-amber-300 bg-amber-50 dark:border-amber-700 dark:bg-amber-900/20'
-          : 'border-gray-200 bg-white dark:border-gray-700 dark:bg-gray-800'"
-      >
+      <div class="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-gray-200 bg-white p-4 dark:border-gray-700 dark:bg-gray-800">
         <div>
           <h3 class="text-sm text-gray-900 font-medium dark:text-white">
             藏品评分奖励
           </h3>
           <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
             当前评分 {{ fmtNum(overview.score.total) }}，已领到 {{ fmtNum(overview.score.claimed) }}
-            <span v-if="overview.score.claimable" class="ml-1 font-medium text-amber-700 dark:text-amber-300">有新的可领取</span>
+            <span class="ml-1 text-gray-400">（奖励按评分档位发放，档位之间有间隔，点了会由服务端判定）</span>
           </p>
         </div>
         <BaseButton
           variant="primary"
           size="sm"
-          :disabled="busy || !overview.score.claimable"
+          :disabled="busy"
           :loading="busy"
           @click="handleClaim"
         >
-          {{ overview.score.claimable ? '领取评分奖励' : '暂无可领' }}
+          领取评分奖励
         </BaseButton>
       </div>
 

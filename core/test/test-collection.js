@@ -50,6 +50,8 @@ let bagOverride = null;
 let collectionReplyHex = null;
 /** 自定义背包回包(优先级高于 bagOverride) */
 let originalBagReply = null;
+/** true = ClaimCollectionReward 模拟服务端 1047006 */
+let claimNoReward = false;
 function installMallStub() {
     const mallMod = require(`${SB}/src/services/mall`);
     const net = require(`${SB}/src/utils/network`);
@@ -99,6 +101,7 @@ function installStub() {
             return { body: purchaseReply(Buffer.from(body || [])) };
         }
         if (key === 'gamepb.collectionpb.CollectionService.ClaimCollectionReward') {
+            if (claimNoReward) throw new Error('gamepb.collectionpb.CollectionService.ClaimCollectionReward 错误: code=1047006 暂无可领取的奖励');
             // 抓包 61.06s 实测: #2=1200 #3=1000 #4{50=1000}
             return { body: Buffer.from('10b00918e80722049003e807', 'hex') };
         }
@@ -215,7 +218,9 @@ function purchaseReply(reqBody) {
         check('700005 已激活且 1 星', p700005 && p700005.owned && p700005.star === 1, p700005);
         check('700005 有获得时间', p700005 && p700005.obtainedAt === 1794034704, p700005 && p700005.obtainedAt);
         check('当前展示位 = 700005', ov.display && ov.display.itemId === 700005, ov.display);
-        check('评分 1200 / 已领 1000 / 有可领', ov.score.total === 1200 && ov.score.claimed === 1000 && ov.score.claimable === true, ov.score);
+        check('评分 1200 / 已领 1000', ov.score.total === 1200 && ov.score.claimed === 1000, ov.score);
+        // ⚠ 不能由 total > claimed 推断"有可领": 实测 1200 > 1000 却回 1047006
+        check('claimable 不靠比值推断(为 null, 以试领为准)', ov.score.claimable === null, ov.score.claimable);
         check('展台数量 = ItemInfo type=34 条数(10)', ov.pedestals.length === 10, ov.pedestals.length);
         check('至少包含默认展台', ov.pedestals.some(p => p.id === 610100 && p.owned), ov.pedestals.slice(0, 3));
         check('典藏收藏点取自背包', ov.points.collection === 5320, ov.points);
@@ -310,7 +315,8 @@ function purchaseReply(reqBody) {
         const kindsA = calls.map(c => c.key.split('.').pop());
         check('展示位为空 → 自动摆上', kindsA.includes('SwitchSceneDisplay'), kindsA);
         check('背包没有同名精灵 → 不发升星', !kindsA.includes('UpgradeCollection'), kindsA);
-        check('评分 0/0 → 不领奖', !kindsA.includes('ClaimCollectionReward'), kindsA);
+        // 现在每次都"试着领一次", 由服务端判定有没有档位(1047006 = 没有)
+        check('评分奖励改为试领(不再靠比值猜)', kindsA.includes('ClaimCollectionReward'), kindsA);
         check('流程 ok', a.ok === true, a);
 
         // 场景B: 末包(已 1 星, 展示已设, 评分 1200/1000)
@@ -320,7 +326,7 @@ function purchaseReply(reqBody) {
         const kindsB = calls.map(c => c.key.split('.').pop());
         check('展示已设置 → 不重复切换', !kindsB.includes('SwitchSceneDisplay'), kindsB);
         check('无库存 → 不升星', !kindsB.includes('UpgradeCollection'), kindsB);
-        check('评分 1200 > 已领 1000 → 领奖', kindsB.includes('ClaimCollectionReward'), kindsB);
+        check('每次都会试领一次', kindsB.includes('ClaimCollectionReward'), kindsB);
         check('领奖结果带回服务端评分', b.claimed && b.claimed.totalScore === 1200, b.claimed);
 
         // 场景C: 背包里只有 1 个桃米 → 只升 1 次(库存耗尽就停)
@@ -337,6 +343,25 @@ function purchaseReply(reqBody) {
 
         collectionReplyHex = null;
         bagOverride = null;
+    }
+
+    section('5c. 1047006 暂无可领取的奖励 → 视为正常(不报错/不刷错误日志)');
+    {
+        claimNoReward = true;
+        const r = await collection.claimCollectionReward();
+        check('不抛异常', r.ok === true, r);
+        check('claimed = false', r.claimed === false, r);
+        check('带明确原因', /没有|暂无/.test(r.reason || ''), r.reason);
+
+        // 自动流程里也不应把它当失败
+        collectionReplyHex = '0a280801120e08e5dc2a10011801209098bbd706120e08e4dc2a1001180120cb97bbd70628e80730b009120a08011206080110e5dc2a';
+        calls.length = 0;
+        const flow = await collection.runCollectionTasks({});
+        check('流程仍然 ok', flow.ok === true, flow);
+        check('claimed 为 null(没领到)', flow.claimed === null, flow.claimed);
+        check('跳过原因里说明了没有可领', flow.skipped.some(x => /没有|暂无|档位/.test(x)), flow.skipped);
+        claimNoReward = false;
+        collectionReplyHex = null;
     }
 
     section('6. type=33 藏品礼包可被仓库自动开启');

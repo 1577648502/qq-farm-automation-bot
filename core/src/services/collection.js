@@ -33,12 +33,15 @@
  */
 
 const protobuf = require('protobufjs');
-const { sendMsgAsync } = require('../utils/network');
+const { sendMsgAsync, getUserState } = require('../utils/network');
 const { types } = require('../utils/proto');
 const { getItemById, getItemImageById, getAllItems } = require('../config/gameConfig');
 const { log, toNum, sleep } = require('../utils/utils');
 
 const SERVICE = 'gamepb.collectionpb.CollectionService';
+
+/** 典藏室开启等级(用户确认: 125 级才开启) */
+const COLLECTION_UNLOCK_LEVEL = 125;
 
 // 物品类型
 const ITEM_TYPE_COLLECTION = 35;   // 藏品(可陈列)
@@ -295,18 +298,39 @@ async function checkUpgradeAffordable(itemId, counts = null) {
 
 /**
  * 领取评分奖励
- * 抓包实测请求只有 `08 01`(#1=1), 服务端按当前评分发放所有达标未领的档位。
- * 回复 #2=当前评分, #3=本次覆盖到的档位(与 GetCollections #5 对齐)。
+ *
+ * 抓包实测请求只有 `08 01`(#1=1), 服务端按当前评分发放所有**达标且有档位**的奖励。
+ *
+ * ⚠ 关键教训(用户实测): `#6 当前评分 > #5 已领档位` 并不等于"有奖励可领"!
+ *   抓包 61s 领取成功后 #5 仍是 1000、#6 仍是 1200 —— 说明 #5 记录的是
+ *   **已领到的档位值**, 而档位之间有间隔(下一个档位可能是 2000),
+ *   1200 够不到 2000 档 → 服务端回 `1047006 暂无可领取的奖励`。
+ *   档位表在 config/CollectionScoreReward(已混淆), 无法离线推出间隔,
+ *   **所以只能以服务端反馈为准**: 把 1047006 当成"当前没有可领"的正常结果,
+ *   而不是错误。
  */
+const ERR_NO_REWARD = 1047006;
+
 async function claimCollectionReward() {
     const body = types.ClaimCollectionRewardRequest.encode(
         types.ClaimCollectionRewardRequest.create({ field1: 1 }),
     ).finish();
-    const { body: reply } = await sendMsgAsync(SERVICE, 'ClaimCollectionReward', body);
-    const replyBuf = Buffer.isBuffer(reply) ? reply : Buffer.from(reply || []);
+    let replyBuf;
+    try {
+        const { body: reply } = await sendMsgAsync(SERVICE, 'ClaimCollectionReward', body);
+        replyBuf = Buffer.isBuffer(reply) ? reply : Buffer.from(reply || []);
+    } catch (e) {
+        const msg = String((e && e.message) || '');
+        if (msg.includes(`code=${ERR_NO_REWARD}`) || msg.includes('暂无可领取')) {
+            // 服务端说没有可领的 → 不是错误, 也不该每次都刷日志
+            return { ok: true, claimed: false, reason: '当前没有达到新档位(奖励按档位间隔发放)', totalScore: 0, claimedScore: 0, rewardHex: '' };
+        }
+        throw e;
+    }
     const fields = parseWire(replyBuf);
     const result = {
         ok: true,
+        claimed: true,
         totalScore: num(findField(fields, 2)),
         claimedScore: num(findField(fields, 3)),
         rewardHex: (() => { const x = findField(fields, 4); return x && x.w === 2 ? x.v.toString('hex') : ''; })(),
@@ -327,7 +351,10 @@ async function claimCollectionReward() {
  *   · 背包里可用来升星的同名额精灵数量(升星消耗物)
  */
 async function getCollectionOverview({ probe = true } = {}) {
-    const server = probe ? await getCollections().catch(() => null) : null;
+    const level = toNum((getUserState() || {}).level) || 0;
+    // 等级不够时服务端还没开这个功能, 请求没有意义(也会报错) → 直接跳过
+    const locked = level > 0 && level < COLLECTION_UNLOCK_LEVEL;
+    const server = (probe && !locked) ? await getCollections().catch(() => null) : null;
     const spiritCounts = await getSpiritCountsInBag();
 
     const byId = new Map((server ? server.entries : []).map((e) => [e.itemId, e]));
@@ -396,6 +423,9 @@ async function getCollectionOverview({ probe = true } = {}) {
 
     return {
         updatedAt: Date.now(),
+        level,
+        unlockLevel: COLLECTION_UNLOCK_LEVEL,
+        locked,
         serverOk: !!server,
         catalogTotal: catalog.reduce((n, s) => n + s.items.length, 0),
         ownedTotal,
@@ -412,7 +442,9 @@ async function getCollectionOverview({ probe = true } = {}) {
         score: {
             total: server ? server.totalScore : 0,
             claimed: server ? server.claimedScore : 0,
-            claimable: !!(server && server.totalScore > server.claimedScore),
+            // ⚠ 不能由 total > claimed 推断: 档位之间有间隔(实测 1200 > 1000 却"暂无奖励")
+            //   这里只给参考值, 真实可领状态以 claimCollectionReward 的服务端反馈为准
+            claimable: null,
         },
     };
 }
@@ -437,6 +469,10 @@ async function runCollectionTasks(opts = {}) {
     const maxUpgrades = Math.max(0, Math.min(200, Number(opts.maxUpgrades) || 10));
 
     const out = { ok: true, state: null, display: null, upgraded: [], claimed: null, skipped: [] };
+    const level = toNum((getUserState() || {}).level) || 0;
+    if (level > 0 && level < COLLECTION_UNLOCK_LEVEL) {
+        return { ok: true, skipped: [`典藏室 ${COLLECTION_UNLOCK_LEVEL} 级开启(当前 ${level} 级)`], level, locked: true, upgraded: [], display: null, claimed: null };
+    }
     let state;
     try {
         state = await getCollections();
@@ -498,17 +534,15 @@ async function runCollectionTasks(opts = {}) {
         }
     }
 
-    // ③ 评分奖励
+    // ③ 评分奖励: **每次先试着领一次**, 由服务端判定有没有可领的档位
+    //   (档位间隔未知, 不能用"评分 > 已领档位"猜; 服务端回 1047006 就是没有)
     if (autoClaim) {
         try {
-            state = await getCollections();   // 升星后评分会变, 重新读一次再判断
-        } catch { /* 用旧状态判断 */ }
-        if (state.totalScore > state.claimedScore) {
-            try {
-                out.claimed = await claimCollectionReward();
-            } catch (e) {
-                out.skipped.push(`领取评分奖励失败: ${e.message}`);
-            }
+            const r = await claimCollectionReward();
+            out.claimed = r.claimed ? r : null;
+            if (!r.claimed) out.skipped.push(r.reason || '当前没有可领取的评分奖励');
+        } catch (e) {
+            out.skipped.push(`领取评分奖励失败: ${e.message}`);
         }
     }
 
