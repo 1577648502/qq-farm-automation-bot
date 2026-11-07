@@ -296,12 +296,25 @@ function isGiftPackItemId(itemId) {
     return GIFTPACK_ITEM_TYPES.has(Number(info.type)) && Number(info.can_use) === 1;
 }
 
-async function autoOpenGiftPacks() {
+/**
+ * 自动开启背包礼包
+ * @param opts.onlyIds  只开这些物品ID(其它礼包原样留着), 供商城"买完即开"使用
+ *                      (传了 onlyIds 就不受 60s 全量巡查节流限制, 买完立刻开)
+ *
+ * ⚠ 数量一律**以背包实际数量为准**: 调用方传入的"买了几个"和包里真实数量
+ *   往往不一致(前面的巡查/其它流程已经开掉一部分), 按传入数量 Use 会报
+ *   `code=1000019 金豆豆藏品礼包不足`。
+ */
+async function autoOpenGiftPacks(opts = {}) {
     const now = Date.now();
-    if (now - giftPackLastCheckAt < GIFT_PACK_SCAN_INTERVAL_MS) {
+    const onlyIds = Array.isArray(opts.onlyIds) && opts.onlyIds.length
+        ? new Set(opts.onlyIds.map((x) => Number(x) || 0).filter((x) => x > 0))
+        : null;
+    if (!onlyIds && now - giftPackLastCheckAt < GIFT_PACK_SCAN_INTERVAL_MS) {
         return 0;
     }
-    giftPackLastCheckAt = now;
+    // 指定礼包的开箱不受"全量巡查"节流影响, 但也不能每次购买都刷新全量节流窗口
+    if (!onlyIds) giftPackLastCheckAt = now;
     try {
         const bagReply = await getBag();
         const bagItems = getBagItems(bagReply);
@@ -310,6 +323,7 @@ async function autoOpenGiftPacks() {
             const id = toNum(it && it.id);
             const count = toNum(it && it.count);
             if (id <= 0 || count <= 0 || !isGiftPackItemId(id)) continue;
+            if (onlyIds && !onlyIds.has(id)) continue;
             packs.set(id, (packs.get(id) || 0) + count);
         }
         if (packs.size <= 0) return 0;
@@ -355,8 +369,13 @@ async function autoOpenGiftPacks() {
     }
 }
 
-async function openGiftPacksSilently() {
-    return autoOpenGiftPacks();
+/**
+ * 开背包礼包
+ * @param opts.onlyIds 只开指定物品ID(传了就不动其它礼包)
+ * 数量以背包实际为准, 见 autoOpenGiftPacks 的注释
+ */
+async function openGiftPacksSilently(opts = {}) {
+    return autoOpenGiftPacks(opts);
 }
 
 async function openFertilizerGiftPacksSilently() {

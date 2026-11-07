@@ -1047,7 +1047,7 @@ async function buyFreeGifts(force = false) {
  * 抓包 `20261107-112023_典藏室和快乐独享领取` 实测:
  *   slot=5 (请求体 08 05 10 01 18 01) 返回限时商店, 其中含 **藏品礼包**:
  *     1047 金豆豆藏品礼包  price={1005:300}  limit={#1:2, #2:3, #3:50} → 还能买 47
- *     1048 钻石藏品礼包    price={1004:40}   limit={#1:2, #2:50}       → 还能买 50
+ *     1048 钻石藏品礼包    price={1004:40}   limit={#1:2, #2:50}       → **不买**(用户要求, 见排除名单)
  *     1061/1062/1063 奶茶点券/每日/加速礼包
  *     10001~10004 20/40 小时化肥(旧品类, 不在这里买)
  *   ⚠ slot 必须是 >=1: proto3 会把 0 当默认值省略字段, 变成空请求体 → 服务端 1031002
@@ -1060,7 +1060,9 @@ async function buyFreeGifts(force = false) {
  */
 const LIMITED_PACK_SLOT = 5;              // slot 5 = 限时商店/藏品礼包(11-07 抓包 08 05 10 01 18 01)
 const LIMITED_PACK_BUY_INTERVAL_MS = 700;   // 单个购买间隔(服务端要求逐次购买, 太快会被判风控)
-const LIMITED_PACK_GOODS_FALLBACK = [1047, 1048];   // 兜底: slot 查不到时按 goods_id 再找一遍
+// 只买金豆豆藏品礼包(1047)。钻石藏品礼包(1048)**不买** —— 用户明确要求, 钻石留给别的用途
+const LIMITED_PACK_GOODS_FALLBACK = [1047];
+const LIMITED_PACK_EXCLUDE_GOODS = new Set([1048]);   // 钻石藏品礼包: 明确排除
 let limitedPackMemory = { dateKey: '', bought: new Map() };   // goodsId → 本进程当天已买
 
 function limitedPackBoughtToday(goodsId) {
@@ -1075,11 +1077,17 @@ function markLimitedPackBought(goodsId, count) {
     limitedPackMemory.bought.set(Number(goodsId), limitedPackBoughtToday(goodsId) + count);
 }
 
-/** 从限时商店里挑出"藏品礼包"(按商品名 / 贵金属币种识别, 不写死 goods_id) */
+/**
+ * 从限时商店里挑出"要买的藏品礼包"
+ *   · 排除名单优先(1048 钻石藏品礼包不买)
+ *   · 其余按商品名 / goods_id 识别
+ */
 function isCollectionPackGoods(goods) {
+    const goodsId = Number(goods && goods.goods_id) || 0;
+    if (LIMITED_PACK_EXCLUDE_GOODS.has(goodsId)) return false;
     const name = String((goods && goods.name) || '');
     if (/藏品礼包/.test(name)) return true;
-    return LIMITED_PACK_GOODS_FALLBACK.includes(Number(goods && goods.goods_id) || 0);
+    return LIMITED_PACK_GOODS_FALLBACK.includes(goodsId);
 }
 
 /**
@@ -1199,36 +1207,34 @@ async function buyLimitedPackToLimit(goods) {
         });
     }
 
-    // ④ 买完立刻开包: 客户端抓包是 Purchase 之后隔 1.5s 发 ItemService.Use
+    // ④ 买完立刻开包 —— **交给仓库的开箱流程, 用背包实际数量开**
+    //   ⚠ 踩过的两个坑:
+    //     a) 这里自己 useItem 开一次, 仓库"自动开启礼包"巡查又开一次 → 日志出现两次开箱;
+    //     b) 按 out.bought(本次买到的个数)去 Use, 但包里实际数量通常不同(巡查已经开掉一部分),
+    //        于是报 `code=1000019 xxx不足`。
+    //   现在只把"本次涉及的礼包 ID"告诉仓库, 数量由它从背包读(仅开这些 ID, 不动其它礼包)。
     if (out.bought > 0) {
         await sleep(1200);
         try {
-            const { useItem } = require('./warehouse');
-            // 礼包到手的是"物品条目"(抓包 Purchase.#3 = {1: 101619, 2: 1}), 这里按商品内容推断
+            const { openGiftPacksSilently } = require('./warehouse');
             const itemIds = decodeGoodsItems(goods.item_ids);
-            const packIds = (itemIds.length ? itemIds : (await resolvePackIdsByBag(name))).map(x => x.id).filter(id => id > 0);
-            for (const packId of new Set(packIds)) {
-                const info = getItemById(packId);
-                if (!info || Number(info.can_use) !== 1) continue;
-                try {
-                    await useItem(packId, out.bought);
-                    out.opened += out.bought;
-                    log('商城', `已开启礼包「${info.name || packId}」x${out.bought}`, {
-                        module: 'mall', event: '礼包开箱', result: 'ok', itemId: packId, count: out.bought,
-                    });
-                } catch (ee) {
-                    log('商城', `开启礼包失败(${info.name || packId}): ${ee.message}`, {
-                        module: 'mall', event: '礼包开箱', result: 'error', itemId: packId,
-                    });
-                }
-                await sleep(400);
+            let packIds = (itemIds.length ? itemIds : (await resolvePackIdsByBag(name))).map(x => x.id).filter(id => id > 0);
+            if (!packIds.length) {
+                // 商品没带物品条目时, 按商品名找同名 can_use 礼包
+                packIds = (await resolvePackIdsByBag(name)).map(x => x.id);
             }
-            out.ok = true;
+            const usable = [...new Set(packIds)].filter((id) => {
+                const info = getItemById(id);
+                return info && Number(info.can_use) === 1;
+            });
+            if (usable.length) {
+                out.opened = await openGiftPacksSilently({ onlyIds: usable });
+            }
         } catch (e) {
-            // 开包失败不影响"已购买"的事实: 仓库的礼包自动开启(60s 巡查)会兜底
-            log('商城', `礼包开箱流程异常(交仓库自动开启兜底): ${e.message}`, { module: 'mall', event: '礼包开箱', result: 'warn' });
-            out.ok = true;
+            // 开包失败不影响"已购买"的事实: 仓库下一轮巡查会兜底
+            log('商城', `礼包开箱失败(交仓库自动开启兜底): ${e.message}`, { module: 'mall', event: '礼包开箱', result: 'warn' });
         }
+        out.ok = true;
     }
     return out;
 }

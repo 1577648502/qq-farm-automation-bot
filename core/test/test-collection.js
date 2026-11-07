@@ -39,6 +39,12 @@ const calls = [];
  * 只换 network.sendMsgAsync 对它无效 → 这里直接给 mall 打桩(与 test-buy-book 同一手法)
  */
 const mallStub = { purchased: [], used: [] };
+/**
+ * 背包桩模式:
+ *   null      → 回放抓包里的真实背包(概览断言用)
+ *   数字      → 只含该数量的金豆豆藏品礼包(开包断言用)
+ */
+let bagOverride = null;
 function installMallStub() {
     const mallMod = require(`${SB}/src/services/mall`);
     const net = require(`${SB}/src/utils/network`);
@@ -52,11 +58,9 @@ function installMallStub() {
         mallStub.purchased.push({ goodsId: Number(goodsId), count: Number(count) });
         return types.PurchaseResponse.decode(purchaseReply(Buffer.from([0x08, goodsId & 0xff])));
     };
-    const wh = require(`${SB}/src/services/warehouse`);
-    wh.useItem = async (itemId, count = 1) => {
-        mallStub.used.push({ itemId: Number(itemId), count: Number(count) });
-        return types.UseReply.decode(Buffer.alloc(0));
-    };
+    // ⚠ warehouse 在 require 时就解构了 getBag / sendMsgAsync, 换 exports 无效。
+    //   所以背包内容由 installStub 里的网络桩提供(见 BAG 状态), 这里只记录 Use 调用。
+    // warehouse.useItem 走 network.sendMsgAsync(见上), 这里不再重复打桩
 }
 
 function installStub() {
@@ -70,7 +74,13 @@ function installStub() {
             return { body: bodyOf('CollectionService.GetCollections', 'S->C') };
         }
         if (key === 'gamepb.itempb.ItemService.Bag') {
-            return { body: bodyOf('ItemService.Bag', 'S->C') };
+            if (bagOverride === null) return { body: bodyOf('ItemService.Bag', 'S->C') };
+            const { types } = require(`${SB}/src/utils/proto`);
+            return {
+                body: types.BagReply.encode(types.BagReply.create({
+                    item_bag: { items: bagOverride > 0 ? [{ id: 101619, count: bagOverride }] : [] },
+                })).finish(),
+            };
         }
         if (key === 'gamepb.mallpb.MallService.GetMallListBySlotType') {
             // slot=5 → 限时商店(含藏品礼包); 其它 slot 回一个空列表
@@ -83,6 +93,13 @@ function installStub() {
             return { body: purchaseReply(Buffer.from(body || [])) };
         }
         if (key === 'gamepb.itempb.ItemService.Use') {
+            // warehouse 的 useItem 走的是 network 层(require 时已解构), 按这里记录
+            const fields = require(`${SB}/src/services/mengchong`).parseTop(Buffer.from(body || []));
+            mallStub.used.push({
+                itemId: Number((fields.find(x => x.f === 1) || {}).v || 0),
+                count: Number((fields.find(x => x.f === 2) || {}).v || 0),
+            });
+            bagOverride = 0;   // 开完就空了
             return { body: Buffer.alloc(0) };
         }
         throw new Error(`未 stub 的接口: ${key}`);
@@ -172,8 +189,9 @@ function purchaseReply(reqBody) {
         check('1048 的 #7 只有 {1:2,2:50}',
             g1048 && Buffer.from(g1048.limit).toString('hex') === '08021832',
             g1048 && Buffer.from(g1048.limit).toString('hex'));
-        check('两个都被识别为藏品礼包',
-            mall.isCollectionPackGoods(g1047) && mall.isCollectionPackGoods(g1048));
+        check('1047 金豆豆藏品礼包 → 要买', mall.isCollectionPackGoods(g1047) === true);
+        check('1048 钻石藏品礼包 → 明确不买', mall.isCollectionPackGoods(g1048) === false);
+        check('奶茶礼包不会被误认(1061)', mall.isCollectionPackGoods(list.find(g => Number(g.goods_id) === 1061)) === false);
     }
 
     section('4b. 商城列表请求体必须与抓包逐字节一致(1031002 的根因)');
@@ -194,22 +212,28 @@ function purchaseReply(reqBody) {
         check('三次请求都不是空 body', hexes.every(h => h.length >= 8), hexes);
     }
 
-    section('5. 按服务端上限买 + 买完开包');
+    section('5. 按服务端上限买 + 买完开包(只买金豆豆礼包, 开箱只走仓库一次)');
     {
         mallStub.used.length = 0;
+        bagOverride = 5;      // 包里实际只剩 5 个(买了 45 个, 巡查已开掉一部分)
         calls.length = 0;
         const r = await mall.checkAndBuyLimitedPacks(true);
         const purchases = calls.filter(c => c.key === 'gamepb.mallpb.MallService.Purchase');
         const uses = mallStub.used;
-        check('识别到 2 个藏品礼包', r.goods.length === 2, r.goods.map(g => g.name));
+        check('只买 1 个礼包(钻石礼包被排除)', r.goods.length === 1, r.goods.map(g => g.name));
+        check('买的是金豆豆藏品礼包', r.goods[0] && r.goods[0].goodsId === 1047, r.goods[0]);
+        check('没有任何 1048 的购买请求',
+            purchases.every(p => !p.body.includes(Buffer.from([0x98, 0x08]))), purchases.map(p => p.body.toString('hex')));
         check('有购买动作', purchases.length > 0, purchases.length);
-        check('买完发起了开包(ItemService.Use)', uses.length > 0, uses.length);
         check('购买总是 count=1(与抓包一致)', purchases.every(p => p.body.toString('hex').endsWith('1001')), purchases.map(p => p.body.toString('hex')));
-        // 1047: 限购 50 - 已购 3 = 47; 1048: 限购 50 - 已购 0 = 50 —— 只受余额约束
         check('本次购买数量 > 0', r.bought > 0, { bought: r.bought, goods: r.goods });
-        check('1047 受金豆豆余额约束: 5000/300 → 16 个(少于限购剩余 47)', (r.goods.find(g => g.goodsId === 1047) || {}).bought === 16, r.goods);
-        check('1048 受服务端限购约束: 50 个(钻石 2000/40)', (r.goods.find(g => g.goodsId === 1048) || {}).bought === 50, r.goods);
-        check('开包数量与购买一致', r.opened === r.bought, { opened: r.opened, bought: r.bought });
+        check('1047 受金豆豆余额约束: 5000/300 → 16 个(少于限购剩余 47)', r.goods[0].bought === 16, r.goods[0]);
+
+        // 开箱: 只调一次仓库 Use(不能再额外自己开一遍), 且数量取背包实际值
+        check('开箱只调用一次 ItemService.Use(不再重复开)', uses.length === 1, uses);
+        check('开的是 101619', uses[0] && uses[0].itemId === 101619, uses[0]);
+        check('开箱数量取背包实际数量 5(不是本次购买的 16)', uses[0] && uses[0].count === 5, uses[0]);
+        check('开箱数量 != 购买数量', uses[0] && uses[0].count !== r.bought, { used: uses[0], bought: r.bought });
     }
 
     section('6. type=33 藏品礼包可被仓库自动开启');
