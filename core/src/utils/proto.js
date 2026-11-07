@@ -32,6 +32,7 @@ async function loadProto() {
         getResourcePath('proto', 'qqvippb.proto'),
         getResourcePath('proto', 'sharepb.proto'),
         getResourcePath('proto', 'illustratedpb.proto'),
+        getResourcePath('proto', 'collectionpb.proto'),
         getResourcePath('proto', 'interactpb.proto'),
         getResourcePath('proto', 'activitypb.proto'),
         getResourcePath('proto', 'seasonpb.proto'),
@@ -133,6 +134,19 @@ async function loadProto() {
     types.ClaimShareRewardReply = root.lookupType('gamepb.sharepb.ClaimShareRewardReply');
     types.GetIllustratedListV2Request = root.lookupType('gamepb.illustratedpb.GetIllustratedListV2Request');
     types.GetIllustratedListV2Reply = root.lookupType('gamepb.illustratedpb.GetIllustratedListV2Reply');
+
+    // 典藏室(珍藏室): 2026-11-07 抓包 20261107-155647_典藏室
+    types.GetCollectionsRequest = root.lookupType('gamepb.collectionpb.GetCollectionsRequest');
+    types.GetCollectionsReply = root.lookupType('gamepb.collectionpb.GetCollectionsReply');
+    types.CollectionEntry = root.lookupType('gamepb.collectionpb.CollectionEntry');
+    types.SceneDisplay = root.lookupType('gamepb.collectionpb.SceneDisplay');
+    types.UpgradeCollectionRequest = root.lookupType('gamepb.collectionpb.UpgradeCollectionRequest');
+    types.UpgradeCollectionReply = root.lookupType('gamepb.collectionpb.UpgradeCollectionReply');
+    types.SwitchSceneDisplayRequest = root.lookupType('gamepb.collectionpb.SwitchSceneDisplayRequest');
+    types.SwitchSceneDisplayReply = root.lookupType('gamepb.collectionpb.SwitchSceneDisplayReply');
+    types.DisplayChangeNotify = root.lookupType('gamepb.collectionpb.DisplayChangeNotify');
+    types.ClaimCollectionRewardRequest = root.lookupType('gamepb.collectionpb.ClaimCollectionRewardRequest');
+    types.ClaimCollectionRewardReply = root.lookupType('gamepb.collectionpb.ClaimCollectionRewardReply');
     types.ClaimAllRewardsV2Request = root.lookupType('gamepb.illustratedpb.ClaimAllRewardsV2Request');
     types.ClaimAllRewardsV2Reply = root.lookupType('gamepb.illustratedpb.ClaimAllRewardsV2Reply');
 

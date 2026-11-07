@@ -1,0 +1,99 @@
+syntax = "proto3";
+
+package gamepb.collectionpb;
+
+import "corepb.proto";
+
+// ============ 典藏室(珍藏室) ============
+// 协议依据: 2026-11-07 抓包 `20261107-155647_典藏室`
+//   0.30s GetCollections → 0a0101
+//   25.2s UpgradeCollection → 08 01 10 e5dc2a (710005? 实为 700005)
+//   27.7s SwitchSceneDisplay → 0a0a 0801 1206 0801 10e5dc2a
+//   61.0s ClaimCollectionReward → 08 01
+service CollectionService {
+  rpc GetCollections(GetCollectionsRequest) returns (GetCollectionsReply);
+  rpc UpgradeCollection(UpgradeCollectionRequest) returns (UpgradeCollectionReply);
+  rpc SwitchSceneDisplay(SwitchSceneDisplayRequest) returns (SwitchSceneDisplayReply);
+  rpc ClaimCollectionReward(ClaimCollectionRewardRequest) returns (ClaimCollectionRewardReply);
+}
+
+// 请求实测 0a0101 → #1 是 **wire2(bytes)** 不是 varint, 内容单字节 0x01。
+// 用 .proto 的 int32 会编码成 0801(与服务端不一致), 所以 service 层手工拼字节。
+message GetCollectionsRequest {
+  bytes field1 = 1;
+}
+
+// 已拥有的藏品(精灵)。实测:
+//   #1=700005(桃米/#4=获得时间)  一条一条 repeated 在 #2 里
+//   ⚠ 藏品不在背包里(ItemService.Bag 里没有 type=35 的物品),
+//     它们的星级/激活态/展示位全部由这个接口维护
+message CollectionEntry {
+  int64 item_id = 1;             // 藏品物品ID(700001~740006)
+  int32 star = 2;                // 星级: 0/未下发=一星前的初始态, 1=一星, 2=二星
+  int32 activated = 3;           // 1 = 已激活(获得; 未激活时 UI 显示"藏品未激活")
+  int64 obtained_at = 4;         // 获得时间(秒级时间戳, 实测 1794034704)
+  int32 field5 = 5;              // 首次抓包里出现过 1, 语义未确认(疑似展示位)
+}
+
+// 当前场景展示(同一结构也用于 SwitchSceneDisplay / DisplayChangeNotify)
+message SceneDisplay {
+  int32 scene = 1;               // 场景? 实测恒为 1
+  int32 slot = 2;                // 展示位? 实测恒为 1
+  int64 item_id = 3;             // 展示的藏品ID; 0 或不下发 = 空位
+  int32 field4 = 4;              // 实测 0, 语义未确认
+}
+
+message GetCollectionsReply {
+  int32 field1 = 1;              // 实测 1
+  repeated CollectionEntry entries = 2;
+  int32 claimed_score = 5;       // 实测 1000 (与 ClaimCollectionReward 的 #3 一致 → 已领取到的评分档)
+  int32 total_score = 6;         // 实测 1200 (与 ClaimCollectionReward 的 #2 一致 → 当前累计评分)
+  // ⚠ 外层实测: #1=1, #2=entries(repeated CollectionEntry), #5=已领评分, #6=当前评分,
+  //   然后**再一次 #2** 装展示位 { #1: 场景, #2: { #1: 展示位, #2: 藏品ID } }。
+  //   同一个字段号既放 entries 又放展示位, 这是抓包事实; 为保证 entries 正常解析,
+  //   展示位在 service 层用通用 wire 解析读取(见 collection.js parseDisplays)。
+  int32 field3 = 3;
+}
+
+// 升星: 实测请求 08 01 10 e5dc2a  → #1=1, #2=藏品ID
+// ⚠ 升星消耗的是**同名精灵本身**(用户确认: "升星是消耗的对应的精灵, 开启盒子获得的");
+//   抓包里 43.9s 第二次升 700005 失败, meta.error_code=1000019 "桃米不足"
+//   —— 说明背包里没有第二个桃米可消耗。客户端本身不发 Use 请求。
+message UpgradeCollectionRequest {
+  int32 field1 = 1;              // 实测 1
+  int64 item_id = 2;
+}
+
+message UpgradeCollectionReply {
+  int32 field1 = 1;              // 实测 1
+  int64 item_id = 2;             // 回显
+  int32 star = 3;                // 升级后的星级(实测 1)
+  int32 score = 4;               // 升级后的评分(实测 600 / 1200, 严格等比 300→600→1200)
+}
+
+// 切换展示: 实测 0a0a08011206080110e5dc2a
+message SwitchSceneDisplayRequest {
+  SceneDisplay display = 1;
+}
+
+message SwitchSceneDisplayReply {
+  SceneDisplay display = 1;
+}
+
+// 展示变更推送(结构与请求一致)
+message DisplayChangeNotify {
+  SceneDisplay display = 1;
+}
+
+// 领取评分奖励: 实测请求 08 01 (#1=1)
+message ClaimCollectionRewardRequest {
+  int32 field1 = 1;
+}
+
+// 回复实测: 10b009 18e807 22049003e807
+//   #2=1200 (当前评分) #3=1000 (本次覆盖到的档位评分) #4={#50=1000}
+message ClaimCollectionRewardReply {
+  int32 total_score = 2;
+  int32 claimed_score = 3;
+  bytes reward_detail = 4;
+}

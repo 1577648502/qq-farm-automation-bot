@@ -1,19 +1,19 @@
 <script setup lang="ts">
 /**
- * 典藏室 —— 藏品陈列总览
+ * 典藏室 —— 藏品陈列总览 + 展示/升星/评分奖励
  *
- * 数据来源:
- *   藏品/展台/进度 → 背包(type=35 藏品, type=34 展台, 3002 典藏收藏点)
- *   gamepb.collectionpb.CollectionService.GetCollections 目前只回空壳,
- *   仅作为"典藏室是否开放"的探测(页面上单独一行显示)
- *
- * 页面结构参考「公益小红花」「千星游记」: 顶部概览 → 系列卡片 → 展台/进度
+ * 数据来源(2026-11-07 抓包 20261107-155647_典藏室):
+ *   CollectionService.GetCollections   → 藏品星级/激活/获得时间 + 当前展示位 + 评分
+ *   CollectionService.UpgradeCollection → 升星(消耗背包里的同名精灵)
+ *   CollectionService.SwitchSceneDisplay → 切换展示
+ *   CollectionService.ClaimCollectionReward → 领评分奖励
+ * 展台(type=34)与典藏收藏点(3002)仍在背包里, 由后端一并汇总。
  */
 import { computed, ref } from 'vue'
-import api from '@/api'
-
-import BaseButton from '@/components/ui/BaseButton.vue'
 import { usePageRefresh } from '@/composables/usePageRefresh'
+
+import api from '@/api'
+import BaseButton from '@/components/ui/BaseButton.vue'
 import { useToastStore } from '@/stores/toast'
 
 interface CollectionItem {
@@ -22,8 +22,12 @@ interface CollectionItem {
   desc: string
   image: string
   slot?: number
-  count: number
   owned: boolean
+  activated: number
+  star: number
+  obtainedAt: number
+  /** 背包里同名精灵数量 = 还能升几次星 */
+  upgradable: number
 }
 
 interface CollectionSeries {
@@ -43,8 +47,11 @@ interface Pedestal {
   owned: boolean
 }
 
+interface SceneDisplay { scene: number, slot: number, itemId: number, field3?: number }
+
 interface CollectionOverview {
   updatedAt: number
+  serverOk: boolean
   catalogTotal: number
   ownedTotal: number
   series: CollectionSeries[]
@@ -52,42 +59,50 @@ interface CollectionOverview {
   pedestals: Pedestal[]
   ownedPedestals: number
   points: { collection: number, normal: number }
-  endpoint: { ok: boolean, skipped?: boolean, flag1?: number, text?: string, error?: string }
+  display: SceneDisplay | null
+  displays: SceneDisplay[]
+  score: { total: number, claimed: number, claimable: boolean }
 }
 
 const toast = useToastStore()
 const loading = ref(false)
 const busy = ref(false)
+const running = ref(false)
 const overview = ref<CollectionOverview | null>(null)
 
 const fmtNum = (n: number) => (Number(n) || 0).toLocaleString('zh-CN')
 
-const progress = computed(() => {
-  const o = overview.value
-  if (!o || !o.catalogTotal)
-    return 0
-  return Math.min(100, (o.ownedTotal / o.catalogTotal) * 100)
-})
-
-const endpointText = computed(() => {
-  const e = overview.value?.endpoint
-  if (!e || e.skipped)
-    return '未探测'
-  if (!e.ok)
-    return `探测失败: ${e.error || '未知'}`
-  return `已连通 (#1=${e.flag1 ?? 0}${e.text ? `, "${e.text}"` : ''})`
-})
+function fmtTime(sec: number) {
+  if (!sec) return '-'
+  const d = new Date(sec * 1000)
+  return `${d.getMonth() + 1}/${d.getDate()} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
+}
 
 function extractError(e: any): string {
   return e?.response?.data?.error || e?.message || ''
 }
 
+const progress = computed(() => {
+  const o = overview.value
+  if (!o || !o.catalogTotal) return 0
+  return Math.min(100, (o.ownedTotal / o.catalogTotal) * 100)
+})
+
+const displayItem = computed(() => {
+  const o = overview.value
+  if (!o || !o.display || !o.display.itemId) return null
+  const hit = o.series.flatMap(s => s.items).concat(o.extra as any[])
+    .find((x: any) => Number(x.id) === Number(o.display!.itemId))
+  return hit || null
+})
+
+const starText = (n: number) => (n > 0 ? '★'.repeat(Math.min(5, n)) : '未升星')
+
 async function loadOverview() {
   loading.value = true
   try {
     const { data } = await api.get('/api/collection/overview')
-    if (data?.ok)
-      overview.value = data.data
+    if (data?.ok) overview.value = data.data
     else toast.error(data?.error || '加载失败')
   }
   catch (e: any) {
@@ -98,27 +113,70 @@ async function loadOverview() {
   }
 }
 
-/** 立即按限购买一次藏品礼包(顺便就把礼包开出来了) */
-async function handleBuyPacks() {
+async function post(path: string, body: any = {}, okText?: string) {
   busy.value = true
   try {
-    const { data } = await api.post('/api/mall/buy-limited-packs')
+    const { data } = await api.post(path, body)
     if (data?.ok) {
-      const d = data.data || {}
-      if (d.bought > 0)
-        toast.success(`已购买 ${d.bought} 个藏品礼包，开包 ${d.opened || 0} 个`)
-      else toast.info(d.skipped || '已达限购上限，未购买')
+      if (okText) toast.success(okText)
       await loadOverview()
+      return data.data
     }
-    else {
-      toast.error(data?.error || '购买失败')
-    }
+    toast.error(data?.error || '操作失败')
+    return null
   }
   catch (e: any) {
-    toast.error(extractError(e) || '购买失败')
+    toast.error(extractError(e) || '操作失败')
+    return null
   }
   finally {
     busy.value = false
+  }
+}
+
+/** 展示这一款 */
+async function handleDisplay(item: CollectionItem) {
+  await post('/api/collection/display', { itemId: item.id }, `已展示「${item.name}」`)
+}
+
+/** 升 1 星(消耗背包 1 个同名精灵) */
+async function handleUpgrade(item: CollectionItem) {
+  await post('/api/collection/upgrade', { itemId: item.id }, `「${item.name}」升星成功`)
+}
+
+async function handleClaim() {
+  const r = await post('/api/collection/claim-reward')
+  if (r) toast.success(`已领取评分奖励(覆盖到 ${r.claimedScore} 档)`)
+}
+
+/** 一键: 展示 → 升星 → 领评分奖励 */
+async function handleRunAll() {
+  running.value = true
+  try {
+    const { data } = await api.post('/api/collection/run', {})
+    if (data?.ok) {
+      const r = data.data || {}
+      if (r.ok === false) {
+        toast.error(r.reason || '执行失败')
+      }
+      else {
+        const parts = []
+        if (r.display) parts.push('已设置展示')
+        if (r.upgraded?.length) parts.push(`升星 ${r.upgraded.length} 次`)
+        if (r.claimed) parts.push('已领评分奖励')
+        toast.success(parts.length ? parts.join('，') : (r.skipped?.[0] || '没有需要处理的'))
+      }
+      await loadOverview()
+    }
+    else {
+      toast.error(data?.error || '执行失败')
+    }
+  }
+  catch (e: any) {
+    toast.error(extractError(e) || '执行失败')
+  }
+  finally {
+    running.value = false
   }
 }
 
@@ -126,75 +184,121 @@ usePageRefresh('/collection', loadOverview)
 </script>
 
 <template>
-  <div class="mx-auto max-w-5xl p-4 space-y-4">
+  <div class="mx-auto max-w-5xl space-y-4 p-4">
     <!-- 标题 -->
-    <div class="flex items-center justify-between">
+    <div class="flex flex-wrap items-center justify-between gap-2">
       <div>
         <h1 class="text-2xl text-gray-900 font-bold dark:text-white">
           典藏室
         </h1>
         <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
-          藏品陈列 · 限时藏品礼包 · 典藏进度
+          藏品陈列 · 升星 · 评分奖励
         </p>
       </div>
       <div class="flex gap-2">
         <BaseButton variant="secondary" size="sm" :loading="loading" @click="loadOverview">
           刷新
         </BaseButton>
-        <BaseButton variant="primary" size="sm" :loading="busy" @click="handleBuyPacks">
-          买藏品礼包
+        <BaseButton variant="primary" size="sm" :loading="running" @click="handleRunAll">
+          一键处理
         </BaseButton>
       </div>
     </div>
 
-    <!-- 接口探测(GetCollections 目前只回空壳) -->
-    <div class="border border-gray-200 rounded-lg bg-white p-3 text-xs text-gray-500 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-400">
-      <span class="mr-2 text-gray-700 font-medium dark:text-gray-200">GetCollections 探测:</span>
-      <span>{{ endpointText }}</span>
-      <span class="ml-2 text-gray-400">（该接口暂未下发藏品明细，藏品数据取自背包 type=35 / 展台 type=34）</span>
-    </div>
-
     <template v-if="overview">
+      <!-- 服务器未连通提示 -->
+      <div
+        v-if="!overview.serverOk"
+        class="rounded border border-yellow-300 bg-yellow-50 p-3 text-xs text-yellow-800 dark:border-yellow-700 dark:bg-yellow-900/30 dark:text-yellow-200"
+      >
+        未取到典藏室服务端数据(账号可能未运行)。下方星级/展示位信息不可用。
+      </div>
+
       <!-- 概览 -->
       <div class="grid grid-cols-2 gap-3 md:grid-cols-4">
-        <div class="border border-gray-200 rounded-lg bg-white p-3 dark:border-gray-700 dark:bg-gray-800">
-          <div class="text-xs text-gray-500 dark:text-gray-400">
-            已收藏款式
-          </div>
+        <div class="rounded-lg border border-gray-200 bg-white p-3 dark:border-gray-700 dark:bg-gray-800">
+          <div class="text-xs text-gray-500 dark:text-gray-400">已激活藏品</div>
           <div class="mt-1 text-xl font-bold">
-            {{ fmtNum(overview.ownedTotal) }}<span class="text-sm text-gray-400 font-normal"> / {{ fmtNum(overview.catalogTotal) }}</span>
+            {{ fmtNum(overview.ownedTotal) }}<span class="text-sm font-normal text-gray-400"> / {{ fmtNum(overview.catalogTotal) }}</span>
           </div>
         </div>
-        <div class="border border-gray-200 rounded-lg bg-white p-3 dark:border-gray-700 dark:bg-gray-800">
-          <div class="text-xs text-gray-500 dark:text-gray-400">
-            典藏收藏点
+        <div class="rounded-lg border border-gray-200 bg-white p-3 dark:border-gray-700 dark:bg-gray-800">
+          <div class="text-xs text-gray-500 dark:text-gray-400">藏品评分</div>
+          <div class="mt-1 text-xl font-bold">
+            {{ fmtNum(overview.score.total) }}
+            <span class="text-sm font-normal text-gray-400">已领 {{ fmtNum(overview.score.claimed) }}</span>
           </div>
+        </div>
+        <div class="rounded-lg border border-gray-200 bg-white p-3 dark:border-gray-700 dark:bg-gray-800">
+          <div class="text-xs text-gray-500 dark:text-gray-400">典藏收藏点</div>
           <div class="mt-1 text-xl font-bold">
             {{ fmtNum(overview.points.collection) }}
           </div>
         </div>
-        <div class="border border-gray-200 rounded-lg bg-white p-3 dark:border-gray-700 dark:bg-gray-800">
-          <div class="text-xs text-gray-500 dark:text-gray-400">
-            拥有展台
-          </div>
+        <div class="rounded-lg border border-gray-200 bg-white p-3 dark:border-gray-700 dark:bg-gray-800">
+          <div class="text-xs text-gray-500 dark:text-gray-400">拥有展台</div>
           <div class="mt-1 text-xl font-bold">
-            {{ fmtNum(overview.ownedPedestals) }}<span class="text-sm text-gray-400 font-normal"> / {{ overview.pedestals.length }}</span>
-          </div>
-        </div>
-        <div class="border border-gray-200 rounded-lg bg-white p-3 dark:border-gray-700 dark:bg-gray-800">
-          <div class="text-xs text-gray-500 dark:text-gray-400">
-            普通收藏点
-          </div>
-          <div class="mt-1 text-xl font-bold">
-            {{ fmtNum(overview.points.normal) }}
+            {{ fmtNum(overview.ownedPedestals) }}<span class="text-sm font-normal text-gray-400"> / {{ overview.pedestals.length }}</span>
           </div>
         </div>
       </div>
 
+      <!-- 评分奖励 -->
+      <div
+        class="flex flex-wrap items-center justify-between gap-3 rounded-lg border p-4"
+        :class="overview.score.claimable
+          ? 'border-amber-300 bg-amber-50 dark:border-amber-700 dark:bg-amber-900/20'
+          : 'border-gray-200 bg-white dark:border-gray-700 dark:bg-gray-800'"
+      >
+        <div>
+          <h3 class="text-sm text-gray-900 font-medium dark:text-white">
+            藏品评分奖励
+          </h3>
+          <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+            当前评分 {{ fmtNum(overview.score.total) }}，已领到 {{ fmtNum(overview.score.claimed) }}
+            <span v-if="overview.score.claimable" class="ml-1 font-medium text-amber-700 dark:text-amber-300">有新的可领取</span>
+          </p>
+        </div>
+        <BaseButton
+          variant="primary"
+          size="sm"
+          :disabled="busy || !overview.score.claimable"
+          :loading="busy"
+          @click="handleClaim"
+        >
+          {{ overview.score.claimable ? '领取评分奖励' : '暂无可领' }}
+        </BaseButton>
+      </div>
+
+      <!-- 当前展示 -->
+      <div class="rounded-lg border border-gray-200 bg-white p-4 dark:border-gray-700 dark:bg-gray-800">
+        <div class="mb-2 flex items-center justify-between">
+          <h3 class="text-sm text-gray-900 font-medium dark:text-white">
+            当前展示位
+          </h3>
+          <span class="text-xs text-gray-400">
+            <template v-if="overview.display">
+              场景 {{ overview.display.scene }} / 位 {{ overview.display.slot }}
+            </template>
+            <template v-else>未读取</template>
+          </span>
+        </div>
+        <div v-if="displayItem" class="flex items-center gap-3">
+          <img v-if="displayItem.image" :src="displayItem.image" :alt="displayItem.name" class="h-16 w-16 object-contain">
+          <div>
+            <div class="text-sm font-medium">{{ displayItem.name }}</div>
+            <div class="text-xs text-amber-600 dark:text-amber-400">{{ starText((displayItem as any).star) }}</div>
+          </div>
+        </div>
+        <div v-else class="text-xs text-gray-500 dark:text-gray-400">
+          展示位为空。点下方任意藏品的「展示」即可摆上去。
+        </div>
+      </div>
+
       <!-- 收集进度 -->
-      <div class="border border-gray-200 rounded-lg bg-white p-4 dark:border-gray-700 dark:bg-gray-800">
+      <div class="rounded-lg border border-gray-200 bg-white p-4 dark:border-gray-700 dark:bg-gray-800">
         <div class="mb-2 flex items-center justify-between text-sm">
-          <span class="text-gray-900 font-medium dark:text-white">藏品收集进度</span>
+          <span class="font-medium text-gray-900 dark:text-white">藏品收集进度</span>
           <span class="text-gray-500 dark:text-gray-400">{{ progress.toFixed(1) }}%</span>
         </div>
         <div class="h-2 w-full overflow-hidden rounded bg-gray-200 dark:bg-gray-700">
@@ -206,25 +310,25 @@ usePageRefresh('/collection', loadOverview)
       <div
         v-for="s in overview.series"
         :key="s.series"
-        class="border border-gray-200 rounded-lg bg-white p-4 dark:border-gray-700 dark:bg-gray-800"
+        class="rounded-lg border border-gray-200 bg-white p-4 dark:border-gray-700 dark:bg-gray-800"
       >
         <div class="mb-3 flex items-center justify-between">
           <h3 class="text-sm text-gray-900 font-medium dark:text-white">
             {{ s.name }}
           </h3>
           <span class="text-xs text-gray-500 dark:text-gray-400">
-            已收集 {{ s.owned }} / {{ s.total }}
+            已激活 {{ s.owned }} / {{ s.total }}
           </span>
         </div>
         <div class="grid grid-cols-3 gap-2 sm:grid-cols-6">
           <div
             v-for="it in s.items"
             :key="it.id"
-            class="flex flex-col items-center border rounded p-2 text-center transition"
+            class="flex flex-col items-center rounded border p-2 text-center transition"
             :class="it.owned
               ? 'border-amber-300 bg-amber-50 dark:border-amber-700 dark:bg-amber-900/20'
               : 'border-gray-200 bg-gray-50 opacity-60 dark:border-gray-700 dark:bg-gray-900/40'"
-            :title="`${it.name}｜${it.desc}`"
+            :title="`${it.name}｜${it.desc}｜获得 ${fmtTime(it.obtainedAt)}`"
           >
             <img
               v-if="it.image"
@@ -234,18 +338,39 @@ usePageRefresh('/collection', loadOverview)
               loading="lazy"
             >
             <div v-else class="i-carbon-image h-12 w-12 text-gray-300" />
-            <div class="mt-1 w-full truncate text-xs text-gray-800 font-medium dark:text-gray-100">
+            <div class="mt-1 w-full truncate text-xs font-medium text-gray-800 dark:text-gray-100">
               {{ it.name }}
             </div>
             <div class="text-[11px]" :class="it.owned ? 'text-amber-700 dark:text-amber-300' : 'text-gray-400'">
-              {{ it.owned ? `×${it.count}` : '未收集' }}
+              {{ it.owned ? starText(it.star) : '未激活' }}
             </div>
+            <!-- 可升星(背包有同名精灵) -->
+            <div v-if="it.owned && it.upgradable > 0" class="mt-1 flex w-full flex-col gap-1">
+              <BaseButton
+                variant="secondary"
+                size="sm"
+                :disabled="busy"
+                @click="handleUpgrade(it)"
+              >
+                升星 (×{{ it.upgradable }})
+              </BaseButton>
+            </div>
+            <BaseButton
+              v-if="it.owned"
+              class="mt-1 w-full"
+              variant="text"
+              size="sm"
+              :disabled="busy"
+              @click="handleDisplay(it)"
+            >
+              展示
+            </BaseButton>
           </div>
         </div>
       </div>
 
-      <!-- 目录未收录的藏品(配置同步滞后时兜底) -->
-      <div v-if="overview.extra.length" class="border border-gray-200 rounded-lg bg-white p-4 dark:border-gray-700 dark:bg-gray-800">
+      <!-- 目录未收录的藏品 -->
+      <div v-if="overview.extra.length" class="rounded-lg border border-gray-200 bg-white p-4 dark:border-gray-700 dark:bg-gray-800">
         <h3 class="mb-3 text-sm text-gray-900 font-medium dark:text-white">
           其他藏品
         </h3>
@@ -253,21 +378,17 @@ usePageRefresh('/collection', loadOverview)
           <div
             v-for="it in overview.extra"
             :key="it.id"
-            class="flex flex-col items-center border border-amber-300 rounded bg-amber-50 p-2 text-center dark:border-amber-700 dark:bg-amber-900/20"
+            class="flex flex-col items-center rounded border border-amber-300 bg-amber-50 p-2 text-center dark:border-amber-700 dark:bg-amber-900/20"
           >
             <img v-if="it.image" :src="it.image" :alt="it.name" class="h-12 w-12 object-contain" loading="lazy">
-            <div class="mt-1 w-full truncate text-xs font-medium">
-              {{ it.name }}
-            </div>
-            <div class="text-[11px] text-amber-700 dark:text-amber-300">
-              ×{{ it.count }}
-            </div>
+            <div class="mt-1 w-full truncate text-xs font-medium">{{ it.name }}</div>
+            <div class="text-[11px] text-amber-700 dark:text-amber-300">{{ starText(it.star) }}</div>
           </div>
         </div>
       </div>
 
       <!-- 展台 -->
-      <div class="border border-gray-200 rounded-lg bg-white p-4 dark:border-gray-700 dark:bg-gray-800">
+      <div class="rounded-lg border border-gray-200 bg-white p-4 dark:border-gray-700 dark:bg-gray-800">
         <h3 class="mb-3 text-sm text-gray-900 font-medium dark:text-white">
           藏品展台
         </h3>
@@ -275,7 +396,7 @@ usePageRefresh('/collection', loadOverview)
           <div
             v-for="p in overview.pedestals"
             :key="p.id"
-            class="flex flex-col items-center border rounded p-2 text-center"
+            class="flex flex-col items-center rounded border p-2 text-center"
             :class="p.owned
               ? 'border-emerald-300 bg-emerald-50 dark:border-emerald-700 dark:bg-emerald-900/20'
               : 'border-gray-200 bg-gray-50 opacity-60 dark:border-gray-700 dark:bg-gray-900/40'"
@@ -283,7 +404,7 @@ usePageRefresh('/collection', loadOverview)
           >
             <img v-if="p.image" :src="p.image" :alt="p.name" class="h-12 w-12 object-contain" loading="lazy">
             <div v-else class="i-carbon-image h-12 w-12 text-gray-300" />
-            <div class="mt-1 w-full truncate text-xs text-gray-800 font-medium dark:text-gray-100">
+            <div class="mt-1 w-full truncate text-xs font-medium text-gray-800 dark:text-gray-100">
               {{ p.name }}
             </div>
             <div class="text-[11px]" :class="p.owned ? 'text-emerald-700 dark:text-emerald-300' : 'text-gray-400'">
@@ -295,10 +416,11 @@ usePageRefresh('/collection', loadOverview)
 
       <div class="text-center text-xs text-gray-400">
         更新于 {{ new Date(overview.updatedAt).toLocaleString('zh-CN') }}
+        · 升星消耗背包里的同名精灵
       </div>
     </template>
 
-    <div v-else-if="!loading" class="border border-yellow-300 rounded bg-yellow-50 p-4 text-yellow-800 dark:border-yellow-700 dark:bg-yellow-900/30 dark:text-yellow-200">
+    <div v-else-if="!loading" class="rounded border border-yellow-300 bg-yellow-50 p-4 text-yellow-800 dark:border-yellow-700 dark:bg-yellow-900/30 dark:text-yellow-200">
       未取到典藏室数据（账号可能未运行）。
     </div>
   </div>

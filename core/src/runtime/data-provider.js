@@ -225,6 +225,7 @@ function createDataProvider(options) {
                 buyBookEnabled: body.buyBookEnabled,
                 buyBookCount: body.buyBookCount,
                 limitedPackEnabled: body.limitedPackEnabled,
+                collectionEnabled: body.collectionEnabled,
                 // 秋祈良愿(每日祈愿) + 放烟花
                 autumnWishEnabled: body.autumnWishEnabled,
                 fireworkEnabled: body.fireworkEnabled,
@@ -540,6 +541,10 @@ function createDataProvider(options) {
         buyChallengeBooks: (accountRef, opts) => callWorkerApi(resolveAccountRefId(accountRef), 'buyChallengeBooks', opts || {}),
         // 典藏室(藏品展示)
         getCollectionOverview: (accountRef, opts) => callWorkerApi(resolveAccountRefId(accountRef), 'getCollectionOverview', opts || {}),
+        runCollectionTasks: (accountRef, opts) => callWorkerApi(resolveAccountRefId(accountRef), 'runCollectionTasks', opts || {}),
+        upgradeCollection: (accountRef, opts) => callWorkerApi(resolveAccountRefId(accountRef), 'upgradeCollection', opts || {}),
+        switchCollectionDisplay: (accountRef, opts) => callWorkerApi(resolveAccountRefId(accountRef), 'switchCollectionDisplay', opts || {}),
+        claimCollectionReward: (accountRef, opts) => callWorkerApi(resolveAccountRefId(accountRef), 'claimCollectionReward', opts || {}),
         // 限时礼包(藏品礼包, 按上限买 + 买完开包)
         buyLimitedPacks: (accountRef, opts) => callWorkerApi(resolveAccountRefId(accountRef), 'buyLimitedPacks', opts || {}),
         claimTreasureSettlement: (accountRef) => callWorkerApi(resolveAccountRefId(accountRef), 'claimTreasureSettlement'),

@@ -9,7 +9,7 @@ if (parentPort && workerData && workerData.startupMode === 'code_refresh') {
     process.env.FARM_STARTUP_MODE = 'code_refresh';
 }
 const { getLevelExpProgress } = require('../config/gameConfig');
-const { getAutomation, getPreferredSeed, getConfigSnapshot, applyConfigSnapshot, getBuyBookConfig, getAutumnWishConfig, getHappyShareEnabled, getMilkTeaConfig, getActivityStatus, getAdGiftEnabled, getLimitedPackConfig } = require('../models/store');
+const { getAutomation, getPreferredSeed, getConfigSnapshot, applyConfigSnapshot, getBuyBookConfig, getAutumnWishConfig, getHappyShareEnabled, getMilkTeaConfig, getActivityStatus, getAdGiftEnabled, getLimitedPackConfig, getCollectionEnabled } = require('../models/store');
 const { checkAndClaimEmails } = require('../services/email');
 const { getEmailDailyState } = require('../services/email');
 const { checkFarm, startFarmCheckLoop, stopFarmCheckLoop, refreshFarmCheckLoop, getLandsDetail, getAvailableSeeds, buySeed, runFarmOperation, runFertilizerByConfig, operateSingleLand } = require('../services/farm');
@@ -204,6 +204,8 @@ async function runDailyRoutines(force = false) {
         await runBuyChallengeBooks('daily_routine');
         // 限时礼包(藏品礼包): 按服务端限购买满 + 买完开包
         await runBuyLimitedPacks('daily_routine');
+        // 典藏室: 展示 + 升星(有同名精灵才升) + 领评分奖励
+        await runCollection('daily_routine');
         // 秋祈良愿: 每日祈愿领奖 + 可选放烟花
         await runAutumnWish('daily_routine');
         // 快乐不独享: 每日快乐值 + 档位奖励
@@ -228,6 +230,7 @@ function stopDailyRoutineTimer() {
     workerScheduler.clear('escort_settle_interval');
     workerScheduler.clear('buy_book_interval');
     workerScheduler.clear('limited_pack_interval');
+    workerScheduler.clear('collection_interval');
     workerScheduler.clear('autumn_wish_interval');
     workerScheduler.clear('happy_share_interval');
     workerScheduler.clear('ad_gift_interval');
@@ -375,6 +378,44 @@ async function runHappyShare(reason = 'interval') {
  *   已按目标买满当天 → 直接返回(零网络请求), 有缺口才去商城买。
  */
 /**
+ * 典藏室: 展示 + 升星 + 领评分奖励
+ * 协议/规则见 services/collection.js runCollectionTasks()
+ * ⚠ 升星消耗同名精灵(开藏品礼包获得), 背包没货时服务层直接跳过, 不会发无效请求
+ */
+async function runCollection(reason = 'interval') {
+    if (!canRunTasks()) return { skipped: true, reason: 'offline' };
+    if (!getCollectionEnabled()) return { skipped: true, reason: 'disabled' };
+    try {
+        const r = await require('../services/collection').runCollectionTasks({});
+        if (r.ok === false) {
+            log('典藏室', `典藏室处理失败: ${r.reason || '未知'}`, {
+                module: 'activity', event: '典藏室', result: 'warn', trigger: reason,
+            });
+            return r;
+        }
+        if (r.display) {
+            log('典藏室', `已切换展示位 → ${r.display.itemId}`, {
+                module: 'activity', event: '典藏室', result: 'ok', trigger: reason,
+            });
+        }
+        if (r.upgraded.length) {
+            log('典藏室', `升星 ${r.upgraded.length} 次: ${r.upgraded.map(u => `${u.name}→${u.star}星`).join('、')}`, {
+                module: 'activity', event: '典藏室', result: 'ok', trigger: reason,
+            });
+        }
+        if (r.claimed) {
+            log('典藏室', `已领取评分奖励 (评分 ${r.claimed.totalScore}, 覆盖到 ${r.claimed.claimedScore})`, {
+                module: 'activity', event: '典藏室', result: 'ok', trigger: reason,
+            });
+        }
+        return r;
+    } catch (e) {
+        log('典藏室', `典藏室处理失败: ${e.message}`, { module: 'activity', event: '典藏室', result: 'error', trigger: reason });
+        return { ok: false, reason: e.message };
+    }
+}
+
+/**
  * 限时礼包(藏品礼包): 按服务端限购买满, 买完立刻开包
  * 协议/规则见 services/mall.js checkAndBuyLimitedPacks()
  * 用 30 分钟自查: 商品是活动限时上架, 限购买满后接口会返回 remaining=0, 不会重复买。
@@ -472,6 +513,10 @@ function startDailyRoutineTimer() {
     // 限时藏品礼包: 每 30 分钟自查(服务端限购买满后不会再买; 上架/补货时能较快跟上)
     workerScheduler.setIntervalTask('limited_pack_interval', 30 * 60 * 1000, () => {
         runBuyLimitedPacks('interval').catch(() => null);
+    }, { preventOverlap: true });
+    // 典藏室: 每 20 分钟自查(升星只有在背包有同名精灵时才发请求)
+    workerScheduler.setIntervalTask('collection_interval', 20 * 60 * 1000, () => {
+        runCollection('interval').catch(() => null);
     }, { preventOverlap: true });
     // 秋祈良愿(每日祈愿 + 可选放烟花): 每 20 分钟自查一次
     workerScheduler.setIntervalTask('autumn_wish_interval', 20 * 60 * 1000, () => {
@@ -1599,6 +1644,22 @@ async function handleApiCall(msg) {
             }
             case 'getCollectionOverview':
                 result = await require('../services/collection').getCollectionOverview(args[0] || {});
+                break;
+            case 'runCollectionTasks':
+                result = await require('../services/collection').runCollectionTasks(args[0] || {});
+                break;
+            case 'upgradeCollection': {
+                const cid = toNum((args[0] || {}).itemId);
+                result = await require('../services/collection').upgradeCollection(cid);
+                break;
+            }
+            case 'switchCollectionDisplay': {
+                const cd = args[0] || {};
+                result = await require('../services/collection').switchSceneDisplay(cd.itemId, cd);
+                break;
+            }
+            case 'claimCollectionReward':
+                result = await require('../services/collection').claimCollectionReward();
                 break;
             case 'buyLimitedPacks': {
                 const r = await require('../services/mall').checkAndBuyLimitedPacks(true);

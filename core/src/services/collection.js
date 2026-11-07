@@ -1,33 +1,42 @@
 /**
- * 典藏室（藏品 · 珍藏室）—— 只读展示 + 新增接口探测
+ * 典藏室(珍藏室) —— 藏品查询 / 展示 / 升星 / 评分奖励
  *
- * ════════ 抓包来源 ════════
- * 2026-11-07 抓包 `20261107-112023_典藏室和快乐独享领取` 里出现的新接口:
- *   gamepb.collectionpb.CollectionService.GetCollections
- *   请求: 0a 01 01              → {#1: bytes[0x01]}
- *   响应: 0a 02 08 01  12 00    → {#1: {#1: 1}, #2: ""}
- * ⚠ 服务端只回了一个空壳(客户端打开典藏室面板时也只是探测一下), 没有下发藏品明细。
- *   所以**藏品清单必须从背包反推**: 藏品是 type=35 的物品
- *   (700001/710001/720001/730001/740001 五个系列, 每系列 6 款, 共 30 款;
- *    desc 统一写着"可收进珍藏室陈列展示"), 展台是 type=34 (610201~610303),
- *   进度值是 3002「典藏收藏点」。
- *   GetCollections 的请求/响应字段照样实现(用于探测活动是否开放/是否有红点),
- *   真正可看的数据以背包为准 —— 这也是客户端面板的来源。
+ * ══════════════════════════════════════════════════════════════════
+ * 协议依据: 2026-11-07 抓包 `20261107-155647_典藏室`(这次是真数据, 不是空壳)
  *
- * ════════ 藏品系列(ItemInfo 静态表) ════════
- *   700001~700006  icon_collect_5_x  果冻系列
- *   710001~710006  icon_collect_1_x  氧气小精灵
- *   720001~720006  icon_collect_2_x  田园灵偶
- *   730001~730006  icon_collect_3_x  漫游客
- *   740001~740006  icon_collect_4_x  青叶风灵
- * 系列号藏在图标路径 `icon_collect_<系列>_<款式>` 里, 用它分组即可, 不需要额外配置表。
+ *   GetCollections          C->S 0a0101                  查询
+ *   UpgradeCollection       C->S 08 01 10 <itemId>       升星
+ *   SwitchSceneDisplay      C->S 0a0a 0801 1206 0801 10<itemId>  切换展示
+ *   ClaimCollectionReward   C->S 08 01                   领取评分奖励
+ *   DisplayChangeNotify     S->C  展示变更推送(结构同 SwitchSceneDisplay 回显)
+ *
+ * GetCollections 回复实测:
+ *   #1 = 1
+ *   #2(repeated 藏品) { #1 藏品ID, #2 星级, #3 已激活, #4 获得时间, #5 疑似展示位 }
+ *   #5 = 1000  已领取评分档
+ *   #6 = 1200  当前累计评分
+ *   #2 { #1: 场景, #2: { #1: 展示位, #2: 藏品ID } }   ← 当前展示位(与 entries 同字段号)
+ *
+ * UpgradeCollection 回复实测: #1=1 #2=itemId #3=升级后星级 #4=升级后评分
+ *   700005: 600  700004: 1200   (严格等比 300 → 600 → 1200)
+ *
+ * ClaimCollectionReward 回复实测: #2=1200(当前评分) #3=1000(覆盖到的档位) #4{#50=1000}
+ *
+ * ══════════════════════════════════════════════════════════════════
+ * 两个由用户确认的关键事实:
+ *   ① 藏品**不在背包里**(ItemService.Bag 中没有 type=35 物品),
+ *      获得 = 开藏品礼包后服务端直接登记到这里, `#3 activated=1` 即"已激活";
+ *      客户端**不需要**发任何激活请求 —— 抓包里全程没有 Use 请求。
+ *   ② 升星消耗的是**同名精灵本身**(从盒子里开出来的),
+ *      所以 43.9s 第二次升 700005 失败: `1000019 桃米不足`(背包里没有第二个桃米)。
+ *      → 自动升星必须**先确认背包里有同名精灵**, 否则必定失败刷错误日志。
  */
 
 const protobuf = require('protobufjs');
 const { sendMsgAsync } = require('../utils/network');
+const { types } = require('../utils/proto');
 const { getItemById, getItemImageById, getAllItems } = require('../config/gameConfig');
-const { log, toNum } = require('../utils/utils');
-const { getBag, getBagItems } = require('./warehouse');
+const { log, toNum, sleep } = require('../utils/utils');
 
 const SERVICE = 'gamepb.collectionpb.CollectionService';
 
@@ -45,7 +54,8 @@ const SERIES_NAMES = {
     5: '果冻系列',
 };
 
-/** 极简 wire 解析(只读, 不依赖 .proto) */
+// ============ 通用 wire 工具(展示位与 entries 共用字段号, 只能自己拆) ============
+
 function parseWire(buf) {
     const out = [];
     const reader = protobuf.Reader.create(buf);
@@ -64,33 +74,94 @@ function parseWire(buf) {
     return out;
 }
 const findField = (fields, f) => fields.find((x) => x.f === f) || null;
-const bufToStr = (v) => (Buffer.isBuffer(v) ? v.toString('utf8') : '');
+const num = (x) => {
+    if (!x) return 0;
+    if (Buffer.isBuffer(x.v)) return 0;      // wire2 不是数字
+    const n = Number(x.v);
+    return Number.isFinite(n) ? n : 0;
+};
+
+// ============ 查询 ============
 
 /**
- * 调 GetCollections
- * 请求 {#1: <1 字节状态>}: 实测客户端传 0x01(二进制状态位), 用 raw writer 构造,
- * 不能走 .proto(collectionpb 表不在仓库里, 字段号按抓包硬编码)。
- * 返回 { ok, raw, flag1, text } —— 服务端拒绝时抛异常由调用方捕获。
+ * 解析展示位: 形如 { #1: 场景, #2: { #1: 展示位, #2: 藏品ID, #3: ? } }
+ * 返回 { scene, slot, itemId }
  */
-async function getCollections(flagByte = 1) {
-    const w = protobuf.Writer.create();
-    w.uint32((1 << 3) | 2).bytes(Buffer.from([flagByte & 0xff]));
-    const { body } = await sendMsgAsync(SERVICE, 'GetCollections', w.finish());
-    const buf = Buffer.isBuffer(body) ? body : Buffer.from(body || []);
-    const fields = parseWire(buf);
-    const box = findField(fields, 1);
-    const inner = box && box.w === 2 ? parseWire(box.v) : [];
+function parseDisplay(buf) {
+    if (!buf || !buf.length) return null;
+    const top = parseWire(buf);
+    const inner = findField(top, 2);
+    const body = inner && inner.w === 2 ? parseWire(inner.v) : [];
     return {
-        ok: true,
-        rawHex: buf.toString('hex'),
-        flag1: Number((findField(inner, 1) || {}).v || 0),
-        text: bufToStr((findField(fields, 2) || {}).v),
-        // 明细还没见服务端下发过: 有 #3..#N 时原样带出去, 方便后续版本再解析
-        detailHex: fields.filter((x) => x.f >= 3 && x.w === 2).map((x) => x.v.toString('hex')),
+        scene: num(findField(top, 1)),
+        slot: num(findField(body, 1)),
+        itemId: num(findField(body, 2)),
+        field3: num(findField(body, 3)),
     };
 }
 
-/** 静态藏品目录: 从 ItemInfo 里按 type=35 收集, 用图标路径分组 */
+/**
+ * 解析 GetCollections 原始回包
+ *
+ * 实测结构(2026-11-07 抓包 68.75s, 54B):
+ *   外层 {
+ *     #1: <状态内层>,                       ← 藏品与评分都在这里
+ *     #2: <展示位> = { #1: 场景, #2: { #1: 展示位, #2: 藏品ID } }
+ *   }
+ *   状态内层 { #1: 1, #2(repeated 藏品), #5: 已领评分, #6: 当前评分 }
+ *   藏品 { #1 item_id, #2 星级, #3 已激活, #4 获得时间, #5 疑似展示位 }
+ */
+function parseCollectionsReply(buf) {
+    const out = { field1: 0, entries: [], displays: [], claimedScore: 0, totalScore: 0 };
+    if (!buf || !buf.length) return out;
+    const top = parseWire(buf);
+
+    // 状态内层: 外层 #1
+    const boxed = findField(top, 1);
+    const inner = boxed && boxed.w === 2 ? parseWire(boxed.v) : top;
+    out.field1 = num(findField(inner, 1));
+    out.claimedScore = num(findField(inner, 5));
+    out.totalScore = num(findField(inner, 6));
+    for (const x of inner) {
+        if (x.f !== 2 || x.w !== 2) continue;
+        const sub = parseWire(x.v);
+        const id = num(findField(sub, 1));
+        if (id <= 0) continue;
+        out.entries.push({
+            itemId: id,
+            star: num(findField(sub, 2)),
+            activated: num(findField(sub, 3)),
+            obtainedAt: num(findField(sub, 4)),
+            field5: num(findField(sub, 5)),
+        });
+    }
+
+    // 展示位: 外层 #2(与内层的藏品同字段号, 但在不同层)
+    for (const x of top) {
+        if (x.f !== 2 || x.w !== 2) continue;
+        const d = parseDisplay(x.v);
+        if (d && (d.itemId > 0 || d.slot > 0)) out.displays.push(d);
+    }
+    return out;
+}
+
+async function getCollectionsRaw() {
+    // ⚠ 抓包请求是 0a 01 01: #1 为 wire2(bytes), 内容 1 字节 0x01。
+    //   用 .proto 编码 int32 会变成 08 01, 与客户端不一致 → 手工拼。
+    const body = Buffer.from([0x0a, 0x01, 0x01]);
+    const { body: reply } = await sendMsgAsync(SERVICE, 'GetCollections', body);
+    return Buffer.isBuffer(reply) ? reply : Buffer.from(reply || []);
+}
+
+/** 查询典藏室状态(解析后的结构) */
+async function getCollections() {
+    const buf = await getCollectionsRaw();
+    const parsed = parseCollectionsReply(buf);
+    return { ok: true, rawHex: buf.toString('hex'), ...parsed };
+}
+
+// ============ 静态目录(ItemInfo) ============
+
 let catalogCache = null;
 function buildCollectionCatalog() {
     if (catalogCache) return catalogCache;
@@ -124,34 +195,158 @@ function buildCollectionCatalog() {
     return catalogCache;
 }
 
-/** 背包 → { 按物品ID: 数量 } */
-function bagCountMap(bagReply) {
-    const map = new Map();
-    for (const it of (getBagItems(bagReply) || [])) {
-        const id = toNum(it && it.id);
-        const count = toNum(it && it.count);
-        if (id > 0 && count > 0) map.set(id, (map.get(id) || 0) + count);
+/** 背包里同名精灵的数量(升星消耗的就是它) */
+function bagSpiritCounts() {
+    try {
+        // 避免循环依赖: warehouse 在调用时才 require
+        const { getBag, getBagItems } = require('./warehouse');
+        return { getBag, getBagItems };
+    } catch {
+        return null;
     }
-    return map;
+}
+
+async function getSpiritCountsInBag() {
+    const api = bagSpiritCounts();
+    if (!api) return new Map();
+    const counts = new Map();
+    try {
+        const bag = await api.getBag();
+        for (const it of (api.getBagItems(bag) || [])) {
+            const id = toNum(it && it.id);
+            const c = toNum(it && it.count);
+            if (id > 0 && c > 0) counts.set(id, (counts.get(id) || 0) + c);
+        }
+    } catch { /* 读背包失败按 0 处理 */ }
+    return counts;
+}
+
+// ============ 展示 ============
+
+/**
+ * 切换展示
+ * @param itemId 藏品ID; 0 = 清空展示位(抓包 30.0s: #2{1,0,0})
+ */
+async function switchSceneDisplay(itemId = 0, opts = {}) {
+    const scene = Math.max(1, toNum(opts.scene) || 1);
+    const slot = Math.max(1, toNum(opts.slot) || 1);
+    const w = protobuf.Writer.create();
+    const inner = protobuf.Writer.create();
+    inner.uint32(8).int32(slot);
+    if (toNum(itemId) > 0) inner.uint32(16).int64(toNum(itemId));
+    else { inner.uint32(16).int32(0); inner.uint32(24).int32(0); }   // 清空与抓包一致
+    const mid = protobuf.Writer.create();
+    mid.uint32(8).int32(scene);
+    mid.uint32(18).bytes(inner.finish());
+    w.uint32(10).bytes(mid.finish());
+    const body = w.finish();
+    const { body: reply } = await sendMsgAsync(SERVICE, 'SwitchSceneDisplay', body);
+    const replyBuf = Buffer.isBuffer(reply) ? reply : Buffer.from(reply || []);
+    return { ok: true, itemId: toNum(itemId), display: parseDisplay(replyBuf), rawHex: replyBuf.toString('hex') };
+}
+
+// ============ 升星 ============
+
+/**
+ * 升星
+ * ⚠ 消耗的是**同名精灵**(背包里的同 itemId 物品), 没货时服务端回
+ *   `1000019 xxx不足`。调用方应先用 checkUpgradeAffordable 判断。
+ */
+async function upgradeCollection(itemId) {
+    const id = toNum(itemId);
+    if (id <= 0) throw new Error('无效的藏品ID');
+    const body = types.UpgradeCollectionRequest.encode(
+        types.UpgradeCollectionRequest.create({ field1: 1, item_id: id }),
+    ).finish();
+    const { body: reply } = await sendMsgAsync(SERVICE, 'UpgradeCollection', body);
+    const replyBuf = Buffer.isBuffer(reply) ? reply : Buffer.from(reply || []);
+    const fields = parseWire(replyBuf);
+    const info = getItemById(id) || {};
+    const result = {
+        ok: true,
+        itemId: id,
+        name: String(info.name || `藏品#${id}`),
+        star: num(findField(fields, 3)),
+        score: num(findField(fields, 4)),
+        rawHex: replyBuf.toString('hex'),
+    };
+    log('典藏室', `已升星「${result.name}」→ ${result.star} 星 (评分 ${result.score})`, {
+        module: 'activity', event: '典藏室', result: 'ok', itemId: id, star: result.star,
+    });
+    return result;
 }
 
 /**
- * 典藏室概览(页面主数据)
- *   藏品: 每个系列已拥有/总数, 逐款数量
- *   展台: 已拥有的展台
- *   进度: 3002 典藏收藏点
+ * 判断某藏品现在能不能升星(背包里至少要有 1 个同名精灵可消耗)
+ * 返回 { can, inBag, reason }
+ */
+async function checkUpgradeAffordable(itemId, counts = null) {
+    const id = toNum(itemId);
+    const bag = counts || await getSpiritCountsInBag();
+    const n = bag.get(id) || 0;
+    if (n <= 0) {
+        const info = getItemById(id) || {};
+        return { can: false, inBag: 0, reason: `背包里没有「${info.name || id}」可消耗` };
+    }
+    return { can: true, inBag: n, reason: '' };
+}
+
+// ============ 评分奖励 ============
+
+/**
+ * 领取评分奖励
+ * 抓包实测请求只有 `08 01`(#1=1), 服务端按当前评分发放所有达标未领的档位。
+ * 回复 #2=当前评分, #3=本次覆盖到的档位(与 GetCollections #5 对齐)。
+ */
+async function claimCollectionReward() {
+    const body = types.ClaimCollectionRewardRequest.encode(
+        types.ClaimCollectionRewardRequest.create({ field1: 1 }),
+    ).finish();
+    const { body: reply } = await sendMsgAsync(SERVICE, 'ClaimCollectionReward', body);
+    const replyBuf = Buffer.isBuffer(reply) ? reply : Buffer.from(reply || []);
+    const fields = parseWire(replyBuf);
+    const result = {
+        ok: true,
+        totalScore: num(findField(fields, 2)),
+        claimedScore: num(findField(fields, 3)),
+        rewardHex: (() => { const x = findField(fields, 4); return x && x.w === 2 ? x.v.toString('hex') : ''; })(),
+    };
+    log('典藏室', `已领取藏品评分奖励 (评分 ${result.totalScore}, 覆盖到 ${result.claimedScore} 档)`, {
+        module: 'activity', event: '典藏室', result: 'ok', score: result.totalScore, claimed: result.claimedScore,
+    });
+    return result;
+}
+
+// ============ 概览(页面主数据) ============
+
+/**
+ * 典藏室概览
+ *   · 目录(30 款) × 服务端状态(星级/激活/获得时间)
+ *   · 当前展示位
+ *   · 评分(已领档位 / 当前累计)
+ *   · 背包里可用来升星的同名额精灵数量(升星消耗物)
  */
 async function getCollectionOverview({ probe = true } = {}) {
-    const bagReply = await getBag();
-    const counts = bagCountMap(bagReply);
+    const server = probe ? await getCollections().catch(() => null) : null;
+    const spiritCounts = await getSpiritCountsInBag();
 
+    const byId = new Map((server ? server.entries : []).map((e) => [e.itemId, e]));
     const catalog = buildCollectionCatalog();
     let ownedTotal = 0;
     const series = catalog.map((s) => {
         const items = s.items.map((it) => {
-            const count = counts.get(it.id) || 0;
-            if (count > 0) ownedTotal += 1;
-            return { ...it, count, owned: count > 0 };
+            const st = byId.get(it.id) || null;
+            const owned = !!(st && st.activated > 0);
+            if (owned) ownedTotal += 1;
+            return {
+                ...it,
+                owned,
+                activated: st ? st.activated : 0,
+                star: st ? st.star : 0,
+                obtainedAt: st ? st.obtainedAt : 0,
+                // 背包里同名精灵数量 = 还能升几次星(每个消耗 1 个)
+                upgradable: spiritCounts.get(it.id) || 0,
+            };
         });
         return {
             series: s.series,
@@ -162,79 +357,162 @@ async function getCollectionOverview({ probe = true } = {}) {
         };
     });
 
-    // 目录里没收录(type=35 但/或 ItemInfo 未同步到)的藏品: 直接从背包兜底展示
+    // 服务端登记了、但本地目录没收录的藏品(配置同步滞后时兜底)
     const knownIds = new Set(catalog.flatMap((s) => s.items.map((x) => x.id)));
     const extra = [];
-    for (const [id, count] of counts.entries()) {
-        const info = getItemById(id);
-        if (!info || Number(info.type) !== ITEM_TYPE_COLLECTION || knownIds.has(id)) continue;
+    for (const e of (server ? server.entries : [])) {
+        if (knownIds.has(e.itemId)) continue;
+        const info = getItemById(e.itemId) || {};
         extra.push({
-            id,
-            name: String(info.name || `藏品#${id}`),
+            id: e.itemId,
+            name: String(info.name || `藏品#${e.itemId}`),
             desc: String(info.desc || ''),
-            image: getItemImageById(id),
-            count,
-            owned: true,
+            image: getItemImageById(e.itemId),
+            owned: e.activated > 0,
+            activated: e.activated,
+            star: e.star,
+            obtainedAt: e.obtainedAt,
+            upgradable: spiritCounts.get(e.itemId) || 0,
         });
     }
 
-    // 展台: type=34
+    // 展台(type=34, 背包里)
     const pedestals = [];
     for (const item of (getAllItems() || [])) {
         if (Number(item.type) !== ITEM_TYPE_PEDESTAL) continue;
         const id = Number(item.id) || 0;
         if (id <= 0) continue;
-        const count = counts.get(id) || 0;
+        const count = spiritCounts.get(id) || 0;
         pedestals.push({
             id,
             name: String(item.name || `展台#${id}`),
             desc: String(item.desc || ''),
             image: getItemImageById(id),
             count,
-            owned: id === 610100 || count > 0,   // 610100「默认」始终可用
+            owned: id === 610100 || count > 0,
         });
     }
     pedestals.sort((a, b) => a.id - b.id);
 
-    const point = counts.get(ITEM_ID_COLLECTION_POINT) || 0;
-    const normalPoint = counts.get(3001) || 0;
-
-    // 新接口探测: 失败不影响页面(该接口目前只回空壳)
-    let endpoint = { ok: false, skipped: !probe };
-    if (probe) {
-        try {
-            endpoint = await getCollections();
-        } catch (e) {
-            endpoint = { ok: false, error: e.message };
-        }
-    }
-
     return {
         updatedAt: Date.now(),
+        serverOk: !!server,
         catalogTotal: catalog.reduce((n, s) => n + s.items.length, 0),
         ownedTotal,
         series,
         extra,
         pedestals,
         ownedPedestals: pedestals.filter((p) => p.owned).length,
-        points: { collection: point, normal: normalPoint },
-        endpoint,
+        points: {
+            collection: spiritCounts.get(ITEM_ID_COLLECTION_POINT) || 0,
+            normal: spiritCounts.get(3001) || 0,
+        },
+        display: server && server.displays.length ? server.displays[server.displays.length - 1] : null,
+        displays: server ? server.displays : [],
+        score: {
+            total: server ? server.totalScore : 0,
+            claimed: server ? server.claimedScore : 0,
+            claimable: !!(server && server.totalScore > server.claimedScore),
+        },
     };
 }
 
+// ============ 自动化流程 ============
+
 /**
- * 手动刷新时的简单日志(供 /api/collection/refresh 之类接口使用)
+ * 典藏室日常: 展示 → 升星 → 领评分奖励
+ *
+ * @param opts.autoDisplay  有藏品但没有展示时, 自动把评分最高的摆上去(默认 true)
+ * @param opts.autoUpgrade  背包里有同名精灵就升星(默认 true; 没货绝不发请求)
+ * @param opts.autoClaim    评分奖励有新增可领时自动领(默认 true)
+ * @param opts.maxUpgrades  单次最多升几次星(默认 10, 防止一次把库存全烧掉)
+ *
+ * ⚠ 升星消耗同名精灵, 抓包里第二次升 700005 就因"桃米不足"失败 →
+ *   本流程每个藏品先看背包同名声, 只升到库存用完为止, 不做无效请求。
  */
-async function refreshCollection(params = {}) {
-    const overview = await getCollectionOverview(params);
-    log('典藏室', `典藏室数据已刷新: 拥有藏品 ${overview.ownedTotal}/${overview.catalogTotal} 款, 展台 ${overview.ownedPedestals} 个, 典藏收藏点 ${overview.points.collection}`, {
-        module: 'activity',
-        event: '典藏室',
-        result: 'ok',
-        owned: overview.ownedTotal,
-        total: overview.catalogTotal,
-    });
-    return overview;
+async function runCollectionTasks(opts = {}) {
+    const autoDisplay = opts.autoDisplay !== false;
+    const autoUpgrade = opts.autoUpgrade !== false;
+    const autoClaim = opts.autoClaim !== false;
+    const maxUpgrades = Math.max(0, Math.min(200, Number(opts.maxUpgrades) || 10));
+
+    const out = { ok: true, state: null, display: null, upgraded: [], claimed: null, skipped: [] };
+    let state;
+    try {
+        state = await getCollections();
+    } catch (e) {
+        return { ok: false, reason: `查询典藏室失败: ${e.message}` };
+    }
+    out.state = { entries: state.entries, score: { total: state.totalScore, claimed: state.claimedScore } };
+
+    const activated = state.entries.filter((e) => e.activated > 0);
+    if (!activated.length) {
+        out.skipped.push('还没有已激活的藏品(开藏品礼包获得后会自动激活)');
+    }
+
+    // ① 展示: 有藏品但展示位为空 → 摆评分最高的
+    if (autoDisplay && activated.length) {
+        const cur = state.displays[state.displays.length - 1];
+        const curItemId = cur ? cur.itemId : 0;
+        const curValid = curItemId > 0 && activated.some((e) => e.itemId === curItemId);
+        if (!curValid) {
+            // 优先摆已升星的(评分高), 平手时摆最近获得的
+            const pick = activated.slice().sort((a, b) => (b.star - a.star) || (b.obtainedAt - a.obtainedAt))[0];
+            try {
+                const r = await switchSceneDisplay(pick.itemId, { scene: cur ? cur.scene : 1, slot: cur ? cur.slot : 1 });
+                out.display = r;
+                log('典藏室', `已把「${(getItemById(pick.itemId) || {}).name || pick.itemId}」摆上展示位`, {
+                    module: 'activity', event: '典藏室', result: 'ok', itemId: pick.itemId,
+                });
+            } catch (e) {
+                out.skipped.push(`切换展示失败: ${e.message}`);
+            }
+        }
+    }
+
+    // ② 升星: 只升背包里有同名精灵的
+    if (autoUpgrade && maxUpgrades > 0) {
+        const bagCounts = await getSpiritCountsInBag();
+        // 背包同名声数量 = 最多能升几次(每次消耗 1 个)
+        const candidates = activated
+            .filter((e) => (bagCounts.get(e.itemId) || 0) > 0)
+            .sort((a, b) => (a.star - b.star) || (bagCounts.get(b.itemId) - bagCounts.get(a.itemId)));
+        let budget = maxUpgrades;
+        for (const e of candidates) {
+            if (budget <= 0) break;
+            let stock = bagCounts.get(e.itemId) || 0;
+            while (stock > 0 && budget > 0) {
+                try {
+                    const r = await upgradeCollection(e.itemId);
+                    out.upgraded.push({ itemId: e.itemId, name: r.name, star: r.star, score: r.score });
+                    stock -= 1;
+                    budget -= 1;
+                    await sleep(600);
+                } catch (err) {
+                    // 库存与真实不一致 / 星级上限 / 其它限制 → 换下一个藏品
+                    const msg = String((err && err.message) || '');
+                    out.skipped.push(`${(getItemById(e.itemId) || {}).name || e.itemId} 升星失败: ${msg}`);
+                    break;
+                }
+            }
+        }
+    }
+
+    // ③ 评分奖励
+    if (autoClaim) {
+        try {
+            state = await getCollections();   // 升星后评分会变, 重新读一次再判断
+        } catch { /* 用旧状态判断 */ }
+        if (state.totalScore > state.claimedScore) {
+            try {
+                out.claimed = await claimCollectionReward();
+            } catch (e) {
+                out.skipped.push(`领取评分奖励失败: ${e.message}`);
+            }
+        }
+    }
+
+    return out;
 }
 
 module.exports = {
@@ -242,8 +520,16 @@ module.exports = {
     ITEM_TYPE_COLLECTION,
     ITEM_TYPE_PEDESTAL,
     ITEM_ID_COLLECTION_POINT,
+    SERIES_NAMES,
+    __testing: { parseWire, parseDisplay, parseCollectionsReply },
     getCollections,
+    getCollectionsRaw,
     buildCollectionCatalog,
+    getSpiritCountsInBag,
+    switchSceneDisplay,
+    upgradeCollection,
+    checkUpgradeAffordable,
+    claimCollectionReward,
     getCollectionOverview,
-    refreshCollection,
+    runCollectionTasks,
 };

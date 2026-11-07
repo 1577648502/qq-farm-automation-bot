@@ -2107,6 +2107,9 @@ app.use('/api', (req, res, next) => {
             const limitedPackConfig = (id && typeof store.getLimitedPackConfig === 'function')
                 ? store.getLimitedPackConfig(id)
                 : { enabled: true };
+            const collectionEnabled = (id && typeof store.getCollectionEnabled === 'function')
+                ? store.getCollectionEnabled(id)
+                : true;
             const ui = store.getUI();
             // 获取用户隔离的下线提醒配置
             const offlineReminder = store.getOfflineReminder && currentUser
@@ -2149,6 +2152,8 @@ app.use('/api', (req, res, next) => {
                     buyBookCount: buyBookConfig.count,
                     // 限时藏品礼包(按限购买满 + 买完开包)
                     limitedPackEnabled: limitedPackConfig.enabled,
+                    // 典藏室(展示 + 升星 + 领评分奖励)
+                    collectionEnabled,
                     // 秋祈良愿 + 放烟花
                     autumnWishEnabled: autumnWish.wishEnabled,
                     fireworkEnabled: autumnWish.fireworkEnabled,
@@ -3459,8 +3464,7 @@ app.use('/api', (req, res, next) => {
     });
 
     // ============ 典藏室(藏品展示) ============
-    // 藏品明细从背包反推(type=35 藏品 / type=34 展台 / 3002 典藏收藏点);
-    // 同时探测 gamepb.collectionpb.CollectionService.GetCollections(目前只回空壳)
+    // 典藏室概览: 服务端 GetCollections(藏品/星级/展示位/评分) + 背包展台 + 可升星库存
     app.get('/api/collection/overview', async (req, res) => {
         const id = getAccId(req);
         if (!id) return res.status(400).json({ ok: false, error: '缺少账号 ID' });
@@ -3468,6 +3472,50 @@ app.use('/api', (req, res, next) => {
         try {
             const probe = String(req.query.probe || '1') !== '0';
             const data = await provider.getCollectionOverview(id, { probe });
+            res.json({ ok: true, data });
+        } catch (e) { res.json({ ok: false, error: e.message }); }
+    });
+
+    // 典藏室: 跑一次日常(展示 → 升星 → 领评分奖励)
+    app.post('/api/collection/run', async (req, res) => {
+        const id = getAccId(req);
+        if (!id) return res.status(400).json({ ok: false, error: '缺少账号 ID' });
+        if (!checkAccountAccess(req, id)) return res.status(403).json({ ok: false, error: '无权访问此账号' });
+        try {
+            const data = await provider.runCollectionTasks(id, req.body || {});
+            res.json({ ok: true, data });
+        } catch (e) { res.json({ ok: false, error: e.message }); }
+    });
+
+    // 手动升星(消耗背包里的同名精灵)
+    app.post('/api/collection/upgrade', async (req, res) => {
+        const id = getAccId(req);
+        if (!id) return res.status(400).json({ ok: false, error: '缺少账号 ID' });
+        if (!checkAccountAccess(req, id)) return res.status(403).json({ ok: false, error: '无权访问此账号' });
+        try {
+            const data = await provider.upgradeCollection(id, { itemId: req.body && req.body.itemId });
+            res.json({ ok: true, data });
+        } catch (e) { res.json({ ok: false, error: e.message }); }
+    });
+
+    // 切换展示位(itemId=0 清空)
+    app.post('/api/collection/display', async (req, res) => {
+        const id = getAccId(req);
+        if (!id) return res.status(400).json({ ok: false, error: '缺少账号 ID' });
+        if (!checkAccountAccess(req, id)) return res.status(403).json({ ok: false, error: '无权访问此账号' });
+        try {
+            const data = await provider.switchCollectionDisplay(id, req.body || {});
+            res.json({ ok: true, data });
+        } catch (e) { res.json({ ok: false, error: e.message }); }
+    });
+
+    // 领取评分奖励
+    app.post('/api/collection/claim-reward', async (req, res) => {
+        const id = getAccId(req);
+        if (!id) return res.status(400).json({ ok: false, error: '缺少账号 ID' });
+        if (!checkAccountAccess(req, id)) return res.status(403).json({ ok: false, error: '无权访问此账号' });
+        try {
+            const data = await provider.claimCollectionReward(id);
             res.json({ ok: true, data });
         } catch (e) { res.json({ ok: false, error: e.message }); }
     });

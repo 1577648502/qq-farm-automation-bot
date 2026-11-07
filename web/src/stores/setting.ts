@@ -85,6 +85,7 @@ export interface SettingsState {
   buyBookEnabled: boolean
   buyBookCount: number
   limitedPackEnabled: boolean
+  collectionEnabled: boolean
   autumnWishEnabled: boolean
   fireworkEnabled: boolean
   fireworkMode: 'self' | 'friend'
@@ -146,6 +147,7 @@ function createDefaultSettings(): SettingsState {
     buyBookEnabled: true,
     buyBookCount: 2,
     limitedPackEnabled: true,
+    collectionEnabled: true,
     autumnWishEnabled: true,
     fireworkEnabled: false,
     fireworkMode: 'self',
@@ -309,6 +311,7 @@ export const useSettingStore = defineStore('setting', () => {
       settings.value.buyBookEnabled = d.buyBookEnabled ?? true
       settings.value.buyBookCount = d.buyBookCount ?? 2
       settings.value.limitedPackEnabled = d.limitedPackEnabled ?? true
+      settings.value.collectionEnabled = d.collectionEnabled ?? true
       settings.value.autumnWishEnabled = d.autumnWishEnabled ?? true
       settings.value.fireworkEnabled = d.fireworkEnabled ?? false
       settings.value.fireworkMode = d.fireworkMode === 'friend' ? 'friend' : 'self'
@@ -392,6 +395,7 @@ export const useSettingStore = defineStore('setting', () => {
         buyBookEnabled: newSettings.buyBookEnabled,
         buyBookCount: newSettings.buyBookCount,
         limitedPackEnabled: newSettings.limitedPackEnabled,
+        collectionEnabled: newSettings.collectionEnabled,
         autumnWishEnabled: newSettings.autumnWishEnabled,
         fireworkEnabled: newSettings.fireworkEnabled,
         fireworkMode: newSettings.fireworkMode,

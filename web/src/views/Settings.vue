@@ -743,6 +743,7 @@ const localAutomationSettings = ref({
   buyBookEnabled: true,
   buyBookCount: 2,
   limitedPackEnabled: true,
+  collectionEnabled: true,
   autumnWishEnabled: true,
   fireworkEnabled: false,
   fireworkMode: 'self',
@@ -1142,6 +1143,7 @@ function syncLocalAutomationSettings(submitted?: any) {
     localAutomationSettings.value.buyBookEnabled = settings.value.buyBookEnabled ?? true
     localAutomationSettings.value.buyBookCount = settings.value.buyBookCount ?? 2
     localAutomationSettings.value.limitedPackEnabled = settings.value.limitedPackEnabled ?? true
+    localAutomationSettings.value.collectionEnabled = settings.value.collectionEnabled ?? true
     localAutomationSettings.value.autumnWishEnabled = settings.value.autumnWishEnabled ?? true
     localAutomationSettings.value.fireworkEnabled = settings.value.fireworkEnabled ?? false
     localAutomationSettings.value.fireworkMode = settings.value.fireworkMode === 'friend' ? 'friend' : 'self'
@@ -2527,6 +2529,13 @@ async function onBackupFileChange(ev: Event) {
                   立即买到上限
                 </BaseButton>
                 <span v-if="limitedPackResult" class="text-xs text-gray-600 dark:text-gray-300">{{ limitedPackResult }}</span>
+              </div>
+              <!-- 子任务: 典藏室(展示 + 升星 + 领评分奖励) -->
+              <div class="flex flex-wrap items-center gap-3 border border-gray-200 rounded px-2.5 py-2 dark:border-gray-700">
+                <BaseSwitch v-model="localAutomationSettings.collectionEnabled" label="典藏室自动处理" />
+                <span class="text-xs text-gray-500 dark:text-gray-400">
+                  自动展示、有同名精灵时升星、领评分奖励（在「典藏室」页可看详情）
+                </span>
               </div>
               <template #note>
                 每次抢夺消耗 1 张挑战书（胜负都算），按对方可博弈资金挑书面值；150 金豆豆/个，游戏每日限购 2 个。

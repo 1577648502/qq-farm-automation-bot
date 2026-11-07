@@ -45,6 +45,11 @@ const mallStub = { purchased: [], used: [] };
  *   数字      → 只含该数量的金豆豆藏品礼包(开包断言用)
  */
 let bagOverride = null;
+
+/** GetCollections 回放用: null = 抓包里第一条, 否则用指定 hex */
+let collectionReplyHex = null;
+/** 自定义背包回包(优先级高于 bagOverride) */
+let originalBagReply = null;
 function installMallStub() {
     const mallMod = require(`${SB}/src/services/mall`);
     const net = require(`${SB}/src/utils/network`);
@@ -71,9 +76,10 @@ function installStub() {
         const key = `${service}.${method}`;
         calls.push({ key, body: Buffer.from(body || []) });
         if (key === 'gamepb.collectionpb.CollectionService.GetCollections') {
-            return { body: bodyOf('CollectionService.GetCollections', 'S->C') };
+            return { body: collectionReplyHex ? Buffer.from(collectionReplyHex, 'hex') : bodyOf('CollectionService.GetCollections', 'S->C') };
         }
         if (key === 'gamepb.itempb.ItemService.Bag') {
+            if (originalBagReply) return { body: Buffer.from(originalBagReply) };
             if (bagOverride === null) return { body: bodyOf('ItemService.Bag', 'S->C') };
             const { types } = require(`${SB}/src/utils/proto`);
             return {
@@ -91,6 +97,18 @@ function installStub() {
         }
         if (key === 'gamepb.mallpb.MallService.Purchase') {
             return { body: purchaseReply(Buffer.from(body || [])) };
+        }
+        if (key === 'gamepb.collectionpb.CollectionService.ClaimCollectionReward') {
+            // 抓包 61.06s 实测: #2=1200 #3=1000 #4{50=1000}
+            return { body: Buffer.from('10b00918e80722049003e807', 'hex') };
+        }
+        if (key === 'gamepb.collectionpb.CollectionService.UpgradeCollection') {
+            // 抓包 25.24s 实测: #1=1 #2=700005 #3=1 #4=600
+            return { body: Buffer.from('080110e5dc2a180120d804', 'hex') };
+        }
+        if (key === 'gamepb.collectionpb.CollectionService.SwitchSceneDisplay') {
+            // 抓包 27.71s 实测: 原样回显
+            return { body: Buffer.from(body || []) };
         }
         if (key === 'gamepb.itempb.ItemService.Use') {
             // warehouse 的 useItem 走的是 network 层(require 时已解构), 按这里记录
@@ -137,14 +155,14 @@ function purchaseReply(reqBody) {
     const warehouse = require(`${SB}/src/services/warehouse`);
     installMallStub();
 
-    section('1. GetCollections 请求/响应解析');
+    section('1. GetCollections 请求体(与抓包一致)');
     {
         calls.length = 0;
         const r = await collection.getCollections();
         check('解析成功', r.ok === true, r);
-        check('回包 #1.#1 = 1', r.flag1 === 1, r);
-        check('请求体 = 0a0101(与抓包一致)', calls[0].body.toString('hex') === '0a0101', calls[0].body.toString('hex'));
-        check('没有多余的明细字段', r.detailHex.length === 0, r.detailHex);
+        check('请求体 = 0a0101(抓包 0.30s 实测)', calls[0].body.toString('hex') === '0a0101', calls[0].body.toString('hex'));
+        check('返回原始 hex', typeof r.rawHex === 'string' && r.rawHex.length > 0, r.rawHex);
+        check('entries 是数组', Array.isArray(r.entries), r.entries);
     }
 
     section('2. 藏品目录(ItemInfo type=35)');
@@ -158,18 +176,64 @@ function purchaseReply(reqBody) {
         check('有图标资源路径(icon_collect_1_1)', String((require(`${SB}/src/config/gameConfig`).getItemById(cat[0].items[0].id) || {}).icon_res || '').includes('icon_collect_1_1'), cat[0].items[0]);
     }
 
-    section('3. 典藏室概览(背包反推)');
+    section('3. GetCollections 解析(2026-11-07 真实帧)');
     {
-        const ov = await collection.getCollectionOverview({ probe: false });
+        // 首包(0.35s): 只有获得时间, 星级未下发
+        const first = collection.__testing.parseCollectionsReply(
+            Buffer.from('0a220801120e08e4dc2a180120cb97bbd7062801120e08e5dc2a1801209098bbd70628011200', 'hex'),
+        );
+        check('首包解析出 2 个藏品', first.entries.length === 2, first.entries);
+        check('首包 #1 = 1', first.field1 === 1, first.field1);
+        check('首包 星级未下发(=0)', first.entries.every(e => e.star === 0), first.entries.map(e => e.star));
+        check('首包 均已激活', first.entries.every(e => e.activated === 1), first.entries.map(e => e.activated));
+        check('首包 获得时间 = 1794034635/1794034704',
+            first.entries.map(e => e.obtainedAt).sort((a, b) => a - b).join(',') === '1794034635,1794034704',
+            first.entries.map(e => e.obtainedAt));
+        check('首包 展示位为空', first.displays.length === 0, first.displays);
+
+        // 末包(68.75s): 星级/评分/展示位齐全
+        const last = collection.__testing.parseCollectionsReply(
+            Buffer.from('0a280801120e08e5dc2a10011801209098bbd706120e08e4dc2a1001180120cb97bbd70628e80730b009120a08011206080110e5dc2a', 'hex'),
+        );
+        check('末包解析出 2 个藏品', last.entries.length === 2, last.entries);
+        check('末包 星级均为 1', last.entries.every(e => e.star === 1), last.entries.map(e => e.star));
+        check('末包 已领评分 = 1000', last.claimedScore === 1000, last.claimedScore);
+        check('末包 当前评分 = 1200', last.totalScore === 1200, last.totalScore);
+        check('末包 展示位 = 700005', last.displays.length === 1
+            && last.displays[0].scene === 1 && last.displays[0].slot === 1 && last.displays[0].itemId === 700005, last.displays);
+    }
+
+    section('3b. 概览(服务端状态 + 背包展台)');
+    {
+        // 网络桩改回放"末包"(星级/展示位齐全); 背包仍回放抓包数据
+        collectionReplyHex = '0a280801120e08e5dc2a10011801209098bbd706120e08e4dc2a1001180120cb97bbd70628e80730b009120a08011206080110e5dc2a';
+        const ov = await collection.getCollectionOverview({ probe: true });
         check('目录总数 30', ov.catalogTotal === 30, ov.catalogTotal);
-        check('典藏收藏点取自背包(抓包这一局 5320)', ov.points.collection === 5320, ov.points);
-        check('普通收藏点取自背包(抓包这一局 5370)', ov.points.normal === 5370, ov.points);
-        check('展台至少包含默认展台', ov.pedestals.some(p => p.id === 610100 && p.owned), ov.pedestals.slice(0, 3));
+        check('服务端连通', ov.serverOk === true, ov.serverOk);
+        check('已激活藏品 = 2', ov.ownedTotal === 2, ov.ownedTotal);
+        const p700005 = ov.series.flatMap(s => s.items).find(i => i.id === 700005);
+        check('700005 已激活且 1 星', p700005 && p700005.owned && p700005.star === 1, p700005);
+        check('700005 有获得时间', p700005 && p700005.obtainedAt === 1794034704, p700005 && p700005.obtainedAt);
+        check('当前展示位 = 700005', ov.display && ov.display.itemId === 700005, ov.display);
+        check('评分 1200 / 已领 1000 / 有可领', ov.score.total === 1200 && ov.score.claimed === 1000 && ov.score.claimable === true, ov.score);
         check('展台数量 = ItemInfo type=34 条数(10)', ov.pedestals.length === 10, ov.pedestals.length);
-        check('probe=false 时不发探测请求', ov.endpoint && ov.endpoint.skipped === true, ov.endpoint);
-        // 抓包这一局背包里没有藏品(type=35), 所以已收藏为 0 —— 不能凭空报"已拥有"
-        check('未拥有时不误报已收藏', ov.ownedTotal === 0, ov.ownedTotal);
-        check('每个系列都有 owned/total', ov.series.every(s => s.owned === 0 && s.total === 6), ov.series.map(s => [s.owned, s.total]));
+        check('至少包含默认展台', ov.pedestals.some(p => p.id === 610100 && p.owned), ov.pedestals.slice(0, 3));
+        check('典藏收藏点取自背包', ov.points.collection === 5320, ov.points);
+    }
+
+    section('3c. 升星/展示/领奖 请求体与抓包逐字节一致');
+    {
+        calls.length = 0;
+        await collection.upgradeCollection(700005).catch(() => null);
+        await collection.switchSceneDisplay(700005).catch(() => null);
+        await collection.switchSceneDisplay(0).catch(() => null);
+        await collection.claimCollectionReward().catch(() => null);
+
+        const hex = calls.map(c => `${c.key.split('.').pop()}=${c.body.toString('hex')}`);
+        check('升星请求 = 080110e5dc2a', hex.includes('UpgradeCollection=080110e5dc2a'), hex);
+        check('展示请求 = 0a0a08011206080110e5dc2a', hex.includes('SwitchSceneDisplay=0a0a08011206080110e5dc2a'), hex);
+        check('清空展示 = 0a0a08011206080110001800', hex.includes('SwitchSceneDisplay=0a0a08011206080110001800'), hex);
+        check('领奖请求 = 0801', hex.includes('ClaimCollectionReward=0801'), hex);
     }
 
     section('4. slot=5 限购解析');
@@ -234,6 +298,45 @@ function purchaseReply(reqBody) {
         check('开的是 101619', uses[0] && uses[0].itemId === 101619, uses[0]);
         check('开箱数量取背包实际数量 5(不是本次购买的 16)', uses[0] && uses[0].count === 5, uses[0]);
         check('开箱数量 != 购买数量', uses[0] && uses[0].count !== r.bought, { used: uses[0], bought: r.bought });
+    }
+
+    section('5b. 自动流程 runCollectionTasks(有货才升星 / 有新增才领奖)');
+    {
+        // 场景A: 展示位为空(首包) + 背包回放抓包(没有精灵) + 评分 0/0
+        collectionReplyHex = '0a220801120e08e4dc2a180120cb97bbd7062801120e08e5dc2a1801209098bbd70628011200';
+        bagOverride = null;
+        calls.length = 0;
+        const a = await collection.runCollectionTasks({});
+        const kindsA = calls.map(c => c.key.split('.').pop());
+        check('展示位为空 → 自动摆上', kindsA.includes('SwitchSceneDisplay'), kindsA);
+        check('背包没有同名精灵 → 不发升星', !kindsA.includes('UpgradeCollection'), kindsA);
+        check('评分 0/0 → 不领奖', !kindsA.includes('ClaimCollectionReward'), kindsA);
+        check('流程 ok', a.ok === true, a);
+
+        // 场景B: 末包(已 1 星, 展示已设, 评分 1200/1000)
+        collectionReplyHex = '0a280801120e08e5dc2a10011801209098bbd706120e08e4dc2a1001180120cb97bbd70628e80730b009120a08011206080110e5dc2a';
+        calls.length = 0;
+        const b = await collection.runCollectionTasks({});
+        const kindsB = calls.map(c => c.key.split('.').pop());
+        check('展示已设置 → 不重复切换', !kindsB.includes('SwitchSceneDisplay'), kindsB);
+        check('无库存 → 不升星', !kindsB.includes('UpgradeCollection'), kindsB);
+        check('评分 1200 > 已领 1000 → 领奖', kindsB.includes('ClaimCollectionReward'), kindsB);
+        check('领奖结果带回服务端评分', b.claimed && b.claimed.totalScore === 1200, b.claimed);
+
+        // 场景C: 背包里只有 1 个桃米 → 只升 1 次(库存耗尽就停)
+        const { types } = require(`${SB}/src/utils/proto`);
+        originalBagReply = types.BagReply.encode(types.BagReply.create({
+            item_bag: { items: [{ id: 700005, count: 1 }] },
+        })).finish();
+        calls.length = 0;
+        const c = await collection.runCollectionTasks({});
+        const upgrades = calls.filter(x => x.key.endsWith('UpgradeCollection'));
+        check('背包有 1 个桃米 → 只升 1 次', upgrades.length === 1, upgrades.length);
+        check('升的是 700005 (080110e5dc2a)', upgrades[0] && upgrades[0].body.toString('hex') === '080110e5dc2a', upgrades.map(u => u.body.toString('hex')));
+        originalBagReply = null;
+
+        collectionReplyHex = null;
+        bagOverride = null;
     }
 
     section('6. type=33 藏品礼包可被仓库自动开启');
