@@ -219,6 +219,7 @@ async function runDailyRoutines(force = false) {
 
 let lastTreasureRobAt = 0;
 let lastBuyBookSkipLog = '';
+let lastLimitedPackSkipLog = '';
 
 function stopDailyRoutineTimer() {
     workerScheduler.clear('daily_routine_interval');
@@ -385,6 +386,7 @@ async function runBuyLimitedPacks(reason = 'interval') {
     try {
         const r = await checkAndBuyLimitedPacks(false);
         if (r.bought > 0) {
+            lastLimitedPackSkipLog = '';
             log('商城', `限时礼包: 本次购买 ${r.bought} 个(开包 ${r.opened}) `
                 + r.goods.map(g => `${g.name}买${g.bought}`).join('、'), {
                 module: 'mall', event: '限时礼包', result: 'ok', trigger: reason,
@@ -395,8 +397,6 @@ async function runBuyLimitedPacks(reason = 'interval') {
             log('商城', `限时礼包: 本次未买 — ${r.skipped}`, {
                 module: 'mall', event: '限时礼包', result: 'skip', trigger: reason,
             });
-        } else if (r.bought > 0) {
-            lastLimitedPackSkipLog = '';
         }
         return r;
     } catch (e) {
