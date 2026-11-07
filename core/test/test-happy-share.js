@@ -102,7 +102,7 @@ function installStub() {
         const fsx = mgx.parseTop(Buffer.from(body));
         const group = Number((fsx.find(f => f.f === 1) || {}).v) || 0;
         const cmd = Number((fsx.find(f => f.f === 2) || {}).v) || 0;
-        calls.push({ key, group, cmd });
+        calls.push({ key, group, cmd, bodyLen: Buffer.from(body || []).length });
         if (key === OPERATE) {
             // ===== 2026-11-05 新版(8 档): 「一次请求领完所有可领档位」回放 =====
             if (stubMode === 'multi') {
@@ -313,6 +313,49 @@ function installStub() {
         const r2 = await happy.claimTierRewards();
         check('无可领档位时跳过', r2.ok === true && r2.skipped === true, r2);
         check('跳过时不发 cmd=71', calls.filter(c => c.cmd === 71).length === 0, calls.map(c => c.cmd));
+
+        stubMode = 'legacy';
+        phase5 = 0;
+        happy.setSeason(2026092501);
+    }
+
+    section('11. 2026-11-07 抓包: 领取请求体必须只有 group+cmd(修复"永远不自动领")');
+    {
+        // 真实客户端(2026-10-15 / 11-05 / 11-07 三次抓包)的快乐不独享 Operate 请求都是 **8 字节**:
+        //   08 <group varint> 10 <cmd varint>  —— 不带任何 payload 字段
+        // 对照: 同一个抓包里奶茶活动(2026110101)的 cmd 63/55/58 都带 payload(11 字节),
+        //       说明"带空 payload"只在快乐不独享这里是错的。
+        const CAP7 = path.join(__dirname, '..', '..', 'wx-code-grabber', 'captures', '20261107-112023_典藏室和快乐独享领取.decoded.jsonl');
+        const raw = fs.readFileSync(CAP7, 'utf8').split('\n').filter(Boolean).map(l => JSON.parse(l));
+        const ops = raw.filter(j => j.key.endsWith('ActivityService.Operate') && j.dir === 'C->S');
+        const mgx = require(`${SB}/src/services/mengchong`);
+        const bodyOfOp = (o) => Buffer.from(o.bodyHex || '', 'hex');
+        const groupOf = (b) => Number((mgx.parseTop(b).find(x => x.f === 1) || {}).v || 0);
+
+        const happyOps = ops.filter(o => groupOf(bodyOfOp(o)) === 2026110104);
+        check('抓包里有快乐不独享的 Operate 请求', happyOps.length > 0, ops.map(o => groupOf(bodyOfOp(o))));
+        check('快乐不独享请求体全是 8 字节(只有 group+cmd)',
+            happyOps.every(o => bodyOfOp(o).length === 8), happyOps.map(o => bodyOfOp(o).length));
+        check('这些请求确实只有 #1 group + #2 cmd 两个字段',
+            happyOps.every((o) => {
+                const fsx = mgx.parseTop(bodyOfOp(o));
+                return fsx.length === 2 && fsx[0].f === 1 && fsx[1].f === 2;
+            }), happyOps.map(o => mgx.parseTop(bodyOfOp(o)).map(x => x.f)));
+
+        // 对照组: 同样方法看奶茶活动 → 是带 payload 的 11 字节, 证明不是"抓包丢字段"
+        const milkOps = ops.filter(o => groupOf(bodyOfOp(o)) === 2026110101);
+        check('对照: 奶茶活动请求带 payload(11 字节)', milkOps.some(o => bodyOfOp(o).length === 11), milkOps.map(o => bodyOfOp(o).length));
+
+        // 服务层: 打开活动发出的请求必须是 8 字节(桩里记了 bodyLen)
+        happy.setSeason(2026110104);
+        stubMode = 'multi';
+        phase5 = 0;
+        calls.length = 0;
+        await happy.getHappyStatus();
+        const opCalls = calls.filter(c => c.key === OPERATE);
+        check('getHappyStatus 发出的 Operate 请求 8 字节',
+            opCalls.length > 0 && opCalls.every(c => c.bodyLen === 8), opCalls.map(c => c.bodyLen));
+        check('打开活动用 cmd=70', opCalls.some(c => c.cmd === 70), opCalls.map(c => c.cmd));
 
         stubMode = 'legacy';
         phase5 = 0;

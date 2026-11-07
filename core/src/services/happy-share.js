@@ -37,6 +37,14 @@
  *   不需要活动侧再发 Use 请求(活动结束后未领的档位就没了, 所以档位必须尽早领)。
  *
  * 上行 payload 加密未见 → 一律空 payload 试发 + 状态双重校验
+ *
+ * ════════ 2026-11-07 抓包纠正: 请求体必须"只有 group + cmd" ════════
+ * 实测真实客户端三次(20261015 / 20261105 / 20261107)发的 Operate 请求都是 **8 字节**:
+ *   `08 <group varint> 10 <cmd varint>` —— 不带任何 payload 字段。
+ * 旧代码传 FIELD_OPEN/FIELD_HAPPY/FIELD_TIER 当 payload 字段号, 会多发一个空 bytes 字段
+ * (`82 0a 00` / `9a 09 00` ...), 请求变成 10~11 字节, 服务端按"参数错误"拒绝 →
+ * 表现为"快乐不独享永远不会自动领"(定时器在跑、状态能读、领取就是不动)。
+ * 现在统一传 payloadField=0(encodeOperateRaw 里 `if (payloadField)` 直接跳过)。
  */
 const { log, toNum, toInt, sleep } = require('../utils/utils');
 const { getItemById, getItemImageById } = require('../config/gameConfig');
@@ -70,6 +78,7 @@ function setSeason(group) {
     activeGroup = hit.group;
     return true;
 }
+/** 结果字段号(只用于读回包, 不用于构造请求 —— 请求体只有 group+cmd) */
 const FIELD_OPEN = 153;
 const FIELD_HAPPY = 157;
 const FIELD_TIER = 154;
@@ -152,12 +161,12 @@ function parseRewardResult(resultHex) {
 
 /** 读活动状态(打开活动 cmd=69, 顺带拿快乐包id) */
 async function getHappyStatus() {
-    let r = await operateRaw(activeGroup, activeSeason.open, FIELD_OPEN, Buffer.alloc(0));
+    let r = await operateRaw(activeGroup, activeSeason.open, 0);
     if (r.errorCode !== 0) {
         // 换期时 group 会变: 失败就换另一个组再试一次
         const other = activeGroup === GROUP_S4 ? GROUP_S3 : GROUP_S4;
         const otherSeason = SEASONS.find((x) => x.group === other) || activeSeason;
-        const r2 = await operateRaw(other, otherSeason.open, FIELD_OPEN, Buffer.alloc(0)).catch(() => null);
+        const r2 = await operateRaw(other, otherSeason.open, 0).catch(() => null);
         if (r2 && r2.errorCode === 0) {
             setSeason(other);   // 组与命令号一起切换
             log('活动', `快乐不独享: 活动组已切换为 ${activeGroup}`, { module: 'activity', event: '快乐不独享', result: 'ok' });
@@ -185,7 +194,7 @@ async function getHappyStatus() {
 async function claimDailyHappy() {
     const before = await getHappyStatus();
     if (!before.ok) return { ok: false, reason: before.reason };
-    const r = await operateRaw(activeGroup, activeSeason.claimHappy, FIELD_HAPPY, Buffer.alloc(0));
+    const r = await operateRaw(activeGroup, activeSeason.claimHappy, 0);
     if (r.errorCode !== 0) return { ok: false, reason: `领取快乐值失败 code=${r.errorCode}` };
     const gained = r.resultHex ? toInt((findField(parseTop(Buffer.from(r.resultHex, 'hex')), 2) || {}).v) : 0;
     await sleep(1200);
@@ -201,7 +210,7 @@ async function claimDailyHappy() {
         const { reportShare } = require('./share');
         await reportShare();
         await sleep(1500);
-        const r2 = await operateRaw(activeGroup, activeSeason.claimHappy, FIELD_HAPPY, Buffer.alloc(0));
+        const r2 = await operateRaw(activeGroup, activeSeason.claimHappy, 0);
         if (r2.errorCode === 0) {
             await sleep(1200);
             after = await getHappyStatus().catch(() => null);
@@ -236,7 +245,7 @@ async function claimTierRewards() {
     if (!targets.length) return { ok: true, claimed: [], skipped: true, reason: '没有达到门槛的档位', happy: st.happy, tiers: st.tiers };
 
     // 一次领完(服务端会处理所有状态=2 的档位)
-    const r = await operateRaw(activeGroup, activeSeason.claimTier, FIELD_TIER, Buffer.alloc(0));
+    const r = await operateRaw(activeGroup, activeSeason.claimTier, 0);
     if (r.errorCode !== 0) {
         return { ok: false, reason: `领取档位失败 code=${r.errorCode}`, claimed: [], happy: st.happy, tiers: st.tiers, targets };
     }
