@@ -742,6 +742,7 @@ const localAutomationSettings = ref({
   robDailyLimit: 20,
   buyBookEnabled: true,
   buyBookCount: 2,
+  limitedPackEnabled: true,
   autumnWishEnabled: true,
   fireworkEnabled: false,
   fireworkMode: 'self',
@@ -923,8 +924,9 @@ const stealthDirty = computed(() => !stealthSame(stealthPayload(), stealthSavedP
 async function saveStealthSettings() {
   const accountId = String(currentAccountId.value || '')
   if (!accountId || settingsLoading.value || settingsLoadError.value
-    || String(settingStore.settingsAccountId) !== accountId)
+    || String(settingStore.settingsAccountId) !== accountId) {
     return
+  }
   const saveEpoch = accountSaveEpoch
   const requestId = ++stealthSaveRequest
   const isCurrentSave = () => requestId === stealthSaveRequest
@@ -970,8 +972,9 @@ watch(
   () => {
     const accountId = String(currentAccountId.value || '')
     if (!accountId || !stealthDirty.value || settingsLoading.value || settingsLoadError.value
-      || String(settingStore.settingsAccountId) !== accountId)
+      || String(settingStore.settingsAccountId) !== accountId) {
       return
+    }
     if (stealthSaveTimer)
       clearTimeout(stealthSaveTimer)
     stealthSaveTimer = setTimeout(() => {
@@ -1138,6 +1141,7 @@ function syncLocalAutomationSettings(submitted?: any) {
     localAutomationSettings.value.robDailyLimit = settings.value.robDailyLimit ?? 20
     localAutomationSettings.value.buyBookEnabled = settings.value.buyBookEnabled ?? true
     localAutomationSettings.value.buyBookCount = settings.value.buyBookCount ?? 2
+    localAutomationSettings.value.limitedPackEnabled = settings.value.limitedPackEnabled ?? true
     localAutomationSettings.value.autumnWishEnabled = settings.value.autumnWishEnabled ?? true
     localAutomationSettings.value.fireworkEnabled = settings.value.fireworkEnabled ?? false
     localAutomationSettings.value.fireworkMode = settings.value.fireworkMode === 'friend' ? 'friend' : 'self'
@@ -1194,8 +1198,9 @@ function syncLocalAutomationSettings(submitted?: any) {
 async function saveStrategySettings() {
   const accountId = String(currentAccountId.value || '')
   if (!accountId || settingsLoading.value || settingsLoadError.value
-    || String(settingStore.settingsAccountId) !== accountId)
+    || String(settingStore.settingsAccountId) !== accountId) {
     return
+  }
   const saveEpoch = accountSaveEpoch
   const requestId = ++strategySaveRequest
   const isCurrentSave = () => requestId === strategySaveRequest
@@ -1401,6 +1406,39 @@ async function buyBooksNow() {
   }
 }
 
+/** 限时藏品礼包: 立即按服务端限购买满 + 买完开包 */
+const limitedPackRunning = ref(false)
+const limitedPackResult = ref('')
+async function buyLimitedPacksNow() {
+  const accountId = String(currentAccountId.value || '')
+  if (!accountId) {
+    showAlert('请先选择账号', 'danger')
+    return
+  }
+  limitedPackRunning.value = true
+  limitedPackResult.value = ''
+  try {
+    const res = await api.post('/api/mall/buy-limited-packs', {}, { headers: { 'x-account-id': accountId } })
+    if (apiError(res, res.data?.data)) {
+      limitedPackResult.value = apiError(res, res.data?.data) || '购买失败'
+      return
+    }
+    const d = res.data?.data || {}
+    const parts = (d.goods || []).map((g: any) => g.bought > 0
+      ? `${g.name} 买 ${g.bought} 个${g.opened ? `（开包 ${g.opened}）` : ''}`
+      : `${g.name} 跳过：${g.skipped || '已达上限'}`)
+    limitedPackResult.value = parts.length
+      ? `${d.bought > 0 ? `本次共买 ${d.bought} 个` : '未购买'}｜${parts.join('；')}`
+      : (d.skipped || '商城暂时没有藏品礼包')
+  }
+  catch (e: any) {
+    limitedPackResult.value = e?.response?.data?.error || e?.message || '购买失败（账号未运行？）'
+  }
+  finally {
+    limitedPackRunning.value = false
+  }
+}
+
 const treasureRunning = ref(false)
 async function runTreasureNow() {
   if (!currentAccountId.value)
@@ -1441,8 +1479,9 @@ async function runTreasureNow() {
 async function saveAutomationSettings() {
   const accountId = String(currentAccountId.value || '')
   if (!accountId || settingsLoading.value || settingsLoadError.value
-    || String(settingStore.settingsAccountId) !== accountId)
+    || String(settingStore.settingsAccountId) !== accountId) {
     return
+  }
   const saveEpoch = accountSaveEpoch
   const requestId = ++automationSaveRequest
   const isCurrentSave = () => requestId === automationSaveRequest
@@ -1808,7 +1847,7 @@ async function onBackupFileChange(ev: Event) {
         <button
           v-for="tab in tabs"
           :key="tab.key"
-          class="flex min-w-0 items-center justify-center gap-2 rounded-md px-3 py-2 text-sm font-medium transition-all sm:justify-start sm:px-4"
+          class="min-w-0 flex items-center justify-center gap-2 rounded-md px-3 py-2 text-sm font-medium transition-all sm:justify-start sm:px-4"
           :class="activeTab === tab.key
             ? 'text-white shadow-sm'
             : 'text-gray-600 hover:bg-gray-100 dark:text-gray-400 dark:hover:bg-gray-700'"
@@ -2481,6 +2520,14 @@ async function onBackupFileChange(ev: Event) {
                 </BaseButton>
                 <span v-if="buyBookResult" class="text-xs text-gray-600 dark:text-gray-300">{{ buyBookResult }}</span>
               </div>
+              <!-- 子任务: 限时藏品礼包(按服务端限购买满 + 买完开包) -->
+              <div class="flex flex-wrap items-center gap-3 border border-gray-200 rounded px-2.5 py-2 dark:border-gray-700">
+                <BaseSwitch v-model="localAutomationSettings.limitedPackEnabled" label="自动买限时藏品礼包" />
+                <BaseButton variant="secondary" size="sm" :loading="limitedPackRunning" @click="buyLimitedPacksNow">
+                  立即买到上限
+                </BaseButton>
+                <span v-if="limitedPackResult" class="text-xs text-gray-600 dark:text-gray-300">{{ limitedPackResult }}</span>
+              </div>
               <template #note>
                 每次抢夺消耗 1 张挑战书（胜负都算），按对方可博弈资金挑书面值；150 金豆豆/个，游戏每日限购 2 个。
                 手动夺宝在「萌宠游记 → 夺宝（抢宝）」。
@@ -2615,245 +2662,245 @@ async function onBackupFileChange(ev: Event) {
             </AutoTaskCard>
           </div>
 
-        <!-- 防封号(低调)模式 -->
-        <div class="border border-amber-200 rounded bg-amber-50 p-3 space-y-3 dark:border-amber-900/40 dark:bg-amber-900/10">
-          <div class="flex flex-wrap items-center justify-between gap-2">
-            <div>
-              <div class="text-sm text-amber-800 font-medium dark:text-amber-300">
-                防封号（低调模式）
+          <!-- 防封号(低调)模式 -->
+          <div class="border border-amber-200 rounded bg-amber-50 p-3 space-y-3 dark:border-amber-900/40 dark:bg-amber-900/10">
+            <div class="flex flex-wrap items-center justify-between gap-2">
+              <div>
+                <div class="text-sm text-amber-800 font-medium dark:text-amber-300">
+                  防封号（低调模式）
+                </div>
+                <div class="mt-0.5 text-xs text-gray-600 dark:text-gray-400">
+                  不长期在线：在线一小段时间 → 离线一大段时间循环；作物成熟时自动提前上线收取。
+                </div>
+                <div class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                  与「自动取码」配合：取码只更新 Code，不会打断正在进行的在线会话；离线期间也不会被取码自动拉起。
+                </div>
               </div>
-              <div class="mt-0.5 text-xs text-gray-600 dark:text-gray-400">
-                不长期在线：在线一小段时间 → 离线一大段时间循环；作物成熟时自动提前上线收取。
-              </div>
-              <div class="mt-1 text-xs text-gray-500 dark:text-gray-400">
-                与「自动取码」配合：取码只更新 Code，不会打断正在进行的在线会话；离线期间也不会被取码自动拉起。
-              </div>
+              <BaseSwitch v-model="localAutomationSettings.stealthEnabled" label="启用" />
             </div>
-            <BaseSwitch v-model="localAutomationSettings.stealthEnabled" label="启用" />
-          </div>
 
-          <div v-if="localAutomationSettings.stealthEnabled" class="space-y-2">
-            <div class="flex flex-wrap items-end gap-3">
-              <BaseInput
-                v-model.number="localAutomationSettings.stealthOnlineMinMinutes"
-                label="单次在线最短 (分钟)"
-                type="number"
-                min="1"
-                max="180"
-              />
-              <BaseInput
-                v-model.number="localAutomationSettings.stealthOnlineMaxMinutes"
-                label="单次在线最长 (分钟)"
-                type="number"
-                min="1"
-                max="180"
-              />
-            </div>
-            <div class="flex flex-wrap items-end gap-3">
-              <BaseInput
-                v-model.number="localAutomationSettings.stealthOfflineMinMinutes"
-                label="离线最短 (分钟)"
-                type="number"
-                min="1"
-                max="1440"
-              />
-              <BaseInput
-                v-model.number="localAutomationSettings.stealthOfflineMaxMinutes"
-                label="离线最长 (分钟)"
-                type="number"
-                min="1"
-                max="1440"
-              />
-            </div>
-            <BaseSwitch v-model="localAutomationSettings.stealthWakeForRipe" label="作物成熟时优先上线收取（推荐）" />
+            <div v-if="localAutomationSettings.stealthEnabled" class="space-y-2">
+              <div class="flex flex-wrap items-end gap-3">
+                <BaseInput
+                  v-model.number="localAutomationSettings.stealthOnlineMinMinutes"
+                  label="单次在线最短 (分钟)"
+                  type="number"
+                  min="1"
+                  max="180"
+                />
+                <BaseInput
+                  v-model.number="localAutomationSettings.stealthOnlineMaxMinutes"
+                  label="单次在线最长 (分钟)"
+                  type="number"
+                  min="1"
+                  max="180"
+                />
+              </div>
+              <div class="flex flex-wrap items-end gap-3">
+                <BaseInput
+                  v-model.number="localAutomationSettings.stealthOfflineMinMinutes"
+                  label="离线最短 (分钟)"
+                  type="number"
+                  min="1"
+                  max="1440"
+                />
+                <BaseInput
+                  v-model.number="localAutomationSettings.stealthOfflineMaxMinutes"
+                  label="离线最长 (分钟)"
+                  type="number"
+                  min="1"
+                  max="1440"
+                />
+              </div>
+              <BaseSwitch v-model="localAutomationSettings.stealthWakeForRipe" label="作物成熟时优先上线收取（推荐）" />
 
-            <!-- 实时状态 -->
-            <div class="rounded bg-white p-2 text-xs dark:bg-gray-800">
-              <div class="mb-1 flex flex-wrap items-center justify-between gap-x-2 gap-y-1">
-                <span class="shrink-0 text-gray-500 dark:text-gray-400">当前账号状态</span>
-                <span v-if="stealthSaveState === 'saving'" class="min-w-0 text-blue-500">正在保存…</span>
-                <span v-else-if="stealthSaveState === 'error'" class="min-w-0 break-words text-red-500">保存失败：{{ stealthSaveError }}</span>
-                <span v-else-if="stealthDirty" class="min-w-0 text-amber-600 dark:text-amber-400">有未保存的修改…</span>
-                <span v-else-if="stealthSaveState === 'saved'" class="min-w-0 text-gray-400">已自动保存 {{ stealthSavedAt }}</span>
-                <span v-else class="min-w-0 text-gray-400">修改后自动保存</span>
-              </div>
-              <div v-if="stealthStatusError" class="mb-2 rounded bg-red-50 px-2 py-1 text-red-600 dark:bg-red-900/30 dark:text-red-300">
-                {{ stealthStatusError }}
-              </div>
-              <div v-if="myStealth" class="space-y-1">
-                <div class="flex flex-wrap items-center gap-2">
-                  <span
-                    class="rounded px-1.5 py-0.5"
-                    :class="myStealth.phase === 'online'
-                      ? 'bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-300'
-                      : myStealth.phase === 'offline'
-                        ? 'bg-gray-200 text-gray-600 dark:bg-gray-700 dark:text-gray-300'
-                        : 'bg-gray-100 text-gray-500 dark:bg-gray-800 dark:text-gray-400'"
-                  >
-                    {{ !myStealth.enabled
-                      ? '未启用'
-                      : myStealth.phase === 'online'
-                        ? '在线中'
+              <!-- 实时状态 -->
+              <div class="rounded bg-white p-2 text-xs dark:bg-gray-800">
+                <div class="mb-1 flex flex-wrap items-center justify-between gap-x-2 gap-y-1">
+                  <span class="shrink-0 text-gray-500 dark:text-gray-400">当前账号状态</span>
+                  <span v-if="stealthSaveState === 'saving'" class="min-w-0 text-blue-500">正在保存…</span>
+                  <span v-else-if="stealthSaveState === 'error'" class="min-w-0 break-words text-red-500">保存失败：{{ stealthSaveError }}</span>
+                  <span v-else-if="stealthDirty" class="min-w-0 text-amber-600 dark:text-amber-400">有未保存的修改…</span>
+                  <span v-else-if="stealthSaveState === 'saved'" class="min-w-0 text-gray-400">已自动保存 {{ stealthSavedAt }}</span>
+                  <span v-else class="min-w-0 text-gray-400">修改后自动保存</span>
+                </div>
+                <div v-if="stealthStatusError" class="mb-2 rounded bg-red-50 px-2 py-1 text-red-600 dark:bg-red-900/30 dark:text-red-300">
+                  {{ stealthStatusError }}
+                </div>
+                <div v-if="myStealth" class="space-y-1">
+                  <div class="flex flex-wrap items-center gap-2">
+                    <span
+                      class="rounded px-1.5 py-0.5"
+                      :class="myStealth.phase === 'online'
+                        ? 'bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-300'
                         : myStealth.phase === 'offline'
-                          ? '离线中'
-                          : '待调度' }}
-                  </span>
-                  <span v-if="myStealth.nextSwitchAt" class="text-gray-600 dark:text-gray-300">
-                    {{ myStealth.phase === 'online' ? '预计' : '预计' }}
-                    {{ fmtClock(myStealth.nextSwitchAt) }} {{ myStealth.phase === 'online' ? '下线' : '上线' }}
-                    ({{ fmtRemain(myStealth.nextSwitchInSec) }}后)
-                  </span>
+                          ? 'bg-gray-200 text-gray-600 dark:bg-gray-700 dark:text-gray-300'
+                          : 'bg-gray-100 text-gray-500 dark:bg-gray-800 dark:text-gray-400'"
+                    >
+                      {{ !myStealth.enabled
+                        ? '未启用'
+                        : myStealth.phase === 'online'
+                          ? '在线中'
+                          : myStealth.phase === 'offline'
+                            ? '离线中'
+                            : '待调度' }}
+                    </span>
+                    <span v-if="myStealth.nextSwitchAt" class="text-gray-600 dark:text-gray-300">
+                      {{ myStealth.phase === 'online' ? '预计' : '预计' }}
+                      {{ fmtClock(myStealth.nextSwitchAt) }} {{ myStealth.phase === 'online' ? '下线' : '上线' }}
+                      ({{ fmtRemain(myStealth.nextSwitchInSec) }}后)
+                    </span>
+                  </div>
+                  <div v-if="myStealth.lastReason" class="text-gray-500 dark:text-gray-400">
+                    {{ myStealth.lastReason }}
+                  </div>
+                  <div v-if="myStealth.ripeness && myStealth.ripeness.nextReadyAt" class="text-gray-400 dark:text-gray-500">
+                    下一批成熟: {{ fmtClock(myStealth.ripeness.nextReadyAt * 1000) }}
+                    <span v-if="myStealth.ripeness.ripeCount > 0">(当前有 {{ myStealth.ripeness.ripeCount }} 块地已成熟)</span>
+                  </div>
                 </div>
-                <div v-if="myStealth.lastReason" class="text-gray-500 dark:text-gray-400">
-                  {{ myStealth.lastReason }}
+                <div v-else class="text-gray-400 dark:text-gray-500">
+                  暂无状态记录（开启防封号后自动开始计时）
                 </div>
-                <div v-if="myStealth.ripeness && myStealth.ripeness.nextReadyAt" class="text-gray-400 dark:text-gray-500">
-                  下一批成熟: {{ fmtClock(myStealth.ripeness.nextReadyAt * 1000) }}
-                  <span v-if="myStealth.ripeness.ripeCount > 0">(当前有 {{ myStealth.ripeness.ripeCount }} 块地已成熟)</span>
+                <div class="mt-2 flex gap-2 border-t border-gray-100 pt-2 dark:border-gray-700">
+                  <BaseButton variant="secondary" size="sm" :loading="stealthLoading" @click="handleForceStealth('offline')">
+                    立即下线
+                  </BaseButton>
+                  <BaseButton variant="secondary" size="sm" :loading="stealthLoading" @click="handleForceStealth('online')">
+                    立即上线
+                  </BaseButton>
                 </div>
-              </div>
-              <div v-else class="text-gray-400 dark:text-gray-500">
-                暂无状态记录（开启防封号后自动开始计时）
-              </div>
-              <div class="mt-2 flex gap-2 border-t border-gray-100 pt-2 dark:border-gray-700">
-                <BaseButton variant="secondary" size="sm" :loading="stealthLoading" @click="handleForceStealth('offline')">
-                  立即下线
-                </BaseButton>
-                <BaseButton variant="secondary" size="sm" :loading="stealthLoading" @click="handleForceStealth('online')">
-                  立即上线
-                </BaseButton>
               </div>
             </div>
           </div>
-        </div>
 
-        <div v-if="localAutomationSettings.automation.fertilizer_buy_organic || localAutomationSettings.automation.fertilizer_buy_normal" class="rounded bg-green-50 p-3 text-sm space-y-3 dark:bg-green-900/20">
-          <div v-if="localAutomationSettings.automation.fertilizer_buy_organic" class="space-y-2">
-            <div class="text-green-700 font-medium dark:text-green-400">
-              有机化肥设置
+          <div v-if="localAutomationSettings.automation.fertilizer_buy_organic || localAutomationSettings.automation.fertilizer_buy_normal" class="rounded bg-green-50 p-3 text-sm space-y-3 dark:bg-green-900/20">
+            <div v-if="localAutomationSettings.automation.fertilizer_buy_organic" class="space-y-2">
+              <div class="text-green-700 font-medium dark:text-green-400">
+                有机化肥设置
+              </div>
+              <div class="flex flex-wrap gap-4">
+                <BaseInput
+                  v-model.number="localAutomationSettings.fertilizerBuyOrganicCount"
+                  label="购买数量"
+                  type="number"
+                  min="1"
+                  max="10000"
+                />
+                <BaseInput
+                  v-model.number="localAutomationSettings.fertilizerBuyOrganicThresholdHours"
+                  label="触发阈值 (小时)"
+                  type="number"
+                  min="1"
+                  max="990"
+                />
+              </div>
+            </div>
+            <div v-if="localAutomationSettings.automation.fertilizer_buy_normal" class="space-y-2">
+              <div class="text-green-700 font-medium dark:text-green-400">
+                无机化肥设置
+              </div>
+              <div class="flex flex-wrap gap-4">
+                <BaseInput
+                  v-model.number="localAutomationSettings.fertilizerBuyNormalCount"
+                  label="购买数量"
+                  type="number"
+                  min="1"
+                  max="10000"
+                />
+                <BaseInput
+                  v-model.number="localAutomationSettings.fertilizerBuyNormalThresholdHours"
+                  label="触发阈值 (小时)"
+                  type="number"
+                  min="1"
+                  max="990"
+                />
+              </div>
             </div>
             <div class="flex flex-wrap gap-4">
               <BaseInput
-                v-model.number="localAutomationSettings.fertilizerBuyOrganicCount"
-                label="购买数量"
+                v-model.number="localAutomationSettings.fertilizerBuyCheckIntervalMinutes"
+                label="检测间隔 (分钟)"
                 type="number"
                 min="1"
-                max="10000"
-              />
-              <BaseInput
-                v-model.number="localAutomationSettings.fertilizerBuyOrganicThresholdHours"
-                label="触发阈值 (小时)"
-                type="number"
-                min="1"
-                max="990"
+                max="1440"
               />
             </div>
-          </div>
-          <div v-if="localAutomationSettings.automation.fertilizer_buy_normal" class="space-y-2">
-            <div class="text-green-700 font-medium dark:text-green-400">
-              无机化肥设置
-            </div>
-            <div class="flex flex-wrap gap-4">
-              <BaseInput
-                v-model.number="localAutomationSettings.fertilizerBuyNormalCount"
-                label="购买数量"
-                type="number"
-                min="1"
-                max="10000"
-              />
-              <BaseInput
-                v-model.number="localAutomationSettings.fertilizerBuyNormalThresholdHours"
-                label="触发阈值 (小时)"
-                type="number"
-                min="1"
-                max="990"
-              />
-            </div>
-          </div>
-          <div class="flex flex-wrap gap-4">
-            <BaseInput
-              v-model.number="localAutomationSettings.fertilizerBuyCheckIntervalMinutes"
-              label="检测间隔 (分钟)"
-              type="number"
-              min="1"
-              max="1440"
-            />
-          </div>
-          <p class="text-xs text-gray-500 dark:text-gray-400">
-            系统会按照设定的检测间隔定时检测化肥容器剩余量，当低于触发阈值时自动购买。保存设置后会立即检测一次。同时开启两种化肥购买时，优先购买有机化肥。
-          </p>
-        </div>
-
-        <div v-if="localAutomationSettings.automation.friend" class="flex flex-wrap gap-4 rounded bg-blue-50 p-3 text-sm dark:bg-blue-900/20">
-          <BaseSwitch v-model="localAutomationSettings.automation.friend_steal" label="自动偷菜" />
-          <BaseSwitch v-model="localAutomationSettings.automation.friend_help" label="自动帮忙" />
-          <BaseSwitch v-model="localAutomationSettings.automation.friend_bad" label="自动捣乱" />
-          <BaseSwitch v-model="localAutomationSettings.automation.friend_help_exp_limit" label="经验满不帮忙" />
-        </div>
-
-        <div class="space-y-3">
-          <div class="border border-amber-200 rounded bg-amber-50/60 p-3 dark:border-amber-800/60 dark:bg-amber-900/10">
-            <div class="mb-2 text-sm text-amber-800 font-medium dark:text-amber-300">
-              施肥范围
-            </div>
-            <div class="grid grid-cols-2 gap-2 md:grid-cols-4">
-              <label
-                v-for="option in fertilizerLandTypeOptions"
-                :key="option.value"
-                class="flex cursor-pointer items-center gap-1.5 rounded bg-white px-2 py-1 text-xs text-gray-700 dark:bg-gray-800 dark:text-gray-300"
-              >
-                <input
-                  v-model="localAutomationSettings.automation.fertilizer_land_types"
-                  :value="option.value"
-                  type="checkbox"
-                  class="h-3.5 w-3.5"
-                >
-                <span>{{ option.label }}</span>
-              </label>
-            </div>
-            <p class="mt-2 text-xs text-gray-500 dark:text-gray-400">
-              施肥前会优先按土地类型过滤，仅对命中范围的地块执行施肥策略。
+            <p class="text-xs text-gray-500 dark:text-gray-400">
+              系统会按照设定的检测间隔定时检测化肥容器剩余量，当低于触发阈值时自动购买。保存设置后会立即检测一次。同时开启两种化肥购买时，优先购买有机化肥。
             </p>
           </div>
 
-          <BaseSelect
-            v-model="localAutomationSettings.automation.fertilizer"
-            label="施肥策略"
-            :options="fertilizerOptions"
-          />
-
-          <div class="flex items-center gap-4">
-            <BaseSwitch
-              v-model="localAutomationSettings.automation.fertilizer_multi_season"
-              label="多季补肥"
-            />
+          <div v-if="localAutomationSettings.automation.friend" class="flex flex-wrap gap-4 rounded bg-blue-50 p-3 text-sm dark:bg-blue-900/20">
+            <BaseSwitch v-model="localAutomationSettings.automation.friend_steal" label="自动偷菜" />
+            <BaseSwitch v-model="localAutomationSettings.automation.friend_help" label="自动帮忙" />
+            <BaseSwitch v-model="localAutomationSettings.automation.friend_bad" label="自动捣乱" />
+            <BaseSwitch v-model="localAutomationSettings.automation.friend_help_exp_limit" label="经验满不帮忙" />
           </div>
 
-          <div v-if="localAutomationSettings.automation.fertilizer === 'smart'" class="flex flex-wrap gap-4 rounded bg-amber-50 p-3 text-sm dark:bg-amber-900/20">
-            <BaseInput
-              v-model.number="localAutomationSettings.automation.fertilizer_smart_seconds"
-              label="快成熟判定秒数"
-              type="number"
-              min="30"
-              max="3600"
-              class="w-40"
-            />
-            <span class="flex items-end pb-2 text-xs text-gray-500 dark:text-gray-400">
-              距离成熟时间 ≤ 此秒数时施有机肥（默认300秒=5分钟）
-            </span>
-          </div>
-        </div>
+          <div class="space-y-3">
+            <div class="border border-amber-200 rounded bg-amber-50/60 p-3 dark:border-amber-800/60 dark:bg-amber-900/10">
+              <div class="mb-2 text-sm text-amber-800 font-medium dark:text-amber-300">
+                施肥范围
+              </div>
+              <div class="grid grid-cols-2 gap-2 md:grid-cols-4">
+                <label
+                  v-for="option in fertilizerLandTypeOptions"
+                  :key="option.value"
+                  class="flex cursor-pointer items-center gap-1.5 rounded bg-white px-2 py-1 text-xs text-gray-700 dark:bg-gray-800 dark:text-gray-300"
+                >
+                  <input
+                    v-model="localAutomationSettings.automation.fertilizer_land_types"
+                    :value="option.value"
+                    type="checkbox"
+                    class="h-3.5 w-3.5"
+                  >
+                  <span>{{ option.label }}</span>
+                </label>
+              </div>
+              <p class="mt-2 text-xs text-gray-500 dark:text-gray-400">
+                施肥前会优先按土地类型过滤，仅对命中范围的地块执行施肥策略。
+              </p>
+            </div>
 
-        <div class="flex justify-end gap-2 border-t pt-3 dark:border-gray-700">
-          <BaseButton
-            variant="primary"
-            size="sm"
-            :loading="automationSaving"
-            @click="saveAutomationSettings"
-          >
-            保存自动控制
-          </BaseButton>
-        </div>
+            <BaseSelect
+              v-model="localAutomationSettings.automation.fertilizer"
+              label="施肥策略"
+              :options="fertilizerOptions"
+            />
+
+            <div class="flex items-center gap-4">
+              <BaseSwitch
+                v-model="localAutomationSettings.automation.fertilizer_multi_season"
+                label="多季补肥"
+              />
+            </div>
+
+            <div v-if="localAutomationSettings.automation.fertilizer === 'smart'" class="flex flex-wrap gap-4 rounded bg-amber-50 p-3 text-sm dark:bg-amber-900/20">
+              <BaseInput
+                v-model.number="localAutomationSettings.automation.fertilizer_smart_seconds"
+                label="快成熟判定秒数"
+                type="number"
+                min="30"
+                max="3600"
+                class="w-40"
+              />
+              <span class="flex items-end pb-2 text-xs text-gray-500 dark:text-gray-400">
+                距离成熟时间 ≤ 此秒数时施有机肥（默认300秒=5分钟）
+              </span>
+            </div>
+          </div>
+
+          <div class="flex justify-end gap-2 border-t pt-3 dark:border-gray-700">
+            <BaseButton
+              variant="primary"
+              size="sm"
+              :loading="automationSaving"
+              @click="saveAutomationSettings"
+            >
+              保存自动控制
+            </BaseButton>
+          </div>
         </div>
       </div>
 

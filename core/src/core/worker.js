@@ -9,14 +9,14 @@ if (parentPort && workerData && workerData.startupMode === 'code_refresh') {
     process.env.FARM_STARTUP_MODE = 'code_refresh';
 }
 const { getLevelExpProgress } = require('../config/gameConfig');
-const { getAutomation, getPreferredSeed, getConfigSnapshot, applyConfigSnapshot, getBuyBookConfig, getAutumnWishConfig, getHappyShareEnabled, getMilkTeaConfig, getActivityStatus, getAdGiftEnabled } = require('../models/store');
+const { getAutomation, getPreferredSeed, getConfigSnapshot, applyConfigSnapshot, getBuyBookConfig, getAutumnWishConfig, getHappyShareEnabled, getMilkTeaConfig, getActivityStatus, getAdGiftEnabled, getLimitedPackConfig } = require('../models/store');
 const { checkAndClaimEmails } = require('../services/email');
 const { getEmailDailyState } = require('../services/email');
 const { checkFarm, startFarmCheckLoop, stopFarmCheckLoop, refreshFarmCheckLoop, getLandsDetail, getAvailableSeeds, buySeed, runFarmOperation, runFertilizerByConfig, operateSingleLand } = require('../services/farm');
 const { checkFriends, startFriendCheckLoop, stopFriendCheckLoop, refreshFriendCheckLoop, runBadOnceOnStartup, isHelpExpLimitReached, getFriendsList, getFriendLandsDetail, doFriendOperation } = require('../services/friend');
 const { getInteractRecords } = require('../services/interact');
 const { processInviteCodes } = require('../services/invite');
-const { autoBuyOrganicFertilizer, autoBuyFertilizer, checkAndBuyFertilizerBoth, buyFreeGifts, getFreeGiftDailyState, checkAndBuyChallengeBooks } = require('../services/mall');
+const { autoBuyOrganicFertilizer, autoBuyFertilizer, checkAndBuyFertilizerBoth, buyFreeGifts, getFreeGiftDailyState, checkAndBuyChallengeBooks, checkAndBuyLimitedPacks } = require('../services/mall');
 const { getMallCatalog, purchaseCatalogGoods } = require('../services/mall');
 const treasureRob = require('../services/treasure-rob');
 const autumnWish = require('../services/autumn-wish');
@@ -202,6 +202,8 @@ async function runDailyRoutines(force = false) {
         await require('../services/mengchong').checkAndRunMengchongTasks();
         // 每日购买中级挑战书(150 金豆豆/个, 数量可在设置里调)
         await runBuyChallengeBooks('daily_routine');
+        // 限时礼包(藏品礼包): 按服务端限购买满 + 买完开包
+        await runBuyLimitedPacks('daily_routine');
         // 秋祈良愿: 每日祈愿领奖 + 可选放烟花
         await runAutumnWish('daily_routine');
         // 快乐不独享: 每日快乐值 + 档位奖励
@@ -224,6 +226,7 @@ function stopDailyRoutineTimer() {
     workerScheduler.clear('treasure_rob_interval');
     workerScheduler.clear('escort_settle_interval');
     workerScheduler.clear('buy_book_interval');
+    workerScheduler.clear('limited_pack_interval');
     workerScheduler.clear('autumn_wish_interval');
     workerScheduler.clear('happy_share_interval');
     workerScheduler.clear('ad_gift_interval');
@@ -370,6 +373,38 @@ async function runHappyShare(reason = 'interval') {
  * 于是中途打开开关要等到第二天才生效。现在每 10 分钟自查一次:
  *   已按目标买满当天 → 直接返回(零网络请求), 有缺口才去商城买。
  */
+/**
+ * 限时礼包(藏品礼包): 按服务端限购买满, 买完立刻开包
+ * 协议/规则见 services/mall.js checkAndBuyLimitedPacks()
+ * 用 30 分钟自查: 商品是活动限时上架, 限购买满后接口会返回 remaining=0, 不会重复买。
+ */
+async function runBuyLimitedPacks(reason = 'interval') {
+    if (!canRunTasks()) return { skipped: true, reason: 'offline' };
+    const cfg = getLimitedPackConfig();
+    if (!cfg.enabled) return { skipped: true, reason: 'disabled' };
+    try {
+        const r = await checkAndBuyLimitedPacks(false);
+        if (r.bought > 0) {
+            log('商城', `限时礼包: 本次购买 ${r.bought} 个(开包 ${r.opened}) `
+                + r.goods.map(g => `${g.name}买${g.bought}`).join('、'), {
+                module: 'mall', event: '限时礼包', result: 'ok', trigger: reason,
+            });
+        } else if (r.skipped && r.skipped !== lastLimitedPackSkipLog) {
+            // 跳过原因变了才记一条, 避免每 30 分钟刷屏
+            lastLimitedPackSkipLog = r.skipped;
+            log('商城', `限时礼包: 本次未买 — ${r.skipped}`, {
+                module: 'mall', event: '限时礼包', result: 'skip', trigger: reason,
+            });
+        } else if (r.bought > 0) {
+            lastLimitedPackSkipLog = '';
+        }
+        return r;
+    } catch (e) {
+        log('商城', `限时礼包购买失败: ${e.message}`, { module: 'mall', event: '限时礼包', result: 'error', trigger: reason });
+        return { ok: false, error: e.message };
+    }
+}
+
 async function runBuyChallengeBooks(reason = 'interval') {
     if (!canRunTasks()) return { skipped: true, reason: 'offline' };
     const cfg = getBuyBookConfig();
@@ -433,6 +468,10 @@ function startDailyRoutineTimer() {
     // 每日购买中级挑战书: 每 10 分钟自查(买满当天就不再发请求)
     workerScheduler.setIntervalTask('buy_book_interval', 10 * 60 * 1000, () => {
         runBuyChallengeBooks('interval').catch(() => null);
+    }, { preventOverlap: true });
+    // 限时藏品礼包: 每 30 分钟自查(服务端限购买满后不会再买; 上架/补货时能较快跟上)
+    workerScheduler.setIntervalTask('limited_pack_interval', 30 * 60 * 1000, () => {
+        runBuyLimitedPacks('interval').catch(() => null);
     }, { preventOverlap: true });
     // 秋祈良愿(每日祈愿 + 可选放烟花): 每 20 分钟自查一次
     workerScheduler.setIntervalTask('autumn_wish_interval', 20 * 60 * 1000, () => {
@@ -1556,6 +1595,18 @@ async function handleApiCall(msg) {
             case 'useFirework': {
                 const fo = args[0] || {};
                 result = await autumnWish.useFirework({ mode: fo.mode, friendGid: fo.friendGid, itemId: fo.itemId });
+                break;
+            }
+            case 'getCollectionOverview':
+                result = await require('../services/collection').getCollectionOverview(args[0] || {});
+                break;
+            case 'buyLimitedPacks': {
+                const r = await require('../services/mall').checkAndBuyLimitedPacks(true);
+                log('商城', `手动购买限时礼包: ${r.bought > 0 ? `成功 ${r.bought} 个(开包 ${r.opened})` : `未购买(${r.skipped || '未知'})`}` +
+                    r.goods.map(g => ` | ${g.name}: ${g.bought ? `买${g.bought}` : (g.skipped || '跳过')}`).join(''), {
+                    module: 'mall', event: '限时礼包', result: r.bought > 0 ? 'ok' : 'warn', manual: true,
+                });
+                result = r;
                 break;
             }
             case 'buyChallengeBooks': {

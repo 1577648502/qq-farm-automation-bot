@@ -84,6 +84,7 @@ export interface SettingsState {
   robDailyLimit: number
   buyBookEnabled: boolean
   buyBookCount: number
+  limitedPackEnabled: boolean
   autumnWishEnabled: boolean
   fireworkEnabled: boolean
   fireworkMode: 'self' | 'friend'
@@ -144,6 +145,7 @@ function createDefaultSettings(): SettingsState {
     robDailyLimit: 20,
     buyBookEnabled: true,
     buyBookCount: 2,
+    limitedPackEnabled: true,
     autumnWishEnabled: true,
     fireworkEnabled: false,
     fireworkMode: 'self',
@@ -306,6 +308,7 @@ export const useSettingStore = defineStore('setting', () => {
       settings.value.robDailyLimit = d.robDailyLimit ?? 20
       settings.value.buyBookEnabled = d.buyBookEnabled ?? true
       settings.value.buyBookCount = d.buyBookCount ?? 2
+      settings.value.limitedPackEnabled = d.limitedPackEnabled ?? true
       settings.value.autumnWishEnabled = d.autumnWishEnabled ?? true
       settings.value.fireworkEnabled = d.fireworkEnabled ?? false
       settings.value.fireworkMode = d.fireworkMode === 'friend' ? 'friend' : 'self'
@@ -388,6 +391,7 @@ export const useSettingStore = defineStore('setting', () => {
         robDailyLimit: newSettings.robDailyLimit,
         buyBookEnabled: newSettings.buyBookEnabled,
         buyBookCount: newSettings.buyBookCount,
+        limitedPackEnabled: newSettings.limitedPackEnabled,
         autumnWishEnabled: newSettings.autumnWishEnabled,
         fireworkEnabled: newSettings.fireworkEnabled,
         fireworkMode: newSettings.fireworkMode,

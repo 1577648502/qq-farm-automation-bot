@@ -12,7 +12,7 @@ const { Server: SocketIOServer } = require('socket.io');
 const { version } = require('../../package.json');
 const { CONFIG, updateRuntimeConfig, getRuntimeConfig, getDefaultSystemConfig } = require('../config/config');
 const { getLevelExpProgress } = require('../config/gameConfig');
-const { getResourcePath } = require('../config/runtime-paths');
+const { getResourcePath, getDataDir } = require('../config/runtime-paths');
 const store = require('../models/store');
 const backup = require('../services/backup');
 const { addOrUpdateAccount, deleteAccount } = store;
@@ -172,7 +172,9 @@ function startAdminServer(dataProvider) {
         adminLogger.warn('web build not found', { webDist });
         app.get('/', (req, res) => res.send('web build not found. Please build the web project.'));
     }
+    // 先内置目录, 再 data/gameConfig(同步游戏配置下载的新图): express.static 找不到文件会自动 next()
     app.use('/game-config', express.static(getResourcePath('gameConfig')));
+    app.use('/game-config', express.static(path.join(getDataDir(), 'gameConfig')));
 
     // Token 到用户映射（用于用户系统）
     const tokenUserMap = new Map();
@@ -2102,6 +2104,9 @@ app.use('/api', (req, res, next) => {
             const buyBookConfig = (id && typeof store.getBuyBookConfig === 'function')
                 ? store.getBuyBookConfig(id)
                 : { enabled: true, count: 2 };
+            const limitedPackConfig = (id && typeof store.getLimitedPackConfig === 'function')
+                ? store.getLimitedPackConfig(id)
+                : { enabled: true };
             const ui = store.getUI();
             // 获取用户隔离的下线提醒配置
             const offlineReminder = store.getOfflineReminder && currentUser
@@ -2142,6 +2147,8 @@ app.use('/api', (req, res, next) => {
                     // 每日购买中级挑战书(150 金豆豆/个)
                     buyBookEnabled: buyBookConfig.enabled,
                     buyBookCount: buyBookConfig.count,
+                    // 限时藏品礼包(按限购买满 + 买完开包)
+                    limitedPackEnabled: limitedPackConfig.enabled,
                     // 秋祈良愿 + 放烟花
                     autumnWishEnabled: autumnWish.wishEnabled,
                     fireworkEnabled: autumnWish.fireworkEnabled,
@@ -3447,6 +3454,32 @@ app.use('/api', (req, res, next) => {
                 force: body.force !== false,
                 count: body.count,
             });
+            res.json({ ok: true, data });
+        } catch (e) { res.json({ ok: false, error: e.message }); }
+    });
+
+    // ============ 典藏室(藏品展示) ============
+    // 藏品明细从背包反推(type=35 藏品 / type=34 展台 / 3002 典藏收藏点);
+    // 同时探测 gamepb.collectionpb.CollectionService.GetCollections(目前只回空壳)
+    app.get('/api/collection/overview', async (req, res) => {
+        const id = getAccId(req);
+        if (!id) return res.status(400).json({ ok: false, error: '缺少账号 ID' });
+        if (!checkAccountAccess(req, id)) return res.status(403).json({ ok: false, error: '无权访问此账号' });
+        try {
+            const probe = String(req.query.probe || '1') !== '0';
+            const data = await provider.getCollectionOverview(id, { probe });
+            res.json({ ok: true, data });
+        } catch (e) { res.json({ ok: false, error: e.message }); }
+    });
+
+    // ============ 限时礼包(藏品礼包) ============
+    // 立即按服务端限购买满 + 买完开包
+    app.post('/api/mall/buy-limited-packs', async (req, res) => {
+        const id = getAccId(req);
+        if (!id) return res.status(400).json({ ok: false, error: '缺少账号 ID' });
+        if (!checkAccountAccess(req, id)) return res.status(403).json({ ok: false, error: '无权访问此账号' });
+        try {
+            const data = await provider.buyLimitedPacks(id, req.body || {});
             res.json({ ok: true, data });
         } catch (e) { res.json({ ok: false, error: e.message }); }
     });

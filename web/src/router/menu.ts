@@ -1,4 +1,4 @@
-﻿export interface MenuItem  {
+export interface MenuItem {
 
   path: string
 
@@ -15,8 +15,6 @@
   activityKey?: string
 
 }
-
-
 
 export const menuRoutes: MenuItem[] = [
 
@@ -74,7 +72,6 @@ export const menuRoutes: MenuItem[] = [
 
     component: () => import('@/views/Activity.vue'),
 
-
     activityKey: 'heFengEnabled',
   },
 
@@ -89,7 +86,6 @@ export const menuRoutes: MenuItem[] = [
     icon: 'i-carbon-crop-growth',
 
     component: () => import('@/views/QingniangActivity.vue'),
-
 
     activityKey: 'qingNiangEnabled',
   },
@@ -140,9 +136,17 @@ export const menuRoutes: MenuItem[] = [
   },
 
   {
+    path: 'collection',
+    name: 'collection',
+    label: '典藏室',
+    icon: 'i-carbon-trophy',
+    component: () => import('@/views/CollectionRoom.vue'),
+  },
+
+  {
     path: 'pet',
     name: 'pet',
-    label: '\u5ba0\u7269',
+    label: '\u5BA0\u7269',
     icon: 'i-fas-paw',
     component: () => import('@/views/Pet.vue'),
   },

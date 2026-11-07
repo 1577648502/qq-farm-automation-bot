@@ -239,6 +239,8 @@ const DEFAULT_ACCOUNT_CONFIG = {
     robDailyLimit: 20,                // 每日夺宝次数上限(官方规则 20 次; 0 = 不限)
     buyBookEnabled: true,             // 每日自动购买中级挑战书(150 金豆豆/个), 默认开启
     buyBookCount: 2,                  // 每日购买数量
+    // ===== 限时礼包(藏品礼包, 2026-11-07 新) =====
+    limitedPackEnabled: true,         // 自动买限时藏品礼包(按服务端限购买满 + 买完开包)
     // ===== 秋祈良愿(2026-09-24 新活动) =====
     autumnWishEnabled: true,          // 每日自动祈愿领奖励(默认开启, 1 次/天)
     fireworkEnabled: false,           // 自动放烟花(默认关闭): 用烟花桶换经验 + 好友可见
@@ -560,6 +562,9 @@ function normalizeAccountConfig(input, fallback = accountFallbackConfig) {
     if (src.buyBookCount !== undefined && src.buyBookCount !== null) {
         cfg.buyBookCount = Math.max(0, Math.min(20, Number(src.buyBookCount) || 0));
     }
+    if (src.limitedPackEnabled !== undefined && src.limitedPackEnabled !== null) {
+        cfg.limitedPackEnabled = !!src.limitedPackEnabled;
+    }
     if (src.autumnWishEnabled !== undefined && src.autumnWishEnabled !== null) {
         cfg.autumnWishEnabled = !!src.autumnWishEnabled;
     }
@@ -858,6 +863,7 @@ function getConfigSnapshot(accountId) {
         robDailyLimit: Math.max(0, Math.min(200, Number(cfg.robDailyLimit) || 0)),
         buyBookEnabled: cfg.buyBookEnabled === undefined ? true : !!cfg.buyBookEnabled,
         buyBookCount: Math.max(0, Math.min(20, Number(cfg.buyBookCount) || 0)),
+        limitedPackEnabled: cfg.limitedPackEnabled === undefined ? true : !!cfg.limitedPackEnabled,
         autumnWishEnabled: cfg.autumnWishEnabled === undefined ? true : !!cfg.autumnWishEnabled,
         fireworkEnabled: !!cfg.fireworkEnabled,
         fireworkMode: cfg.fireworkMode === 'friend' ? 'friend' : 'self',
@@ -1021,6 +1027,9 @@ function applyConfigSnapshot(snapshot, options = {}) {
     }
     if (cfg.buyBookCount !== undefined && cfg.buyBookCount !== null) {
         next.buyBookCount = Math.max(0, Math.min(20, Number(cfg.buyBookCount) || 0));
+    }
+    if (cfg.limitedPackEnabled !== undefined && cfg.limitedPackEnabled !== null) {
+        next.limitedPackEnabled = !!cfg.limitedPackEnabled;
     }
     if (cfg.autumnWishEnabled !== undefined && cfg.autumnWishEnabled !== null) {
         next.autumnWishEnabled = !!cfg.autumnWishEnabled;
@@ -1597,6 +1606,14 @@ function getBuyBookConfig(accountId) {
     };
 }
 
+function getLimitedPackConfig(accountId) {
+    const cfg = (typeof getConfigSnapshot === 'function' ? getConfigSnapshot(accountId) : (globalConfig.accountConfig || {})) || {};
+    return {
+        // 默认开启: 与 normalizeAccountConfig / getConfigSnapshot 的默认值保持一致
+        enabled: cfg.limitedPackEnabled === undefined ? true : !!cfg.limitedPackEnabled,
+    };
+}
+
 function getAutumnWishConfig(accountId) {
     const cfg = (typeof getConfigSnapshot === 'function' ? getConfigSnapshot(accountId) : (globalConfig.accountConfig || {})) || {};
     return {
@@ -1677,6 +1694,7 @@ module.exports = {
     getBuyBookConfig,
     getAutumnWishConfig,
     getHappyShareEnabled,
+    getLimitedPackConfig,
     getMilkTeaConfig,
     normalizeMilkTeaHireDuration,
     getSellGoldenFruit,

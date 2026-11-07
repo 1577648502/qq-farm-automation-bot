@@ -444,12 +444,18 @@ function loadConfigs() {
         console.warn('[配置] 合并同步 Plant.json 失败:', e.message);
     }
 
-    // 加载种子图片映射（seed_images_named）
+    // 加载图片映射(seed_images_named)
+    // 两处都要扫: 内置目录随版本发布(基础图), data/gameConfig 是"同步游戏配置"下载的新图
+    // (新活动道具如典藏室藏品 7xxxxx 只在 data 目录里; 只扫内置目录会显示成空白)
     try {
-        const seedImageDir = path.join(configDir, 'seed_images_named');
         seedImageMap.clear();
         seedAssetImageMap.clear();
-        if (fs.existsSync(seedImageDir)) {
+        const scanDirs = [
+            path.join(getDataDir(), 'gameConfig', 'seed_images_named'),
+            path.join(configDir, 'seed_images_named'),
+        ];
+        for (const seedImageDir of scanDirs) {
+            if (!fs.existsSync(seedImageDir)) continue;
             const files = fs.readdirSync(seedImageDir);
             for (const file of files) {
                 const filename = String(file || '');
@@ -473,8 +479,8 @@ function loadConfigs() {
                     }
                 }
             }
-            console.warn(`[配置] 已加载种子图片映射 (${seedImageMap.size} 项)`);
         }
+        console.warn(`[配置] 已加载种子图片映射 (${seedImageMap.size} 项)`);
     } catch (e) {
         console.warn('[配置] 加载 seed_images_named 失败:', e.message);
     }

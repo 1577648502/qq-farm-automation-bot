@@ -281,10 +281,19 @@ async function autoOpenFertilizerGiftPacks() {
 const GIFT_PACK_SCAN_INTERVAL_MS = 60 * 1000;
 let giftPackLastCheckAt = 0;
 
+/**
+ * 可自动开启的礼包类型
+ *   11 = 常规礼包(种子包/化肥包/惊喜礼包…)
+ *   33 = 藏品礼包(钻石藏品礼包 101618 / 金豆豆藏品礼包 101619, 2026-11-07 抓包实测可 Use)
+ * ⚠ 33 是 2026-11 新增的类型, 之前只认 11 → 商城买的藏品礼包会一直躺在背包里
+ *   (抓包里客户端买到 101619 后立刻发 ItemService.Use 开包, 回的是开出来的东西)
+ */
+const GIFTPACK_ITEM_TYPES = new Set([11, 33]);
+
 function isGiftPackItemId(itemId) {
     const info = getItemById(Number(itemId) || 0);
     if (!info || typeof info !== 'object') return false;
-    return Number(info.type) === 11 && Number(info.can_use) === 1;
+    return GIFTPACK_ITEM_TYPES.has(Number(info.type)) && Number(info.can_use) === 1;
 }
 
 async function autoOpenGiftPacks() {

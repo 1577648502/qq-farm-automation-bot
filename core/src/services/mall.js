@@ -57,8 +57,13 @@ function getDateKey() {
 }
 
 async function getMallListBySlotType(slotType = 1) {
+    // ⚠ slot_type = 0 是合法的(2026-11-07 抓包: 限时商店的藏品礼包在 slot 0),
+    //   旧写法 `Number(slotType) || 1` 会把 0 当成假值改成 1 → 永远查不到 slot 0 的商品。
+    //   这里只在"完全没传/非法"时回落到 1, 0 原样保留。
+    const raw = Number(slotType);
+    const slot = Number.isFinite(raw) && raw >= 0 ? Math.floor(raw) : 1;
     const body = types.GetMallListBySlotTypeRequest.encode(types.GetMallListBySlotTypeRequest.create({
-        slot_type: Number(slotType) || 1,
+        slot_type: slot,
     })).finish();
     const { body: replyBody } = await sendMsgAsync('gamepb.mallpb.MallService', 'GetMallListBySlotType', body);
     return types.GetMallListBySlotTypeResponse.decode(replyBody);
@@ -1014,6 +1019,258 @@ async function buyFreeGifts(force = false) {
     }
 }
 
+/**
+ * ============ 限时礼包自动购买(2026-11-07 新需求) ============
+ *
+ * 抓包 `20261107-112023_典藏室和快乐独享领取` 实测:
+ *   slot=0 (GetMallListBySlotType{slot_type:0}) 返回 **藏品礼包**
+ *     1047 金豆豆藏品礼包  price={1005:428}  limit={#1:2(周期?), #2:3(已购), #3:50(限购)}
+ *     1048 钻石藏品礼包    price={1004:40}   limit={#2:2, #3:50}
+ *     1061/1062/1063 奶茶点券/每日/加速礼包(会同时在 slot=5 出现)
+ *   slot=5 返回限时商店(20小时化肥 10001~10004 等, 属于旧品类, 不在这里买)
+ *
+ * 规则(用户要求):
+ *   · "看着上限买" → 每次都以服务端下发的 限购 - 已购 为准, 买满为止, 不写死数量
+ *   · "买完使用"   → 买完立刻 Use 开包(藏品礼包是 type=33, 客户端的做法就是买下即开)
+ *   · 币种余额不足时按余额打折, 不硬买
+ *   · 同一商品限购周期可能是"总计"(周期=4/2 看服务端), 买满后本进程当天不再重试
+ */
+const LIMITED_PACK_SLOT = 0;              // slot 0 = 藏品礼包(11-07 抓包)
+const LIMITED_PACK_BUY_INTERVAL_MS = 700;   // 单个购买间隔(服务端要求逐次购买, 太快会被判风控)
+const LIMITED_PACK_GOODS_FALLBACK = [1047, 1048];   // 兜底: slot 查不到时按 goods_id 再找一遍
+let limitedPackMemory = { dateKey: '', bought: new Map() };   // goodsId → 本进程当天已买
+
+function limitedPackBoughtToday(goodsId) {
+    const today = getDateKey();
+    if (limitedPackMemory.dateKey !== today) limitedPackMemory = { dateKey: today, bought: new Map() };
+    return limitedPackMemory.bought.get(Number(goodsId)) || 0;
+}
+
+function markLimitedPackBought(goodsId, count) {
+    const today = getDateKey();
+    if (limitedPackMemory.dateKey !== today) limitedPackMemory = { dateKey: today, bought: new Map() };
+    limitedPackMemory.bought.set(Number(goodsId), limitedPackBoughtToday(goodsId) + count);
+}
+
+/** 从限时商店里挑出"藏品礼包"(按商品名 / 贵金属币种识别, 不写死 goods_id) */
+function isCollectionPackGoods(goods) {
+    const name = String((goods && goods.name) || '');
+    if (/藏品礼包/.test(name)) return true;
+    return LIMITED_PACK_GOODS_FALLBACK.includes(Number(goods && goods.goods_id) || 0);
+}
+
+/**
+ * slot=0 商品的限购解析(单独一套, 不能复用旧品类的 parseMallLimit)
+ *   抓包实测(20261107 slot=0):
+ *     1047 金豆豆藏品礼包  #7 = 08 02 10 03 18 32 → {1:2, 2:3, 3:50}
+ *     1048 钻石藏品礼包    #7 = 08 02 18 32       → {1:2, 2:50}
+ *   与旧品类({1:1/4 周期, 2:已购, 3:限购})的差别: 周期值出现 2, 且 1048 只有两个字段。
+ *   解释: {1: 周期, 2: 已购, 3: 限购}; 没有 #3 时 #2 就是限购(已购 0)。
+ *   验证: 抓包里对 1047 连买了 2 次都成功 → 剩余不可能只有 1(旧解析把 {1,2,3} 当
+ *   "已购2/上限3"会得到剩余 1, 与实际不符)。
+ */
+function parseSlot0Limit(limitField, goodsName) {
+    const bytes = Buffer.isBuffer(limitField) ? limitField : Buffer.from(limitField || []);
+    if (!bytes.length) return null;
+    for (const numeric of collectWireNumericMessages(bytes)) {
+        const values = new Map();
+        for (const entry of numeric) {
+            if (!values.has(entry.field) || entry.value > values.get(entry.field)) values.set(entry.field, entry.value);
+        }
+        const limitCount = values.get(3) || 0;
+        if (limitCount > 0) {
+            const boughtNum = Math.min(values.get(2) || 0, limitCount);
+            return {
+                limitCount,
+                boughtNum,
+                remaining: Math.max(0, limitCount - boughtNum),
+                limitType: values.get(1) === 4 ? 'permanent' : 'daily',
+                raw: values,
+            };
+        }
+        const onlyLimit = values.get(2) || 0;
+        if (onlyLimit > 0 && !values.has(3)) {
+            return {
+                limitCount: onlyLimit,
+                boughtNum: 0,
+                remaining: onlyLimit,
+                limitType: values.get(1) === 4 ? 'permanent' : 'daily',
+                raw: values,
+            };
+        }
+    }
+    return null;
+}
+
+/**
+ * 买一个限时礼包商品到"服务端上限", 然后开包
+ * @param goods  { goods_id, name, price, limit } 原始 MallGoods
+ * @returns { ok, goodsId, name, bought, opened, rewards, skipped }
+ */
+async function buyLimitedPackToLimit(goods) {
+    const goodsId = toNum(goods && goods.goods_id);
+    const name = String((goods && goods.name) || `礼包#${goodsId}`);
+    const out = { ok: false, goodsId, name, bought: 0, opened: 0, rewards: [], skipped: '' };
+    if (goodsId <= 0) { out.skipped = '无效商品ID'; return out; }
+
+    // ① 服务端上限: 限购 - 已购; 无 #7(不限购)时按限购买一件, 避免无上限商品被无限刷
+    const lim = parseSlot0Limit(goods.limit, name);
+    const remainingFromServer = lim ? Math.max(0, lim.remaining) : 1;
+    // 本进程当天已买也要扣掉(服务端状态可能滞后/接口没下发 #2)
+    const needByServer = remainingFromServer - limitedPackBoughtToday(goodsId);
+    if (needByServer <= 0) {
+        out.ok = true;
+        out.skipped = lim && lim.limitCount > 0
+            ? `已达上限 ${lim.boughtNum}/${lim.limitCount}`
+            : '今日已买过(该礼包无明确限购, 每天只买一次)';
+        return out;
+    }
+
+    // ② 余额校验: 用登录态里的币种余额(不读背包, 少一次请求)
+    const price = parseMallPrice(goods.price, goods.is_free);
+    const state = getUserState() || {};
+    let balance = price.balanceKey ? toNum(state[price.balanceKey]) || 0 : 0;
+    let want = needByServer;
+    if (price.amount > 0 && balance > 0) {
+        const affordable = Math.floor(balance / price.amount);
+        if (affordable <= 0) {
+            out.skipped = `${price.unit}不足(${balance} < ${price.amount}/个)`;
+            return out;
+        }
+        if (affordable < want) {
+            log('商城', `限时礼包「${name}」: ${price.unit}余额只够买 ${affordable} 个(上限还能买 ${want} 个)`, {
+                module: 'mall', event: '限时礼包',
+            });
+            want = affordable;
+        }
+    }
+    out.plan = want;
+
+    // ③ 逐个买(count=1 与客户端一致: 抓包里总是 Purchase{goods_id, count:1})
+    for (let i = 0; i < want; i++) {
+        try {
+            await purchaseMallGoods(goodsId, 1);
+            out.bought += 1;
+            markLimitedPackBought(goodsId, 1);
+            if (price.amount > 0 && price.balanceKey) {
+                balance = Math.max(0, balance - price.amount);
+                state[price.balanceKey] = balance;
+            }
+            if (i < want - 1) await sleep(LIMITED_PACK_BUY_INTERVAL_MS);
+        } catch (e) {
+            const msg = String((e && e.message) || '');
+            out.ok = out.bought > 0;
+            out.skipped = msg;
+            if (/余额不足|不足|code=1000019/.test(msg)) {
+                markLimitedPackBought(goodsId, want - i);   // 买不起就别再重试
+                out.skipped = `${price.unit || '货币'}不足: ${msg}`;
+            }
+            log('商城', `购买限时礼包「${name}」失败: ${msg}`, { module: 'mall', event: '限时礼包', result: 'error', goodsId });
+            break;
+        }
+    }
+
+    if (out.bought > 0) {
+        log('商城', `已购买限时礼包「${name}」x${out.bought}${price.amount ? `(单个 ${price.amount} ${price.unit})` : ''}`, {
+            module: 'mall', event: '限时礼包', result: 'ok', goodsId, count: out.bought,
+        });
+    }
+
+    // ④ 买完立刻开包: 客户端抓包是 Purchase 之后隔 1.5s 发 ItemService.Use
+    if (out.bought > 0) {
+        await sleep(1200);
+        try {
+            const { useItem } = require('./warehouse');
+            // 礼包到手的是"物品条目"(抓包 Purchase.#3 = {1: 101619, 2: 1}), 这里按商品内容推断
+            const itemIds = decodeGoodsItems(goods.item_ids);
+            const packIds = (itemIds.length ? itemIds : (await resolvePackIdsByBag(name))).map(x => x.id).filter(id => id > 0);
+            for (const packId of new Set(packIds)) {
+                const info = getItemById(packId);
+                if (!info || Number(info.can_use) !== 1) continue;
+                try {
+                    await useItem(packId, out.bought);
+                    out.opened += out.bought;
+                    log('商城', `已开启礼包「${info.name || packId}」x${out.bought}`, {
+                        module: 'mall', event: '礼包开箱', result: 'ok', itemId: packId, count: out.bought,
+                    });
+                } catch (ee) {
+                    log('商城', `开启礼包失败(${info.name || packId}): ${ee.message}`, {
+                        module: 'mall', event: '礼包开箱', result: 'error', itemId: packId,
+                    });
+                }
+                await sleep(400);
+            }
+            out.ok = true;
+        } catch (e) {
+            // 开包失败不影响"已购买"的事实: 仓库的礼包自动开启(60s 巡查)会兜底
+            log('商城', `礼包开箱流程异常(交仓库自动开启兜底): ${e.message}`, { module: 'mall', event: '礼包开箱', result: 'warn' });
+            out.ok = true;
+        }
+    }
+    return out;
+}
+
+/** 商品没带 item_ids 时: 从背包里找"刚买到的那个礼包"(同名的 can_use 礼包) */
+async function resolvePackIdsByBag(name) {
+    try {
+        const { getBag, getBagItems } = require('./warehouse');
+        const bag = await getBag();
+        const hit = [];
+        for (const it of getBagItems(bag)) {
+            const info = getItemById(toNum(it && it.id));
+            if (!info || Number(info.can_use) !== 1) continue;
+            if (String(info.name || '') === String(name)) hit.push({ id: Number(it.id), count: toNum(it.count) });
+        }
+        return hit;
+    } catch {
+        return [];
+    }
+}
+
+/**
+ * 限时礼包整体流程: 读 slot=0 → 找出藏品礼包 → 每个买到服务端上限 → 开包
+ * 每次都现读商城(限购/已购/价格以服务端为准), 不做本地账本。
+ */
+async function checkAndBuyLimitedPacks(force = false) {
+    const result = { ok: true, goods: [], bought: 0, opened: 0, skipped: '' };
+    let goodsList = [];
+    try {
+        goodsList = await getMallGoodsList(LIMITED_PACK_SLOT);
+    } catch (e) {
+        result.ok = false;
+        result.skipped = `读取限时商店失败: ${e.message}`;
+        return result;
+    }
+    let packs = goodsList.filter(isCollectionPackGoods);
+    if (!packs.length) {
+        // slot 0 没拿到(服务端可能换了 slot 号) → 兜底扫 slot 1~5 找同名礼包
+        for (const slot of [1, 2, 3, 4, 5]) {
+            try {
+                const list = await getMallGoodsList(slot);
+                const hit = list.filter(isCollectionPackGoods);
+                if (hit.length) { packs = hit; break; }
+            } catch { /* 单个 slot 失败跳过 */ }
+        }
+    }
+    if (!packs.length) {
+        result.skipped = force ? '商城里暂时没有藏品礼包' : '暂无藏品礼包';
+        return result;
+    }
+
+    for (const goods of packs) {
+        const r = await buyLimitedPackToLimit(goods);
+        result.goods.push(r);
+        result.bought += r.bought;
+        result.opened += r.opened;
+        if (r.ok === false && r.bought === 0) result.ok = false;
+        await sleep(600);
+    }
+    if (!result.ok && !result.skipped) {
+        result.skipped = (result.goods.find(g => g.skipped) || {}).skipped || '全部购买失败';
+    }
+    return result;
+}
+
 async function checkAndBuyFertilizerByThreshold(type, count, thresholdHours) {
     const { getBag, getBagItems, getContainerHoursFromBagItems } = require('./warehouse');
     
@@ -1138,6 +1395,9 @@ module.exports = {
     autoBuyOrganicFertilizer,
     autoBuyFertilizer,
     checkAndBuyChallengeBooks,
+    checkAndBuyLimitedPacks,
+    buyLimitedPackToLimit,
+    isCollectionPackGoods,
     parseMallLimit,
     checkAndBuyFertilizerByThreshold,
     checkAndBuyFertilizerBoth,
