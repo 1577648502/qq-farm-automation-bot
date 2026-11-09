@@ -52,6 +52,8 @@ let collectionReplyHex = null;
 let originalBagReply = null;
 /** true = ClaimCollectionReward 模拟服务端 1047006 */
 let claimNoReward = false;
+/** true = UpgradeCollection 模拟服务端"材料不足" */
+let upgradeReject = false;
 function installMallStub() {
     const mallMod = require(`${SB}/src/services/mall`);
     const net = require(`${SB}/src/utils/network`);
@@ -106,6 +108,7 @@ function installStub() {
             return { body: Buffer.from('10b00918e80722049003e807', 'hex') };
         }
         if (key === 'gamepb.collectionpb.CollectionService.UpgradeCollection') {
+            if (upgradeReject) throw new Error('gamepb.collectionpb.CollectionService.UpgradeCollection 错误: code=1000019 材料不足');
             // 抓包 25.24s 实测: #1=1 #2=700005 #3=1 #4=600
             return { body: Buffer.from('080110e5dc2a180120d804', 'hex') };
         }
@@ -218,7 +221,7 @@ function purchaseReply(reqBody) {
         check('700005 已激活且 1 星', p700005 && p700005.owned && p700005.star === 1, p700005);
         check('700005 有获得时间', p700005 && p700005.obtainedAt === 1794034704, p700005 && p700005.obtainedAt);
         check('当前展示位 = 700005', ov.display && ov.display.itemId === 700005, ov.display);
-        check('评分 1200 / 已领 1000', ov.score.total === 1200 && ov.score.claimed === 1000, ov.score);
+        check('评分 1200 / 已领档位 1000', ov.score.total === 1200 && ov.score.claimedTier === 1000, ov.score);
         // ⚠ 不能由 total > claimed 推断"有可领": 实测 1200 > 1000 却回 1047006
         check('claimable 不靠比值推断(为 null, 以试领为准)', ov.score.claimable === null, ov.score.claimable);
         check('展台数量 = ItemInfo type=34 条数(10)', ov.pedestals.length === 10, ov.pedestals.length);
@@ -305,41 +308,69 @@ function purchaseReply(reqBody) {
         check('开箱数量 != 购买数量', uses[0] && uses[0].count !== r.bought, { used: uses[0], bought: r.bought });
     }
 
-    section('5b. 自动流程 runCollectionTasks(有货才升星 / 有新增才领奖)');
+    section('5a2. 11-09 抓包: 升星返回值 #4 是"全房间累计评分"');
     {
-        // 场景A: 展示位为空(首包) + 背包回放抓包(没有精灵) + 评分 0/0
+        // 抓包实测四连: 600 → 1200 → 1800 → 2280(第二次升 700005 额外 +480)
+        const cases = [
+            { hex: '080110e5dc2a180120d804', id: 700005, star: 1, score: 600 },
+            { hex: '080110e4dc2a180120b009', id: 700004, star: 1, score: 1200 },
+            { hex: '080110e2dc2a180120880e', id: 700002, star: 1, score: 1800 },
+            { hex: '080110e5dc2a180220e811', id: 700005, star: 2, score: 2280 },
+        ];
+        const parsed = cases.map((c) => {
+            const f = collection.__testing.parseWire(Buffer.from(c.hex, 'hex'));
+            const g = (n) => Number((f.find((x) => x.f === n) || {}).v || 0);
+            return { id: g(2), star: g(3), score: g(4) };
+        });
+        check('四连升级的 (id,star,score) 与抓包一致',
+            JSON.stringify(parsed) === JSON.stringify(cases.map(c => ({ id: c.id, star: c.star, score: c.score }))),
+            parsed);
+        const inc = parsed.map((p, i) => p.score - (i === 0 ? 0 : parsed[i - 1].score));
+        check('每次升星评分 +600(第 4 次 +480)', JSON.stringify(inc) === JSON.stringify([600, 600, 600, 480]), inc);
+    }
+
+    section('5b. 自动流程 runCollectionTasks(不预判升星 / 由服务端判定 / 有新增才领奖)');
+    {
+        // 场景A: 首包(展示位空, 只有 700004/700005) → 自动摆展示 + 尝试升星
         collectionReplyHex = '0a220801120e08e4dc2a180120cb97bbd7062801120e08e5dc2a1801209098bbd70628011200';
         bagOverride = null;
         calls.length = 0;
         const a = await collection.runCollectionTasks({});
         const kindsA = calls.map(c => c.key.split('.').pop());
         check('展示位为空 → 自动摆上', kindsA.includes('SwitchSceneDisplay'), kindsA);
-        check('背包没有同名精灵 → 不发升星', !kindsA.includes('UpgradeCollection'), kindsA);
-        // 现在每次都"试着领一次", 由服务端判定有没有档位(1047006 = 没有)
-        check('评分奖励改为试领(不再靠比值猜)', kindsA.includes('ClaimCollectionReward'), kindsA);
+        // ⚠ 不再用背包预判: 藏品根本不在背包里, 但升级照样能成功(11-09 抓包)
+        check('没有背包同名精灵也要尝试升星', kindsA.includes('UpgradeCollection'), kindsA);
+        check('评分奖励也试领', kindsA.includes('ClaimCollectionReward'), kindsA);
         check('流程 ok', a.ok === true, a);
 
-        // 场景B: 末包(已 1 星, 展示已设, 评分 1200/1000)
+        // 场景B: 末包(已 1 星, 展示已设) → 不重复切换展示, 仍尝试升星
         collectionReplyHex = '0a280801120e08e5dc2a10011801209098bbd706120e08e4dc2a1001180120cb97bbd70628e80730b009120a08011206080110e5dc2a';
         calls.length = 0;
         const b = await collection.runCollectionTasks({});
         const kindsB = calls.map(c => c.key.split('.').pop());
         check('展示已设置 → 不重复切换', !kindsB.includes('SwitchSceneDisplay'), kindsB);
-        check('无库存 → 不升星', !kindsB.includes('UpgradeCollection'), kindsB);
-        check('每次都会试领一次', kindsB.includes('ClaimCollectionReward'), kindsB);
+        check('仍然尝试升星', kindsB.includes('UpgradeCollection'), kindsB);
         check('领奖结果带回服务端评分', b.claimed && b.claimed.totalScore === 1200, b.claimed);
 
-        // 场景C: 背包里只有 1 个桃米 → 只升 1 次(库存耗尽就停)
-        const { types } = require(`${SB}/src/utils/proto`);
-        originalBagReply = types.BagReply.encode(types.BagReply.create({
-            item_bag: { items: [{ id: 700005, count: 1 }] },
-        })).finish();
+        // 场景C: 服务端拒绝升星(材料不足) → 连续失败 MAX_CONSECUTIVE_FAIL 次后停止
+        upgradeReject = true;
+        collectionReplyHex = '0a3a0801120e08e4dc2a1001180120cb97bbd706121008e5dc2a10011801209098bbd7062802120e08e2dc2a180120bab9c2d706280128e80730b009120a08011206080110e5dc2a';
         calls.length = 0;
         const c = await collection.runCollectionTasks({});
         const upgrades = calls.filter(x => x.key.endsWith('UpgradeCollection'));
-        check('背包有 1 个桃米 → 只升 1 次', upgrades.length === 1, upgrades.length);
-        check('升的是 700005 (080110e5dc2a)', upgrades[0] && upgrades[0].body.toString('hex') === '080110e5dc2a', upgrades.map(u => u.body.toString('hex')));
-        originalBagReply = null;
+        check('连续失败 3 次后停止(不是逐个刷完)', upgrades.length === 3, upgrades.length);
+        check('失败原因进了 skipped', c.skipped.some(x => /升星失败/.test(x)), c.skipped);
+        upgradeReject = false;
+
+        // 场景D: 新包数据 —— 3 只精灵(700002 新获得/700004/700005 已 2 星)
+        //   服务端能升的就升, 星级低的优先(700002 无星 → 先试它)
+        collectionReplyHex = '0a3a0801120e08e4dc2a1001180120cb97bbd706121008e5dc2a10011801209098bbd7062802120e08e2dc2a180120bab9c2d706280128e80730b009120a08011206080110e5dc2a';
+        calls.length = 0;
+        const d = await collection.runCollectionTasks({});
+        const order = calls.filter(x => x.key.endsWith('UpgradeCollection')).map(x => x.body.toString('hex'));
+        check('升星按星级从低到高(700002 最先)',
+            order[0] === '080110e2dc2a', order);
+        check('3 只精灵都会被尝试', order.length >= 3, order.length);
 
         collectionReplyHex = null;
         bagOverride = null;

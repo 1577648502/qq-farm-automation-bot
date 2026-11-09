@@ -26,8 +26,8 @@ interface CollectionItem {
   activated: number
   star: number
   obtainedAt: number
-  /** 背包里同名精灵数量 = 还能升几次星 */
-  upgradable: number
+  /** 吞噬次数(#5): 11-09 抓包显示与星级同步增长 */
+  devour: number
 }
 
 interface CollectionSeries {
@@ -64,7 +64,7 @@ interface CollectionOverview {
   level: number
   unlockLevel: number
   locked: boolean
-  score: { total: number, claimed: number, claimable: boolean | null }
+  score: { total: number, claimedTier: number, claimable: boolean | null }
 }
 
 const toast = useToastStore()
@@ -239,7 +239,7 @@ usePageRefresh('/collection', loadOverview)
           <div class="text-xs text-gray-500 dark:text-gray-400">藏品评分</div>
           <div class="mt-1 text-xl font-bold">
             {{ fmtNum(overview.score.total) }}
-            <span class="text-sm font-normal text-gray-400">已领 {{ fmtNum(overview.score.claimed) }}</span>
+            <span class="text-sm font-normal text-gray-400">已领档位 {{ fmtNum(overview.score.claimedTier) }}</span>
           </div>
         </div>
         <div class="rounded-lg border border-gray-200 bg-white p-3 dark:border-gray-700 dark:bg-gray-800">
@@ -263,7 +263,7 @@ usePageRefresh('/collection', loadOverview)
             藏品评分奖励
           </h3>
           <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
-            当前评分 {{ fmtNum(overview.score.total) }}，已领到 {{ fmtNum(overview.score.claimed) }}
+            当前评分 {{ fmtNum(overview.score.total) }}，已领档位 {{ fmtNum(overview.score.claimedTier) }}
             <span class="ml-1 text-gray-400">（奖励按评分档位发放，档位之间有间隔，点了会由服务端判定）</span>
           </p>
         </div>
@@ -352,15 +352,18 @@ usePageRefresh('/collection', loadOverview)
             <div class="text-[11px]" :class="it.owned ? 'text-amber-700 dark:text-amber-300' : 'text-gray-400'">
               {{ it.owned ? starText(it.star) : '未激活' }}
             </div>
-            <!-- 可升星(背包有同名精灵) -->
-            <div v-if="it.owned && it.upgradable > 0" class="mt-1 flex w-full flex-col gap-1">
+            <div v-if="it.owned && it.devour" class="text-[10px] text-gray-400">
+              吞噬 {{ it.devour }} 次
+            </div>
+            <!-- 升星: 由服务端判定能否升(材料不足会报错提示), 不在本地预判 -->
+            <div v-if="it.owned" class="mt-1 flex w-full flex-col gap-1">
               <BaseButton
                 variant="secondary"
                 size="sm"
                 :disabled="busy"
                 @click="handleUpgrade(it)"
               >
-                升星 (×{{ it.upgradable }})
+                升星
               </BaseButton>
             </div>
             <BaseButton

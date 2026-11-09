@@ -13,7 +13,7 @@
  * GetCollections 回复实测:
  *   #1 = 1
  *   #2(repeated 藏品) { #1 藏品ID, #2 星级, #3 已激活, #4 获得时间, #5 疑似展示位 }
- *   #5 = 1000  已领取评分档
+ *   #5 = 1000  已领到的评分档位
  *   #6 = 1200  当前累计评分
  *   #2 { #1: 场景, #2: { #1: 展示位, #2: 藏品ID } }   ← 当前展示位(与 entries 同字段号)
  *
@@ -23,6 +23,29 @@
  * ClaimCollectionReward 回复实测: #2=1200(当前评分) #3=1000(覆盖到的档位) #4{#50=1000}
  *
  * ══════════════════════════════════════════════════════════════════
+ * ══════════════════════════════════════════════════════════════════
+ * 2026-11-09 抓包 `20261109-082655_典藏室激活个升星` 复核(关键):
+ *
+ *   ① **没有"激活"接口**。整个会话只有 4 次 GetCollections、2 次 UpgradeCollection、
+ *      1 次 ClaimCollectionReward, 没有任何其它 collection 请求。
+ *      新获得的 700002 直接以 activated=1 出现在 GetCollections 里
+ *      (获得时间 1794153658, 早于本次抓包) → **激活由服务端在发放时完成**,
+ *      客户端(和我们)都不需要、也无法发激活请求。
+ *
+ *   ② **升星不消耗背包物品**: 背包 61 项里一个藏品都没有, 两次 UpgradeCollection
+ *      仍然成功。所以"背包有同名精灵才能升星"是错误判断(已删除),
+ *      能不能升只能由服务端判定(不足时回 `1000019 xxx不足`)。
+ *
+ *   ③ 升星返回值 #4 = **全房间累计评分**: 600 → 1200 → 1800 → 2280
+ *      (前三次各 +600, 第二次升 700005 额外 +480)。
+ *
+ *   ④ #5 是**该藏品的吞噬次数**(不是"已领档位"/"展示位"):
+ *      700005 升到 2 星时由 1 → 2, 700002 新获得时为 1。
+ *
+ *   ⑤ ClaimCollectionReward 成功: 评分 2280, 覆盖到 2000 档
+ *      (说明档位间隔不是线性的, 仍需以服务端反馈为准)。
+ * ══════════════════════════════════════════════════════════════════
+ *
  * 两个由用户确认的关键事实:
  *   ① 藏品**不在背包里**(ItemService.Bag 中没有 type=35 物品),
  *      获得 = 开藏品礼包后服务端直接登记到这里, `#3 activated=1` 即"已激活";
@@ -42,6 +65,9 @@ const SERVICE = 'gamepb.collectionpb.CollectionService';
 
 /** 典藏室开启等级(用户确认: 125 级才开启) */
 const COLLECTION_UNLOCK_LEVEL = 125;
+
+/** 连续这么多次升星失败就放弃本轮(通常意味着材料耗尽, 继续试只是白刷请求) */
+const MAX_CONSECUTIVE_FAIL = 3;
 
 // 物品类型
 const ITEM_TYPE_COLLECTION = 35;   // 藏品(可陈列)
@@ -135,7 +161,9 @@ function parseCollectionsReply(buf) {
             star: num(findField(sub, 2)),
             activated: num(findField(sub, 3)),
             obtainedAt: num(findField(sub, 4)),
-            field5: num(findField(sub, 5)),
+            // 11-09 抓包: 700005 升到 2 星时 #5 由 1 → 2, 与星级同步增长
+            // (旧推测"展示位"被证伪: 展示位在外层 #2, 与这里无关)
+            devour: num(findField(sub, 5)),
         });
     }
 
@@ -280,18 +308,13 @@ async function upgradeCollection(itemId) {
 }
 
 /**
- * 判断某藏品现在能不能升星(背包里至少要有 1 个同名精灵可消耗)
- * 返回 { can, inBag, reason }
+ * @deprecated 背包判定已失效: 2026-11-09 抓包确认藏品不在背包里。
+ * 仅保留为页面展示用(背包里有多少个同名精灵), **不要**用它拦截升星请求。
  */
 async function checkUpgradeAffordable(itemId, counts = null) {
     const id = toNum(itemId);
     const bag = counts || await getSpiritCountsInBag();
-    const n = bag.get(id) || 0;
-    if (n <= 0) {
-        const info = getItemById(id) || {};
-        return { can: false, inBag: 0, reason: `背包里没有「${info.name || id}」可消耗` };
-    }
-    return { can: true, inBag: n, reason: '' };
+    return { inBag: bag.get(id) || 0 };
 }
 
 // ============ 评分奖励 ============
@@ -347,8 +370,11 @@ async function claimCollectionReward() {
  * 典藏室概览
  *   · 目录(30 款) × 服务端状态(星级/激活/获得时间)
  *   · 当前展示位
- *   · 评分(已领档位 / 当前累计)
- *   · 背包里可用来升星的同名额精灵数量(升星消耗物)
+ *   · 评分(累计评分 / 已领档位)
+ *
+ * ⚠ 2026-11-09 抓包纠正: 藏品**不在背包里**(背包 61 项无一藏品), 但升级照常成功。
+ *   所以"背包有同名精灵才能升星"是错的判断 —— 能否升星只能由服务端判定
+ *   (会回 `1000019 xxx不足` / `1047006 暂无可领取` 这类错误码)。
  */
 async function getCollectionOverview({ probe = true } = {}) {
     const level = toNum((getUserState() || {}).level) || 0;
@@ -371,8 +397,8 @@ async function getCollectionOverview({ probe = true } = {}) {
                 activated: st ? st.activated : 0,
                 star: st ? st.star : 0,
                 obtainedAt: st ? st.obtainedAt : 0,
-                // 背包里同名精灵数量 = 还能升几次星(每个消耗 1 个)
-                upgradable: spiritCounts.get(it.id) || 0,
+                // 该藏品的吞噬次数(#5) —— 11-09 抓包: 700005 升到 2 星时 #5 由 1 变 2
+                devour: st ? (st.devour || 0) : 0,
             };
         });
         return {
@@ -399,7 +425,7 @@ async function getCollectionOverview({ probe = true } = {}) {
             activated: e.activated,
             star: e.star,
             obtainedAt: e.obtainedAt,
-            upgradable: spiritCounts.get(e.itemId) || 0,
+            devour: e.devour || 0,
         });
     }
 
@@ -441,9 +467,10 @@ async function getCollectionOverview({ probe = true } = {}) {
         displays: server ? server.displays : [],
         score: {
             total: server ? server.totalScore : 0,
-            claimed: server ? server.claimedScore : 0,
-            // ⚠ 不能由 total > claimed 推断: 档位之间有间隔(实测 1200 > 1000 却"暂无奖励")
-            //   这里只给参考值, 真实可领状态以 claimCollectionReward 的服务端反馈为准
+            // #5: 已领到的档位值(不是"已领分数")
+            claimedTier: server ? server.claimedScore : 0,
+            // ⚠ 不能由 total > claimedTier 推断可领: 实测 1200 > 1000 仍回 1047006
+            //   真实可领状态只以 claimCollectionReward 的服务端反馈为准
             claimable: null,
         },
     };
@@ -479,7 +506,7 @@ async function runCollectionTasks(opts = {}) {
     } catch (e) {
         return { ok: false, reason: `查询典藏室失败: ${e.message}` };
     }
-    out.state = { entries: state.entries, score: { total: state.totalScore, claimed: state.claimedScore } };
+    out.state = { entries: state.entries, score: { total: state.totalScore, claimedTier: state.claimedScore } };
 
     const activated = state.entries.filter((e) => e.activated > 0);
     if (!activated.length) {
@@ -506,31 +533,35 @@ async function runCollectionTasks(opts = {}) {
         }
     }
 
-    // ② 升星: 只升背包里有同名精灵的
+    // ② 升星: **不做本地预判**, 由服务端判定能不能升
+    //   ⚠ 曾经的错误做法: 只在"背包里有同名精灵"时才升 —— 但 2026-11-09 抓包显示
+    //     藏品根本不在背包里(背包 61 项无一藏品), 升级却照样成功。
+    //     所以"能不能升"只有服务端知道(不足时回 1000019 xxx不足)。
+    //   策略: 从星级最低的开始试, 每个藏品一轮最多试 1 次; 连续 N 个都升不动就整体放弃,
+    //         避免低星全部升满时每次巡检都白刷一堆失败请求。
     if (autoUpgrade && maxUpgrades > 0) {
-        const bagCounts = await getSpiritCountsInBag();
-        // 背包同名声数量 = 最多能升几次(每次消耗 1 个)
         const candidates = activated
-            .filter((e) => (bagCounts.get(e.itemId) || 0) > 0)
-            .sort((a, b) => (a.star - b.star) || (bagCounts.get(b.itemId) - bagCounts.get(a.itemId)));
+            .slice()
+            .sort((a, b) => (a.star - b.star) || (a.obtainedAt - b.obtainedAt));
         let budget = maxUpgrades;
+        let consecutiveFail = 0;
         for (const e of candidates) {
-            if (budget <= 0) break;
-            let stock = bagCounts.get(e.itemId) || 0;
-            while (stock > 0 && budget > 0) {
-                try {
-                    const r = await upgradeCollection(e.itemId);
-                    out.upgraded.push({ itemId: e.itemId, name: r.name, star: r.star, score: r.score });
-                    stock -= 1;
-                    budget -= 1;
-                    await sleep(600);
-                } catch (err) {
-                    // 库存与真实不一致 / 星级上限 / 其它限制 → 换下一个藏品
-                    const msg = String((err && err.message) || '');
-                    out.skipped.push(`${(getItemById(e.itemId) || {}).name || e.itemId} 升星失败: ${msg}`);
-                    break;
-                }
+            if (budget <= 0 || consecutiveFail >= MAX_CONSECUTIVE_FAIL) break;
+            const name = (getItemById(e.itemId) || {}).name || e.itemId;
+            try {
+                const r = await upgradeCollection(e.itemId);
+                out.upgraded.push({ itemId: e.itemId, name: r.name, star: r.star, score: r.score });
+                budget -= 1;
+                consecutiveFail = 0;
+                await sleep(600);
+            } catch (err) {
+                consecutiveFail += 1;
+                const msg = String((err && err.message) || '');
+                out.skipped.push(`${name} 升星失败: ${msg}`);
             }
+        }
+        if (consecutiveFail >= MAX_CONSECUTIVE_FAIL) {
+            out.skipped.push('连续多次升星失败, 本轮停止(通常是材料不足)');
         }
     }
 
