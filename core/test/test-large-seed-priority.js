@@ -22,6 +22,8 @@ let bagSeeds = [];
 let priorityList = [];
 let plantRequests = [];
 let failPlantSeedId = 0;
+// 2x2 种植时服务端会补出 3 块副地块, 这里按用例指定
+let largeSeedSlaveIds = [];
 
 warehouse.getBagSeeds = async () => bagSeeds.map(seed => ({ ...seed }));
 store.getBagSeedPriority = () => [...priorityList];
@@ -44,7 +46,7 @@ network.sendMsgAsync = async (_service, method, body) => {
                 id: seedId,
                 phases: [{ phase: 1, begin_time: Math.floor(Date.now() / 1000) }],
             },
-            slave_land_ids: [],
+            slave_land_ids: largeSeedSlaveIds,
         }],
     })).finish();
     return { body: replyBody };
@@ -58,6 +60,7 @@ const {
         getOrCreateLargeSeedWaitState,
         resetLargeSeedWaitStates,
         plantFromBagSeeds,
+        collectReleasedLandGroupIds,
     },
 } = farm;
 
@@ -71,6 +74,7 @@ function resetScenario(seeds = [], priorities = []) {
     priorityList = priorities;
     plantRequests = [];
     failPlantSeedId = 0;
+    largeSeedSlaveIds = [];
     resetLargeSeedWaitStates();
 }
 
@@ -122,11 +126,67 @@ async function run() {
     const nowA = 1_000_000;
     const nowB = 2_000_000;
     getOrCreateLargeSeedWaitState(largeSeedA, nowA, 'account-a');
-    getOrCreateLargeSeedWaitState(largeSeedA, nowB, 'account-b');
+    getOrCreateLargeSeedWaitState(largeSeedB, nowB, 'account-b');
     const stateA = getOrCreateLargeSeedWaitState(largeSeedA, nowA + 1_000, 'account-a');
-    const stateB = getOrCreateLargeSeedWaitState(largeSeedA, nowB + 1_000, 'account-b');
+    const stateB = getOrCreateLargeSeedWaitState(largeSeedB, nowB + 1_000, 'account-b');
     check('账号 A 独立计时', stateA.startedAt === nowA, stateA);
     check('账号 B 独立计时', stateB.startedAt === nowB, stateB);
+
+    section('7. 收获后整组 2x2 空地一次性回收');
+    // 抓包实测(20261026-155015): 收获后主地块 plant 清空且 slave_land_ids 被清空,
+    // 副地块 plant 为空但 master_land_id 仍指向主地块。
+    // analyzeLands 在收获前把副地块当"被主地块占用"跳过 → 只回收主地块会凑不齐 4 块。
+    {
+        // (a) 用收获前的快照: 主地块还带 slave_land_ids, 整组关系最完整
+        const preHarvestLands = [
+            { id: 21, unlocked: true, plant: { phases: [{ phase: 6 }] }, slave_land_ids: [17, 18, 22] },
+            { id: 17, unlocked: true, master_land_id: 21 },
+            { id: 18, unlocked: true, master_land_id: 21 },
+            { id: 22, unlocked: true, master_land_id: 21 },
+            // 另一组大作物仍在生长, 不能被误收
+            { id: 31, unlocked: true, plant: { phases: [{ phase: 1 }] }, slave_land_ids: [32, 33, 34] },
+            { id: 32, unlocked: true, master_land_id: 31 },
+            { id: 33, unlocked: true, master_land_id: 31 },
+            { id: 34, unlocked: true, master_land_id: 31 },
+        ];
+        const preReleased = collectReleasedLandGroupIds([21], preHarvestLands, { trustedMasterIds: [21] });
+        check('按收获前 slave_land_ids 回收 3 块副地块', preReleased.sort((a, b) => a - b).join(',') === '17,18,22', preReleased);
+        check('主地块自身不重复计入', !preReleased.includes(21), preReleased);
+        check('仍在生长的大作物不被回收', collectReleasedLandGroupIds([31], preHarvestLands, { trustedMasterIds: [21] }).length === 0, collectReleasedLandGroupIds([31], preHarvestLands, { trustedMasterIds: [21] }));
+        check('没有主地块时不回收', collectReleasedLandGroupIds([], preHarvestLands).length === 0);
+
+        // (b) 收获后快照: slave_land_ids 已清空, 只能靠 master_land_id 反查
+        const postHarvestLands = [
+            { id: 21, unlocked: true },
+            { id: 17, unlocked: true, master_land_id: 21 },
+            { id: 18, unlocked: true, master_land_id: 21 },
+            { id: 22, unlocked: true, master_land_id: 21 },
+            { id: 31, unlocked: true, plant: { phases: [{ phase: 1 }] } },
+            { id: 32, unlocked: true, master_land_id: 31 },
+        ];
+        const postReleased = collectReleasedLandGroupIds([21], postHarvestLands);
+        check('收获后按 master_land_id 反查回收 3 块副地块', postReleased.sort((a, b) => a - b).join(',') === '17,18,22', postReleased);
+        check('反查时仍在生长的大作物不被回收', collectReleasedLandGroupIds([31], postHarvestLands).length === 0, collectReleasedLandGroupIds([31], postHarvestLands));
+
+        // 回收后 4 块连续空地能正常种下 2x2
+        resetScenario([largeSeedA, smallSeed], []);
+        largeSeedSlaveIds = [17, 18, 22];
+        const groupLands = collectReleasedLandGroupIds([21], preHarvestLands, { trustedMasterIds: [21] });
+        const planted = await plantFromBagSeeds([21, ...groupLands]);
+        check('整组回收后可种下 1 组 2x2', planted.totalPlanted === 1 && plantRequests.length === 1 && plantRequests[0].seedId === largeSeedA.seedId, { planted, plantRequests });
+        check('整组回收后不再进入等待', planted.waitingForLargeSeed === null, planted.waitingForLargeSeed);
+
+        // (c) 多季大作物收货后回到生长状态: 不在 trustedMasterIds 里就绝不能回收副地块
+        const multiSeasonLands = [
+            { id: 21, unlocked: true, plant: { phases: [{ phase: 2 }] }, slave_land_ids: [17, 18, 22] },
+            { id: 17, unlocked: true, master_land_id: 21 },
+            { id: 18, unlocked: true, master_land_id: 21 },
+            { id: 22, unlocked: true, master_land_id: 21 },
+        ];
+        check('多季大作物(仍在生长)不回收副地块',
+            collectReleasedLandGroupIds([21], multiSeasonLands, { trustedMasterIds: [] }).length === 0,
+            collectReleasedLandGroupIds([21], multiSeasonLands, { trustedMasterIds: [] }));
+    }
 
     finish();
 }

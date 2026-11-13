@@ -1749,6 +1749,106 @@ function classifyHarvestedLandsByMap(landIds, landsMap) {
     return { removable, growing, unknown };
 }
 
+/**
+ * 2x2(4x4) 作物整组空出时，**副地块既不在 empty 里也不在 dead 里**：
+ * analyzeLands 在作物还在时会把它们当"被主地块占用的副地块"跳过，收获也只回主地块。
+ * 若只把主地块放回待种列表，这一轮就只有 1 块空地 → 2x2 种子判定
+ * "需要 4 块连续空地"失败，直接进入最长 10 分钟的等待。
+ *
+ * 契约：`releasedMasterIds` 是待检查的作物主地块；`lands` 是地块快照。
+ * 主地块只有满足下列之一才算"整组空出"：快照里已是空/枯，或在 `trustedMasterIds`
+ * （本轮已经确认收获/铲除的地块，快照是操作前的旧状态）。
+ * 优先用快照里的 slave_land_ids，取不到再用 master_land_id 反查；副地块自身必须已是空地。
+ */
+function collectReleasedLandGroupIds(releasedMasterIds, lands, options = {}) {
+    const masterIds = new Set((Array.isArray(releasedMasterIds) ? releasedMasterIds : []).map(id => toNum(id)).filter(Boolean));
+    const list = Array.isArray(lands) ? lands : [];
+    if (masterIds.size === 0 || list.length === 0) return [];
+    const trustedMasterIds = new Set((Array.isArray(options.trustedMasterIds) ? options.trustedMasterIds : [])
+        .map(id => toNum(id)).filter(Boolean));
+
+    const stateById = new Map();
+    for (const land of list) {
+        const landId = toNum(land && land.id);
+        if (landId) stateById.set(landId, getLandLifecycleState(land));
+    }
+    // 副地块自己必须也已经是空地, 否则说明这组作物还没整组空出来
+    const isFreeLand = (landId) => stateById.get(landId) === 'empty';
+
+    // 主地块整组还没空出来时不能回收(否则会把仍在生长的 2x2 副地块当空地)
+    const releasedMasters = new Set();
+    for (const landId of masterIds) {
+        if (trustedMasterIds.has(landId) || stateById.get(landId) === 'dead' || isFreeLand(landId)) {
+            releasedMasters.add(landId);
+        }
+    }
+    if (releasedMasters.size === 0) return [];
+
+    const released = new Set();
+    for (const land of list) {
+        const landId = toNum(land && land.id);
+        if (!landId) continue;
+        if (releasedMasters.has(landId)) {
+            // 主地块自带的 slave_land_ids（最可靠）
+            for (const slaveId of getSlaveLandIds(land)) {
+                if (!releasedMasters.has(slaveId) && isFreeLand(slaveId)) released.add(slaveId);
+            }
+            continue;
+        }
+        // 反查 master_land_id（服务端收获后会把主地块的 slave_land_ids 清空）
+        const masterLandId = toNum(land && land.master_land_id);
+        if (masterLandId && releasedMasters.has(masterLandId) && isFreeLand(landId)) {
+            released.add(landId);
+        }
+    }
+    return [...released];
+}
+
+function getLandPlantSize(land) {
+    const cfg = getPlantById(toNum(land && land.plant && land.plant.id));
+    return Math.max(1, toNum(cfg && cfg.size) || 1);
+}
+
+/**
+ * 本轮空出/枯死的地块里有没有大作物(2x2 及以上)。
+ * 小作物不占副地块, 不需要为此多拉一次地块状态。
+ */
+function hasLargeCropAmong(landIds, lands) {
+    const ids = new Set((Array.isArray(landIds) ? landIds : []).map(id => toNum(id)).filter(Boolean));
+    if (ids.size === 0) return false;
+    return (Array.isArray(lands) ? lands : []).some(land => {
+        const landId = toNum(land && land.id);
+        if (!landId || !ids.has(landId)) return false;
+        return getLandPlantSize(land) >= LARGE_SEED_PRIORITY_MIN_SIZE || getSlaveLandIds(land).length > 0;
+    });
+}
+
+/**
+ * 收获/铲除让整组大作物空出时，补出同组副地块（已排除 dead/empty 里已有的地块）。
+ * `allowRefresh` 时才在必要时补拉一次 AllLands：服务端收获后会清空主地块的
+ * slave_land_ids，只能靠操作后的快照按 master_land_id 反查。
+ */
+async function resolveReleasedLargeCropLandIds(deadLandIds, emptyLandIds, options = {}) {
+    const knownLandIds = [...deadLandIds, ...emptyLandIds];
+    let released = collectReleasedLandGroupIds(knownLandIds, options.lands, {
+        trustedMasterIds: options.trustedMasterIds,
+    });
+    if (released.length === 0 && options.allowRefresh) {
+        try {
+            const latestLandsReply = await getAllLands();
+            released = collectReleasedLandGroupIds(knownLandIds, latestLandsReply && latestLandsReply.lands);
+        } catch (e) {
+            logWarn('种植', `收获后地块状态补拉失败: ${e.message}`, {
+                module: 'farm',
+                event: '种植种子',
+                result: 'error',
+            });
+        }
+    }
+    const knownSet = new Set(knownLandIds);
+    return released.filter(id => !knownSet.has(id));
+}
+
 async function resolveRemovableHarvestedLands(harvestedLandIds, harvestReply) {
     const ids = Array.isArray(harvestedLandIds) ? harvestedLandIds.filter(Boolean) : [];
     if (ids.length === 0) {
@@ -2061,6 +2161,27 @@ async function runFarmOperation(opType) {
             postHarvest = await resolveRemovableHarvestedLands(harvestedLandIds, harvestReply);
             allDeadLands = [...new Set([...allDeadLands, ...postHarvest.removable])];
         }
+        // 收获/枯死的 2x2、4x4: analyzeLands 在作物还在时会把副地块当"被主地块占用"跳过,
+        // 主地块清空后这些副地块不会自己出现在 empty/dead 里。不补回来的话这一轮只有主地块
+        // 1 块空地, 2x2 种子会被判定"凑不齐连续空地"而进入最长 10 分钟的等待。
+        // `lands` 是操作前的快照(那时 slave_land_ids 还在, 整组关系可还原) —— 快照里这些主地块
+        // 还显示有作物, 所以只把"本轮收获后确认已空/枯"的地块放行。
+        // 多季作物收获后会回到生长状态(growing), 不在该列表里, 其副地块不会被误回收。
+        const releasedSlaveIds = await resolveReleasedLargeCropLandIds(allDeadLands, allEmptyLands, {
+            lands,
+            trustedMasterIds: postHarvest && postHarvest.removable ? postHarvest.removable : [],
+            // 只在本轮确实有大作物时才多拉一次地块状态, 普通小作物不额外打请求
+            allowRefresh: harvestedLandIds.length > 0 && hasLargeCropAmong([...harvestedLandIds, ...allDeadLands], lands),
+        });
+        if (releasedSlaveIds.length > 0) {
+            allEmptyLands.push(...releasedSlaveIds);
+            log('种植', `大作物整组空出后补入 ${releasedSlaveIds.length} 块副地块一并待种 (${releasedSlaveIds.join(',')})`, {
+                module: 'farm',
+                event: '种植种子',
+                result: 'release_group',
+                landIds: releasedSlaveIds,
+            });
+        }
         // 注意：如果是单纯点"一键种植"，harvestedLandIds 为空，只种当前的空地/死地
         if (allDeadLands.length > 0 || allEmptyLands.length > 0) {
             try {
@@ -2324,5 +2445,6 @@ module.exports = {
         getOrCreateLargeSeedWaitState,
         resetLargeSeedWaitStates,
         plantFromBagSeeds,
+        collectReleasedLandGroupIds,
     },
 };
