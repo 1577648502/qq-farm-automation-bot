@@ -906,6 +906,85 @@ function getConfigSnapshot(accountId) {
     };
 }
 
+
+// ============ 账号配置字段归一化表 ============
+// applyConfigSnapshot 用它逐字段更新配置。每个归一化器签名为 (input, fallback) =>
+// 合法值; 遇到非法输入返回安全默认(绝不抛错), 避免脏配置把整个保存流程打挂。
+//
+// ⚠ 新增设置项时: 在这里加一行即可(applyConfigSnapshot 会自动覆盖到),
+//   不要再回去改那个函数 —— 这正是当初 50 多个同构分支的成因。
+const clampInt = (min, max, fallback) => (input, current) => {
+    const value = Number(input);
+    const base = Number.isFinite(value) ? value : (Number.isFinite(current) ? current : fallback);
+    return Math.max(min, Math.min(max, base));
+};
+// `Number(x) || fallback` 语义: 0 会被当成"没填"而落到 fallback。
+// 有些字段原本就是这么写的(如检测间隔 0 → 30 分钟), 必须原样保留, 否则 0 的含义会变。
+const clampIntOrFallback = (min, max, fallback) => (input) => {
+    const value = Number(input) || fallback;
+    return Math.max(min, Math.min(max, value));
+};
+const asBool = (input) => !!input;
+
+const ACCOUNT_CONFIG_NORMALIZERS = {
+    // 种子与种植
+    preferredSeedId: clampInt(0, Number.MAX_SAFE_INTEGER, 0),
+    stealDelaySeconds: clampInt(0, 300, 0),
+    plantDelaySeconds: clampInt(0, 60, 0),
+    plantOrderRandom: asBool,
+
+    // 好友
+    knownFriendGidSyncCooldownSec: normalizeKnownFriendGidSyncCooldownSec,
+    friendsListCacheTtlSec: normalizeFriendsListCacheTtlSec,
+
+    // 防封号(低调)模式
+    stealthEnabled: asBool,
+    stealthOnlineMinMinutes: clampInt(1, 180, 3),
+    stealthOnlineMaxMinutes: clampInt(1, 180, 8),
+    stealthOfflineMinMinutes: clampInt(1, 1440, 20),
+    stealthOfflineMaxMinutes: clampInt(1, 1440, 60),
+    stealthWakeForRipe: asBool,
+
+    // 夺宝
+    robTreasureIntervalMinutes: clampInt(1, 1440, 10),
+    robMaxPerRun: clampInt(1, 20, 1),
+    robDailyLimit: clampInt(0, 200, 0),
+    buyBookEnabled: asBool,
+    buyBookCount: clampInt(0, 20, 0),
+
+    // 各活动开关
+    limitedPackEnabled: asBool,
+    collectionEnabled: asBool,
+    autumnWishEnabled: asBool,
+    fireworkEnabled: asBool,
+    fireworkMode: (input) => (input === 'friend' ? 'friend' : 'self'),
+    fireworkCount: clampInt(0, 20, 0),
+    happyShareEnabled: asBool,
+    adGiftEnabled: asBool,
+    sellGoldenFruit: asBool,
+
+    // 奶茶热销中
+    milkTeaEnabled: asBool,
+    milkTeaCashier: asBool,
+    milkTeaCraft: asBool,
+    milkTeaSpeaker: asBool,
+    milkTeaAutoHire: asBool,
+    milkTeaHireDuration: normalizeMilkTeaHireDuration,
+    milkTeaAutoInteract: asBool,
+    milkTeaAutoWage: asBool,
+    milkTeaAutoBuySeed: asBool,
+    milkTeaAutoUpgrade: asBool,
+    milkTeaSeedBuyCount: clampInt(1, 9999, 1),
+    milkTeaInteractType: normalizeMilkTeaInteractType,
+
+    // 化肥自动购买
+    fertilizerBuyOrganicCount: clampInt(0, 10000, 0),
+    fertilizerBuyOrganicThresholdHours: clampInt(0, 990, 0),
+    fertilizerBuyNormalCount: clampInt(0, 10000, 0),
+    fertilizerBuyNormalThresholdHours: clampInt(0, 990, 0),
+    fertilizerBuyCheckIntervalMinutes: clampIntOrFallback(1, 1440, 30),
+};
+
 function applyConfigSnapshot(snapshot, options = {}) {
     const cfg = snapshot || {};
     const persist = options.persist !== false;
@@ -914,6 +993,7 @@ function applyConfigSnapshot(snapshot, options = {}) {
     const current = getAccountConfigSnapshot(accountId);
     const next = normalizeAccountConfig(current, accountFallbackConfig);
 
+    // ---- 1. automation 子对象: 三个非布尔字段单独处理 ----
     if (cfg.automation && typeof cfg.automation === 'object') {
         for (const [k, v] of Object.entries(cfg.automation)) {
             if (next.automation[k] === undefined) continue;
@@ -930,198 +1010,65 @@ function applyConfigSnapshot(snapshot, options = {}) {
         }
     }
 
+    // ---- 2. 顶层数值/布尔字段: 表驱动 ----
+    //
+    // 这里原本是 50 多个结构完全相同的 `if (cfg.x != null) next.x = 归一化(cfg.x)`,
+    // 每个分支只有"字段名 + 归一化方式"不同。改成规格表后新增设置项只需加一行,
+    // 也顺手消除了"某个字段忘了判 null"这类不一致。
+    // 规格表里没有的字段一律忽略(不会被意外写入)。
+    for (const [key, normalize] of Object.entries(ACCOUNT_CONFIG_NORMALIZERS)) {
+        if (cfg[key] === undefined || cfg[key] === null) continue;
+        next[key] = normalize(cfg[key], next[key]);
+    }
+
+    // ---- 3. 不适配"值 → 值"的字段, 保持显式写法 ----
+
     if (cfg.plantingStrategy && ALLOWED_PLANTING_STRATEGIES.includes(cfg.plantingStrategy)) {
         next.plantingStrategy = cfg.plantingStrategy;
     }
 
-    if (cfg.preferredSeedId !== undefined && cfg.preferredSeedId !== null) {
-        next.preferredSeedId = Math.max(0, Number.parseInt(cfg.preferredSeedId, 10) || 0);
+    // 背包种子优先顺序 / 回退策略: 由专门函数校验
+    if (cfg.bagSeedPriority !== undefined && cfg.bagSeedPriority !== null) {
+        next.bagSeedPriority = normalizeBagSeedPriority(cfg.bagSeedPriority);
+    }
+    if (cfg.bagSeedFallbackStrategy !== undefined && cfg.bagSeedFallbackStrategy !== null) {
+        next.bagSeedFallbackStrategy = normalizeBagSeedFallbackStrategy(cfg.bagSeedFallbackStrategy);
     }
 
+    // 自由文本: 空串也要能保存, 所以不共用数值归一化
+    if (typeof cfg.milkTeaStoreName === 'string') next.milkTeaStoreName = cfg.milkTeaStoreName.slice(0, 20);
+    if (typeof cfg.milkTeaEmployerGid === 'string') next.milkTeaEmployerGid = cfg.milkTeaEmployerGid.trim().slice(0, 32);
+
+    // 数组字段
+    if (Array.isArray(cfg.plantBlacklist)) {
+        next.plantBlacklist = cfg.plantBlacklist.map(Number).filter(n => Number.isFinite(n) && n > 0);
+    }
+    if (Array.isArray(cfg.plantSeedExclude)) {
+        next.plantSeedExclude = cfg.plantSeedExclude.map(Number).filter(n => Number.isFinite(n) && n > 0);
+    }
+    if (Array.isArray(cfg.milkTeaHireGids)) {
+        next.milkTeaHireGids = cfg.milkTeaHireGids.map((g) => String(g).trim()).filter(Boolean).slice(0, 50);
+    }
+
+    // 子对象: 逐字段覆盖, 未传的保持原值
     if (cfg.intervals && typeof cfg.intervals === 'object') {
-        for (const [type, sec] of Object.entries(cfg.intervals)) {
-            if (next.intervals[type] === undefined) continue;
-            next.intervals[type] = Math.max(1, Number.parseInt(sec, 10) || next.intervals[type] || 1);
-        }
-        next.intervals = normalizeIntervals(next.intervals);
+        next.intervals = { ...next.intervals, ...cfg.intervals };
     }
-
     if (cfg.friendQuietHours && typeof cfg.friendQuietHours === 'object') {
-        const old = next.friendQuietHours || {};
-        next.friendQuietHours = {
-            enabled: cfg.friendQuietHours.enabled !== undefined ? !!cfg.friendQuietHours.enabled : !!old.enabled,
-            start: normalizeTimeString(cfg.friendQuietHours.start, old.start || '23:00'),
-            end: normalizeTimeString(cfg.friendQuietHours.end, old.end || '07:00'),
-        };
+        next.friendQuietHours = { ...next.friendQuietHours, ...cfg.friendQuietHours };
     }
 
-    if (Array.isArray(cfg.friendBlacklist)) {
-        next.friendBlacklist = cfg.friendBlacklist.map(Number).filter(n => Number.isFinite(n) && n > 0);
-    }
-
+    // 好友 GID 列表: 还要同步落盘缓存
     if (cfg.knownFriendGids !== undefined) {
         next.knownFriendGids = normalizeKnownFriendGids(cfg.knownFriendGids, next.knownFriendGids);
-        // 同时写入缓存文件
         if (accountId) {
             writeKnownFriendGidsCache(accountId, next.knownFriendGids);
         }
     }
 
-    if (cfg.knownFriendGidSyncCooldownSec !== undefined) {
-        next.knownFriendGidSyncCooldownSec = normalizeKnownFriendGidSyncCooldownSec(
-            cfg.knownFriendGidSyncCooldownSec,
-            next.knownFriendGidSyncCooldownSec,
-        );
-    }
-
-    if (cfg.friendsListCacheTtlSec !== undefined) {
-        next.friendsListCacheTtlSec = normalizeFriendsListCacheTtlSec(
-            cfg.friendsListCacheTtlSec,
-            next.friendsListCacheTtlSec,
-        );
-    }
-
-    // 蔬菜黑名单
-    if (Array.isArray(cfg.plantBlacklist)) {
-        next.plantBlacklist = cfg.plantBlacklist.map(Number).filter(n => Number.isFinite(n) && n > 0);
-    }
-
-    // 偷取延迟
-
-    // 种子排外列表
-    if (Array.isArray(cfg.plantSeedExclude)) {
-        next.plantSeedExclude = cfg.plantSeedExclude.map(Number).filter(n => Number.isFinite(n) && n > 0);
-    }
-    if (cfg.stealDelaySeconds !== undefined && cfg.stealDelaySeconds !== null) {
-        next.stealDelaySeconds = Math.max(0, Math.min(300, Number(cfg.stealDelaySeconds) || 0));
-    }
-
-    // 种植顺序随机
-    if (cfg.plantOrderRandom !== undefined && cfg.plantOrderRandom !== null) {
-        next.plantOrderRandom = !!cfg.plantOrderRandom;
-    }
-
-    // 防封号(低调)模式
-    if (cfg.stealthEnabled !== undefined && cfg.stealthEnabled !== null) {
-        next.stealthEnabled = !!cfg.stealthEnabled;
-    }
-    if (cfg.stealthOnlineMinMinutes !== undefined && cfg.stealthOnlineMinMinutes !== null) {
-        next.stealthOnlineMinMinutes = Math.max(1, Math.min(180, Number(cfg.stealthOnlineMinMinutes) || 3));
-    }
-    if (cfg.stealthOnlineMaxMinutes !== undefined && cfg.stealthOnlineMaxMinutes !== null) {
-        next.stealthOnlineMaxMinutes = Math.max(1, Math.min(180, Number(cfg.stealthOnlineMaxMinutes) || 8));
-    }
-    if (cfg.stealthOfflineMinMinutes !== undefined && cfg.stealthOfflineMinMinutes !== null) {
-        next.stealthOfflineMinMinutes = Math.max(1, Math.min(1440, Number(cfg.stealthOfflineMinMinutes) || 20));
-    }
-    if (cfg.stealthOfflineMaxMinutes !== undefined && cfg.stealthOfflineMaxMinutes !== null) {
-        next.stealthOfflineMaxMinutes = Math.max(1, Math.min(1440, Number(cfg.stealthOfflineMaxMinutes) || 60));
-    }
-    if (cfg.stealthWakeForRipe !== undefined && cfg.stealthWakeForRipe !== null) {
-        next.stealthWakeForRipe = !!cfg.stealthWakeForRipe;
-    }
-    if (cfg.robTreasureIntervalMinutes !== undefined && cfg.robTreasureIntervalMinutes !== null) {
-        next.robTreasureIntervalMinutes = Math.max(1, Math.min(1440, Number(cfg.robTreasureIntervalMinutes) || 10));
-    }
-    if (cfg.robMaxPerRun !== undefined && cfg.robMaxPerRun !== null) {
-        next.robMaxPerRun = Math.max(1, Math.min(20, Number(cfg.robMaxPerRun) || 1));
-    }
-    if (cfg.robDailyLimit !== undefined && cfg.robDailyLimit !== null) {
-        next.robDailyLimit = Math.max(0, Math.min(200, Number(cfg.robDailyLimit) || 0));
-    }
-    if (cfg.buyBookEnabled !== undefined && cfg.buyBookEnabled !== null) {
-        next.buyBookEnabled = !!cfg.buyBookEnabled;
-    }
-    if (cfg.buyBookCount !== undefined && cfg.buyBookCount !== null) {
-        next.buyBookCount = Math.max(0, Math.min(20, Number(cfg.buyBookCount) || 0));
-    }
-    if (cfg.limitedPackEnabled !== undefined && cfg.limitedPackEnabled !== null) {
-        next.limitedPackEnabled = !!cfg.limitedPackEnabled;
-    }
-    if (cfg.collectionEnabled !== undefined && cfg.collectionEnabled !== null) {
-        next.collectionEnabled = !!cfg.collectionEnabled;
-    }
-    if (cfg.autumnWishEnabled !== undefined && cfg.autumnWishEnabled !== null) {
-        next.autumnWishEnabled = !!cfg.autumnWishEnabled;
-    }
-    if (cfg.fireworkEnabled !== undefined && cfg.fireworkEnabled !== null) {
-        next.fireworkEnabled = !!cfg.fireworkEnabled;
-    }
-    if (cfg.fireworkMode !== undefined && cfg.fireworkMode !== null) {
-        next.fireworkMode = cfg.fireworkMode === 'friend' ? 'friend' : 'self';
-    }
-    if (cfg.fireworkCount !== undefined && cfg.fireworkCount !== null) {
-        next.fireworkCount = Math.max(0, Math.min(20, Number(cfg.fireworkCount) || 0));
-    }
-    if (cfg.happyShareEnabled !== undefined && cfg.happyShareEnabled !== null) {
-        next.happyShareEnabled = !!cfg.happyShareEnabled;
-    }
-    if (cfg.milkTeaEnabled !== undefined && cfg.milkTeaEnabled !== null) next.milkTeaEnabled = !!cfg.milkTeaEnabled;
-    if (cfg.milkTeaCashier !== undefined && cfg.milkTeaCashier !== null) next.milkTeaCashier = !!cfg.milkTeaCashier;
-    if (cfg.milkTeaCraft !== undefined && cfg.milkTeaCraft !== null) next.milkTeaCraft = !!cfg.milkTeaCraft;
-    if (cfg.milkTeaSpeaker !== undefined && cfg.milkTeaSpeaker !== null) next.milkTeaSpeaker = !!cfg.milkTeaSpeaker;
-    if (typeof cfg.milkTeaStoreName === 'string') next.milkTeaStoreName = cfg.milkTeaStoreName.slice(0, 20);
-    if (Array.isArray(cfg.milkTeaHireGids)) {
-        next.milkTeaHireGids = cfg.milkTeaHireGids.map((g) => String(g).trim()).filter(Boolean).slice(0, 50);
-    }
-    if (cfg.milkTeaAutoHire !== undefined && cfg.milkTeaAutoHire !== null) next.milkTeaAutoHire = !!cfg.milkTeaAutoHire;
-    if (cfg.milkTeaHireDuration !== undefined && cfg.milkTeaHireDuration !== null) {
-        next.milkTeaHireDuration = normalizeMilkTeaHireDuration(cfg.milkTeaHireDuration);
-    }
+    // 奶茶自动任务已下线, 无论传什么都保持关闭
     next.milkTeaAutoTask = false;
-    if (cfg.milkTeaAutoInteract !== undefined && cfg.milkTeaAutoInteract !== null) next.milkTeaAutoInteract = !!cfg.milkTeaAutoInteract;
-    if (cfg.milkTeaAutoWage !== undefined && cfg.milkTeaAutoWage !== null) next.milkTeaAutoWage = !!cfg.milkTeaAutoWage;
-    if (cfg.milkTeaAutoBuySeed !== undefined && cfg.milkTeaAutoBuySeed !== null) next.milkTeaAutoBuySeed = !!cfg.milkTeaAutoBuySeed;
-    if (cfg.milkTeaAutoUpgrade !== undefined && cfg.milkTeaAutoUpgrade !== null) next.milkTeaAutoUpgrade = !!cfg.milkTeaAutoUpgrade;
-    if (cfg.milkTeaSeedBuyCount !== undefined && cfg.milkTeaSeedBuyCount !== null) next.milkTeaSeedBuyCount = Math.max(1, Math.min(9999, Number(cfg.milkTeaSeedBuyCount) || 1));
-    if (cfg.milkTeaInteractType !== undefined && cfg.milkTeaInteractType !== null) next.milkTeaInteractType = normalizeMilkTeaInteractType(cfg.milkTeaInteractType);
-    if (typeof cfg.milkTeaEmployerGid === 'string') next.milkTeaEmployerGid = cfg.milkTeaEmployerGid.trim().slice(0, 32);
-    if (cfg.sellGoldenFruit !== undefined && cfg.sellGoldenFruit !== null) {
-        next.sellGoldenFruit = !!cfg.sellGoldenFruit;
-    }
-    if (cfg.adGiftEnabled !== undefined && cfg.adGiftEnabled !== null) {
-        next.adGiftEnabled = !!cfg.adGiftEnabled;
-    }
 
-    // 种植延迟
-    if (cfg.plantDelaySeconds !== undefined && cfg.plantDelaySeconds !== null) {
-        next.plantDelaySeconds = Math.max(0, Math.min(60, Number(cfg.plantDelaySeconds) || 0));
-    }
-
-    // 有机化肥购买数量
-    if (cfg.fertilizerBuyOrganicCount !== undefined && cfg.fertilizerBuyOrganicCount !== null) {
-        next.fertilizerBuyOrganicCount = Math.max(0, Math.min(10000, Number(cfg.fertilizerBuyOrganicCount) || 0));
-    }
-
-    // 有机化肥自动购买触发阈值
-    if (cfg.fertilizerBuyOrganicThresholdHours !== undefined && cfg.fertilizerBuyOrganicThresholdHours !== null) {
-        next.fertilizerBuyOrganicThresholdHours = Math.max(0, Math.min(990, Number(cfg.fertilizerBuyOrganicThresholdHours) || 0));
-    }
-
-    // 无机化肥购买数量
-    if (cfg.fertilizerBuyNormalCount !== undefined && cfg.fertilizerBuyNormalCount !== null) {
-        next.fertilizerBuyNormalCount = Math.max(0, Math.min(10000, Number(cfg.fertilizerBuyNormalCount) || 0));
-    }
-
-    // 无机化肥自动购买触发阈值
-    if (cfg.fertilizerBuyNormalThresholdHours !== undefined && cfg.fertilizerBuyNormalThresholdHours !== null) {
-        next.fertilizerBuyNormalThresholdHours = Math.max(0, Math.min(990, Number(cfg.fertilizerBuyNormalThresholdHours) || 0));
-    }
-
-    // 化肥自动购买检测间隔
-    if (cfg.fertilizerBuyCheckIntervalMinutes !== undefined && cfg.fertilizerBuyCheckIntervalMinutes !== null) {
-        next.fertilizerBuyCheckIntervalMinutes = Math.max(1, Math.min(1440, Number(cfg.fertilizerBuyCheckIntervalMinutes) || 30));
-    }
-
-    // 背包种子优先顺序
-    if (cfg.bagSeedPriority !== undefined && cfg.bagSeedPriority !== null) {
-        next.bagSeedPriority = normalizeBagSeedPriority(cfg.bagSeedPriority);
-    }
-
-    // 背包种子回退策略
-    if (cfg.bagSeedFallbackStrategy !== undefined && cfg.bagSeedFallbackStrategy !== null) {
-        next.bagSeedFallbackStrategy = normalizeBagSeedFallbackStrategy(cfg.bagSeedFallbackStrategy);
-    }
 
     if (cfg.ui && typeof cfg.ui === 'object') {
         const theme = String(cfg.ui.theme || '').toLowerCase();
