@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed } from 'vue'
+import { useLandTypes } from '@/composables/useLandTypes'
 
 /**
  * 一块地(或一棵合种作物)在棋盘上的显示。
@@ -92,21 +93,23 @@ const growProgress = computed(() => {
   return Math.min(100, Math.max(0, (matureInSec / totalGrowTime) * 100))
 })
 
-// 土地等级 → 名称与底色。等级语义固定(0 普通 … 6 蓝晶), 一张表同时供
-// 底色 class、显示名、以及 5/6 级那个 ◆ 角标使用, 免得改等级名要改三处。
-const LAND_LEVELS: Array<{ name: string, cls: string, dot?: string }> = [
-  { name: '普通', cls: 'bg-white dark:bg-gray-800 border-gray-200 dark:border-gray-700' },
-  { name: '黄土地', cls: 'bg-yellow-50/80 dark:bg-yellow-900/10 border-yellow-200 dark:border-yellow-800' },
-  { name: '红土地', cls: 'bg-red-50/80 dark:bg-red-900/10 border-red-200 dark:border-red-800' },
-  { name: '黑土地', cls: 'bg-slate-100 dark:bg-slate-800 border-slate-400 dark:border-slate-500' },
-  { name: '金土地', cls: 'bg-amber-100/80 dark:bg-amber-900/20 border-amber-300 dark:border-amber-600' },
-  { name: '紫晶土地', cls: 'bg-fuchsia-100/80 dark:bg-fuchsia-900/20 border-fuchsia-300 dark:border-fuchsia-600', dot: 'text-fuchsia-500' },
-  { name: '蓝晶土地', cls: 'bg-sky-100/80 dark:bg-sky-900/20 border-sky-300 dark:border-sky-600', dot: 'text-sky-500' },
+// 土地等级只在这里映射"底色/角标"(纯前端样式); **等级名称**统一从
+// useLandTypes 取(后端 land-types.js 是唯一来源), 不再本地抄一份名字。
+const LAND_LEVEL_STYLES: Array<{ cls: string, dot?: string }> = [
+  { cls: 'bg-white dark:bg-gray-800 border-gray-200 dark:border-gray-700' },
+  { cls: 'bg-yellow-50/80 dark:bg-yellow-900/10 border-yellow-200 dark:border-yellow-800' },
+  { cls: 'bg-red-50/80 dark:bg-red-900/10 border-red-200 dark:border-red-800' },
+  { cls: 'bg-slate-100 dark:bg-slate-800 border-slate-400 dark:border-slate-500' },
+  { cls: 'bg-amber-100/80 dark:bg-amber-900/20 border-amber-300 dark:border-amber-600' },
+  { cls: 'bg-fuchsia-100/80 dark:bg-fuchsia-900/20 border-fuchsia-300 dark:border-fuchsia-600', dot: 'text-fuchsia-500' },
+  { cls: 'bg-sky-100/80 dark:bg-sky-900/20 border-sky-300 dark:border-sky-600', dot: 'text-sky-500' },
 ]
 
-function getLandLevel(level: any) {
-  const idx = Math.min(Math.max(Number(level) || 0, 0), LAND_LEVELS.length - 1)
-  return LAND_LEVELS[idx]!
+const { getLandLevelName } = useLandTypes()
+
+function getLandLevelStyle(level: any) {
+  const idx = Math.min(Math.max(Number(level) || 0, 0), LAND_LEVEL_STYLES.length - 1)
+  return LAND_LEVEL_STYLES[idx]!
 }
 
 function getLandStatusClass(l: any) {
@@ -117,7 +120,7 @@ function getLandStatusClass(l: any) {
   if (status === 'dead')
     return 'bg-gray-200 dark:bg-gray-700 border-gray-300 dark:border-gray-600 grayscale'
 
-  const baseClass = getLandLevel(l.level).cls
+  const baseClass = getLandLevelStyle(l.level).cls
   if (status === 'harvestable')
     return `${baseClass} ring-2 ring-yellow-500 ring-offset-1 dark:ring-offset-gray-900`
   if (status === 'stealable')
@@ -143,7 +146,7 @@ function getSafeImageUrl(url: string) {
 }
 
 function getLandTypeName(level: number) {
-  return getLandLevel(level).name
+  return getLandLevelName(level)
 }
 
 const statusText = computed(() => {
@@ -228,9 +231,9 @@ const alerts = computed(() => {
     <div class="text-[10px] text-gray-400">
       {{ getLandTypeName(land.level) }}
       <span
-        v-if="getLandLevel(land.level).dot"
+        v-if="getLandLevelStyle(land.level).dot"
         class="ml-0.5"
-        :class="getLandLevel(land.level).dot"
+        :class="getLandLevelStyle(land.level).dot"
         :title="getLandTypeName(land.level)"
       >&#9670;</span>
     </div>

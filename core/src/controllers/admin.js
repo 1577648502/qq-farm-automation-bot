@@ -12,6 +12,7 @@ const { Server: SocketIOServer } = require('socket.io');
 const { version } = require('../../package.json');
 const { CONFIG, updateRuntimeConfig, getRuntimeConfig, getDefaultSystemConfig } = require('../config/config');
 const { getVersionState, resolveVersionSuggestion } = require('../utils/client-version');
+const { getLandTypeOptions, getLandLevelLabels } = require('../config/land-types');
 const { getLevelExpProgress } = require('../config/gameConfig');
 const { getResourcePath, getDataDir } = require('../config/runtime-paths');
 const store = require('../models/store');
@@ -482,9 +483,19 @@ app.use('/api', (req, res, next) => {
         res.json({ ok: true, data: { ok: true, uptime: process.uptime(), version } });
     });
 
+    // 客户端版本 + 土地类型表。
+    // 土地等级/名称映射只在后端 config/land-types.js 维护一份, 前端取这里的结果,
+    // 不再自己抄一遍(2026-11 新增蓝晶土地时就因为前端漏改而显示空白)。
     app.get('/api/game-version', (req, res) => {
         const runtimeConfig = getRuntimeConfig();
-        res.json({ ok: true, clientVersion: runtimeConfig.clientVersion });
+        res.json({
+            ok: true,
+            clientVersion: runtimeConfig.clientVersion,
+            // 施肥范围勾选项
+            landTypes: getLandTypeOptions(),
+            // 地块卡片用的"等级 → 名称"(含 1 级黄土地)
+            landLevels: getLandLevelLabels(),
+        });
     });
 
     app.get('/api/auth/validate', (req, res) => {

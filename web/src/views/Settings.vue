@@ -160,6 +160,8 @@ async function retrySettingsLoad() {
 }
 
 onMounted(async () => {
+  // 土地类型表与账号无关, 并行取即可(失败会退回内置兜底)
+  loadLandTypes()
   await accountStore.fetchAccounts()
   // 先取活动开关状态, 再同步本地设置(否则后台已关闭的活动开关无法被自动关掉)
   await fetchActivityStatus()
@@ -677,16 +679,35 @@ function syncLocalStrategySettings(submitted?: any) {
 const automationSaving = ref(false)
 let automationSaveRequest = 0
 
-const allFertilizerLandTypes = ['blue', 'amethyst', 'gold', 'black', 'red', 'normal']
+// 土地类型以服务端 /api/game-version 下发的为准(后端 config/land-types.js 是唯一来源)。
+// 这里保留一份兜底, 避免接口还没返回时勾选框是空的。
+const LAND_TYPE_FALLBACK = ['blue', 'amethyst', 'gold', 'black', 'red', 'normal']
+const landTypeLabels = ref<Record<string, string>>({
+  blue: '蓝晶土地',
+  amethyst: '紫晶土地',
+  gold: '金土地',
+  black: '黑土地',
+  red: '红土地',
+  normal: '普通土地',
+})
+// 类型 key 集合固定(只用于"全选/过滤"判断), 不随接口变化
+const allFertilizerLandTypes = [...LAND_TYPE_FALLBACK]
+const fertilizerLandTypeOptions = computed(() =>
+  allFertilizerLandTypes.map(value => ({ label: landTypeLabels.value[value] || value, value })),
+)
 
-const fertilizerLandTypeOptions = [
-  { label: '蓝晶土地', value: 'blue' },
-  { label: '紫晶土地', value: 'amethyst' },
-  { label: '金土地', value: 'gold' },
-  { label: '黑土地', value: 'black' },
-  { label: '红土地', value: 'red' },
-  { label: '普通土地', value: 'normal' },
-]
+async function loadLandTypes() {
+  try {
+    const { data } = await api.get('/api/game-version')
+    const list = data?.landTypes
+    if (Array.isArray(list) && list.length) {
+      landTypeLabels.value = Object.fromEntries(list.map((it: any) => [String(it.value), String(it.label)]))
+    }
+  }
+  catch {
+    // 取不到就用兜底, 不影响其它设置
+  }
+}
 
 function normalizeFertilizerLandTypes(input: unknown) {
   const source = Array.isArray(input) ? input : allFertilizerLandTypes

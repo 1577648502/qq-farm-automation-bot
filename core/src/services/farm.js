@@ -329,25 +329,12 @@ function summarizeLandDetails(lands) {
     return summary;
 }
 
-const ALL_FERTILIZER_LAND_TYPES = ['blue', 'amethyst', 'gold', 'black', 'red', 'normal'];
-const FERTILIZER_LAND_TYPE_LABELS = {
-    blue: '蓝晶土地',
-    amethyst: '紫晶土地',
-    gold: '金土地',
-    black: '黑土地',
-    red: '红土地',
-    normal: '普通土地',
-};
-
-function getLandTypeByLevel(level) {
-    const lv = toNum(level);
-    if (lv >= 6) return 'blue';      // 2026-11-02 新增 蓝晶土地(6级, 上限)
-    if (lv === 5) return 'amethyst';
-    if (lv === 4) return 'gold';
-    if (lv === 3) return 'black';
-    if (lv === 2) return 'red';
-    return 'normal';
-}
+// 土地等级/类型映射统一放在 config/land-types.js, 前端也用同一份语义
+const {
+    LAND_TYPE_KEYS: ALL_FERTILIZER_LAND_TYPES,
+    getLandTypeByLevel,
+    getLandTypeLabel,
+} = require('../config/land-types');
 
 function normalizeFertilizerLandTypes(input) {
     const source = Array.isArray(input) ? input : ALL_FERTILIZER_LAND_TYPES;
@@ -377,7 +364,7 @@ function filterLandIdsByTypes(landIds, landTypeById, selectedTypes) {
 }
 
 function formatFertilizerLandTypes(types) {
-    return normalizeFertilizerLandTypes(types).map(type => FERTILIZER_LAND_TYPE_LABELS[type] || type);
+    return normalizeFertilizerLandTypes(types).map(type => getLandTypeLabel(type) || type);
 }
 
 async function runFertilizerByConfig(plantedLands = [], options = {}) {
