@@ -2,8 +2,8 @@
  * 好友农场操作 - 进入/离开/帮忙/偷菜/巡查
  */
 
-const { CONFIG, PlantPhase, PHASE_NAMES } = require('../config/config');
-const { getPlantName, getPlantById, getSeedImageBySeedId, getPlantGrowTime } = require('../config/gameConfig');
+const { CONFIG, PlantPhase } = require('../config/config');
+const { getPlantName, getPlantById } = require('../config/gameConfig');
 const { parentPort } = require('node:worker_threads');
 const {
     isAutomationOn,
@@ -18,7 +18,8 @@ const {
 const { sendMsgAsync, getUserState, networkEvents } = require('../utils/network');
 const { types } = require('../utils/proto');
 const { buildLandBoard } = require('./land-layout');
-const { toLong, toNum, toTimeSec, getServerTimeSec, log, logWarn, sleep, randomDelay } = require('../utils/utils');
+const { buildLockedLand, buildEmptyLand, buildPlantedLand } = require('./land-view');
+const { toLong, toNum, getServerTimeSec, log, logWarn, sleep, randomDelay } = require('../utils/utils');
 const { getCurrentPhase, setOperationLimitsCallback, buildLandMap, getDisplayLandContext, isOccupiedSlaveLand } = require('./farm');
 const { getInteractRecords } = require('./interact');
 const { createScheduler } = require('./scheduler');
@@ -1039,99 +1040,40 @@ async function getFriendLandsDetail(friendGid) {
                 masterLandId,
                 occupiedLandIds,
             } = getDisplayLandContext(land, landsMap);
+            const context = { occupiedByMaster, masterLandId, occupiedLandIds };
+
             if (!unlocked) {
-                landsList.push({
-                    id,
-                    unlocked: false,
-                    status: 'locked',
-                    plantName: '',
-                    phaseName: '未解锁',
-                    level,
-                    needWater: false,
-                    needWeed: false,
-                    needBug: false,
-                    occupiedByMaster: false,
-                    masterLandId: 0,
-                    occupiedLandIds: [],
-                    plantSize: 1,
-                });
+                landsList.push(buildLockedLand({ id, level, phaseName: '未解锁' }));
                 continue;
             }
             const plant = sourceLand && sourceLand.plant;
             if (!plant || !plant.phases || plant.phases.length === 0) {
-                landsList.push({
-                    id,
-                    unlocked: true,
-                    status: 'empty',
-                    plantName: '',
-                    phaseName: '空地',
-                    level,
-                    occupiedByMaster,
-                    masterLandId,
-                    occupiedLandIds,
-                    plantSize: 1,
-                });
+                landsList.push(buildEmptyLand({ id, level, phaseName: '空地', context }));
                 continue;
             }
             const currentPhase = getCurrentPhase(plant.phases, false, '');
             if (!currentPhase) {
-                landsList.push({
-                    id,
-                    unlocked: true,
-                    status: 'empty',
-                    plantName: '',
-                    phaseName: '',
-                    level,
-                    occupiedByMaster,
-                    masterLandId,
-                    occupiedLandIds,
-                    plantSize: 1,
-                });
+                landsList.push(buildEmptyLand({ id, level, phaseName: '', context }));
                 continue;
             }
-            const phaseVal = currentPhase.phase;
-            const plantId = toNum(plant.id);
-            const plantName = getPlantName(plantId) || plant.name || '未知';
-            const plantCfg = getPlantById(plantId);
-            const seedId = toNum(plantCfg && plantCfg.seed_id);
-            if (seedId === 29999) continue;
-            const seedImage = seedId > 0 ? getSeedImageBySeedId(seedId) : '';
-            const plantSize = Math.max(1, toNum(plantCfg && plantCfg.size) || 1);
-            const totalSeason = Math.max(1, toNum(plantCfg && plantCfg.seasons) || 1);
-            const currentSeasonRaw = toNum(plant.season);
-            const currentSeason = currentSeasonRaw > 0 ? Math.min(currentSeasonRaw, totalSeason) : 1;
-            const phaseName = PHASE_NAMES[phaseVal] || '';
-            const maturePhase = Array.isArray(plant.phases)
-                ? plant.phases.find((p) => p && toNum(p.phase) === PlantPhase.MATURE)
-                : null;
-            const matureBegin = maturePhase ? toTimeSec(maturePhase.begin_time) : 0;
-            const matureInSec = matureBegin > nowSec ? (matureBegin - nowSec) : 0;
-            const totalGrowTime = getPlantGrowTime(plantId, plant);
-            let landStatus = 'growing';
-            if (phaseVal === PlantPhase.MATURE) landStatus = plant.stealable ? 'stealable' : 'harvested';
-            else if (phaseVal === PlantPhase.DEAD) landStatus = 'dead';
 
-            landsList.push({
+            const planted = buildPlantedLand({
                 id,
-                unlocked: true,
-                status: landStatus,
-                plantName,
-                seedId,
-                seedImage,
-                phaseName,
-                currentSeason,
-                totalSeason,
                 level,
-                matureInSec,
-                totalGrowTime,
-                needWater: toNum(plant.dry_num) > 0,
-                needWeed: (plant.weed_owners && plant.weed_owners.length > 0),
-                needBug: (plant.insect_owners && plant.insect_owners.length > 0),
-                occupiedByMaster,
-                masterLandId,
-                occupiedLandIds,
-                plantSize,
+                plant,
+                context,
+                currentPhase,
+                nowSec,
+                // 好友农田: 成熟且可偷=stealable, 成熟但不可偷=harvested
+                resolveStatus: (phaseVal) => {
+                    if (phaseVal === PlantPhase.MATURE) return plant.stealable ? 'stealable' : 'harvested';
+                    if (phaseVal === PlantPhase.DEAD) return 'dead';
+                    return 'growing';
+                },
             });
+            // 占位植物(29999): 整块跳过
+            if (!planted) continue;
+            landsList.push(planted);
         }
 
         return {

@@ -14,6 +14,7 @@ const { createScheduler } = require('./scheduler');
 const { recordOperation } = require('./stats');
 const { getBagSeeds } = require('./warehouse');
 const { buildLandBoard, getSlaveLandIds, hasPlantData } = require('./land-layout');
+const { buildLockedLand, buildEmptyLand, buildPlantedLand } = require('./land-view');
 const { autoBuyFertilizer, checkAndBuyFertilizerBoth } = require('./mall');
 const { getCapitalModeConfig, deployDog, withdrawDog, DOG_TYPE_NAMES } = require('./pet');
 
@@ -1131,165 +1132,62 @@ async function getLandsDetail() {
                 masterLandId,
                 occupiedLandIds,
             } = getDisplayLandContext(land, landsMap);
+            // 升级相关字段(自己农场独有)由这里补上, 公共字段交给 land-view
+            const upgradeFields = { maxLevel, landsLevel, landSize, couldUnlock, couldUpgrade, canUpgrade, upgradeCostText, upgradeBlockedReason };
+            const context = { occupiedByMaster, masterLandId, occupiedLandIds };
+
             if (!land.unlocked) {
-                lands.push({
-                    id,
-                    unlocked: false,
-                    status: 'locked',
-                    plantName: '',
-                    phaseName: '',
-                    level,
-                    maxLevel,
-                    landsLevel,
-                    landSize,
-                    couldUnlock,
-                    couldUpgrade,
-                    canUpgrade,
-                    upgradeCostText,
-                    upgradeBlockedReason,
-                    currentSeason: 0,
-                    totalSeason: 0,
-                    occupiedByMaster: false,
-                    masterLandId: 0,
-                    occupiedLandIds: [],
-                    plantSize: 1,
-                });
+                lands.push({ ...buildLockedLand({ id, level }), ...upgradeFields });
                 continue;
             }
-            // const plant = land.plant;
             const plant = sourceLand && sourceLand.plant;
             if (!plant || !plant.phases || plant.phases.length === 0) {
-                lands.push({
-                    id,
-                    unlocked: true,
-                    status: 'empty',
-                    plantName: '',
-                    phaseName: '空地',
-                    level,
-                    maxLevel,
-                    landsLevel,
-                    landSize,
-                    couldUnlock,
-                    couldUpgrade,
-                    canUpgrade,
-                    upgradeCostText,
-                    upgradeBlockedReason,
-                    currentSeason: 0,
-                    totalSeason: 0,
-                    occupiedByMaster,
-                    masterLandId,
-                    occupiedLandIds,
-                    plantSize: 1,
-                });
+                lands.push({ ...buildEmptyLand({ id, level, phaseName: '空地', context }), ...upgradeFields });
                 continue;
             }
             const currentPhase = getCurrentPhase(plant.phases, false, '');
             if (!currentPhase) {
-                lands.push({
-                    id,
-                    unlocked: true,
-                    status: 'empty',
-                    plantName: '',
-                    phaseName: '',
-                    level,
-                    maxLevel,
-                    landsLevel,
-                    landSize,
-                    couldUnlock,
-                    couldUpgrade,
-                    canUpgrade,
-                    upgradeCostText,
-                    upgradeBlockedReason,
-                    currentSeason: 0,
-                    totalSeason: 0,
-                    occupiedByMaster,
-                    masterLandId,
-                    occupiedLandIds,
-                    plantSize: 1,
-                });
+                lands.push({ ...buildEmptyLand({ id, level, phaseName: '', context }), ...upgradeFields });
                 continue;
             }
-            const phaseVal = currentPhase.phase;
-            const plantId = toNum(plant.id);
-            const plantName = getPlantName(plantId) || plant.name || '未知';
-            const plantCfg = getPlantById(plantId);
-            const seedId = toNum(plantCfg && plantCfg.seed_id);
-            if (seedId === 29999) continue;
-            const seedImage = seedId > 0 ? getSeedImageBySeedId(seedId) : '';
-            const plantSize = Math.max(1, toNum(plantCfg && plantCfg.size) || 1);
-            const mutantConfigIds = Array.isArray(plant.mutant_config_ids) ? plant.mutant_config_ids : [];
 
+            const plantId = toNum(plant.id);
+            const planted = buildPlantedLand({
+                id,
+                level,
+                plant,
+                context,
+                currentPhase,
+                nowSec,
+                usePhaseTimers: true,
+                // 自己的农场: 成熟=可收、枯死=dead, 其余都在生长
+                resolveStatus: (phaseVal) => {
+                    if (phaseVal === PlantPhase.MATURE) return 'harvestable';
+                    if (phaseVal === PlantPhase.DEAD) return 'dead';
+                    return 'growing';
+                },
+            });
+            // 占位植物(29999): 整块跳过
+            if (!planted) continue;
+
+            const mutantConfigIds = Array.isArray(plant.mutant_config_ids) ? plant.mutant_config_ids : [];
             // 变异检测: 合并植物级与阶段级 mutant_config_id, 按服务端枚举精确解析。
             const mutationInfo = resolveMutationInfo(plantId, mutantConfigIds, plant.phases);
-            const isMutant = mutationInfo ? mutationInfo.isMutant : false;
-            const isGolden = mutationInfo ? mutationInfo.isGolden : isGoldenPlant(plantId);
-            const mutationType = mutationInfo ? mutationInfo.mutationType : null;
-            const mutationQuality = mutationInfo ? mutationInfo.mutationQuality : null;
-            const mutationKey = mutationInfo ? mutationInfo.mutationKey : null;
-            const mutationEffect = mutationInfo ? mutationInfo.mutationEffect : null;
-            const mutationIcon = mutationInfo ? mutationInfo.mutationIcon : null;
-            const mutationColor = mutationInfo ? mutationInfo.mutationColor : null;
-            const mutationDescription = mutationInfo ? mutationInfo.mutationDescription : null;
-            const mutations = mutationInfo && Array.isArray(mutationInfo.mutations) ? mutationInfo.mutations : [];
-            const totalSeason = Math.max(1, toNum(plantCfg && plantCfg.seasons) || 1);
-            const currentSeasonRaw = toNum(plant.season);
-            const currentSeason = currentSeasonRaw > 0 ? Math.min(currentSeasonRaw, totalSeason) : 1;
-            const phaseName = PHASE_NAMES[phaseVal] || '';
-            const maturePhase = Array.isArray(plant.phases)
-                ? plant.phases.find((p) => p && toNum(p.phase) === PlantPhase.MATURE)
-                : null;
-            const matureBegin = maturePhase ? toTimeSec(maturePhase.begin_time) : 0;
-            const matureInSec = matureBegin > nowSec ? (matureBegin - nowSec) : 0;
-            const totalGrowTime = getPlantGrowTime(plantId, plant);
-
-            let landStatus = 'growing';
-            if (phaseVal === PlantPhase.MATURE) landStatus = 'harvestable';
-            else if (phaseVal === PlantPhase.DEAD) landStatus = 'dead';
-            else if (phaseVal === PlantPhase.UNKNOWN || !plant.phases.length) landStatus = 'empty';
-
-            const needWater = (toNum(plant.dry_num) > 0) || (toTimeSec(currentPhase.dry_time) > 0 && toTimeSec(currentPhase.dry_time) <= nowSec);
-            const needWeed = (plant.weed_owners && plant.weed_owners.length > 0) || (toTimeSec(currentPhase.weeds_time) > 0 && toTimeSec(currentPhase.weeds_time) <= nowSec);
-            const needBug = (plant.insect_owners && plant.insect_owners.length > 0) || (toTimeSec(currentPhase.insect_time) > 0 && toTimeSec(currentPhase.insect_time) <= nowSec);
 
             lands.push({
-                id,
-                unlocked: true,
-                status: landStatus,
-                plantName,
-                seedId,
-                seedImage,
-                phaseName,
-                currentSeason,
-                totalSeason,
-                matureInSec,
-                totalGrowTime,
-                needWater,
-                needWeed,
-                needBug,
+                ...planted,
                 stealable: !!plant.stealable,
-                isMutant: isMutant,
-                isGolden: isGolden,
-                mutationType,
-                mutationQuality,
-                mutationKey,
-                mutationEffect,
-                mutationIcon,
-                mutationColor,
-                mutationDescription,
-                mutations,
-                level,
-                maxLevel,
-                landsLevel,
-                landSize,
-                couldUnlock,
-                couldUpgrade,
-                canUpgrade,
-                upgradeCostText,
-                upgradeBlockedReason,
-                occupiedByMaster,
-                masterLandId,
-                occupiedLandIds,
-                plantSize,
+                isMutant: mutationInfo ? mutationInfo.isMutant : false,
+                isGolden: mutationInfo ? mutationInfo.isGolden : isGoldenPlant(plantId),
+                mutationType: mutationInfo ? mutationInfo.mutationType : null,
+                mutationQuality: mutationInfo ? mutationInfo.mutationQuality : null,
+                mutationKey: mutationInfo ? mutationInfo.mutationKey : null,
+                mutationEffect: mutationInfo ? mutationInfo.mutationEffect : null,
+                mutationIcon: mutationInfo ? mutationInfo.mutationIcon : null,
+                mutationColor: mutationInfo ? mutationInfo.mutationColor : null,
+                mutationDescription: mutationInfo ? mutationInfo.mutationDescription : null,
+                mutations: mutationInfo && Array.isArray(mutationInfo.mutations) ? mutationInfo.mutations : [],
+                ...upgradeFields,
             });
         }
 
