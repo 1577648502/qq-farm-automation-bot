@@ -969,13 +969,14 @@ const ACCOUNT_CONFIG_NORMALIZERS = {
     milkTeaCraft: asBool,
     milkTeaSpeaker: asBool,
     milkTeaAutoHire: asBool,
-    milkTeaHireDuration: normalizeMilkTeaHireDuration,
+    // ⚠ 这两个归一化器原本是单参调用(回落默认值), 不能把当前值当 fallback
+    milkTeaHireDuration: (input) => normalizeMilkTeaHireDuration(input),
     milkTeaAutoInteract: asBool,
     milkTeaAutoWage: asBool,
     milkTeaAutoBuySeed: asBool,
     milkTeaAutoUpgrade: asBool,
     milkTeaSeedBuyCount: clampInt(1, 9999, 1),
-    milkTeaInteractType: normalizeMilkTeaInteractType,
+    milkTeaInteractType: (input) => normalizeMilkTeaInteractType(input),
 
     // 化肥自动购买
     fertilizerBuyOrganicCount: clampInt(0, 10000, 0),

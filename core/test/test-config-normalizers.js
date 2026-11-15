@@ -43,6 +43,12 @@ section('2. 非法值回落到安全默认, 且不抛错');
     catch (e) { threw = e; }
     check('非法值不抛异常', threw === null, threw && threw.message);
     check('非法 fireworkMode → self', apply({ fireworkMode: 'nonsense' }).fireworkMode === 'self');
+    // ⚠ 这两项原本是"单参归一化"(回落默认值), 曾被误传当前值当 fallback,
+    //   导致非法值回落成旧值而不是默认值 —— 由 milk-tea 用例抓到
+    const hireBase = apply({ milkTeaHireDuration: 3 }).milkTeaHireDuration;
+    const hireBad = apply({ milkTeaHireDuration: 7 }).milkTeaHireDuration;
+    check('非法 hireDuration → 默认 1(不是回落到当前值)', hireBad === 1 && hireBase === 3, { hireBase, hireBad });
+    check('非法 interactType → 默认 2', apply({ milkTeaInteractType: 99 }).milkTeaInteractType === 2);
     check('合法 fireworkMode 保留', apply({ fireworkMode: 'friend' }).fireworkMode === 'friend');
 }
 
