@@ -1,122 +1,32 @@
-﻿<script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref, watchEffect } from 'vue'
+<script setup lang="ts">
+import { computed } from 'vue'
 
-
-
+/**
+ * 一块地(或一棵合种作物)在棋盘上的显示。
+ *
+ * 这里只管**画**, 不管操作: 点击后由父级的 LandBoard 弹出操作面板。
+ * 合种作物(2x2/4x4)是一棵植物占多块地, 后端已经把它合成为一块跨格大地
+ * (副地块在 board.groupedSlaveIds 里, 不再单独渲染), 所以这里只需按格子的
+ * 实际大小自适应排版。
+ */
 const props = defineProps<{
   land: any
-  seeds?: any[]
+  /** 这块地跨几行/几列(合种作物 > 1) */
+  rowSpan?: number
+  columnSpan?: number
 }>()
-const emit = defineEmits<{ (e: 'operate', payload: { op: string, seedId?: number, fertilizerId?: number }): void }>()
 
-type LandActionTone = 'water' | 'weed' | 'bug' | 'harvest' | 'fertilizer' | 'organic' | 'danger' | 'plant' | 'upgrade' | 'unlock'
-interface LandAction {
-  op: string
-  label: string
-  tip: string
-  icon: string
-  tone: LandActionTone
-  fertilizerId?: number
-  disabled?: boolean
-}
+const land = computed(() => props.land || {})
+const spanRows = computed(() => Math.max(1, Number(props.rowSpan) || 1))
+const spanCols = computed(() => Math.max(1, Number(props.columnSpan) || 1))
 
-const ACTION_TONE_CLASSES: Record<LandActionTone, string> = {
-  water: 'border-sky-400/30 bg-sky-400/10 text-sky-600 hover:border-sky-400/70 hover:bg-sky-400/20 dark:text-sky-300',
-  weed: 'border-emerald-400/30 bg-emerald-400/10 text-emerald-600 hover:border-emerald-400/70 hover:bg-emerald-400/20 dark:text-emerald-300',
-  bug: 'border-rose-400/30 bg-rose-400/10 text-rose-600 hover:border-rose-400/70 hover:bg-rose-400/20 dark:text-rose-300',
-  harvest: 'border-amber-400/30 bg-amber-400/10 text-amber-600 hover:border-amber-400/70 hover:bg-amber-400/20 dark:text-amber-300',
-  fertilizer: 'border-cyan-400/30 bg-cyan-400/10 text-cyan-600 hover:border-cyan-400/70 hover:bg-cyan-400/20 dark:text-cyan-300',
-  organic: 'border-lime-400/30 bg-lime-400/10 text-lime-600 hover:border-lime-400/70 hover:bg-lime-400/20 dark:text-lime-300',
-  danger: 'border-red-400/30 bg-red-400/10 text-red-600 hover:border-red-400/70 hover:bg-red-400/20 dark:text-red-300',
-  plant: 'border-green-400/30 bg-green-400/10 text-green-600 hover:border-green-400/70 hover:bg-green-400/20 dark:text-green-300',
-  upgrade: 'border-violet-400/30 bg-violet-400/10 text-violet-600 hover:border-violet-400/70 hover:bg-violet-400/20 dark:text-violet-300',
-  unlock: 'border-blue-400/30 bg-blue-400/10 text-blue-600 hover:border-blue-400/70 hover:bg-blue-400/20 dark:text-blue-300',
-}
+const plantSize = computed(() => Math.max(1, Number(land.value.plantSize) || 1))
+const isGrouped = computed(() => spanRows.value > 1 || spanCols.value > 1 || plantSize.value > 1)
 
-const ACTION_BUTTON_BASE = 'land-action-button font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/40 disabled:cursor-not-allowed disabled:opacity-40'
-
-// 这块地能做哪些操作(按地块状态给)
-const landActions = computed(() => {
-  const l: any = land.value || {}
-  const acts: LandAction[] = []
-  if (l.status === 'locked') {
-    acts.push({ op: 'unlock', label: '解锁', tip: '解锁这块地', icon: 'i-carbon-unlocked', tone: 'unlock' })
-    return acts
-  }
-  if (l.needWater) acts.push({ op: 'water', label: '浇水', tip: '给这块地浇水', icon: 'i-carbon-rain-drop', tone: 'water' })
-  if (l.needWeed) acts.push({ op: 'weed', label: '除草', tip: '清除这块地的杂草', icon: 'i-carbon-clean', tone: 'weed' })
-  if (l.needBug) acts.push({ op: 'bug', label: '除虫', tip: '清除这块地的虫害', icon: 'i-carbon-warning-alt', tone: 'bug' })
-  if (l.status === 'harvestable' || l.canHarvest) acts.push({ op: 'harvest', label: '收获', tip: '收获这块地', icon: 'i-carbon-wheat', tone: 'harvest' })
-  if (l.plantName) {
-    acts.push({ op: 'fertilize', label: '普通肥', tip: '给这块地施普通化肥', icon: 'i-carbon-chemistry', tone: 'fertilizer', fertilizerId: 1011 })
-    acts.push({ op: 'fertilize', label: '有机肥', tip: '给这块地施有机化肥', icon: 'i-carbon-growth', tone: 'organic', fertilizerId: 1012 })
-    acts.push({ op: 'clear', label: '铲除', tip: '铲除这块地的作物', icon: 'i-carbon-trash-can', tone: 'danger' })
-  } else if (l.status !== 'locked') {
-    acts.push({ op: 'plant', label: '种植', tip: '在这块地种下所选种子', icon: 'i-carbon-sprout', tone: 'plant' })
-  }
-  // 2026-11-02 起服务端不再下发 could_upgrade: 用后端算出的 canUpgrade(等级/金币/金豆豆) 判断
-  const upgradeBlocked = l.canUpgrade === false || !!l.upgradeBlockedReason
-  acts.push({
-    op: 'upgrade',
-    label: '升级',
-    tip: upgradeBlocked
-      ? `暂不能升级：${l.upgradeBlockedReason || '条件未满足'}${l.upgradeCostText ? `（条件 ${l.upgradeCostText}）` : ''}`
-      : `升级这块地${l.upgradeCostText ? `（条件 ${l.upgradeCostText}）` : '(消耗金币)'}`,
-    icon: 'i-carbon-upgrade',
-    tone: 'upgrade',
-    disabled: upgradeBlocked,
-  })
-  return acts
-})
-
-function getActionButtonClass(action: LandAction) {
-  return `${ACTION_BUTTON_BASE} ${ACTION_TONE_CLASSES[action.tone]}`
-}
-
-// 种植用的种子(取 seeds prop 的第一项为默认)
-const pickedSeedId = ref<number>(0)
-watchEffect(() => {
-  const list = (props.seeds || []) as any[]
-  if (!pickedSeedId.value && list.length) pickedSeedId.value = Number(list[0]?.goodsId || list[0]?.seedId || list[0]?.id) || 0
-})
-function doAction(act: LandAction) {
-  emit('operate', {
-    op: act.op,
-    seedId: act.op === 'plant' ? pickedSeedId.value : undefined,
-    fertilizerId: act.fertilizerId,
-  })
-}
-
-
-
-const land = computed(() => props.land)
-interface MutationDisplay {
-  name: string
-  label: string
-  quality?: string
-  effect?: string
-  icon?: string
-  color?: string
-  description?: string
-}
-
-function formatMutationLabel(value: any) {
-  const t = String(value || '').trim()
-  if (!t)
-    return '变异'
-  if (t.startsWith('变异'))
-    return t // 变异#14 等未识别枚举
-  if (t === '变异')
-    return '变异(类型待识别)'
-  const base = t.includes('_') ? t.split('_')[0] : t // 黄金_天工 → 黄金 (与游戏显示一致)
-  return `${base}变异`
-}
-
-const mutationItems = computed<MutationDisplay[]>(() => {
-  const l: any = land.value || {}
-  const source = Array.isArray(l.mutations) ? l.mutations : []
+const mutationItems = computed(() => {
+  const source = Array.isArray(land.value.mutations) ? land.value.mutations : []
   const items = source
-    .map((mutation: any): MutationDisplay | null => {
+    .map((mutation: any) => {
       const name = String(mutation?.name || '').trim()
       if (!name)
         return null
@@ -130,24 +40,35 @@ const mutationItems = computed<MutationDisplay[]>(() => {
         description: mutation.description || undefined,
       }
     })
-    .filter((mutation: MutationDisplay | null): mutation is MutationDisplay => !!mutation)
+    .filter(Boolean) as Array<{ name: string, label: string, quality?: string, effect?: string, icon?: string, color?: string, description?: string }>
 
-  if (items.length === 0 && l.mutationType) {
+  if (items.length === 0 && land.value.mutationType) {
     items.push({
-      name: String(l.mutationType),
-      label: formatMutationLabel(l.mutationType),
-      quality: l.mutationQuality || undefined,
-      effect: l.mutationEffect || undefined,
-      icon: l.mutationIcon || undefined,
-      color: l.mutationColor || undefined,
-      description: l.mutationDescription || undefined,
+      name: String(land.value.mutationType),
+      label: formatMutationLabel(land.value.mutationType),
+      quality: land.value.mutationQuality || undefined,
+      effect: land.value.mutationEffect || undefined,
+      icon: land.value.mutationIcon || undefined,
+      color: land.value.mutationColor || undefined,
+      description: land.value.mutationDescription || undefined,
     })
   }
-  if (items.length === 0 && l.isGolden) {
+  if (items.length === 0 && land.value.isGolden)
     items.push({ name: '黄金', label: '黄金变异', effect: '黄金果实', icon: '⭐', color: '#FF6B35' })
-  }
   return items
 })
+
+function formatMutationLabel(value: any) {
+  const t = String(value || '').trim()
+  if (!t)
+    return '变异'
+  if (t === '变异')
+    return '变异(类型待识别)'
+  if (t.startsWith('变异'))
+    return t
+  const base = t.includes('_') ? t.split('_')[0] : t
+  return `${base}变异`
+}
 
 function getMutationQualityClass(quality?: string) {
   if (quality === '天工')
@@ -162,109 +83,47 @@ function getMutationQualityClass(quality?: string) {
 function getMutationQualityLabel(quality?: string) {
   return quality === '未知' ? '待确认' : quality
 }
-const now = ref(Date.now())
-let timer: ReturnType<typeof setInterval> | null = null
-
-
-
-onMounted(() => {
-  timer = setInterval(() => {
-    now.value = Date.now()
-  }, 1000)
-})
-
-
-
-onUnmounted(() => {
-  if (timer) {
-    clearInterval(timer)
-  }
-})
-
-
 
 const growProgress = computed(() => {
-  const matureInSec = land.value.matureInSec || 0
-  const totalGrowTime = land.value.totalGrowTime || 0
-
-  
-
-  if (totalGrowTime <= 0 || matureInSec <= 0) {
+  const matureInSec = Number(land.value.matureInSec) || 0
+  const totalGrowTime = Number(land.value.totalGrowTime) || 0
+  if (totalGrowTime <= 0 || matureInSec <= 0)
     return 0
-  }
-
-  
-
-  const progress = Math.min(100, Math.max(0, (matureInSec / totalGrowTime) * 100))
-  return progress
+  return Math.min(100, Math.max(0, (matureInSec / totalGrowTime) * 100))
 })
 
+// 土地等级 → 名称与底色。等级语义固定(0 普通 … 6 蓝晶), 一张表同时供
+// 底色 class、显示名、以及 5/6 级那个 ◆ 角标使用, 免得改等级名要改三处。
+const LAND_LEVELS: Array<{ name: string, cls: string, dot?: string }> = [
+  { name: '普通', cls: 'bg-white dark:bg-gray-800 border-gray-200 dark:border-gray-700' },
+  { name: '黄土地', cls: 'bg-yellow-50/80 dark:bg-yellow-900/10 border-yellow-200 dark:border-yellow-800' },
+  { name: '红土地', cls: 'bg-red-50/80 dark:bg-red-900/10 border-red-200 dark:border-red-800' },
+  { name: '黑土地', cls: 'bg-slate-100 dark:bg-slate-800 border-slate-400 dark:border-slate-500' },
+  { name: '金土地', cls: 'bg-amber-100/80 dark:bg-amber-900/20 border-amber-300 dark:border-amber-600' },
+  { name: '紫晶土地', cls: 'bg-fuchsia-100/80 dark:bg-fuchsia-900/20 border-fuchsia-300 dark:border-fuchsia-600', dot: 'text-fuchsia-500' },
+  { name: '蓝晶土地', cls: 'bg-sky-100/80 dark:bg-sky-900/20 border-sky-300 dark:border-sky-600', dot: 'text-sky-500' },
+]
 
+function getLandLevel(level: any) {
+  const idx = Math.min(Math.max(Number(level) || 0, 0), LAND_LEVELS.length - 1)
+  return LAND_LEVELS[idx]!
+}
 
-function getLandStatusClass(land: any) {
-  const status = land.status
-  const level = Number(land.level) || 0
-
-
+function getLandStatusClass(l: any) {
+  const status = l.status
 
   if (status === 'locked')
     return 'bg-gray-100 dark:bg-gray-800 opacity-60 border-dashed'
-
-
-
-  let baseClass = 'bg-white dark:bg-gray-800 border-gray-200 dark:border-gray-700'
-
-
-
-  // 土地等级样式
-  switch (level) {
-    case 1: // 黄土地
-      baseClass = 'bg-yellow-50/80 dark:bg-yellow-900/10 border-yellow-200 dark:border-yellow-800'
-      break
-    case 2: // 红土地
-      baseClass = 'bg-red-50/80 dark:bg-red-900/10 border-red-200 dark:border-red-800'
-      break
-    case 3: // 黑土地
-      baseClass = 'bg-slate-100 dark:bg-slate-800 border-slate-400 dark:border-slate-500'
-      break
-    case 4: // 金土地
-      baseClass = 'bg-amber-100/80 dark:bg-amber-900/20 border-amber-300 dark:border-amber-600'
-      break
-    case 5: // 紫晶土地
-      baseClass = 'bg-fuchsia-100/80 dark:bg-fuchsia-900/20 border-fuchsia-300 dark:border-fuchsia-600'
-      break
-    case 6: // 蓝晶土地(2026-11-02 新增)
-      baseClass = 'bg-sky-100/80 dark:bg-sky-900/20 border-sky-300 dark:border-sky-600'
-      break
-  }
-
-
-
-  // 状态叠加
   if (status === 'dead')
     return 'bg-gray-200 dark:bg-gray-700 border-gray-300 dark:border-gray-600 grayscale'
 
-
-
+  const baseClass = getLandLevel(l.level).cls
   if (status === 'harvestable')
     return `${baseClass} ring-2 ring-yellow-500 ring-offset-1 dark:ring-offset-gray-900`
-
-
-
   if (status === 'stealable')
     return `${baseClass} ring-2 ring-purple-500 ring-offset-1 dark:ring-offset-gray-900`
-
-
-
-  if (status === 'growing')
-    return baseClass
-
-
-
   return baseClass
 }
-
-
 
 function formatTime(sec: number) {
   if (sec <= 0)
@@ -275,8 +134,6 @@ function formatTime(sec: number) {
   return `${h > 0 ? `${h}:` : ''}${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`
 }
 
-
-
 function getSafeImageUrl(url: string) {
   if (!url)
     return ''
@@ -285,109 +142,109 @@ function getSafeImageUrl(url: string) {
   return url
 }
 
-
-
 function getLandTypeName(level: number) {
-  const typeMap: Record<number, string> = {
-    0: '普通',
-    1: '黄土地',
-    2: '红土地',
-    3: '黑土地',
-    4: '金土地',
-    5: '紫晶土地',
-    6: '蓝晶土地',
-  }
-  return typeMap[Number(level) || 0] || ''
+  return getLandLevel(level).name
 }
-function getPlantSizeText(land: any) {
-  const size = Number(land?.plantSize) || 1
 
+const statusText = computed(() => {
+  const l = land.value
+  if (l.status === 'locked')
+    return '未解锁'
+  if (l.matureInSec > 0)
+    return `预计 ${formatTime(l.matureInSec)} 后成熟`
+  if (l.status === 'harvestable')
+    return '可收获'
+  if (l.status === 'dead')
+    return '已枯萎'
+  return l.phaseName || '空地'
+})
 
-  if (size <= 1)
-    return ''
-  return `${size}x${size}`
-}
+/** 缺什么(缺水/草/虫/可收/枯), 用来在地块上直接标出来, 不需要点开才知道 */
+const alerts = computed(() => {
+  const l = land.value
+  const list: Array<{ key: string, label: string, icon: string, tone: string }> = []
+  if (l.status === 'harvestable')
+    list.push({ key: 'harvest', label: '可收', icon: 'i-carbon-wheat', tone: 'bg-amber-500/90 text-white' })
+  if (l.needWater)
+    list.push({ key: 'water', label: '缺水', icon: 'i-carbon-rain-drop', tone: 'bg-sky-500/90 text-white' })
+  if (l.needWeed)
+    list.push({ key: 'weed', label: '有草', icon: 'i-carbon-clean', tone: 'bg-emerald-500/90 text-white' })
+  if (l.needBug)
+    list.push({ key: 'bug', label: '有虫', icon: 'i-carbon-warning-alt', tone: 'bg-rose-500/90 text-white' })
+  if (l.status === 'dead')
+    list.push({ key: 'dead', label: '枯萎', icon: 'i-carbon-close-outline', tone: 'bg-gray-500/90 text-white' })
+  return list
+})
 </script>
-
-
 
 <template>
   <div
-    class="land-card group relative min-h-[120px] sm:min-h-[140px] flex flex-col items-center border rounded-lg p-1.5 sm:p-2 transition dark:border-gray-700 hover:z-20 hover:shadow-md focus-within:z-20"
-    :class="getLandStatusClass(land)"
+    class="land-tile group relative flex flex-col items-center overflow-hidden border rounded-lg p-1.5 transition-colors sm:rounded-xl sm:p-2"
+    :class="[getLandStatusClass(land), alerts.length ? 'land-tile--active' : '', isGrouped ? 'land-tile--grouped' : 'justify-center']"
   >
+    <!-- 左上: 地块编号(合种作物标出整组 ID) -->
     <div class="absolute left-1 top-1 text-[10px] text-gray-400 font-mono">
-      #{{ land.id }}
+      #{{ land.id }}<span v-if="isGrouped" class="ml-0.5 text-pink-500">组</span>
     </div>
+
+    <!-- 右上: 合种标识 -->
     <div
-      v-if="land.plantSize > 1"
+      v-if="isGrouped"
       class="absolute right-1 top-1 rounded bg-pink-100 px-1 py-0.5 text-[10px] text-pink-700 dark:bg-pink-900/30 dark:text-pink-300"
     >
-      合种 {{ getPlantSizeText(land) }}
+      {{ spanCols }}x{{ spanRows }}
     </div>
-    <div class="mb-0.5 mt-3 sm:mb-1 sm:mt-4 h-8 w-8 sm:h-10 sm:w-10 flex items-center justify-center">
+
+    <!-- 作物图标: 合种大地可以放得更显眼 -->
+    <div
+      class="mb-0.5 mt-3 h-8 w-8 flex shrink-0 items-center justify-center sm:mb-1 sm:mt-4 sm:h-10 sm:w-10"
+      :class="isGrouped ? 'h-10 w-10 sm:h-14 sm:w-14' : ''"
+    >
       <img
         v-if="land.seedImage"
         :src="getSafeImageUrl(land.seedImage)"
         class="max-h-full max-w-full object-contain"
         loading="lazy"
         referrerpolicy="no-referrer"
+        alt=""
       >
       <div v-else class="i-carbon-sprout text-xl text-gray-300" />
     </div>
 
-
-
-    <div class="w-full truncate px-1 text-center text-xs font-bold" :title="land.plantName">
-      {{ land.plantName || '-' }}
+    <div class="w-full truncate px-1 text-center text-xs font-bold" :class="isGrouped ? 'sm:text-sm' : ''" :title="land.plantName">
+      {{ land.plantName || (land.status === 'locked' ? '未解锁' : '-') }}
     </div>
-
-
 
     <div class="mb-0.5 mt-0.5 w-full text-center text-[10px] text-gray-500">
-      <span v-if="land.matureInSec > 0" class="text-orange-500">
-        预计 {{ formatTime(land.matureInSec) }} 后成熟
-      </span>
-      <span v-else>
-        {{ land.phaseName || (land.status === 'locked' ? '未解锁' : '未开垦') }}
-      </span>
+      <span :class="land.matureInSec > 0 ? 'text-orange-500' : ''">{{ statusText }}</span>
     </div>
 
-
-
-    <div v-if="land.matureInSec > 0 && land.totalGrowTime > 0" class="w-full px-1">
+    <div v-if="land.matureInSec > 0 && land.totalGrowTime > 0" class="w-full shrink-0 px-1">
       <div class="rainbow-progress-bar">
-        <div 
-          class="rainbow-progress-fill"
-          :style="{ width: `${growProgress}%` }"
-        />
+        <div class="rainbow-progress-fill" :style="{ width: `${growProgress}%` }" />
       </div>
     </div>
 
-
-
-    <!--    <div class="mb-1 text-[10px] text-gray-400"> -->
     <div class="text-[10px] text-gray-400">
       {{ getLandTypeName(land.level) }}
-      <span v-if="Number(land.level) === 5" class="ml-0.5 text-fuchsia-500" title="紫晶土地">&#9670;</span>
-      <span v-else-if="Number(land.level) >= 6" class="ml-0.5 text-sky-500" title="蓝晶土地">&#9670;</span>
+      <span
+        v-if="getLandLevel(land.level).dot"
+        class="ml-0.5"
+        :class="getLandLevel(land.level).dot"
+        :title="getLandTypeName(land.level)"
+      >&#9670;</span>
     </div>
 
-
-
-    <div
-      v-if="mutationItems.length"
-      class="mt-1 w-full text-[10px] space-y-1"
-    >
+    <div v-if="mutationItems.length" class="mt-1 w-full text-[10px] space-y-1">
       <div
         v-for="item in mutationItems"
         :key="`${item.name}-${item.effect || ''}`"
         class="min-w-0 leading-tight"
         :title="item.description || `${item.label}${item.effect ? ` · ${item.effect}` : ''}`"
       >
-        <div class="flex min-w-0 items-center justify-center gap-1">
+        <div class="min-w-0 flex items-center justify-center gap-1">
           <span class="shrink-0" :style="{ color: item.color || '#6B7280' }" aria-hidden="true">{{ item.icon || '?' }}</span>
-          <span class="min-w-0 truncate font-semibold text-gray-700 dark:text-gray-200">{{ item.label }}</span>
+          <span class="min-w-0 truncate text-gray-700 font-semibold dark:text-gray-200">{{ item.label }}</span>
           <span
             v-if="item.quality && item.quality !== '无'"
             class="shrink-0 rounded px-1 font-medium"
@@ -396,226 +253,51 @@ function getPlantSizeText(land: any) {
             {{ getMutationQualityLabel(item.quality) }}
           </span>
         </div>
-        <div v-if="item.effect" class="mt-0.5 break-words text-center text-[9px] text-gray-600 dark:text-gray-300">
-          {{ item.effect }}
-        </div>
       </div>
     </div>
+
     <div class="mb-1 text-[10px] text-gray-400">
-      季数 {{ land.totalSeason > 0 ? (`${land.currentSeason}/${land.totalSeason}`) : '-/-' }}
+      季数 {{ land.totalSeason > 0 ? `${land.currentSeason}/${land.totalSeason}` : '-/-' }}
     </div>
 
-
-
-    <!-- Status Badges -->
-    <div class="mt-auto flex origin-bottom scale-85 sm:scale-90 gap-0.5 text-[9px] sm:text-[10px]">
-      <span v-if="land.needWater" class="rounded bg-blue-100 px-0.5 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400">水</span>
-      <span v-if="land.needWeed" class="rounded bg-green-100 px-0.5 text-green-700 dark:bg-green-900/30 dark:text-green-400">草</span>
-      <span v-if="land.needBug" class="rounded bg-red-100 px-0.5 text-red-700 dark:bg-red-900/30 dark:text-red-400">虫</span>
-      <!-- For friends view -->
-      <span v-if="land.status === 'harvestable'" class="rounded bg-orange-100 px-0.5 text-orange-700 dark:bg-orange-900/30 dark:text-orange-400">可偷</span>
-    </div>
-
-    <div class="land-action-hint" aria-hidden="true">
-      <div class="i-carbon-settings-adjust text-sm" />
-    </div>
-
-    <!-- 单地块操作 -->
-    <div class="land-action-dock">
-      <div v-if="landActions.some(a => a.op === 'plant')" class="mb-1.5">
-        <select
-          v-model.number="pickedSeedId"
-          class="land-seed-select"
-          aria-label="选择种植种子"
-          title="选择种植种子"
-          @click.stop
-        >
-          <option v-for="sd in (seeds || [])" :key="sd.goodsId || sd.seedId || sd.id" :value="Number(sd.goodsId || sd.seedId || sd.id)">
-            {{ sd.name || ('#' + (sd.goodsId || sd.seedId || sd.id)) }}
-          </option>
-        </select>
-      </div>
-      <div class="flex flex-wrap items-center justify-center gap-1">
-        <button
-          v-for="act in landActions"
-          :key="`${act.op}-${act.fertilizerId || act.label}`"
-          type="button"
-          :class="getActionButtonClass(act)"
-          :aria-label="act.tip"
-          :data-tip="act.label"
-          :disabled="act.disabled || (act.op === 'plant' && !pickedSeedId)"
-          @click.stop="doAction(act)"
-        >
-          <i :class="act.icon" class="shrink-0 text-sm" aria-hidden="true" />
-          <span class="land-action-label">{{ act.label }}</span>
-        </button>
-      </div>
+    <!-- 待办标记: 让用户一眼看到哪块地要处理, 不用挨个点开 -->
+    <div v-if="alerts.length" class="mt-auto flex flex-wrap items-center justify-center gap-0.5 pb-0.5">
+      <span
+        v-for="alert in alerts"
+        :key="alert.key"
+        class="inline-flex items-center gap-0.5 rounded px-1 py-0.5 text-[9px] font-medium"
+        :class="alert.tone"
+      >
+        <i :class="alert.icon" class="text-[10px]" aria-hidden="true" />
+        {{ alert.label }}
+      </span>
     </div>
   </div>
 </template>
 
-
-
 <style scoped>
-.land-action-dock {
-  position: relative;
-  z-index: 30;
-  width: 100%;
-  margin-top: 0.5rem;
-  border: 1px solid rgb(148 163 184 / 0.3);
-  border-radius: 0.75rem;
-  background: rgb(255 255 255 / 0.9);
-  padding: 0.35rem;
-  box-shadow: 0 10px 28px rgb(15 23 42 / 0.14);
-  backdrop-filter: blur(12px);
+.land-tile--active {
+  box-shadow: 0 0 0 2px rgb(251 191 36 / 0.55);
 }
 
-.land-action-hint {
-  display: none;
-  position: absolute;
-  right: 0.45rem;
-  bottom: 0.45rem;
-  z-index: 10;
-  height: 1.5rem;
-  width: 1.5rem;
-  align-items: center;
-  justify-content: center;
-  border: 1px solid rgb(148 163 184 / 0.25);
-  border-radius: 9999px;
-  background: rgb(255 255 255 / 0.72);
-  color: rgb(100 116 139);
-  opacity: 0.75;
-  pointer-events: none;
-  transition: opacity 0.18s ease;
-}
-
-.land-action-button {
-  position: relative;
-  display: flex;
-  height: 2.25rem;
-  min-width: 2.25rem;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 0.05rem;
-  border-width: 1px;
-  border-radius: 0.55rem;
-  padding: 0 0.25rem;
-}
-
-.land-action-label {
-  font-size: 8px;
-  line-height: 1;
-  white-space: nowrap;
-}
-
-.land-seed-select {
-  width: 100%;
-  min-height: 1.75rem;
-  border: 1px solid rgb(148 163 184 / 0.4);
-  border-radius: 0.45rem;
-  background: rgb(255 255 255 / 0.88);
-  padding: 0 0.5rem;
-  color: rgb(51 65 85);
-  font-size: 10px;
-  outline: none;
-}
-
-.land-seed-select:focus {
-  border-color: rgb(59 130 246 / 0.8);
-  box-shadow: 0 0 0 2px rgb(59 130 246 / 0.16);
-}
-
-@media (hover: hover) and (pointer: fine) {
-  .land-action-dock {
-    position: absolute;
-    right: 0.5rem;
-    bottom: 0.5rem;
-    left: 0.5rem;
-    width: auto;
-    margin-top: 0;
-    opacity: 0;
-    pointer-events: none;
-    transform: translateY(0.4rem) scale(0.98);
-    transition: opacity 0.18s ease, transform 0.18s ease;
-  }
-
-  .land-card:hover .land-action-dock,
-  .land-card:focus-within .land-action-dock {
-    opacity: 1;
-    pointer-events: auto;
-    transform: translateY(0) scale(1);
-  }
-
-  .land-action-hint {
-    display: flex;
-  }
-
-  .land-card:hover .land-action-hint,
-  .land-card:focus-within .land-action-hint {
-    opacity: 0;
-  }
-
-  .land-action-button {
-    height: 2rem;
-    min-width: 2rem;
-    border-radius: 9999px;
-    padding: 0;
-  }
-
-  .land-action-label {
-    display: none;
-  }
-
-  .land-action-button::after {
-    content: attr(data-tip);
-    position: absolute;
-    bottom: calc(100% + 0.4rem);
-    left: 50%;
-    z-index: 50;
-    border-radius: 0.35rem;
-    background: rgb(15 23 42 / 0.94);
-    padding: 0.2rem 0.4rem;
-    color: white;
-    font-size: 9px;
-    line-height: 1.2;
-    opacity: 0;
-    pointer-events: none;
-    transform: translate(-50%, 0.2rem);
-    transition: opacity 0.12s ease, transform 0.12s ease;
-    white-space: nowrap;
-  }
-
-  .land-action-button:hover::after,
-  .land-action-button:focus-visible::after {
-    opacity: 1;
-    transform: translate(-50%, 0);
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .land-action-dock,
-  .land-action-button::after,
-  .land-action-hint {
-    transition: none;
-  }
+/* 合种大地: 内容整体铺开, 待办标记贴底, 不要因为格子突然变高就挤成一坨 */
+.land-tile--grouped {
+  justify-content: space-evenly;
+  padding-top: 1.25rem;
 }
 
 .rainbow-progress-bar {
   width: 80%;
   margin: 0 auto;
-  height: 8px;
+  height: 6px;
   background: linear-gradient(145deg, #f0f0f0, #e6e6e6);
   border-radius: 10px;
   overflow: hidden;
-  box-shadow: 
-    inset 3px 3px 6px rgba(0, 0, 0, 0.1),
-    inset -3px -3px 6px rgba(255, 255, 255, 0.9),
-    2px 2px 4px rgba(0, 0, 0, 0.05);
+  box-shadow:
+    inset 2px 2px 4px rgba(0, 0, 0, 0.1),
+    inset -2px -2px 4px rgba(255, 255, 255, 0.9);
   position: relative;
 }
-
-
 
 .rainbow-progress-bar::before {
   content: '';
@@ -623,119 +305,33 @@ function getPlantSizeText(land: any) {
   top: 1px;
   left: 2px;
   right: 2px;
-  height: 3px;
-  background: linear-gradient(90deg, rgba(255,255,255,0.8), rgba(255,255,255,0.2));
+  height: 2px;
+  background: linear-gradient(90deg, rgba(255, 255, 255, 0.8), rgba(255, 255, 255, 0.2));
   border-radius: 10px 10px 0 0;
   pointer-events: none;
 }
 
-
-
 .rainbow-progress-fill {
   height: 100%;
-  background: linear-gradient(
-    90deg,
-    #ff6b9d 0%,
-    #ff9f43 20%,
-    #ffd32a 40%,
-    #26de81 60%,
-    #45aaf2 80%,
-    #a55eea 100%
-  );
+  background: linear-gradient(90deg, #ff6b9d 0%, #ff9f43 20%, #ffd32a 40%, #26de81 60%, #45aaf2 80%, #a55eea 100%);
   border-radius: 10px;
   transition: width 1s linear;
   position: relative;
-  box-shadow: 
-    inset 0 2px 4px rgba(255, 255, 255, 0.6),
-    inset 0 -1px 2px rgba(0, 0, 0, 0.1);
-  animation: cute-pulse 2s ease-in-out infinite;
 }
 
-
-
-.rainbow-progress-fill::after {
-  content: '';
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  background: linear-gradient(
-    90deg,
-    transparent 0%,
-    rgba(255, 255, 255, 0.4) 50%,
-    transparent 100%
-  );
-  animation: shimmer 2s infinite;
-  border-radius: 10px;
-}
-
-
-
-@keyframes cute-pulse {
-  0%, 100% {
-    filter: brightness(1) saturate(1);
-  }
-  50% {
-    filter: brightness(1.1) saturate(1.1);
+@media (prefers-reduced-motion: reduce) {
+  .rainbow-progress-fill {
+    transition: none;
+    animation: none;
   }
 }
-
-
-
-@keyframes shimmer {
-  0% {
-    transform: translateX(-100%);
-  }
-  100% {
-    transform: translateX(100%);
-  }
-}
-
-
 
 @media (prefers-color-scheme: dark) {
   .rainbow-progress-bar {
     background: linear-gradient(145deg, #2a2a2a, #1e1e1e);
-    box-shadow: 
-      inset 3px 3px 6px rgba(0, 0, 0, 0.3),
-      inset -3px -3px 6px rgba(60, 60, 60, 0.3),
-      2px 2px 4px rgba(0, 0, 0, 0.2);
-  }
-
-
-
-  .rainbow-progress-bar::before {
-    background: linear-gradient(90deg, rgba(255,255,255,0.1), rgba(255,255,255,0.02));
-  }
-
-
-
-  .rainbow-progress-fill {
-    box-shadow: 
-      inset 0 2px 4px rgba(255, 255, 255, 0.2),
-      inset 0 -1px 2px rgba(0, 0, 0, 0.2);
+    box-shadow:
+      inset 2px 2px 4px rgba(0, 0, 0, 0.3),
+      inset -2px -2px 4px rgba(60, 60, 60, 0.3);
   }
 }
 </style>
-
-<style>
-.dark .land-action-dock {
-  border-color: rgb(148 163 184 / 0.24);
-  background: rgb(17 24 39 / 0.92);
-  box-shadow: 0 12px 30px rgb(0 0 0 / 0.32);
-}
-
-.dark .land-action-hint {
-  border-color: rgb(148 163 184 / 0.32);
-  background: rgb(30 41 59 / 0.9);
-  color: rgb(203 213 225);
-}
-
-.dark .land-seed-select {
-  border-color: rgb(100 116 139 / 0.55);
-  background: rgb(30 41 59 / 0.92);
-  color: rgb(226 232 240);
-}
-</style>
-

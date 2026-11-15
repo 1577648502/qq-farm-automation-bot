@@ -1,4 +1,4 @@
-﻿import { defineStore } from 'pinia'
+import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import api from '@/api'
 import { useAccountStore } from '@/stores/account'
@@ -38,6 +38,8 @@ export const useFarmStore = defineStore('farm', () => {
   const lands = ref<Land[]>([])
   const seeds = ref<any[]>([])
   const summary = ref<any>({})
+  // 棋盘布局(列数/每块地的跨格位置): 2x2 合种作物由后端合成一块跨格大地
+  const board = ref<any>(null)
   const loading = ref(false)
   let latestLandsRequest = 0
   let latestSeedsRequest = 0
@@ -66,6 +68,7 @@ export const useFarmStore = defineStore('farm', () => {
       if (data?.ok) {
         lands.value = data.data.lands || []
         summary.value = data.data.summary || {}
+        board.value = data.data.board || null
       }
     }
     finally {
@@ -87,7 +90,7 @@ export const useFarmStore = defineStore('farm', () => {
   }
 
   /** 单地块操作: 浇水/除草/除虫/收获/铲除/施肥/种植/升级/解锁 */
-  async function operateLand(accountId: string, payload: { landId: number; op: string; seedId?: number; fertilizerId?: number }) {
+  async function operateLand(accountId: string, payload: { landId: number, masterLandId?: number, op: string, seedId?: number, fertilizerId?: number }) {
     if (!accountId)
       return
     const { data } = await api.post('/api/land/operate', payload, {
@@ -107,5 +110,5 @@ export const useFarmStore = defineStore('farm', () => {
     await fetchLands(accountId)
   }
 
-  return { lands, summary, seeds, loading, fetchLands, fetchSeeds, operate, operateLand }
+  return { lands, summary, board, seeds, loading, fetchLands, fetchSeeds, operate, operateLand }
 })

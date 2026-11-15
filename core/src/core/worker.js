@@ -1366,6 +1366,7 @@ async function handleApiCall(msg) {
                 const lo = args[0] || {};
                 result = await operateSingleLand({
                     landId: lo.landId,
+                    masterLandId: lo.masterLandId,
                     op: lo.op,
                     seedId: lo.seedId,
                     fertilizerId: lo.fertilizerId,

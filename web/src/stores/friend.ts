@@ -18,6 +18,8 @@ export const useFriendStore = defineStore('friend', () => {
   const friends = ref<any[]>([])
   const loading = ref(false)
   const friendLands = ref<Record<string, any[]>>({})
+  // 好友农田的棋盘布局(与自己的农场同一套合并规则: 2x2 合成一块跨格大地)
+  const friendBoards = ref<Record<string, any>>({})
   const friendLandsLoading = ref<Record<string, boolean>>({})
   const blacklist = ref<BlacklistItem[]>([])
   const interactRecords = ref<any[]>([])
@@ -159,6 +161,7 @@ export const useFriendStore = defineStore('friend', () => {
         const lands = res.data.data.lands || []
         const summary = res.data.data.summary || null
         friendLands.value[friendId] = lands
+        friendBoards.value[friendId] = res.data.data.board || null
         syncFriendPlantSummary(friendId, lands, summary)
       }
     }
@@ -289,6 +292,7 @@ export const useFriendStore = defineStore('friend', () => {
     friends,
     loading,
     friendLands,
+    friendBoards,
     friendLandsLoading,
     blacklist,
     interactRecords,

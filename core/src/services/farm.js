@@ -13,6 +13,7 @@ const { getPlantRankings } = require('./analytics');
 const { createScheduler } = require('./scheduler');
 const { recordOperation } = require('./stats');
 const { getBagSeeds, getBag, getBagItems, getContainerHoursFromBagItems } = require('./warehouse');
+const { buildLandBoard, getSlaveLandIds, hasPlantData } = require('./land-layout');
 const { autoBuyFertilizer, checkAndBuyFertilizerBoth } = require('./mall');
 const { getCapitalModeConfig, deployDog, withdrawDog, DOG_TYPE_NAMES } = require('./pet');
 
@@ -251,16 +252,6 @@ async function getNextRipeness() {
     return { nowSec, landCount: lands.length, ripeCount, readyLandIds, nextReadyAt };
 }
 
-function getSlaveLandIds(land) {
-    const ids = Array.isArray(land && land.slave_land_ids) ? land.slave_land_ids : [];
-    return [...new Set(ids.map(id => toNum(id)).filter(Boolean))];
-}
-
-function hasPlantData(land) {
-    const plant = land && land.plant;
-    return !!(plant && Array.isArray(plant.phases) && plant.phases.length > 0);
-}
-
 function getLinkedMasterLand(land, landsMap) {
     const landId = toNum(land && land.id);
     const masterLandId = toNum(land && land.master_land_id);
@@ -324,6 +315,13 @@ function isOccupiedSlaveLandWithMap(land, landsMap, slaveToMasterMap) {
     return slaveToMasterMap.has(landId);
 }
 
+/**
+ * 汇总面板顶部的胶囊数字。
+ *
+ * 按**作物**计数, 不按格子: 2x2 合种作物是一棵植物占 4 块地,
+ * 副地块(occupiedByMaster=true)在面板上已经被主地块合并掉了,
+ * 再计入的话"可收 4"其实只有 1 棵作物。
+ */
 function summarizeLandDetails(lands) {
     const summary = {
         harvestable: 0,
@@ -336,7 +334,7 @@ function summarizeLandDetails(lands) {
     };
 
     for (const land of Array.isArray(lands) ? lands : []) {
-        if (!land || !land.unlocked) continue;
+        if (!land || !land.unlocked || land.occupiedByMaster) continue;
 
         const status = String(land.status || '');
         if (status === 'harvestable') summary.harvestable++;
@@ -1319,8 +1317,10 @@ async function getLandsDetail() {
 
         return {
             lands,
-
             summary: summarizeLandDetails(lands),
+            // 棋盘要用**原始**地块算: 化简后的 lands 里副地块已经被主地块的作物数据覆盖,
+            // 分组关系(slave_land_ids)只剩主地块这一份, 拿它算会和实际格子位置对不上
+            board: buildLandBoard(landsReply.lands),
         };
     } catch {
         return { lands: [], summary: {} };
@@ -1914,59 +1914,6 @@ async function checkFarm() {
  * 手动/自动执行农场操作
  * @param {string} opType - 'all', 'harvest', 'clear', 'plant', 'upgrade'
  */
-/**
- * 单地块操作(我的农场里每块地单独操作)
- * @param opts.landId 地块 ID
- * @param opts.op water|weed|bug|harvest|clear|fertilize|plant|upgrade|unlock
- * @param opts.seedId 种植时用的种子ID(不传则报错)
- * @param opts.fertilizerId 施肥用的化肥ID(默认普通化肥)
- * @returns {Promise<{ok:boolean, action:string, landId:number, detail?:string}>}
- */
-async function operateSingleLand(opts = {}) {
-    const landId = toNum(opts.landId);
-    const op = String(opts.op || '').trim();
-    if (!landId) throw new Error('缺少地块 ID');
-    if (!op) throw new Error('缺少操作类型');
-
-    switch (op) {
-        case 'water':
-            await waterLand([landId]);
-            return { ok: true, action: '浇水', landId };
-        case 'weed':
-            await weedOut([landId]);
-            return { ok: true, action: '除草', landId };
-        case 'bug':
-            await insecticide([landId]);
-            return { ok: true, action: '除虫', landId };
-        case 'harvest':
-            await harvest([landId]);
-            return { ok: true, action: '收获', landId };
-        case 'clear':
-            await removePlant([landId]);
-            return { ok: true, action: '铲除', landId };
-        case 'upgrade':
-            await upgradeLand(landId);
-            return { ok: true, action: '升级土地', landId };
-        case 'unlock':
-            await unlockLand(landId);
-            return { ok: true, action: '解锁土地', landId };
-        case 'plant': {
-            const seedId = toNum(opts.seedId);
-            if (!seedId) throw new Error('请先选择要种的种子');
-            await plantSeeds(seedId, [landId]);
-            return { ok: true, action: '种植', landId, detail: `seedId=${seedId}` };
-        }
-        case 'fertilize': {
-            const fertilizerId = toNum(opts.fertilizerId) || NORMAL_FERTILIZER_ID;
-            const n = await fertilize([landId], fertilizerId);
-            if (n <= 0) throw new Error('施肥失败(可能化肥不足或该地块不支持)');
-            return { ok: true, action: '施肥', landId, detail: `fertilizerId=${fertilizerId}` };
-        }
-        default:
-            throw new Error('不支持的操作: ' + op);
-    }
-}
-
 async function runFarmOperation(opType) {
     const landsReply = await getAllLands();
     if (!landsReply.lands || landsReply.lands.length === 0) {
@@ -2297,6 +2244,91 @@ async function runFarmOperation(opType) {
          });
     }
     return { hadWork: actions.length > 0, actions };
+}
+
+/**
+ * 把一个地块 ID 还原成它所属合种组的**主地块**。
+ *
+ * 合种作物(2x2/4x4)在面板上只显示一块跨格大地, 但背后是 4 块地:
+ * 副地块不带 plant 数据, 而浇水/除草/除虫/收获/铲除/施肥这些协议服务端只认主地块
+ * (收获的 Reply 也只回主地块)。
+ *
+ * 前端面板渲染的就是主地块, 正常情况下 `masterLandId` 直接由前端带上来,
+ * 不再为了这一步多拉一次全量 AllLands。只有没带时才补拉快照兜底。
+ */
+async function resolveMasterLandId(landId, knownMasterLandId) {
+    const known = toNum(knownMasterLandId);
+    if (known > 0) return known;
+    try {
+        const reply = await getAllLands();
+        const landsMap = buildLandMap(reply && reply.lands);
+        const land = landsMap.get(landId);
+        if (!land) return landId;
+        const { masterLandId } = getDisplayLandContext(land, landsMap);
+        return masterLandId || landId;
+    } catch {
+        return landId;
+    }
+}
+
+/**
+ * 单地块操作(我的农场里每块地单独操作)
+ * @param opts.landId 地块 ID(可能是合种组的副地块)
+ * @param opts.masterLandId 该地块所属合种组的主地块(前端已知时传入, 省掉一次全量拉取)
+ * @param opts.op water|weed|bug|harvest|clear|fertilize|plant|upgrade|unlock
+ * @param opts.seedId 种植时用的种子ID(不传则报错)
+ * @param opts.fertilizerId 施肥用的化肥ID(默认普通化肥)
+ * @returns {Promise<{ok:boolean, action:string, landId:number, detail?:string}>}
+ */
+async function operateSingleLand(opts = {}) {
+    const rawLandId = toNum(opts.landId);
+    const op = String(opts.op || '').trim();
+    if (!rawLandId) throw new Error('缺少地块 ID');
+    if (!op) throw new Error('缺少操作类型');
+
+    // 升级/解锁/种植必须落在具体那块地上, 其余操作归属整组的主地块
+    const landBelongsToGroup = ['water', 'weed', 'bug', 'harvest', 'clear', 'fertilize'].includes(op);
+    const landId = landBelongsToGroup
+        ? await resolveMasterLandId(rawLandId, opts.masterLandId)
+        : rawLandId;
+
+    switch (op) {
+        case 'water':
+            await waterLand([landId]);
+            return { ok: true, action: '浇水', landId };
+        case 'weed':
+            await weedOut([landId]);
+            return { ok: true, action: '除草', landId };
+        case 'bug':
+            await insecticide([landId]);
+            return { ok: true, action: '除虫', landId };
+        case 'harvest':
+            await harvest([landId]);
+            return { ok: true, action: '收获', landId };
+        case 'clear':
+            await removePlant([landId]);
+            return { ok: true, action: '铲除', landId };
+        case 'upgrade':
+            await upgradeLand(landId);
+            return { ok: true, action: '升级土地', landId };
+        case 'unlock':
+            await unlockLand(landId);
+            return { ok: true, action: '解锁土地', landId };
+        case 'plant': {
+            const seedId = toNum(opts.seedId);
+            if (!seedId) throw new Error('请先选择要种的种子');
+            await plantSeeds(seedId, [landId]);
+            return { ok: true, action: '种植', landId, detail: `seedId=${seedId}` };
+        }
+        case 'fertilize': {
+            const fertilizerId = toNum(opts.fertilizerId) || NORMAL_FERTILIZER_ID;
+            const n = await fertilize([landId], fertilizerId);
+            if (n <= 0) throw new Error('施肥失败(可能化肥不足或该地块不支持)');
+            return { ok: true, action: '施肥', landId, detail: `fertilizerId=${fertilizerId}` };
+        }
+        default:
+            throw new Error('不支持的操作: ' + op);
+    }
 }
 
 function scheduleNextFarmCheck(delayMs = CONFIG.farmCheckInterval) {

@@ -4,7 +4,7 @@ import { storeToRefs } from 'pinia'
 import { computed, onMounted, ref, watch } from 'vue'
 import api from '@/api'
 import ConfirmModal from '@/components/ConfirmModal.vue'
-import LandCard from '@/components/LandCard.vue'
+import LandBoard from '@/components/LandBoard.vue'
 import { useAccountStore } from '@/stores/account'
 import { useFriendStore } from '@/stores/friend'
 import { useStatusStore } from '@/stores/status'
@@ -19,6 +19,7 @@ const {
   friends,
   loading,
   friendLands,
+  friendBoards,
   friendLandsLoading,
   blacklist,
   interactRecords,
@@ -818,11 +819,10 @@ async function handleBatchAddKnownFriendGids() {
               <div v-else-if="!friendLands[friend.gid] || friendLands[friend.gid]?.length === 0" class="py-4 text-center text-gray-500">
                 无土地数据
               </div>
-              <div v-else class="grid grid-cols-2 gap-2 lg:grid-cols-8 md:grid-cols-5 sm:grid-cols-4">
-                <LandCard
-                  v-for="land in friendLands[friend.gid]"
-                  :key="land.id"
-                  :land="land"
+              <div v-else class="pb-1">
+                <LandBoard
+                  :lands="friendLands[friend.gid] || []"
+                  :board="friendBoards[friend.gid]"
                 />
               </div>
             </div>

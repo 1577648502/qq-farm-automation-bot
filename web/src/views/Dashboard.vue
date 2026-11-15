@@ -10,6 +10,7 @@ import { useAccountStore } from '@/stores/account'
 import { useBagStore } from '@/stores/bag'
 import { useStatusStore } from '@/stores/status'
 import { useToastStore } from '@/stores/toast'
+import { LAND_OP_META } from '@/utils/land-ops'
 import { formatCompactNumber, formatSignedCompactNumber } from '@/utils/number-format'
 
 const statusStore = useStatusStore()
@@ -362,13 +363,15 @@ function formatLogTime(timeStr: string) {
   return parts.length > 1 ? parts[1] : timeStr
 }
 
+// 自己农场的操作名/图标以 land-ops 为准(与农场面板、单地块操作共用一份),
+// 这里只补操作记录里额外出现的好友/商店类条目。
 const OP_META: Record<string, { label: string, icon: string, color: string }> = {
-  harvest: { label: '收获', icon: 'i-carbon-crop-growth', color: 'text-green-500' },
-  water: { label: '浇水', icon: 'i-carbon-rain-drop', color: 'text-blue-400' },
-  weed: { label: '除草', icon: 'i-carbon-cut-out', color: 'text-yellow-500' },
-  bug: { label: '除虫', icon: 'i-carbon-warning-alt', color: 'text-red-400' },
-  fertilize: { label: '施肥', icon: 'i-carbon-chemistry', color: 'text-emerald-500' },
-  plant: { label: '种植', icon: 'i-carbon-tree', color: 'text-lime-500' },
+  harvest: { label: LAND_OP_META.harvest!.label, icon: 'i-carbon-crop-growth', color: LAND_OP_META.harvest!.color },
+  water: { label: LAND_OP_META.water!.label, icon: LAND_OP_META.water!.icon, color: LAND_OP_META.water!.color },
+  weed: { label: LAND_OP_META.weed!.label, icon: 'i-carbon-cut-out', color: LAND_OP_META.weed!.color },
+  bug: { label: LAND_OP_META.bug!.label, icon: LAND_OP_META.bug!.icon, color: LAND_OP_META.bug!.color },
+  fertilize: { label: LAND_OP_META.fertilize!.label, icon: LAND_OP_META.fertilize!.icon, color: LAND_OP_META.fertilize!.color },
+  plant: { label: LAND_OP_META.plant!.label, icon: 'i-carbon-tree', color: LAND_OP_META.plant!.color },
   steal: { label: '偷菜', icon: 'i-carbon-run', color: 'text-orange-500' },
   helpWater: { label: '帮浇水', icon: 'i-carbon-rain-drop', color: 'text-blue-300' },
   helpWeed: { label: '帮除草', icon: 'i-carbon-cut-out', color: 'text-yellow-400' },

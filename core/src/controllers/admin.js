@@ -1875,10 +1875,10 @@ app.use('/api', (req, res, next) => {
         const id = getAccId(req);
         if (!id) return res.status(400).json({ ok: false, error: '缺少账号 ID' });
         if (!checkAccountAccess(req, id)) return res.status(403).json({ ok: false, error: '无权访问此账号' });
-        const { landId, op, seedId, fertilizerId } = req.body || {};
+        const { landId, masterLandId, op, seedId, fertilizerId } = req.body || {};
         if (!landId || !op) return res.status(400).json({ ok: false, error: '缺少 landId 或 op' });
         try {
-            const data = await provider.operateLand(id, { landId, op, seedId, fertilizerId });
+            const data = await provider.operateLand(id, { landId, masterLandId, op, seedId, fertilizerId });
             res.json({ ok: true, data });
         } catch (e) { res.json({ ok: false, error: e.message }); }
     });

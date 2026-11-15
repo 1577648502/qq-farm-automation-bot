@@ -18,6 +18,7 @@ const {
 } = require('../models/store');
 const { sendMsgAsync, getUserState, networkEvents } = require('../utils/network');
 const { types } = require('../utils/proto');
+const { buildLandBoard } = require('./land-layout');
 const { toLong, toNum, toTimeSec, getServerTimeSec, log, logWarn, sleep, randomDelay } = require('../utils/utils');
 const { getCurrentPhase, setOperationLimitsCallback, buildLandMap, getDisplayLandContext, isOccupiedSlaveLand } = require('./farm');
 const { getInteractRecords } = require('./interact');
@@ -1137,6 +1138,8 @@ async function getFriendLandsDetail(friendGid) {
         return {
             lands: landsList,
             summary: analyzed,
+            // 同自己农场: 棋盘用原始地块算, 化简后的 landsList 里副地块已被主地块的作物数据覆盖
+            board: buildLandBoard(lands),
         };
     } catch {
         return { lands: [], summary: {} };
