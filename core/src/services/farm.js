@@ -1782,6 +1782,267 @@ async function checkFarm() {
  * 手动/自动执行农场操作
  * @param {string} opType - 'all', 'harvest', 'clear', 'plant', 'upgrade'
  */
+/**
+ * 把分析结果拼成一行摘要, 用于农场循环日志: [收:2 草:1 空:3 长:20]
+ */
+function buildLandStatusSummary(status) {
+    const parts = [];
+    if (status.harvestable.length) parts.push(`收:${status.harvestable.length}`);
+    if (status.needWeed.length) parts.push(`草:${status.needWeed.length}`);
+    if (status.needBug.length) parts.push(`虫:${status.needBug.length}`);
+    if (status.needWater.length) parts.push(`水:${status.needWater.length}`);
+    if (status.dead.length) parts.push(`枯:${status.dead.length}`);
+    if (status.empty.length) parts.push(`空:${status.empty.length}`);
+    if (status.unlockable.length) parts.push(`解:${status.unlockable.length}`);
+    if (status.upgradable.length) parts.push(`升:${status.upgradable.length}`);
+    parts.push(`长:${status.growing.length}`);
+    return parts;
+}
+
+/**
+ * 除草 / 除虫 / 浇水。串行执行以降低并发压力。
+ * 自动模式(all)下受"不除自己草虫"开关控制; 手动 clear 不受影响。
+ */
+async function runWeedBugWater(status, opType, actions) {
+    const skipOwnWeedBug = opType === 'all' && isAutomationOn('skip_own_weed_bug');
+
+    const steps = [
+        { list: status.needWeed, skip: skipOwnWeedBug, fn: () => weedOut(status.needWeed), label: '除草', tag: '除草', record: 'weed' },
+        { list: status.needBug, skip: skipOwnWeedBug, fn: () => insecticide(status.needBug), label: '除虫', tag: '除虫', record: 'bug' },
+        { list: status.needWater, skip: false, fn: () => waterLand(status.needWater), label: '浇水', tag: '浇水', record: 'water' },
+    ];
+    for (const step of steps) {
+        if (step.list.length === 0 || step.skip) continue;
+        try {
+            await step.fn();
+            actions.push(`${step.label}${step.list.length}`);
+            recordOperation(step.record, step.list.length);
+        } catch (e) {
+            logWarn(step.tag, e.message);
+        }
+    }
+}
+
+/**
+ * 资本模式: 即将成熟前提前放狗, 收获时上阵。
+ * @param phase 'beforeHarvest' 收获前的"快成熟就放狗" / 'onHarvest' 真要收获时上阵
+ */
+async function runCapitalModeDog(phase, lands = []) {
+    try {
+        const capCfg = getCapitalModeConfig();
+        if (!capCfg.enabled || !capCfg.selectedDogId) return;
+        const dogName = DOG_TYPE_NAMES[capCfg.selectedDogId] || capCfg.selectedDogId;
+
+        if (phase === 'onHarvest') {
+            log('宠物', `资本模式: 即将收获, 自动上阵 ${dogName}`);
+            await deployDog(capCfg.selectedDogId);
+            return;
+        }
+
+        if (!capCfg.secondsBeforeMature || capCfg.secondsBeforeMature <= 0) return;
+        const nowSec = getServerTimeSec();
+        let soonestRemain = null;
+        for (const land of lands) {
+            if (!land.plant || !land.plant.phases) continue;
+            const maturePhase = land.plant.phases.find(p => toNum(p.phase) === PlantPhase.MATURE);
+            if (!maturePhase) continue;
+            const matureTime = toTimeSec(maturePhase.begin_time);
+            if (!matureTime || matureTime <= nowSec) continue;
+            const remainSec = matureTime - nowSec;
+            if (remainSec > capCfg.secondsBeforeMature) continue;
+            if (soonestRemain === null || remainSec < soonestRemain) soonestRemain = remainSec;
+        }
+        if (soonestRemain !== null) {
+            log('宠物', `资本模式: 余${soonestRemain}秒成熟, 自动上阵 ${dogName}`);
+            await deployDog(capCfg.selectedDogId);
+        }
+    } catch (e) {
+        const label = phase === 'onHarvest' ? '上阵失败' : '提前放狗失败';
+        log('宠物', `资本模式: ${label} ${e.message || e}`);
+    }
+}
+
+/**
+ * 收获全部成熟作物, 并检测本次收获到的变异作物。
+ * @returns { harvestedLandIds, harvestReply }
+ */
+async function runHarvest(status, opType, actions) {
+    if (status.harvestable.length === 0) {
+        return { harvestedLandIds: [], harvestReply: null };
+    }
+    await runCapitalModeDog('onHarvest');
+
+    try {
+        const harvestReply = await harvest(status.harvestable);
+        log('收获', `收获完成 ${status.harvestable.length} 块土地`, {
+            module: 'farm',
+            event: '收获作物',
+            result: 'ok',
+            count: status.harvestable.length,
+            landIds: [...status.harvestable],
+        });
+        actions.push(`收获${status.harvestable.length}`);
+        recordOperation('harvest', status.harvestable.length);
+
+        logHarvestedMutants(harvestReply);
+
+        networkEvents.emit('farmHarvested', {
+            count: status.harvestable.length,
+            landIds: [...status.harvestable],
+            opType,
+        });
+        return { harvestedLandIds: [...status.harvestable], harvestReply };
+    } catch (e) {
+        logWarn('收获', e.message, {
+            module: 'farm',
+            event: '收获作物',
+            result: 'error',
+        });
+        return { harvestedLandIds: [], harvestReply: null };
+    }
+}
+
+/** 收获回复里如果有变异作物, 打一条汇总日志 */
+function logHarvestedMutants(harvestReply) {
+    const mutated = [];
+    for (const land of (harvestReply && harvestReply.land) || []) {
+        if (!land || !land.plant) continue;
+        const configIds = Array.isArray(land.plant.mutant_config_ids) ? land.plant.mutant_config_ids : [];
+        const info = resolveMutationInfo(Number(land.plant.id) || 0, configIds, land.plant.phases);
+        if (info && info.isMutant && info.mutationType) {
+            mutated.push({
+                landId: Number(land.id),
+                plantName: land.plant.name || '',
+                mutationType: info.mutationType,
+                mutationQuality: info.mutationQuality,
+                mutationKey: info.mutationKey || info.mutationType,
+                mutationEffect: info.mutationEffect,
+            });
+        }
+    }
+    if (mutated.length === 0) return;
+    log('变异', '收获发现变异作物: ' + mutated.map(m => `${m.mutationType}(${m.plantName}${m.mutationEffect ? `, ${m.mutationEffect}` : ''})`).join(', '), {
+        module: 'farm',
+        event: '变异收获',
+        result: 'ok',
+        mutants: mutated,
+    });
+}
+
+/**
+ * 种植阶段: 计算待种地块(含 2x2 整组回收) → 种植 → 返回落地的地块。
+ *
+ * ⚠ 收获后先 randomDelay 再铲除枯地, 这是有意的节流, 别挪动顺序。
+ */
+async function runPlantPhase({ opType, status, lands, harvestedLandIds, harvestReply }) {
+    const allEmptyLands = [...new Set(status.empty)];
+    let allDeadLands = [...new Set(status.dead)];
+    let postHarvest = null;
+
+    if (opType === 'all' && harvestedLandIds.length > 0) {
+        // 收获后延迟再铲除枯地
+        await randomDelay(1000, 1500);
+        postHarvest = await resolveRemovableHarvestedLands(harvestedLandIds, harvestReply);
+        allDeadLands = [...new Set([...allDeadLands, ...postHarvest.removable])];
+    }
+
+    // 收获/枯死的 2x2、4x4: analyzeLands 在作物还在时会把副地块当"被主地块占用"跳过,
+    // 主地块清空后这些副地块不会自己出现在 empty/dead 里。不补回来的话这一轮只有主地块
+    // 1 块空地, 2x2 种子会被判定"凑不齐连续空地"而进入最长 10 分钟的等待。
+    // `lands` 是操作前的快照(那时 slave_land_ids 还在, 整组关系可还原) —— 快照里这些主地块
+    // 还显示有作物, 所以只把"本轮收获后确认已空/枯"的地块放行。
+    // 多季作物收获后会回到生长状态(growing), 不在该列表里, 其副地块不会被误回收。
+    const releasedSlaveIds = await resolveReleasedLargeCropLandIds(allDeadLands, allEmptyLands, {
+        lands,
+        trustedMasterIds: postHarvest && postHarvest.removable ? postHarvest.removable : [],
+        // 只在本轮确实有大作物时才多拉一次地块状态, 普通小作物不额外打请求
+        allowRefresh: harvestedLandIds.length > 0 && hasLargeCropAmong([...harvestedLandIds, ...allDeadLands], lands),
+    });
+    if (releasedSlaveIds.length > 0) {
+        allEmptyLands.push(...releasedSlaveIds);
+        log('种植', `大作物整组空出后补入 ${releasedSlaveIds.length} 块副地块一并待种 (${releasedSlaveIds.join(',')})`, {
+            module: 'farm',
+            event: '种植种子',
+            result: 'release_group',
+            landIds: releasedSlaveIds,
+        });
+    }
+
+    // 注意：如果是单纯点"一键种植"，harvestedLandIds 为空，只种当前的空地/死地
+    let plantCount = 0;
+    if (allDeadLands.length > 0 || allEmptyLands.length > 0) {
+        try {
+            plantCount = allDeadLands.length + allEmptyLands.length;
+            await autoPlantEmptyLands(allDeadLands, allEmptyLands);
+        } catch (e) {
+            logWarn('种植', e.message);
+        }
+    }
+    return { postHarvest, plantCount };
+}
+
+/**
+ * 解锁 / 升级土地。
+ * 手动 upgrade 总是执行; 自动 all 受 land_upgrade 开关控制。
+ */
+async function runLandUpgradePhase({ opType, status, lands, actions }) {
+    const shouldAutoUpgrade = opType === 'all' && isAutomationOn('land_upgrade');
+    if (!shouldAutoUpgrade && opType !== 'upgrade') return;
+
+    if (status.unlockable.length > 0) {
+        let unlocked = 0;
+        for (const landId of status.unlockable) {
+            try {
+                await unlockLand(landId, false);
+                log('解锁', `土地#${landId} 解锁成功`, { module: 'farm', event: '解锁土地', result: 'ok', landId });
+                unlocked++;
+            } catch (e) {
+                logWarn('解锁', `土地#${landId} 解锁失败: ${e.message}`, { module: 'farm', event: '解锁土地', result: 'error', landId });
+            }
+            await randomDelay(1000, 1500);
+        }
+        if (unlocked > 0) actions.push(`解锁${unlocked}`);
+    }
+
+    if (status.upgradable.length > 0) {
+        let upgraded = 0;
+        for (const landId of status.upgradable) {
+            try {
+                const reply = await upgradeLand(landId);
+                const newLevel = reply.land ? toNum(reply.land.level) : '?';
+                const costText = formatLandUpgradeCost(resolveLandUpgradeState(reply.land || {}));
+                log('升级', `土地#${landId} 升级成功 → 等级${newLevel}${costText ? ` (条件 ${costText})` : ''}`, {
+                    module: 'farm', event: '升级土地', result: 'ok', landId, level: newLevel
+                });
+                upgraded++;
+            } catch (e) {
+                log('升级', `土地#${landId} 升级失败: ${e.message}`, { module: 'farm', event: '升级土地', result: 'error', landId });
+            }
+            await randomDelay(1000, 1500);
+        }
+        if (upgraded > 0) {
+            actions.push(`升级${upgraded}`);
+            recordOperation('upgrade', upgraded);
+        }
+        return;
+    }
+
+    if (opType !== 'upgrade') return;
+    // 手动"升级土地"没找到可升级地块: 给出原因(满级 / 等级不足 / 货币不足), 避免以为没生效
+    const reasons = new Map();
+    for (const land of lands) {
+        if (!land || !land.unlocked) continue;
+        const st = resolveLandUpgradeState(land);
+        for (const reason of st.missing) reasons.set(reason, (reasons.get(reason) || 0) + 1);
+    }
+    const text = [...reasons.entries()].map(([reason, count]) => `${reason}×${count}`).join('、');
+    log('升级', `没有可升级的土地${text ? ` → ${text}` : ''}`, { module: 'farm', event: '升级土地', result: 'skip' });
+}
+
+/**
+ * 手动/自动执行农场操作
+ * @param {string} opType - 'all', 'harvest', 'clear', 'plant', 'upgrade'
+ */
 async function runFarmOperation(opType) {
     const landsReply = await getAllLands();
     if (!landsReply.lands || landsReply.lands.length === 0) {
@@ -1792,165 +2053,24 @@ async function runFarmOperation(opType) {
     }
 
     const lands = landsReply.lands;
-
     const status = analyzeLands(lands);
-
-    // 摘要
-    const statusParts = [];
-    if (status.harvestable.length) statusParts.push(`收:${status.harvestable.length}`);
-    if (status.needWeed.length) statusParts.push(`草:${status.needWeed.length}`);
-    if (status.needBug.length) statusParts.push(`虫:${status.needBug.length}`);
-    if (status.needWater.length) statusParts.push(`水:${status.needWater.length}`);
-    if (status.dead.length) statusParts.push(`枯:${status.dead.length}`);
-    if (status.empty.length) statusParts.push(`空:${status.empty.length}`);
-    if (status.unlockable.length) statusParts.push(`解:${status.unlockable.length}`);
-    if (status.upgradable.length) statusParts.push(`升:${status.upgradable.length}`);
-    statusParts.push(`长:${status.growing.length}`);
-
+    const statusParts = buildLandStatusSummary(status);
     const actions = [];
 
-    // 执行除草/虫/水 - 串行执行以降低并发压力
+    // 1. 除草 / 除虫 / 浇水
     if (opType === 'all' || opType === 'clear') {
-        // 检查是否跳过自己农场的草虫（仅自动模式生效，手动clear不受影响）
-        const skipOwnWeedBug = opType === 'all' && isAutomationOn('skip_own_weed_bug');
-        if (status.needWeed.length > 0 && !skipOwnWeedBug) {
-            try {
-                await weedOut(status.needWeed);
-                actions.push(`除草${status.needWeed.length}`);
-                recordOperation('weed', status.needWeed.length);
-            } catch (e) {
-                logWarn('除草', e.message);
-            }
-        }
-        if (status.needBug.length > 0 && !skipOwnWeedBug) {
-            try {
-                await insecticide(status.needBug);
-                actions.push(`除虫${status.needBug.length}`);
-                recordOperation('bug', status.needBug.length);
-            } catch (e) {
-                logWarn('除虫', e.message);
-            }
-        }
-        if (status.needWater.length > 0) {
-            try {
-                await waterLand(status.needWater);
-                actions.push(`浇水${status.needWater.length}`);
-                recordOperation('water', status.needWater.length);
-            } catch (e) {
-                logWarn('浇水', e.message);
-            }
-        }
+        await runWeedBugWater(status, opType, actions);
     }
 
-    // 资本模式：检查即将成熟的作物，提前放狗
-    if (opType === 'all' || opType === 'harvest') {
-        try {
-            const capCfg = getCapitalModeConfig();
-            if (capCfg.enabled && capCfg.selectedDogId && capCfg.secondsBeforeMature > 0) {
-                const nowSec = getServerTimeSec();
-                let soonestMature = null;
-                let soonestRemain = 0;
-                for (const land of lands) {
-                    if (!land.plant || !land.plant.phases) continue;
-                    const maturePhase = land.plant.phases.find(function(p) { return toNum(p.phase) === PlantPhase.MATURE; });
-                    if (!maturePhase) continue;
-                    const matureTime = toTimeSec(maturePhase.begin_time);
-                    if (!matureTime || matureTime <= nowSec) continue;
-                    const remainSec = matureTime - nowSec;
-                    if (remainSec > capCfg.secondsBeforeMature) continue;
-                    if (soonestMature === null || remainSec < soonestRemain) {
-                        soonestMature = land;
-                        soonestRemain = remainSec;
-                    }
-                }
-                if (soonestMature) {
-                    log('宠物', '资本模式: 余' + soonestRemain + '秒成熟, 自动上阵 ' + (DOG_TYPE_NAMES[capCfg.selectedDogId] || capCfg.selectedDogId));
-                    await deployDog(capCfg.selectedDogId);
-                }
-            }
-        } catch (e) {
-            log('宠物', '资本模式: 提前放狗失败 ' + (e.message || e));
-        }
-    }
-
-    // 执行收获
+    // 2. 收获(含资本模式放狗)
     let harvestedLandIds = [];
     let harvestReply = null;
-    let postHarvest = null;
     if (opType === 'all' || opType === 'harvest') {
-        if (status.harvestable.length > 0) {
-            try {
-                const capCfg = getCapitalModeConfig();
-                if (capCfg.enabled && capCfg.selectedDogId) {
-                    log('宠物', '资本模式: 即将收获, 自动上阵 ' + (DOG_TYPE_NAMES[capCfg.selectedDogId] || capCfg.selectedDogId));
-                    await deployDog(capCfg.selectedDogId);
-                }
-            } catch (e) {
-                log('宠物', '资本模式: 上阵失败 ' + (e.message || e));
-            }
-            try {
-                harvestReply = await harvest(status.harvestable);
-                log('收获', `收获完成 ${status.harvestable.length} 块土地`, {
-                    module: 'farm',
-                    event: '收获作物',
-                    result: 'ok',
-                    count: status.harvestable.length,
-                    landIds: [...status.harvestable],
-                });
-                actions.push(`收获${status.harvestable.length}`);
-                recordOperation('harvest', status.harvestable.length);
-                harvestedLandIds = [...status.harvestable];
-                // 检测收获中的变异作物
-                var mutantCrops = [];
-                if (harvestReply && harvestReply.land) {
-                    for (var hi = 0; hi < harvestReply.land.length; hi++) {
-                        var rl = harvestReply.land[hi];
-                        if (!rl || !rl.plant) continue;
-                        var configIds = Array.isArray(rl.plant.mutant_config_ids) ? rl.plant.mutant_config_ids : [];
-                        var mi = resolveMutationInfo(Number(rl.plant.id) || 0, configIds, rl.plant.phases);
-                        if (mi && mi.isMutant && mi.mutationType) {
-                            mutantCrops.push({
-                                landId: Number(rl.id),
-                                plantName: rl.plant.name || '',
-                                mutationType: mi.mutationType,
-                                mutationQuality: mi.mutationQuality,
-                                mutationKey: mi.mutationKey || mi.mutationType,
-                                mutationEffect: mi.mutationEffect,
-                            });
-                        }
-                    }
-                }
-                if (mutantCrops.length > 0) {
-                    var mutantNames = mutantCrops.map(function(mc) {
-                        var effect = mc.mutationEffect ? ', ' + mc.mutationEffect : '';
-                        return mc.mutationType + '(' + mc.plantName + effect + ')';
-                    }).join(', ');
-                    log('变异', '收获发现变异作物: ' + mutantNames, {
-                        module: 'farm',
-                        event: '变异收获',
-                        result: 'ok',
-                        mutants: mutantCrops,
-                    });
-                }
+        await runCapitalModeDog('beforeHarvest', lands);
+        ({ harvestedLandIds, harvestReply } = await runHarvest(status, opType, actions));
 
-                networkEvents.emit('farmHarvested', {
-                    count: status.harvestable.length,
-                    landIds: [...status.harvestable],
-                    opType,
-                });
-            } catch (e) {
-                logWarn('收获', e.message, {
-                    module: 'farm',
-                    event: '收获作物',
-                    result: 'error',
-                });
-            }
-        }
-    }
-
-    // 资本模式: 收获后收回守护狗
-    if (opType === 'all' || opType === 'harvest') {
-        if (status.harvestable.length > 0) {
+        // 资本模式: 收获后收回守护狗
+        if (harvestedLandIds.length > 0) {
             try {
                 const capCfg = getCapitalModeConfig();
                 if (capCfg.enabled && capCfg.selectedDogId) {
@@ -1964,49 +2084,18 @@ async function runFarmOperation(opType) {
         }
     }
 
-    // 执行种植
+    // 3. 种植
+    let postHarvest = null;
     if (opType === 'all' || opType === 'plant') {
-        const allEmptyLands = [...new Set(status.empty)];
-        let allDeadLands = [...new Set(status.dead)];
-
-        if (opType === 'all' && harvestedLandIds.length > 0) {
-            // 收获后延迟再铲除枯地
-            await randomDelay(1000, 1500);
-            //const postHarvest = await resolveRemovableHarvestedLands(harvestedLandIds, harvestReply);
-            postHarvest = await resolveRemovableHarvestedLands(harvestedLandIds, harvestReply);
-            allDeadLands = [...new Set([...allDeadLands, ...postHarvest.removable])];
-        }
-        // 收获/枯死的 2x2、4x4: analyzeLands 在作物还在时会把副地块当"被主地块占用"跳过,
-        // 主地块清空后这些副地块不会自己出现在 empty/dead 里。不补回来的话这一轮只有主地块
-        // 1 块空地, 2x2 种子会被判定"凑不齐连续空地"而进入最长 10 分钟的等待。
-        // `lands` 是操作前的快照(那时 slave_land_ids 还在, 整组关系可还原) —— 快照里这些主地块
-        // 还显示有作物, 所以只把"本轮收获后确认已空/枯"的地块放行。
-        // 多季作物收获后会回到生长状态(growing), 不在该列表里, 其副地块不会被误回收。
-        const releasedSlaveIds = await resolveReleasedLargeCropLandIds(allDeadLands, allEmptyLands, {
-            lands,
-            trustedMasterIds: postHarvest && postHarvest.removable ? postHarvest.removable : [],
-            // 只在本轮确实有大作物时才多拉一次地块状态, 普通小作物不额外打请求
-            allowRefresh: harvestedLandIds.length > 0 && hasLargeCropAmong([...harvestedLandIds, ...allDeadLands], lands),
-        });
-        if (releasedSlaveIds.length > 0) {
-            allEmptyLands.push(...releasedSlaveIds);
-            log('种植', `大作物整组空出后补入 ${releasedSlaveIds.length} 块副地块一并待种 (${releasedSlaveIds.join(',')})`, {
-                module: 'farm',
-                event: '种植种子',
-                result: 'release_group',
-                landIds: releasedSlaveIds,
-            });
-        }
-        // 注意：如果是单纯点"一键种植"，harvestedLandIds 为空，只种当前的空地/死地
-        if (allDeadLands.length > 0 || allEmptyLands.length > 0) {
-            try {
-                const plantCount = allDeadLands.length + allEmptyLands.length;
-                await autoPlantEmptyLands(allDeadLands, allEmptyLands);
-                actions.push(`种植${plantCount}`);
-                recordOperation('plant', plantCount);
-            } catch (e) { logWarn('种植', e.message); }
+        const result = await runPlantPhase({ opType, status, lands, harvestedLandIds, harvestReply });
+        postHarvest = result.postHarvest;
+        if (result.plantCount > 0) {
+            actions.push(`种植${result.plantCount}`);
+            recordOperation('plant', result.plantCount);
         }
     }
+
+    // 4. 多季作物补肥
     if (opType === 'all' && postHarvest && Array.isArray(postHarvest.growing) && postHarvest.growing.length > 0 && isAutomationOn('fertilizer_multi_season')) {
         const multiSeasonTargets = [...new Set(postHarvest.growing.map(v => toNum(v)).filter(Boolean))];
         if (multiSeasonTargets.length > 0) {
@@ -2029,68 +2118,10 @@ async function runFarmOperation(opType) {
         }
     }
 
-    // 执行土地解锁/升级（手动 upgrade 总是执行；自动 all 受开关控制）
-    const shouldAutoUpgrade = opType === 'all' && isAutomationOn('land_upgrade');
-    if (shouldAutoUpgrade || opType === 'upgrade') {
-        if (status.unlockable.length > 0) {
-            let unlocked = 0;
-            for (const landId of status.unlockable) {
-                try {
-                    await unlockLand(landId, false);
-                    log('解锁', `土地#${landId} 解锁成功`, {
-                        module: 'farm', event: '解锁土地', result: 'ok', landId
-                    });
-                    unlocked++;
-                } catch (e) {
-                    logWarn('解锁', `土地#${landId} 解锁失败: ${e.message}`, {
-                        module: 'farm', event: '解锁土地', result: 'error', landId
-                    });
-                }
-                await randomDelay(1000, 1500);
-            }
-            if (unlocked > 0) {
-                actions.push(`解锁${unlocked}`);
-            }
-        }
+    // 5. 解锁 / 升级
+    await runLandUpgradePhase({ opType, status, lands, actions });
 
-        if (status.upgradable.length > 0) {
-            let upgraded = 0;
-            for (const landId of status.upgradable) {
-                try {
-                    const reply = await upgradeLand(landId);
-                    const newLevel = reply.land ? toNum(reply.land.level) : '?';
-                    const costText = formatLandUpgradeCost(resolveLandUpgradeState(reply.land || {}));
-                    log('升级', `土地#${landId} 升级成功 → 等级${newLevel}${costText ? ` (条件 ${costText})` : ''}`, {
-                        module: 'farm', event: '升级土地', result: 'ok', landId, level: newLevel
-                    });
-                    upgraded++;
-                } catch (e) {
-                    log('升级', `土地#${landId} 升级失败: ${e.message}`, {
-                        module: 'farm', event: '升级土地', result: 'error', landId
-                    });
-                }
-                await randomDelay(1000, 1500);
-            }
-            if (upgraded > 0) {
-                actions.push(`升级${upgraded}`);
-                recordOperation('upgrade', upgraded);
-            }
-        } else if (opType === 'upgrade') {
-            // 手动"升级土地"没找到可升级地块: 给出原因(满级 / 等级不足 / 货币不足), 避免以为没生效
-            const reasons = new Map();
-            for (const land of lands) {
-                if (!land || !land.unlocked) continue;
-                const st = resolveLandUpgradeState(land);
-                if (st.missing.length === 0) continue;
-                for (const reason of st.missing) reasons.set(reason, (reasons.get(reason) || 0) + 1);
-            }
-            const text = [...reasons.entries()].map(([reason, count]) => `${reason}×${count}`).join('、');
-            log('升级', `没有可升级的土地${text ? ` → ${text}` : ''}`, {
-                module: 'farm', event: '升级土地', result: 'skip',
-            });
-        }
-    }
-
+    // 6. smart 策略的有机肥补施
     if (opType === 'all') {
         const fertilizerConfig = getAutomation().fertilizer || 'none';
         if (fertilizerConfig === 'smart') {
@@ -2104,12 +2135,13 @@ async function runFarmOperation(opType) {
             }
         }
     }
+
     // 日志
     const actionStr = actions.length > 0 ? ` → ${actions.join('/')}` : '';
     if (actions.length > 0) {
-         log('农场', `[${statusParts.join(' ')}]${actionStr}`, {
-             module: 'farm', event: '农场循环', opType, actions
-         });
+        log('农场', `[${statusParts.join(' ')}]${actionStr}`, {
+            module: 'farm', event: '农场循环', opType, actions
+        });
     }
     return { hadWork: actions.length > 0, actions };
 }
