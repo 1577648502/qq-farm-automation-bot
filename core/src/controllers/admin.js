@@ -594,6 +594,40 @@ app.use('/api', (req, res, next) => {
         return msg === '账号未运行' || msg === 'API Timeout';
     };
 
+    /**
+     * 账号级接口的统一入口: 取账号 → 校验归属 → 调 provider → 统一回包。
+     *
+     * 为什么需要它:
+     *   面板里有一大批"读 x-account-id 然后直接转发给 provider"的接口。
+     *   这些接口原先各自手写样板, 结果是**大批漏掉了账号归属校验** ——
+     *   普通用户可以拿别人的账号 ID 调 /api/pet/feed、/api/activity/draw
+     *   这类会真实改动数据的接口, 属于越权。
+     *   统一走这里之后, "校验归属"是不可能忘的一步, 样板也只剩一行。
+     *
+     * @param handler (accountId, req) => data | Promise<data>
+     */
+    const withAccount = (handler, options = {}) => async (req, res) => {
+        if (options.requireProvider !== false && !provider) {
+            return res.json({ ok: false, error: 'Provider not ready' });
+        }
+        const accountId = getAccId(req);
+        if (!accountId) {
+            return res.json({ ok: false, error: 'Missing x-account-id' });
+        }
+        if (!checkAccountAccess(req, accountId)) {
+            return res.status(403).json({ ok: false, error: '无权访问此账号' });
+        }
+        try {
+            const data = await handler(accountId, req);
+            res.json({ ok: true, data });
+        } catch (e) {
+            if (options.softErrors === false) {
+                return res.status(500).json({ ok: false, error: e.message });
+            }
+            return handleApiError(res, e);
+        }
+    };
+
     function handleApiError(res, err) {
         if (isSoftRuntimeError(err)) {
             return res.json({ ok: false, error: err.message });
@@ -774,16 +808,7 @@ app.use('/api', (req, res, next) => {
     });
 
     // 访客
-    app.get('/api/interact-records', async (req, res) => {
-        const id = getAccId(req);
-        if (!id) return res.status(400).json({ ok: false, error: 'Missing x-account-id' });
-        try {
-            const data = await provider.getInteractRecords(id);
-            res.json({ ok: true, data });
-        } catch (e) {
-            handleApiError(res, e);
-        }
-    });
+    app.get('/api/interact-records', withAccount(accountId => provider.getInteractRecords(accountId)));
     // API: 好友农田详情
     app.get('/api/friend/:gid/lands', async (req, res) => {
         const id = getAccId(req);
@@ -2773,6 +2798,10 @@ app.use('/api', (req, res, next) => {
             }
 
             const accountId = String(target.id);
+            // 改备注也是写操作, 必须校验这个账号是否归当前用户
+            if (!checkAccountAccess(req, accountId)) {
+                return res.status(403).json({ ok: false, error: '无权访问此账号' });
+            }
             const data = addOrUpdateAccount({ id: accountId, name: remark });
             if (provider && typeof provider.setRuntimeAccountName === 'function') {
                 provider.setRuntimeAccountName(accountId, remark);
@@ -3017,251 +3046,91 @@ app.use('/api', (req, res, next) => {
     });
 
     // ============ Mall (商域) API ============
-    app.get('/api/mall/goods', async (req, res) => {
-        if (!provider) return res.json({ ok: false, error: 'Provider not ready' });
-        const accountId = req.headers['x-account-id'] || '';
+    app.get('/api/mall/goods', withAccount((accountId, req) => {
         const slotType = req.query.slotType ? Number(req.query.slotType) : undefined;
-        try {
-            const result = await provider.getMallCatalog(accountId, slotType);
-            res.json({ ok: true, data: result });
-        } catch (e) {
-            res.status(500).json({ ok: false, error: e.message });
-        }
-    });
+        return provider.getMallCatalog(accountId, slotType);
+    }, { softErrors: false }));
 
-    app.post('/api/mall/purchase', async (req, res) => {
-        if (!provider) return res.json({ ok: false, error: 'Provider not ready' });
-        const accountId = req.headers['x-account-id'] || '';
+    app.post('/api/mall/purchase', withAccount((accountId, req) => {
         const { goodsId, count, slotType, source, shopId } = req.body || {};
-        try {
-            const result = await provider.purchaseMallGoods(accountId, goodsId, count, slotType, source, shopId);
-            res.json({ ok: true, data: result });
-        } catch (e) {
-            res.status(500).json({ ok: false, error: e.message });
-        }
-    });
+        return provider.purchaseMallGoods(accountId, goodsId, count, slotType, source, shopId);
+    }, { softErrors: false }));
 
     
     // ============ Pet (宠物) API ============
-    app.post('/api/pet/activate', async (req, res) => {
-        if (!provider) return res.json({ ok: false, error: 'Provider not ready' });
+    app.post('/api/pet/activate', withAccount((accountId, req) => {
         const { dogTypeId } = req.body || {};
-        try { res.json({ ok: true, data: await provider.activateDog(req.headers['x-account-id'] || '', dogTypeId) }); }
-        catch (e) { res.json({ ok: false, error: e.message }); }
-    });
-    app.post('/api/pet/feed', async (req, res) => {
-        if (!provider) return res.json({ ok: false, error: 'Provider not ready' });
+        return provider.activateDog(accountId, dogTypeId);
+    }));
+    app.post('/api/pet/feed', withAccount((accountId, req) => {
         const { itemId, count } = req.body || {};
-        try { res.json({ ok: true, data: await provider.feedDog(req.headers['x-account-id'] || '', itemId, count || 1) }); }
-        catch (e) { res.json({ ok: false, error: e.message }); }
-    });
-    app.get('/api/pet/status', async (req, res) => {
-        if (!provider) return res.json({ ok: false, error: 'Provider not ready' });
+        return provider.feedDog(accountId, itemId, count || 1);
+    }));
+    app.get('/api/pet/status', withAccount((accountId, req) => {
         const friendGid = req.query.friendGid || 0;
-        try { res.json({ ok: true, data: await provider.getDogStatus(req.headers['x-account-id'] || '', Number(friendGid)) }); }
-        catch (e) { res.json({ ok: false, error: e.message }); }
-    });
+        return provider.getDogStatus(accountId, Number(friendGid));
+    }));
 
     // ============ 宠物增强 API（参考完整功能） ============
 
     // API: 获取宠物列表（所有狗类型）
-    app.get('/api/pet/list', async (req, res) => {
-        if (!provider) return res.json({ ok: false, error: 'Provider not ready' });
-        try { res.json({ ok: true, data: await provider.getPetList(req.headers['x-account-id'] || '') }); }
-        catch (e) { res.json({ ok: false, error: e.message }); }
-    });
+    app.get('/api/pet/list', withAccount(accountId => provider.getPetList(accountId)));
 
     // API: 上阵狗
-    app.post('/api/pet/deploy', async (req, res) => {
-        if (!provider) return res.json({ ok: false, error: 'Provider not ready' });
+    app.post('/api/pet/deploy', withAccount((accountId, req) => {
         const { dogTypeId } = req.body || {};
-        try { res.json({ ok: true, data: await provider.deployDog(req.headers['x-account-id'] || '', dogTypeId) }); }
-        catch (e) { res.json({ ok: false, error: e.message }); }
-    });
+        return provider.deployDog(accountId, dogTypeId);
+    }));
 
     // API: 收起狗
-    app.post('/api/pet/recall', async (req, res) => {
-        if (!provider) return res.json({ ok: false, error: 'Provider not ready' });
-        try { res.json({ ok: true, data: await provider.withdrawDog(req.headers['x-account-id'] || '') }); }
-        catch (e) { res.json({ ok: false, error: e.message }); }
-    });
+    app.post('/api/pet/recall', withAccount(accountId => provider.withdrawDog(accountId)));
 
     // API: 狗粮列表
-    app.get('/api/pet/food-list', async (req, res) => {
-        if (!provider) return res.json({ ok: false, error: 'Provider not ready' });
-        try { res.json({ ok: true, data: await provider.getDogFoodList(req.headers['x-account-id'] || '') }); }
-        catch (e) { res.json({ ok: false, error: e.message }); }
-    });
+    app.get('/api/pet/food-list', withAccount(accountId => provider.getDogFoodList(accountId)));
 
     // API: 守护日志
-    app.get('/api/pet/guard-logs', async (req, res) => {
-        if (!provider) return res.json({ ok: false, error: 'Provider not ready' });
+    app.get('/api/pet/guard-logs', withAccount((accountId, req) => {
         const page = parseInt(req.query.page) || 1;
         const pageSize = parseInt(req.query.pageSize) || 10;
-        try { res.json({ ok: true, data: await provider.getGuardLogs(req.headers['x-account-id'] || '', page, pageSize) }); }
-        catch (e) { res.json({ ok: false, error: e.message }); }
-    });
+        return provider.getGuardLogs(accountId, page, pageSize);
+    }));
 
     // API: 护主奖励状态
-    app.get('/api/pet/rewards', async (req, res) => {
-        if (!provider) return res.json({ ok: false, error: 'Provider not ready' });
-        try { res.json({ ok: true, data: await provider.getGuardReward(req.headers['x-account-id'] || '') }); }
-        catch (e) { res.json({ ok: false, error: e.message }); }
-    });
+    app.get('/api/pet/rewards', withAccount(accountId => provider.getGuardReward(accountId)));
 
     // API: 领取护主奖励
-    app.post('/api/pet/rewards/claim', async (req, res) => {
-        if (!provider) return res.json({ ok: false, error: 'Provider not ready' });
-        try { res.json({ ok: true, data: await provider.claimGuardReward(req.headers['x-account-id'] || '') }); }
-        catch (e) { res.json({ ok: false, error: e.message }); }
-    });
+    app.post('/api/pet/rewards/claim', withAccount(accountId => provider.claimGuardReward(accountId)));
 
     // API: 资本模式配置
-    app.get('/api/pet/capital-mode', async (req, res) => {
-        if (!provider) return res.json({ ok: false, error: 'Provider not ready' });
-        try { res.json({ ok: true, data: await provider.getCapitalMode(req.headers['x-account-id'] || '') }); }
-        catch (e) { res.json({ ok: false, error: e.message }); }
-    });
+    app.get('/api/pet/capital-mode', withAccount(accountId => provider.getCapitalMode(accountId)));
 
     // API: 保存资本模式
-    app.post('/api/pet/capital-mode/save', async (req, res) => {
-        if (!provider) return res.json({ ok: false, error: 'Provider not ready' });
-        try { res.json({ ok: true, data: await provider.setCapitalMode(req.headers['x-account-id'] || '', req.body) }); }
-        catch (e) { res.json({ ok: false, error: e.message }); }
-    });
+    app.post('/api/pet/capital-mode/save', withAccount((accountId, req) => provider.setCapitalMode(accountId, req.body)));
 // ============ Activity (活动) API ============
-    app.get('/api/activity/overview', async (req, res) => {
-        if (!provider) return res.json({ ok: false, error: 'Provider not ready' });
-        const accountId = req.headers['x-account-id'] || '';
-        try {
-            const result = await provider.getActivityOverview(accountId, { ...req.query, activityName: req.query.name });
-            res.json({ ok: true, data: result });
-        } catch (e) {
-            res.status(500).json({ ok: false, error: e.message });
-        }
-    });
+    app.get('/api/activity/overview', withAccount((accountId, req) => provider.getActivityOverview({ ...req.query, activityName: req.query.name }), { softErrors: false }));
 
-    app.post('/api/activity/draw', async (req, res) => {
-        if (!provider) return res.json({ ok: false, error: 'Provider not ready' });
-        const accountId = req.headers['x-account-id'] || '';
-        try {
-            const result = await provider.drawActivityLottery(accountId, req.body || {});
-            res.json({ ok: true, data: result });
-        } catch (e) {
-            res.status(500).json({ ok: false, error: e.message });
-        }
-    });
+    app.post('/api/activity/draw', withAccount((accountId, req) => provider.drawActivityLottery(req.body || {}), { softErrors: false }));
 
-    app.post('/api/activity/brew', async (req, res) => {
-        if (!provider) return res.json({ ok: false, error: 'Provider not ready' });
-        const accountId = req.headers['x-account-id'] || '';
-        try {
-            const result = await provider.performQingniangBrew(accountId, req.body || {});
-            res.json({ ok: true, data: result });
-        } catch (e) {
-            res.status(500).json({ ok: false, error: e.message });
-        }
-    });
+    app.post('/api/activity/brew', withAccount((accountId, req) => provider.performQingniangBrew(req.body || {}), { softErrors: false }));
 
-    app.post('/api/activity/brew/fine', async (req, res) => {
-        if (!provider) return res.json({ ok: false, error: 'Provider not ready' });
-        const accountId = req.headers['x-account-id'] || '';
-        try {
-            const result = await provider.performQingniangBrew(accountId, { ...req.body, mode: 'fine' });
-            res.json({ ok: true, data: result });
-        } catch (e) {
-            res.status(500).json({ ok: false, error: e.message });
-        }
-    });
+    app.post('/api/activity/brew/fine', withAccount((accountId, req) => provider.performQingniangBrew({ ...req.body, mode: 'fine' }), { softErrors: false }));
 
 
-    app.post('/api/activity/brew/sell', async (req, res) => {
-        if (!provider) return res.json({ ok: false, error: 'Provider not ready' });
-        const accountId = req.headers['x-account-id'] || '';
-        try {
-            const result = await provider.sellQingniangBrew(accountId, req.body || {});
-            res.json({ ok: true, data: result });
-        } catch (e) {
-            res.status(500).json({ ok: false, error: e.message });
-        }
-    });
+    app.post('/api/activity/brew/sell', withAccount((accountId, req) => provider.sellQingniangBrew(req.body || {}), { softErrors: false }));
 
-    app.post('/api/activity/brew/share-sell', async (req, res) => {
-        if (!provider) return res.json({ ok: false, error: 'Provider not ready' });
-        const accountId = req.headers['x-account-id'] || '';
-        try {
-            const result = await provider.shareSellQingniangBrew(accountId, req.body || {});
-            res.json({ ok: true, data: result });
-        } catch (e) {
-            res.status(500).json({ ok: false, error: e.message });
-        }
-    });
+    app.post('/api/activity/brew/share-sell', withAccount((accountId, req) => provider.shareSellQingniangBrew(req.body || {}), { softErrors: false }));
 
-    app.post('/api/activity/battle-pass/claim', async (req, res) => {
-        if (!provider) return res.json({ ok: false, error: 'Provider not ready' });
-        const accountId = req.headers['x-account-id'] || '';
-        try {
-            const result = await provider.claimActivityBattlePass(accountId, req.body || {});
-            res.json({ ok: true, data: result });
-        } catch (e) {
-            res.status(500).json({ ok: false, error: e.message });
-        }
-    });
+    app.post('/api/activity/battle-pass/claim', withAccount((accountId, req) => provider.claimActivityBattlePass(req.body || {}), { softErrors: false }));
 
-    app.post('/api/activity/tasks/claim', async (req, res) => {
-        if (!provider) return res.json({ ok: false, error: 'Provider not ready' });
-        const accountId = req.headers['x-account-id'] || '';
-        try {
-            const result = await provider.claimActivityTasks(accountId, req.body || {});
-            res.json({ ok: true, data: result });
-        } catch (e) {
-            res.status(500).json({ ok: false, error: e.message });
-        }
-    });
+    app.post('/api/activity/tasks/claim', withAccount((accountId, req) => provider.claimActivityTasks(req.body || {}), { softErrors: false }));
 
-    app.post('/api/activity/daily-signin/claim', async (req, res) => {
-        if (!provider) return res.json({ ok: false, error: 'Provider not ready' });
-        const accountId = req.headers['x-account-id'] || '';
-        try {
-            const result = await provider.claimActivityDailySignin(accountId, req.body || {});
-            res.json({ ok: true, data: result });
-        } catch (e) {
-            res.status(500).json({ ok: false, error: e.message });
-        }
-    });
+    app.post('/api/activity/daily-signin/claim', withAccount((accountId, req) => provider.claimActivityDailySignin(req.body || {}), { softErrors: false }));
 
-    app.post('/api/activity/exchange', async (req, res) => {
-        if (!provider) return res.json({ ok: false, error: 'Provider not ready' });
-        const accountId = req.headers['x-account-id'] || '';
-        try {
-            const result = await provider.exchangeActivityGoods(accountId, req.body || {});
-            res.json({ ok: true, data: result });
-        } catch (e) {
-            res.status(500).json({ ok: false, error: e.message });
-        }
-    });
+    app.post('/api/activity/exchange', withAccount((accountId, req) => provider.exchangeActivityGoods(req.body || {}), { softErrors: false }));
 
-    app.get('/api/activity/star', async (req, res) => {
-        if (!provider) return res.json({ ok: false, error: 'Provider not ready' });
-        const accountId = req.headers['x-account-id'] || '';
-        try {
-            const result = await provider.getStarActivity(accountId);
-            res.json({ ok: true, data: result });
-        } catch (e) {
-            res.status(500).json({ ok: false, error: e.message });
-        }
-    });
+    app.get('/api/activity/star', withAccount((accountId, req) => provider.getStarActivity(), { softErrors: false }));
 
-    app.post('/api/activity/star/exchange', async (req, res) => {
-        if (!provider) return res.json({ ok: false, error: 'Provider not ready' });
-        const accountId = req.headers['x-account-id'] || '';
-        try {
-            const result = await provider.exchangeStarGoods(accountId, req.body || {});
-            res.json({ ok: true, data: result });
-        } catch (e) {
-            res.status(500).json({ ok: false, error: e.message });
-        }
-    });
+    app.post('/api/activity/star/exchange', withAccount((accountId, req) => provider.exchangeStarGoods(req.body || {}), { softErrors: false }));
 
     // ===== 夺宝(抢宝) API =====
     // 列出可夺宝藏(不传 gid = 遍历所有好友)
@@ -3655,38 +3524,11 @@ app.use('/api', (req, res, next) => {
         } catch (e) { res.json({ ok: false, error: e.message }); }
     });
 
-    app.post('/api/activity/star/light-up', async (req, res) => {
-        if (!provider) return res.json({ ok: false, error: 'Provider not ready' });
-        const accountId = req.headers['x-account-id'] || '';
-        try {
-            const result = await provider.lightUpStar(accountId, req.body || {});
-            res.json({ ok: true, data: result });
-        } catch (e) {
-            res.status(500).json({ ok: false, error: e.message });
-        }
-    });
+    app.post('/api/activity/star/light-up', withAccount((accountId, req) => provider.lightUpStar(accountId, req.body || {}), { softErrors: false }));
 
-    app.get('/api/solar-terms', async (req, res) => {
-        if (!provider) return res.json({ ok: false, error: 'Provider not ready' });
-        const accountId = req.headers['x-account-id'] || '';
-        try {
-            const result = await provider.getSolarTerms(accountId);
-            res.json({ ok: true, data: result });
-        } catch (e) {
-            res.status(500).json({ ok: false, error: e.message });
-        }
-    });
+    app.get('/api/solar-terms', withAccount(accountId => provider.getSolarTerms(accountId), { softErrors: false }));
 
-    app.post('/api/solar-terms/claim', async (req, res) => {
-        if (!provider) return res.json({ ok: false, error: 'Provider not ready' });
-        const accountId = req.headers['x-account-id'] || '';
-        try {
-            const result = await provider.claimSolarTerms(accountId, (req.body || {}).id);
-            res.json({ ok: true, data: result });
-        } catch (e) {
-            res.status(500).json({ ok: false, error: e.message });
-        }
-    });
+    app.post('/api/solar-terms/claim', withAccount((accountId, req) => provider.claimSolarTerms(accountId, (req.body || {}).id), { softErrors: false }));
 
 
     app.get('*', (req, res) => {
