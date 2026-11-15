@@ -160,6 +160,7 @@ const DEFAULT_ACCOUNT_CONFIG = {
         // month_card: true,
         // open_server_gift: true,
         fertilizer_gift: false,
+        auto_use_items: true, // 背包里能直接用的道具(宝箱/各类礼包/百宝瓶…)自动使用
         fertilizer_buy_organic: false,
         fertilizer_buy_normal: false,
         mystery_shop: false, // 神秘商店自动购买
@@ -1565,9 +1566,15 @@ function getSystemConfig() {
 
 function setSystemConfig(config) {
     if (!config || typeof config !== 'object') return null;
+    // serverUrl / clientVersion 留空时**保留原值**, 不存空串:
+    // 空串一旦落盘, 下次启动 updateRuntimeConfig 会把它当成有效值喂给运行时,
+    // 管理页也会回显空白(曾是"服务器地址不显示/版本号改了不生效"的原因)。
+    const prev = globalConfig.systemConfig || {};
+    const serverUrl = String(config.serverUrl || '').trim();
+    const clientVersion = String(config.clientVersion || '').trim();
     globalConfig.systemConfig = {
-        serverUrl: String(config.serverUrl || '').trim(),
-        clientVersion: String(config.clientVersion || '').trim(),
+        serverUrl: serverUrl || String(prev.serverUrl || '').trim(),
+        clientVersion: clientVersion || String(prev.clientVersion || '').trim(),
         platform: String(config.platform || 'qq').trim(),
         os: String(config.os || 'iOS').trim(),
         activityHeFeng: config.activityHeFeng !== false,

@@ -34,7 +34,7 @@ const { setRecordGoldExpHook } = require('../services/status');
 const { cleanupTaskSystem, checkAndClaimTasks, getTaskClaimDailyState, getTaskDailyStateLikeApp, getGrowthTaskStateLikeApp } = require('../services/task');
 const { getActiveMysteryShop, buyMysteryGoods, checkAndBuyMysteryShop } = require('../services/mystery-shop');
 const { getSolarTerms, claimSolarTerms, checkAndClaimSolarTerms } = require('../services/solarterms');
-const { sellAllFruits, getBag, getBagItems, openFertilizerGiftPacksSilently, openGiftPacksSilently } = require('../services/warehouse');
+const { sellAllFruits, getBag, getBagItems, openFertilizerGiftPacksSilently, openGiftPacksSilently, autoUseBagItems } = require('../services/warehouse');
 if (parentPort && workerData && workerData.accountId && !process.env.FARM_ACCOUNT_ID) {
     process.env.FARM_ACCOUNT_ID = String(workerData.accountId);
 }
@@ -604,6 +604,8 @@ async function runFarmTick(auto) {
         if (auto.fertilizer_gift) await openFertilizerGiftPacksSilently();
         // 背包可打开礼包自动开启(无开关, 内部自带节流)
         await openGiftPacksSilently().catch(() => 0);
+        // 其余可盲用的道具(成长宝箱/百宝瓶等), 受开关控制, 内部自带节流
+        if (auto.auto_use_items) await autoUseBagItems().catch(() => 0);
     } catch {
         // ignore
     } finally {
@@ -1057,6 +1059,10 @@ async function startBot(config) {
                 }
                 // 登录后先开一遍背包可打开礼包(无开关)
                 await openGiftPacksSilently().catch(() => 0);
+                // 首登也把能直接用掉的道具清一遍(受开关控制)
+                if (getAutomation().auto_use_items) {
+                    await autoUseBagItems().catch(() => 0);
+                }
 
                 // 启动时执行一次放虫放草（只在账号启动时执行）
                 workerScheduler.setTimeoutTask('bad_startup_once', 10000, async () => {

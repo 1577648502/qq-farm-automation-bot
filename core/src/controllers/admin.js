@@ -11,6 +11,7 @@ const express = require('express');
 const { Server: SocketIOServer } = require('socket.io');
 const { version } = require('../../package.json');
 const { CONFIG, updateRuntimeConfig, getRuntimeConfig, getDefaultSystemConfig } = require('../config/config');
+const { getVersionState, resolveVersionSuggestion } = require('../utils/client-version');
 const { getLevelExpProgress } = require('../config/gameConfig');
 const { getResourcePath, getDataDir } = require('../config/runtime-paths');
 const store = require('../models/store');
@@ -2259,15 +2260,66 @@ app.use('/api', (req, res, next) => {
     // 获取系统配置
     app.get('/api/admin/system-config', authRequired, adminRequired, (req, res) => {
         try {
-            const savedConfig = store.getSystemConfig();
             const defaultConfig = getDefaultSystemConfig();
+            const savedConfig = store.getSystemConfig();
             const currentRuntime = getRuntimeConfig();
+            // saved 里 serverUrl/clientVersion 可能是老版本落盘的空串(那次 bug 留下的),
+            // 这里统一用"运行时实际生效值"兜底, 免得管理页回显空输入框
+            const effectiveSaved = savedConfig
+                ? {
+                    ...savedConfig,
+                    serverUrl: savedConfig.serverUrl || currentRuntime.serverUrl || defaultConfig.serverUrl,
+                    clientVersion: savedConfig.clientVersion || currentRuntime.clientVersion || defaultConfig.clientVersion,
+                }
+                : { ...defaultConfig };
             res.json({
                 ok: true,
                 data: {
-                    saved: savedConfig,
+                    saved: effectiveSaved,
                     default: defaultConfig,
                     current: currentRuntime,
+                    // 服务器下发的资源版本跟进结论(未登录过账号时为 null)
+                    versionCheck: getVersionState(getAccId(req)),
+                },
+            });
+        } catch (e) {
+            res.status(500).json({ ok: false, error: e.message });
+        }
+    });
+
+    // 应用服务器建议的版本号(只替换资源日期段)
+    //
+    // 服务器只下发 res_version(资源日期), 完整版本号的三段号猜不出来, 所以这里
+    // 只做"把本地版本号的日期段换成服务器给的新日期", 并明确告诉前端这是试探性的:
+    // 应用后如果登录仍失败, 说明主版本号也变了, 需要用户手动填。
+    app.post('/api/admin/system-config/apply-suggested-version', authRequired, adminRequired, (req, res) => {
+        try {
+            const accountId = getAccId(req);
+            const state = getVersionState(accountId);
+            if (!state) {
+                return res.json({ ok: false, error: '还没有收到服务器版本信息，请先运行一次账号' });
+            }
+            if (!state.outdated || !state.suggested) {
+                return res.json({ ok: false, error: '当前版本号已是最新，无需更新' });
+            }
+            // 再确认一次(防止状态过期后 suggested 与当前版本对不上)
+            const suggestion = resolveVersionSuggestion(getRuntimeConfig().clientVersion, { res_version: state.remoteDate });
+            if (!suggestion.outdated || !suggestion.suggested) {
+                return res.json({ ok: false, error: '当前版本号已是最新，无需更新' });
+            }
+            const saved = store.setSystemConfig({
+                ...(store.getSystemConfig() || {}),
+                clientVersion: suggestion.suggested,
+            });
+            updateRuntimeConfig(saved);
+            res.json({
+                ok: true,
+                data: {
+                    saved,
+                    current: getRuntimeConfig(),
+                    // 提示前端: 版本号变了需要重连才生效, 且仍是试探
+                    needsReconnect: true,
+                    tentative: true,
                 },
             });
         } catch (e) {

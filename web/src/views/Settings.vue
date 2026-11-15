@@ -729,6 +729,7 @@ const localAutomationSettings = ref({
     charity_task: false,
     mengchong_task: false,
     mengchong_hunt: false,
+    auto_use_items: true,
     rob_treasure: false,
     fertilizer: 'normal',
     skip_own_weed_bug: false,
@@ -1084,6 +1085,7 @@ function syncLocalAutomationSettings(submitted?: any) {
         charity_task: false,
         mengchong_task: false,
         mengchong_hunt: false,
+        auto_use_items: true,
         rob_treasure: false,
         fertilizer: 'none',
         skip_own_weed_bug: false,
@@ -1115,6 +1117,7 @@ function syncLocalAutomationSettings(submitted?: any) {
         charity_task: false,
         mengchong_task: false,
         mengchong_hunt: false,
+        auto_use_items: true,
         rob_treasure: false,
         fertilizer: 'none',
         skip_own_weed_bug: false,
@@ -2457,6 +2460,8 @@ async function onBackupFileChange(ev: Event) {
               </div>
               <div class="grid gap-3 2xl:grid-cols-2 sm:grid-cols-2 xl:grid-cols-1">
                 <BaseSwitch v-model="localAutomationSettings.automation.fertilizer_gift" label="自动填充化肥" />
+                <BaseSwitch v-model="localAutomationSettings.automation.auto_use_items" label="自动使用背包道具" />
+                <span class="col-span-full text-xs text-gray-400 dark:text-gray-500">宝箱、各类礼包等可直接使用的道具会自动用掉；化肥/罐头容器、种子解锁卡、狗粮、活动道具、红包与兑换券不会自动用。</span>
                 <BaseSwitch v-model="localAutomationSettings.automation.fertilizer_buy_organic" label="自动购买有机化肥" />
                 <BaseSwitch v-model="localAutomationSettings.automation.fertilizer_buy_normal" label="自动购买无机化肥" />
                 <BaseSwitch v-model="localAutomationSettings.automation.mystery_shop" label="自动购买神秘商店" />

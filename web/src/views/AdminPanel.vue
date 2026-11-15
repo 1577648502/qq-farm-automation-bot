@@ -677,7 +677,7 @@ const systemConfigLoading = ref(false)
 
 const localSystemConfig = ref({
   serverUrl: 'wss://gate-obt.nqf.qq.com/prod/ws',
-  clientVersion: '1.10.0.13_20260417',
+  clientVersion: '1.14.2.15_20260922',
   platform: 'qq',
   os: 'iOS',
   activityHeFeng: true,
@@ -689,9 +689,15 @@ const localSystemConfig = ref({
   activityMilkTea: true,
 })
 
+// 运行时实际生效的值(服务端 getRuntimeConfig 返回), 与"已保存"分开显示,
+// 方便一眼看出"改了但没生效"的情况
+const runtimeSystemConfig = ref<any>(null)
+// 服务器下发的版本跟进结论(以资源日期判断是否落后)
+const versionCheck = ref<any>(null)
+
 const defaultSystemConfig = ref({
   serverUrl: 'wss://gate-obt.nqf.qq.com/prod/ws',
-  clientVersion: '1.10.0.13_20260417',
+  clientVersion: '1.14.2.15_20260922',
   platform: 'qq',
   os: 'iOS',
   activityHeFeng: true,
@@ -758,12 +764,23 @@ async function loadSystemConfig() {
   try {
     const { data } = await api.get('/api/admin/system-config')
     if (data?.ok) {
-      if (data.data.saved) {
-        localSystemConfig.value = { ...defaultSystemConfig.value, ...data.data.saved }
-      }
+      // 后端已把空串兜底成生效值, 这里再补一层: saved 里为空时不覆盖默认值,
+      // 否则输入框会回显空白(服务器地址"不显示"就是这么来的)
       if (data.data.default) {
         defaultSystemConfig.value = { ...defaultSystemConfig.value, ...data.data.default }
       }
+      if (data.data.saved) {
+        const merged = { ...defaultSystemConfig.value, ...data.data.saved }
+        if (!String(merged.serverUrl || '').trim())
+          merged.serverUrl = data.data.default?.serverUrl || defaultSystemConfig.value.serverUrl
+        if (!String(merged.clientVersion || '').trim())
+          merged.clientVersion = data.data.default?.clientVersion || defaultSystemConfig.value.clientVersion
+        localSystemConfig.value = merged
+      }
+      // 同时把运行时实际生效值带出来, 供页面展示"当前生效"
+      if (data.data.current)
+        runtimeSystemConfig.value = { ...data.data.current }
+      versionCheck.value = data.data.versionCheck || null
     }
   }
   catch (e: any) {
@@ -779,6 +796,12 @@ async function handleSaveSystemConfig() {
   try {
     const { data } = await api.post('/api/admin/system-config', localSystemConfig.value)
     if (data?.ok) {
+      // 回填服务端实际保存/生效后的值: 留空的地址/版本会被后端保留原值,
+      // 不重新拉一次的话输入框会一直显示成空
+      if (data.data?.saved)
+        localSystemConfig.value = { ...localSystemConfig.value, ...data.data.saved }
+      if (data.data?.current)
+        runtimeSystemConfig.value = { ...data.data.current }
       showAlert('系统配置已保存并立即生效，无需重启项目', 'primary')
     }
     else {
@@ -793,12 +816,40 @@ async function handleSaveSystemConfig() {
   }
 }
 
+// 应用服务器建议的版本号(只替换资源日期段, 保存后需重连才生效)
+async function handleApplySuggestedVersion() {
+  systemConfigSaving.value = true
+  try {
+    const { data } = await api.post('/api/admin/system-config/apply-suggested-version')
+    if (data?.ok) {
+      if (data.data?.saved) {
+        localSystemConfig.value = { ...localSystemConfig.value, clientVersion: data.data.saved.clientVersion }
+        versionCheck.value = null
+      }
+      if (data.data?.current)
+        runtimeSystemConfig.value = { ...data.data.current }
+      showAlert('版本号已更新，重启或重连账号后生效', 'primary')
+    }
+    else {
+      showAlert(data?.error || '应用失败', 'danger')
+    }
+  }
+  catch (e: any) {
+    showAlert(`应用失败: ${e.message || '未知错误'}`, 'danger')
+  }
+  finally {
+    systemConfigSaving.value = false
+  }
+}
+
 async function handleResetSystemConfig() {
   systemConfigSaving.value = true
   try {
     const { data } = await api.post('/api/admin/system-config/reset')
     if (data?.ok) {
       localSystemConfig.value = { ...data.data.saved }
+      if (data.data?.current)
+        runtimeSystemConfig.value = { ...data.data.current }
       showAlert('系统配置已重置为默认值', 'primary')
     }
     else {
@@ -1763,9 +1814,29 @@ onMounted(() => {
                   v-model="localSystemConfig.clientVersion"
                   label="客户端版本"
                   type="text"
-                  placeholder="1.10.0.13_20260417"
+                  placeholder="1.14.2.15_20260922"
                   class="md:col-span-2"
                 />
+                <div v-if="runtimeSystemConfig" class="rounded-md bg-gray-100 px-3 py-2 text-xs text-gray-600 md:col-span-2 dark:bg-gray-700/60 dark:text-gray-300">
+                  当前生效：{{ runtimeSystemConfig.serverUrl }} · {{ runtimeSystemConfig.clientVersion }}
+                  <span v-if="runtimeSystemConfig.clientVersion !== localSystemConfig.clientVersion || runtimeSystemConfig.serverUrl !== localSystemConfig.serverUrl" class="ml-1 text-amber-600 dark:text-amber-400">（与输入框不同，保存后才会生效）</span>
+                </div>
+                <!-- 服务器只在登录/心跳时下发资源版本日期, 据此提示版本号是否落后 -->
+                <div
+                  v-if="versionCheck && versionCheck.outdated"
+                  class="flex flex-wrap items-center gap-2 border border-amber-200 rounded-md bg-amber-50 px-3 py-2 text-xs text-amber-800 md:col-span-2 dark:border-amber-800 dark:bg-amber-900/20 dark:text-amber-300"
+                >
+                  <span>服务器资源版本已更新到 {{ versionCheck.remoteDate }}，当前版本号还停在 {{ versionCheck.localDate }}。</span>
+                  <button
+                    type="button"
+                    class="rounded bg-amber-600 px-2 py-1 text-white font-medium hover:bg-amber-700 disabled:opacity-50"
+                    :disabled="systemConfigSaving"
+                    @click="handleApplySuggestedVersion"
+                  >
+                    用 {{ versionCheck.suggested }}
+                  </button>
+                  <span class="text-amber-700/80 dark:text-amber-400/80">（只替换日期段，若仍登录失败需手动填完整版本号）</span>
+                </div>
                 <div class="flex flex-col gap-1.5">
                   <label class="text-sm text-gray-700 font-medium dark:text-gray-300">平台</label>
                   <div class="w-fit inline-flex gap-1 rounded-md bg-gray-100 p-1 dark:bg-gray-900/60">

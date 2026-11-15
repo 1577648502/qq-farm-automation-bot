@@ -297,6 +297,133 @@ function isGiftPackItemId(itemId) {
 }
 
 /**
+ * 哪些背包道具可以**自动使用**。
+ *
+ * 先把"其实已经在自动处理"的类型划出去, 免得同一轮重复处理或绕开已有保护:
+ *
+ *   type=11/33 礼包(种子包/宝箱/藏品礼包) → autoOpenGiftPacks, 无开关、随时开
+ *   type=7    化肥道具 80001~80014      → autoOpenFertilizerGiftPacks, 受 fertilizer_gift
+ *              控制, 且带"化肥容器 990h 上限"的裁剪, 不能绕过
+ *
+ * 再排除"能用但必须先选目标""要走别的协议""不该自动做"的:
+ *
+ *   type=2    容器道具(1011/1012 化肥桶、7003/7004 罐头桶) —— 是"桶容量"本身, 不能用
+ *   type=109  罐头 80021~80034 —— 喂动物用, 本仓库没有牧场模块
+ *   type=23   活动道具(催化剂/重塑剂/放虫草瓶/烟花…) —— 必须指定地块或好友
+ *   type=9    狗粮 90004~90006 —— 要走 dogpb.FeedDog, 且用户可能想留着自己喂
+ *   type=25/27/36  微信红包/奶茶兑换券 —— 涉及站外权益或现金, 绝不自动用
+ *
+ * 剩下的就是本函数负责的: 目前是 type=14 种子解锁卡(用掉即解锁对应种子,
+ * 没有目标参数、也没有副作用)。
+ */
+const AUTO_USE_EXCLUDED_TYPES = new Set([2, 7, 11, 33, 9, 23, 25, 27, 36, 109]);
+
+/**
+ * 这个道具能不能"自动使用"(受 auto_use_items 开关控制)。
+ */
+function isAutoUsableItemId(itemId) {
+    const info = getItemById(Number(itemId) || 0);
+    if (!info || typeof info !== 'object') return false;
+    if (Number(info.can_use) !== 1) return false;
+    return !AUTO_USE_EXCLUDED_TYPES.has(Number(info.type) || 0);
+}
+
+/**
+ * 背包里能不能点"使用"按钮 —— 比自动使用宽一些:
+ * 礼包(type 11/33)虽然不归 autoUseBagItems 管, 但用户手动开没问题, 所以也算可用。
+ */
+function isManualUsableItemId(itemId) {
+    if (isAutoUsableItemId(itemId)) return true;
+    return isGiftPackItemId(itemId);
+}
+
+// 自动使用背包道具: 内部自带节流(礼包已有 60s 巡查节流), 这里再单独限一次
+const AUTO_USE_SCAN_INTERVAL_MS = 60 * 1000;
+let autoUseLastCheckAt = 0;
+// 连续失败就记住, 避免每轮巡查都对同一个道具报错刷日志(重启后重置)
+const autoUseFailedIds = new Set();
+
+/**
+ * 自动使用背包里所有**可直接使用**的道具(种子解锁卡等)。
+ *
+ * 与另外两套的分工见 isAutoUsableItemId 的注释: 礼包归 autoOpenGiftPacks,
+ * 化肥归 autoOpenFertilizerGiftPacks, 这里只管剩下那些"用掉即生效、无副作用"的道具。
+ *
+ * @param opts.onlyIds 只处理这些物品ID(手动触发单个道具时用)
+ * @returns {Promise<{used:number, details:string[]}>}
+ */
+async function autoUseBagItems(opts = {}) {
+    const now = Date.now();
+    const onlyIds = Array.isArray(opts.onlyIds) && opts.onlyIds.length
+        ? new Set(opts.onlyIds.map(x => Number(x) || 0).filter(x => x > 0))
+        : null;
+    if (!onlyIds && now - autoUseLastCheckAt < AUTO_USE_SCAN_INTERVAL_MS) {
+        return { used: 0, details: [] };
+    }
+    // 全量巡查才会刷新节流窗口(指定 onlyIds 的手动触发不占用这个窗口)
+    const finish = (result) => {
+        if (!onlyIds) autoUseLastCheckAt = now;
+        return result;
+    };
+
+    let bagItems;
+    try {
+        const bagReply = await getBag();
+        bagItems = getBagItems(bagReply);
+    } catch (e) {
+        logWarn('仓库', `自动使用道具: 读取背包失败: ${e.message}`, {
+            module: 'warehouse', event: '自动使用道具', result: 'error',
+        });
+        return finish({ used: 0, details: [] });
+    }
+
+    // 同一物品可能散在多条(带有 uid), 先按 ID 合并数量
+    const targets = new Map();
+    for (const it of (bagItems || [])) {
+        const id = toNum(it && it.id);
+        const count = toNum(it && it.count);
+        if (id <= 0 || count <= 0) continue;
+        if (onlyIds && !onlyIds.has(id)) continue;
+        if (!isAutoUsableItemId(id)) continue;
+        if (autoUseFailedIds.has(id)) continue;
+        targets.set(id, (targets.get(id) || 0) + count);
+    }
+    if (targets.size === 0) return finish({ used: 0, details: [] });
+
+    let used = 0;
+    const details = [];
+    for (const [itemId, count] of targets.entries()) {
+        const info = getItemById(itemId) || {};
+        const itemName = info.name ? String(info.name) : `物品#${itemId}`;
+        try {
+            await useItem(itemId, count);
+            used += count;
+            details.push(`${itemName}x${count}`);
+        } catch (e) {
+            // 记下失败的 ID: 同一件道具反复失败大多是"当前条件不满足", 不必每轮重试刷屏
+            autoUseFailedIds.add(itemId);
+            logWarn('仓库', `自动使用道具失败: ${itemName}: ${e.message}`, {
+                module: 'warehouse', event: '自动使用道具', result: 'error', itemId, count,
+            });
+        }
+        await sleep(200);
+    }
+
+    if (used > 0) {
+        log('仓库', `自动使用背包道具 x${used} [${details.join('，')}]`, {
+            module: 'warehouse', event: '自动使用道具', result: 'ok', count: used, items: details,
+        });
+    }
+    return finish({ used, details });
+}
+
+/** 测试/手动重试用: 清空失败记忆 */
+function resetAutoUseFailedIds() {
+    autoUseFailedIds.clear();
+    autoUseLastCheckAt = 0;
+}
+
+/**
  * 自动开启背包礼包
  * @param opts.onlyIds  只开这些物品ID(其它礼包原样留着), 供商城"买完即开"使用
  *                      (传了 onlyIds 就不受 60s 全量巡查节流限制, 买完立刻开)
@@ -546,6 +673,8 @@ function buildBagDetailFromItems(rawItems) {
                 priceUnit,
                 sellable,
                 sellBlockedReason,
+                // 能否在背包里点"使用": 由后端按 allowlist 判定, 前端不再自己猜类型
+                usable: isManualUsableItemId(id),
                 level: info ? (Number(info.level) || 0) : 0,
                 interactionType,
                 hoursText: '',
@@ -867,6 +996,10 @@ module.exports = {
     batchUseItems,
     openFertilizerGiftPacksSilently,
     openGiftPacksSilently,
+    autoUseBagItems,
+    isAutoUsableItemId,
+    isManualUsableItemId,
+    resetAutoUseFailedIds,
     getFertilizerGiftDailyState: () => ({
         key: 'fertilizer_gift_open',
         doneToday: fertilizerGiftDoneDateKey === getDateKey(),

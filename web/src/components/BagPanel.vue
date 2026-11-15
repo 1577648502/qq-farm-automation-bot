@@ -94,9 +94,10 @@ function canBatchSell(item: any) {
   return canSell(item) && Number(item.count || 0) > 0
 }
 
+// 能"直接使用"的道具由后端下发 usable(排除容器/解锁卡/狗粮/活动道具/红包/罐头等
+// 需要选目标或走别的协议的类型), 前端不再按 itemType 自己猜
 function canUse(item: any) {
-  const itemType = Number(item?.itemType || 0)
-  return itemType === 11
+  return item?.usable === true && Number(item?.count || 0) > 0
 }
 
 function getBagGroupKey(item: any) {
@@ -493,7 +494,7 @@ useIntervalFn(loadBag, 60000)
             {{ item.name || `物品${item.id}` }}
           </div>
           <div v-if="item.isMutantItem && item.mutantTypes && item.mutantTypes.length > 0" class="mb-1 flex flex-wrap justify-center gap-1">
-            <span v-for="mt in item.mutantTypes" :key="mt" class="inline-block rounded-full bg-gradient-to-r from-purple-500 to-pink-500 px-2 py-0.5 text-[10px] font-bold text-white shadow-sm">
+            <span v-for="mt in item.mutantTypes" :key="mt" class="inline-block rounded-full from-purple-500 to-pink-500 bg-gradient-to-r px-2 py-0.5 text-[10px] text-white font-bold shadow-sm">
               🌟 {{ mt }}
             </span>
           </div>

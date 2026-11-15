@@ -35,17 +35,20 @@ const CONFIG = {
 };
 
 function updateRuntimeConfig(newConfig) {
-    if (newConfig.serverUrl && typeof newConfig.serverUrl === 'string') {
-        CONFIG.serverUrl = newConfig.serverUrl;
+    // 只接受**非空字符串**: 历史数据里有 serverUrl/clientVersion 被存成空串的情况,
+    // 空串不该把运行时默认值冲掉(否则连不上服务器却看不出原因)。
+    const pick = (value) => (typeof value === 'string' && value.trim() ? value.trim() : '');
+    if (pick(newConfig.serverUrl)) {
+        CONFIG.serverUrl = pick(newConfig.serverUrl);
     }
-    if (newConfig.clientVersion && typeof newConfig.clientVersion === 'string') {
-        CONFIG.clientVersion = newConfig.clientVersion;
+    if (pick(newConfig.clientVersion)) {
+        CONFIG.clientVersion = pick(newConfig.clientVersion);
     }
-    if (newConfig.platform && typeof newConfig.platform === 'string') {
-        CONFIG.platform = newConfig.platform;
+    if (pick(newConfig.platform)) {
+        CONFIG.platform = pick(newConfig.platform);
     }
-    if (newConfig.os && typeof newConfig.os === 'string') {
-        CONFIG.os = newConfig.os;
+    if (pick(newConfig.os)) {
+        CONFIG.os = pick(newConfig.os);
     }
 }
 

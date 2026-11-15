@@ -13,6 +13,7 @@ const { recordOperation } = require('../services/stats');
 const { types } = require('./proto');
 const { toLong, toNum, syncServerTime, log, logWarn } = require('./utils');
 const cryptoWasm = require('./crypto-wasm');
+const { observeVersionInfo } = require('./client-version');
 
 // 延迟加载 warehouse 模块避免循环依赖
 let warehouseModule = null;
@@ -428,6 +429,21 @@ function handleNotify(msg) {
 }
 
 // ============ 登录 ============
+/**
+ * 处理服务器下发的 version_info(登录/心跳都会带)。
+ * 只记录结论并在版本落后时告警; 真正改版本号由管理面板"一键应用"完成 ——
+ * 运行时擅自改会和已建立的连接不一致, 还可能因为猜错补丁号直接把登录搞失败。
+ */
+function handleServerVersionInfo(versionInfo) {
+    if (!versionInfo) return;
+    try {
+        observeVersionInfo(versionInfo, CONFIG.clientVersion, process.env.FARM_ACCOUNT_ID || '');
+    } catch (e) {
+        // 版本跟进是附加能力, 绝不影响登录主流程
+        logWarn('系统', `版本信息处理失败: ${e && e.message ? e.message : e}`);
+    }
+}
+
 async function sendLogin(onLoginSuccess) {
     const body = types.LoginRequest.encode(types.LoginRequest.create({
         sharer_id: toLong(0),
@@ -491,6 +507,9 @@ async function sendLogin(onLoginSuccess) {
                 }
                 console.warn('===============================');
                 console.warn('');
+
+                // 服务器在 LoginReply 里带 version_info: 跟上资源版本(只提示, 不擅自改配置)
+                handleServerVersionInfo(reply.version_info);
 
                 // 登录后主动获取背包中的金豆豆数量
                 fetchGoldBeanFromBag();
@@ -575,6 +594,8 @@ function startHeartbeat() {
             try {
                 const reply = types.HeartbeatReply.decode(replyBody);
                 if (reply.server_time) syncServerTime(toNum(reply.server_time));
+                // 心跳也会带 version_info: 游戏热更新后不用等重登就能发现
+                handleServerVersionInfo(reply.version_info);
             } catch { }
         }).catch((e) => {
             warnHeartbeatFailure(`心跳失败: ${e && e.message ? e.message : '未知错误'}`, {
