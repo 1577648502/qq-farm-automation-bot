@@ -95,7 +95,7 @@ useIntervalFn(load, 60000)
   <div class="space-y-4">
     <div class="rounded-lg bg-white shadow dark:bg-gray-800">
       <!-- Header -->
-      <div class="flex flex-col items-center justify-between gap-3 border-b border-gray-100 p-3 sm:p-4 sm:flex-row dark:border-gray-700">
+      <div class="flex flex-col items-center justify-between gap-3 border-b border-gray-100 p-3 sm:flex-row dark:border-gray-700 sm:p-4">
         <h3 class="flex items-center gap-2 text-lg font-bold">
           <div class="i-carbon-shopping-cart text-xl" />
           种子商城
@@ -103,7 +103,7 @@ useIntervalFn(load, 60000)
       </div>
 
       <!-- Summary -->
-      <div class="flex flex-wrap gap-2 sm:gap-4 border-b border-gray-100 bg-gray-50 p-3 sm:p-4 text-xs sm:text-sm dark:border-gray-700 dark:bg-gray-900/50">
+      <div class="flex flex-wrap gap-2 border-b border-gray-100 bg-gray-50 p-3 text-xs sm:gap-4 dark:border-gray-700 dark:bg-gray-900/50 sm:p-4 sm:text-sm">
         <div class="flex items-center gap-1 rounded-full bg-blue-100 px-3 py-1 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400">
           <div class="i-carbon-shopping-cart" />
           <span class="font-medium">总计: {{ items.length }}</span>
@@ -123,7 +123,7 @@ useIntervalFn(load, 60000)
       </div>
 
       <!-- Filters -->
-      <div class="flex flex-wrap gap-2 border-b border-gray-100 p-3 sm:p-4 dark:border-gray-700">
+      <div class="flex flex-wrap gap-2 border-b border-gray-100 p-3 dark:border-gray-700 sm:p-4">
         <button
           v-for="f in FILTERS"
           :key="f.value"
@@ -140,9 +140,7 @@ useIntervalFn(load, 60000)
 
       <!-- Content -->
       <div class="p-3 sm:p-4">
-        <div v-if="loading" class="flex justify-center py-12">
-          <div class="i-svg-spinners-90-ring-with-bg text-4xl text-blue-500" />
-        </div>
+        <LoadingState v-if="loading" />
 
         <div v-else-if="!currentAccountId" class="flex flex-col items-center justify-center gap-4 py-12 text-center text-gray-500">
           <div class="i-carbon-user-offline text-4xl text-gray-400" />
@@ -162,11 +160,11 @@ useIntervalFn(load, 60000)
           暂无种子商城数据
         </div>
 
-        <div v-else class="grid grid-cols-3 gap-2 sm:gap-3 lg:grid-cols-8 md:grid-cols-6 sm:grid-cols-4">
+        <div v-else class="grid grid-cols-3 gap-2 lg:grid-cols-8 md:grid-cols-6 sm:grid-cols-4 sm:gap-3">
           <div
             v-for="item in filteredItems"
             :key="item.seedId"
-            class="relative flex flex-col items-center rounded-lg border p-2 transition"
+            class="relative flex flex-col items-center border rounded-lg p-2 transition"
             :class="item.locked || item.soldOut
               ? 'border-dashed border-gray-200 bg-gray-50 opacity-60 dark:border-gray-700 dark:bg-gray-900/40'
               : 'border-gray-200 bg-white dark:border-gray-700 dark:bg-gray-800'"
@@ -208,7 +206,7 @@ useIntervalFn(load, 60000)
                 type="number"
                 min="1"
                 placeholder="1"
-                class="w-10 rounded border border-gray-200 px-1 py-0.5 text-center text-[10px] dark:border-gray-600 dark:bg-gray-700"
+                class="w-10 border border-gray-200 rounded px-1 py-0.5 text-center text-[10px] dark:border-gray-600 dark:bg-gray-700"
               >
               <button
                 class="min-h-[24px] flex flex-1 items-center justify-center gap-0.5 rounded px-1 py-0.5 text-[10px] text-white transition disabled:cursor-not-allowed disabled:opacity-50"

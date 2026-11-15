@@ -346,9 +346,7 @@ useIntervalFn(loadBag, 60000)
       </div>
     </div>
 
-    <div v-if="bagLoading || statusLoading" class="flex justify-center py-12">
-      <div class="i-svg-spinners-90-ring-with-bg text-4xl text-blue-500" />
-    </div>
+    <LoadingState v-if="bagLoading || statusLoading" />
 
     <div v-else-if="!currentAccountId" class="rounded-lg bg-white p-8 text-center text-gray-500 shadow dark:bg-gray-800">
       请选择账号后查看背包

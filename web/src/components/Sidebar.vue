@@ -7,6 +7,7 @@ import api from '@/api'
 import AccountModal from '@/components/AccountModal.vue'
 import RemarkModal from '@/components/RemarkModal.vue'
 
+import LoadingState from '@/components/ui/LoadingState.vue'
 import { menuRoutes } from '@/router/menu'
 import { getPlatformClass, getPlatformLabel, useAccountStore } from '@/stores/account'
 import { useAppStore } from '@/stores/app'
@@ -196,7 +197,7 @@ const navItems = computed(() => {
   const as = activityStatus.value
   return menuRoutes
     .filter(item => !item.adminOnly || isAdmin)
-    .filter(item => {
+    .filter((item) => {
       // ?????????????
       if (item.activityKey) {
         return as[item.activityKey as keyof typeof as] !== false
@@ -257,7 +258,7 @@ const activityStatus = ref({
 
 async function loadActivityStatus() {
   try {
-    const res = await api.get("/api/activities/status")
+    const res = await api.get('/api/activities/status')
     if (res.data?.ok) {
       activityStatus.value = {
         heFengEnabled: res.data.heFengEnabled !== false,
@@ -269,7 +270,8 @@ async function loadActivityStatus() {
         milkTeaEnabled: res.data.milkTeaEnabled !== false,
       }
     }
-  } catch {
+  }
+  catch {
     // ????
   }
 }
@@ -838,10 +840,10 @@ function closeOpenSourceNotice() {
   <!-- 开源致谢弹窗 -->
   <div
     v-if="showOpenSourceNotice"
-    class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4"
+    class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4 backdrop-blur-sm"
     @click.self="closeOpenSourceNotice"
   >
-    <div class="w-[460px] max-w-full rounded-xl bg-white p-5 shadow-2xl dark:bg-gray-800" @click.stop>
+    <div class="max-w-full w-[460px] rounded-xl bg-white p-5 shadow-2xl dark:bg-gray-800" @click.stop>
       <div class="mb-4 flex items-center gap-2">
         <div class="i-carbon-favorite text-xl" :style="{ color: 'var(--theme-primary)' }" />
         <h3 class="text-lg text-gray-900 font-bold dark:text-gray-100">
@@ -849,7 +851,7 @@ function closeOpenSourceNotice() {
         </h3>
       </div>
 
-      <div class="space-y-3 text-sm text-gray-700 leading-6 dark:text-gray-300">
+      <div class="text-sm text-gray-700 leading-6 space-y-3 dark:text-gray-300">
         <p>
           本项目基于开源项目
           <a
@@ -869,7 +871,7 @@ function closeOpenSourceNotice() {
         <p>
           我们会尊重原项目的开源贡献，并在后续维护中尽量保持清晰、稳定、可持续的改进。
         </p>
-	<p>
+        <p>
           本项目二开代码使用Codex工具基于Gpt5.5与deepseek-v4-flash完成。
         </p>
         <p>
@@ -903,7 +905,7 @@ function closeOpenSourceNotice() {
     class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm"
     @click.self="showRenewModal = false"
   >
-    <div class="w-96 max-w-full rounded-xl bg-white p-5 shadow-2xl dark:bg-gray-800" @click.stop>
+    <div class="max-w-full w-96 rounded-xl bg-white p-5 shadow-2xl dark:bg-gray-800" @click.stop>
       <h3 class="mb-4 text-lg text-gray-900 font-bold dark:text-gray-100">
         续费卡密
       </h3>
@@ -1031,7 +1033,7 @@ function closeOpenSourceNotice() {
   <!-- 管理员设置公告弹窗 -->
   <div
     v-if="showAnnouncementModal"
-    class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4"
+    class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4 backdrop-blur-sm"
     @click.self="showAnnouncementModal = false"
   >
     <div class="w-[500px] rounded-xl bg-white p-5 shadow-2xl dark:bg-gray-800" @click.stop>
@@ -1039,9 +1041,7 @@ function closeOpenSourceNotice() {
         设置公告
       </h3>
 
-      <div v-if="announcementLoading" class="flex justify-center py-8">
-        <div class="i-svg-spinners-90-ring-with-bg text-2xl text-blue-500" />
-      </div>
+      <LoadingState v-if="announcementLoading" size="md" />
 
       <template v-else>
         <div class="mb-4">
@@ -1092,7 +1092,7 @@ function closeOpenSourceNotice() {
   <!-- 普通用户查看公告弹窗 -->
   <div
     v-if="showAnnouncementViewModal && currentAnnouncement?.content"
-    class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4"
+    class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4 backdrop-blur-sm"
   >
     <div
       class="announcement-view-modal rounded-xl bg-white shadow-2xl dark:bg-gray-800"
@@ -1194,7 +1194,17 @@ function closeOpenSourceNotice() {
 
 /* 自定义调整大小手柄样式 */
 .announcement-view-modal::-webkit-resizer {
-  background: linear-gradient(-45deg, transparent 50%, var(--theme-primary) 50%, var(--theme-primary) 60%, transparent 60%, transparent 70%, var(--theme-primary) 70%, var(--theme-primary) 80%, transparent 80%);
+  background: linear-gradient(
+    -45deg,
+    transparent 50%,
+    var(--theme-primary) 50%,
+    var(--theme-primary) 60%,
+    transparent 60%,
+    transparent 70%,
+    var(--theme-primary) 70%,
+    var(--theme-primary) 80%,
+    transparent 80%
+  );
   border-radius: 0 0 12px 0;
 }
 </style>

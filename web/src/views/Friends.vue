@@ -5,6 +5,7 @@ import { computed, onMounted, ref, watch } from 'vue'
 import api from '@/api'
 import ConfirmModal from '@/components/ConfirmModal.vue'
 import LandBoard from '@/components/LandBoard.vue'
+import LoadingState from '@/components/ui/LoadingState.vue'
 import { useAccountStore } from '@/stores/account'
 import { useFriendStore } from '@/stores/friend'
 import { useStatusStore } from '@/stores/status'
@@ -581,11 +582,11 @@ async function handleBatchAddKnownFriendGids() {
       </div>
     </div>
 
-    <div class="mb-4 flex flex-nowrap overflow-x-auto scrollbar-none snap-x snap-mandatory border-b border-gray-200 dark:border-gray-700">
+    <div class="scrollbar-none mb-4 flex flex-nowrap snap-x snap-mandatory overflow-x-auto border-b border-gray-200 dark:border-gray-700">
       <button
         v-for="tab in TABS"
         :key="tab.key"
-        class="min-h-[44px] flex items-center gap-2 px-4 py-3 text-sm font-medium transition-colors whitespace-nowrap snap-start"
+        class="min-h-[44px] flex snap-start items-center gap-2 whitespace-nowrap px-4 py-3 text-sm font-medium transition-colors"
         :class="activeTab === tab.key
           ? 'border-b-2'
           : 'text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-300'"
@@ -603,9 +604,7 @@ async function handleBatchAddKnownFriendGids() {
       </button>
     </div>
 
-    <div v-if="loading || statusLoading || interactLoading" class="flex justify-center py-12">
-      <div class="i-svg-spinners-90-ring-with-bg text-4xl text-blue-500" />
-    </div>
+    <LoadingState v-if="loading || statusLoading || interactLoading" />
 
     <div v-else-if="!currentAccountId" class="flex flex-col items-center justify-center gap-4 rounded-lg bg-white p-12 text-center text-gray-500 shadow dark:bg-gray-800">
       <div class="i-carbon-user-offline text-4xl text-gray-400" />
@@ -678,7 +677,7 @@ async function handleBatchAddKnownFriendGids() {
             </div>
           </div>
 
-          <div class="mt-4 grid gap-3 lg:grid-cols-2">
+          <div class="grid mt-4 gap-3 lg:grid-cols-2">
             <div>
               <label class="mb-1 block text-xs text-gray-500 dark:text-gray-400">访客检测入库冷却(秒)</label>
               <input
@@ -813,9 +812,7 @@ async function handleBatchAddKnownFriendGids() {
             </div>
 
             <div v-if="expandedFriends.has(friend.gid)" class="border-t bg-gray-50 p-4 dark:border-gray-700 dark:bg-gray-900/50">
-              <div v-if="friendLandsLoading[friend.gid]" class="flex justify-center py-4">
-                <div class="i-svg-spinners-90-ring-with-bg text-2xl text-blue-500" />
-              </div>
+              <LoadingState v-if="friendLandsLoading[friend.gid]" size="md" :padded="false" class="py-4" />
               <div v-else-if="!friendLands[friend.gid] || friendLands[friend.gid]?.length === 0" class="py-4 text-center text-gray-500">
                 无土地数据
               </div>
@@ -1106,7 +1103,7 @@ async function handleBatchAddKnownFriendGids() {
             <div v-if="filteredKnownFriendGids.length === 0" class="py-8 text-center text-gray-500 dark:text-gray-400">
               暂无数据
             </div>
-            <div v-else class="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
+            <div v-else class="grid grid-cols-1 gap-2 lg:grid-cols-3 sm:grid-cols-2">
               <div
                 v-for="item in filteredKnownFriendGids"
                 :key="item.gid"

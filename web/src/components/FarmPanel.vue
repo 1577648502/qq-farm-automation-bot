@@ -211,9 +211,7 @@ onUnmounted(() => {
 
       <!-- Grid -->
       <div class="p-3 sm:p-4">
-        <div v-if="loading || statusLoading" class="flex justify-center py-12">
-          <div class="i-svg-spinners-90-ring-with-bg text-4xl text-blue-500" />
-        </div>
+        <LoadingState v-if="loading || statusLoading" />
 
         <div v-else-if="!currentAccountId" class="flex flex-col items-center justify-center gap-4 rounded-lg bg-white p-12 text-center text-gray-500 shadow dark:bg-gray-800">
           <div class="i-carbon-user-offline text-4xl text-gray-400" />

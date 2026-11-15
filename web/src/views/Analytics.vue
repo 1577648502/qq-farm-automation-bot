@@ -309,9 +309,9 @@ function formatGrowTime(seconds: any) {
 
 <template>
   <div class="space-y-4">
-    <div class="flex flex-nowrap gap-2 overflow-x-auto scrollbar-none snap-x snap-mandatory border-b border-gray-200 dark:border-gray-700">
+    <div class="scrollbar-none flex flex-nowrap snap-x snap-mandatory gap-2 overflow-x-auto border-b border-gray-200 dark:border-gray-700">
       <button
-        class="min-h-[44px] border-b-2 px-4 py-2 text-sm font-medium transition-colors whitespace-nowrap snap-start"
+        class="min-h-[44px] snap-start whitespace-nowrap border-b-2 px-4 py-2 text-sm font-medium transition-colors"
         :class="activeTab === 'crops'
           ? 'border-blue-500 text-blue-600 dark:border-blue-400 dark:text-blue-400'
           : 'border-transparent text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-300'"
@@ -355,9 +355,7 @@ function formatGrowTime(seconds: any) {
     </div>
 
     <div>
-      <div v-if="loading" class="flex justify-center py-12">
-        <div class="i-svg-spinners-90-ring-with-bg text-4xl text-blue-500" />
-      </div>
+      <LoadingState v-if="loading" />
 
       <div v-else-if="!currentAccountId" class="rounded-lg bg-white p-8 text-center text-gray-500 shadow dark:bg-gray-800">
         请选择账号后查看数据分析
@@ -476,7 +474,7 @@ function formatGrowTime(seconds: any) {
           </div>
 
           <div class="hidden overflow-hidden border border-gray-200 rounded-lg bg-white shadow sm:block dark:border-gray-700 dark:bg-gray-800">
-            <div class="-mx-3 sm:mx-0 overflow-x-auto">
+            <div class="overflow-x-auto -mx-3 sm:mx-0">
               <table class="w-full whitespace-nowrap text-left text-sm">
                 <thead class="border-b bg-gray-50 text-xs text-gray-500 uppercase dark:border-gray-700 dark:bg-gray-700/50 dark:text-gray-400">
                   <tr>
@@ -681,7 +679,7 @@ function formatGrowTime(seconds: any) {
         </div>
 
         <div class="p-4">
-          <div class="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+          <div class="grid grid-cols-1 gap-3 lg:grid-cols-4 sm:grid-cols-2">
             <div
               v-for="strategy in strategies"
               :key="strategy.key"
