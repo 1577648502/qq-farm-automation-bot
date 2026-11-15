@@ -406,11 +406,14 @@ async function runFertilizerByConfig(plantedLands = [], options = {}) {
     if (planted.length === 0 && fertilizerConfig !== 'organic' && fertilizerConfig !== 'both' && fertilizerConfig !== 'smart') {
         return { normal: 0, organic: 0 };
     }
-    let latestLands = [];
+    // 调用方(巡田主流程)手上通常已有一份地块快照, 传进来就不用重复拉全量
+    let latestLands = Array.isArray(options.lands) ? options.lands : [];
     const landTypeById = new Map();
     try {
-        const latest = await getAllLands();
-        latestLands = Array.isArray(latest && latest.lands) ? latest.lands : [];
+        if (latestLands.length === 0) {
+            const latest = await getAllLands();
+            latestLands = Array.isArray(latest && latest.lands) ? latest.lands : [];
+        }
         for (const land of latestLands) {
             if (!land) continue;
             const landId = toNum(land.id);
@@ -488,14 +491,9 @@ async function runFertilizerByConfig(plantedLands = [], options = {}) {
         }
     }
     else if (fertilizerConfig === 'smart') {
-        let organicTargets = [];
         const smartSeconds = toNum(automation.fertilizer_smart_seconds) || 300;
-        try {
-            const latest = await getAllLands();
-            organicTargets = getFastMatureLands(latest && latest.lands, smartSeconds);
-        } catch (e) {
-            logWarn('施肥', `获取全农场地块失败: ${e.message}`);
-        }
+        // 复用上面已经拉到的快照: 原来这里又打了一次全量 AllLands
+        const organicTargets = getFastMatureLands(latestLands, smartSeconds);
 
         if (organicTargets.length > 0) {
             fertilizedOrganic = await fertilizeOrganicLoop(organicTargets);
@@ -2107,7 +2105,7 @@ async function runFarmOperation(opType) {
                 landIds: multiSeasonTargets,
             });
             try {
-                await runFertilizerByConfig(multiSeasonTargets, { reason: 'multi_season' });
+                await runFertilizerByConfig(multiSeasonTargets, { reason: 'multi_season', lands });
             } catch (e) {
                 logWarn('施肥', `多季补肥执行失败: ${e.message}`, {
                     module: 'farm',
@@ -2126,7 +2124,7 @@ async function runFarmOperation(opType) {
         const fertilizerConfig = getAutomation().fertilizer || 'none';
         if (fertilizerConfig === 'smart') {
             try {
-                const result = await runFertilizerByConfig([], { skipNormal: true });
+                const result = await runFertilizerByConfig([], { skipNormal: true, lands });
                 if (result.organic > 0) {
                     actions.push(`有机肥${result.organic}`);
                 }
