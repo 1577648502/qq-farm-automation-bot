@@ -9,7 +9,6 @@ const {
     isAutomationOn,
     getFriendQuietHours,
     getFriendBlacklist,
-    setFriendBlacklist,
     getPlantBlacklist,
     getKnownFriendGids,
     getKnownFriendGidSyncCooldownSec,

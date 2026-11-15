@@ -4,7 +4,7 @@
 
 const protobuf = require('protobufjs');
 const { CONFIG, PlantPhase, PHASE_NAMES } = require('../config/config');
-const { getPlantNameBySeedId, getPlantName, getPlantExp, formatGrowTime, getPlantGrowTime, getAllSeeds, getPlantById, getPlantBySeedId, getSeedImageBySeedId, resolveMutationInfo, isGoldenPlant } = require('../config/gameConfig');
+const { getPlantNameBySeedId, getPlantName, formatGrowTime, getPlantGrowTime, getAllSeeds, getPlantById, getPlantBySeedId, getSeedImageBySeedId, resolveMutationInfo, isGoldenPlant } = require('../config/gameConfig');
 const { isAutomationOn, getPreferredSeed, getAutomation, getPlantingStrategy, getBagSeedPriority, getBagSeedFallbackStrategy, getPlantSeedExclude, getFertilizerBuyOrganicCount, getFertilizerBuyOrganicThresholdHours, getFertilizerBuyNormalCount, getFertilizerBuyNormalThresholdHours, getFertilizerBuyCheckIntervalMinutes } = require('../models/store');
 const { sendMsgAsync, getUserState, networkEvents, getWsErrorState } = require('../utils/network');
 const { types } = require('../utils/proto');
@@ -12,7 +12,7 @@ const { toLong, toNum, getServerTimeSec, toTimeSec, log, logWarn, sleep, randomD
 const { getPlantRankings } = require('./analytics');
 const { createScheduler } = require('./scheduler');
 const { recordOperation } = require('./stats');
-const { getBagSeeds, getBag, getBagItems, getContainerHoursFromBagItems } = require('./warehouse');
+const { getBagSeeds } = require('./warehouse');
 const { buildLandBoard, getSlaveLandIds, hasPlantData } = require('./land-layout');
 const { autoBuyFertilizer, checkAndBuyFertilizerBoth } = require('./mall');
 const { getCapitalModeConfig, deployDog, withdrawDog, DOG_TYPE_NAMES } = require('./pet');
@@ -291,28 +291,6 @@ function getDisplayLandContext(land, landsMap) {
 
 function isOccupiedSlaveLand(land, landsMap) {
     return !!getDisplayLandContext(land, landsMap).occupiedByMaster;
-}
-
-function buildSlaveToMasterMap(lands) {
-    const map = new Map();
-    for (const land of (Array.isArray(lands) ? lands : [])) {
-        const slaveIds = getSlaveLandIds(land);
-        const masterId = toNum(land && land.id);
-        if (slaveIds.length > 0 && masterId > 0) {
-            for (const slaveId of slaveIds) {
-                if (slaveId > 0 && slaveId !== masterId) {
-                    map.set(slaveId, masterId);
-                }
-            }
-        }
-    }
-    return map;
-}
-
-function isOccupiedSlaveLandWithMap(land, landsMap, slaveToMasterMap) {
-    const landId = toNum(land && land.id);
-    if (!landId) return false;
-    return slaveToMasterMap.has(landId);
 }
 
 /**
@@ -1429,7 +1407,9 @@ async function plantFromShop(landsToPlant, state, overrideStrategy) {
                 landFootprint,
                 emptyCount: landsToPlant.length,
             });
-            return;
+            // ⚠ 必须返回和函数约定一致的对象: 调用方会直接读 shopResult.plantedLands,
+            //   裸 return 会让它抛 TypeError, 被上层 catch 吞成一条警告, 整轮种植静默中断
+            return { plantedLands: [] };
         }
     }
     const totalCost = bestSeed.price * needCount;
@@ -1615,7 +1595,6 @@ function analyzeLands(lands) {
     const result = {
         harvestable: [], needWater: [], needWeed: [], needBug: [],
         growing: [], empty: [], dead: [], unlockable: [], upgradable: [],
-        harvestableInfo: [],
     };
 
     const nowSec = getServerTimeSec();
@@ -1662,15 +1641,6 @@ function analyzeLands(lands) {
 
         if (phaseVal === PlantPhase.MATURE) {
             result.harvestable.push(id);
-            const plantId = toNum(plant.id);
-            const plantNameFromConfig = getPlantName(plantId);
-            const plantExp = getPlantExp(plantId);
-            result.harvestableInfo.push({
-                landId: id,
-                plantId,
-                name: plantNameFromConfig || plantName,
-                exp: plantExp,
-            });
             continue;
         }
 
@@ -2464,7 +2434,6 @@ module.exports = {
     operateSingleLand,
     runFertilizerByConfig,
     buildLandMap,
-    buildSlaveToMasterMap,
     getDisplayLandContext,
     isOccupiedSlaveLand,
     sortBagSeedsForPlanting,

@@ -564,20 +564,6 @@ function getCurrentTotals() {
     };
 }
 
-async function getCurrentTotalsFromBag() {
-    const bagReply = await getBag();
-    const items = getBagItems(bagReply);
-    let gold = null;
-    let exp = null;
-    for (const item of items) {
-        const id = toNum(item.id);
-        const count = toNum(item.count);
-        if (id === 1 || id === 1001) gold = count;       // 金币
-        if (id === 1101) exp = count;     // 累计经验
-    }
-    return { gold, exp };
-}
-
 function getItemMutantTypes(item, id) {
     const itemMutantTypes = [];
     if (item && item.mutant_types && item.mutant_types.length > 0) {
@@ -1010,7 +996,6 @@ module.exports = {
     isSellableItem,
     getSellBlockReason,
     getBagItems,
-    getCurrentTotalsFromBag,
     getBagSeeds,
     getContainerHoursFromBagItems,
     __privateWarehouseFns: {
