@@ -692,6 +692,46 @@ const landTypeLabels = ref<Record<string, string>>({
 })
 // 类型 key 集合固定(只用于"全选/过滤"判断), 不随接口变化
 const allFertilizerLandTypes = [...LAND_TYPE_FALLBACK]
+
+/**
+ * 自动化开关的默认值。
+ *
+ * 这份默认值原本在文件里写了三遍(响应式初值 + syncLocalAutomationSettings
+ * 的两处兜底), 新增一个开关要改三处, 漏一处就会出现"保存了但页面回显成默认值"。
+ * 现在统一由这个工厂产出, 只有 fertilizer 策略因场景不同由参数指定。
+ */
+function createDefaultAutomation(fertilizer: string = 'none') {
+  return {
+    farm: false,
+    task: false,
+    sell: false,
+    friend: false,
+    farm_push: false,
+    land_upgrade: false,
+    friend_steal: false,
+    friend_help: false,
+    friend_bad: false,
+    friend_help_exp_limit: false,
+    fertilizer_gift: false,
+    fertilizer_buy_organic: false,
+    fertilizer_buy_normal: false,
+    mystery_shop: false,
+    star_light_up: false,
+    solar_terms: false,
+    weather_task: false,
+    weather_research: false,
+    charity_task: false,
+    mengchong_task: false,
+    mengchong_hunt: false,
+    auto_use_items: true,
+    rob_treasure: false,
+    fertilizer,
+    skip_own_weed_bug: false,
+    fertilizer_multi_season: false,
+    fertilizer_land_types: [...allFertilizerLandTypes],
+    fertilizer_smart_seconds: 300,
+  }
+}
 const fertilizerLandTypeOptions = computed(() =>
   allFertilizerLandTypes.map(value => ({ label: landTypeLabels.value[value] || value, value })),
 )
@@ -728,36 +768,7 @@ function normalizeFertilizerLandTypes(input: unknown) {
 }
 
 const localAutomationSettings = ref({
-  automation: {
-    farm: false,
-    task: false,
-    sell: false,
-    friend: false,
-    farm_push: false,
-    land_upgrade: false,
-    friend_steal: false,
-    friend_help: false,
-    friend_bad: false,
-    friend_help_exp_limit: false,
-    fertilizer_gift: false,
-    fertilizer_buy_organic: false,
-    fertilizer_buy_normal: false,
-    mystery_shop: false,
-    star_light_up: false,
-    solar_terms: false,
-    weather_task: false,
-    weather_research: false,
-    charity_task: false,
-    mengchong_task: false,
-    mengchong_hunt: false,
-    auto_use_items: true,
-    rob_treasure: false,
-    fertilizer: 'normal',
-    skip_own_weed_bug: false,
-    fertilizer_multi_season: false,
-    fertilizer_land_types: [...allFertilizerLandTypes],
-    fertilizer_smart_seconds: 300,
-  },
+  automation: createDefaultAutomation('normal'),
   // 夺宝(抢宝)
   robTreasureIntervalMinutes: 10,
   robMaxPerRun: 1,
@@ -1084,70 +1095,11 @@ function syncLocalAutomationSettings(submitted?: any) {
   const currentDraft = submitted ? cloneJsonValue(localAutomationSettings.value) : null
   if (settings.value) {
     if (!settings.value.automation) {
-      localAutomationSettings.value.automation = {
-        farm: false,
-        task: false,
-        sell: false,
-        friend: false,
-        farm_push: false,
-        land_upgrade: false,
-        friend_steal: false,
-        friend_help: false,
-        friend_bad: false,
-        friend_help_exp_limit: false,
-        fertilizer_gift: false,
-        fertilizer_buy_organic: false,
-        fertilizer_buy_normal: false,
-        mystery_shop: false,
-        star_light_up: false,
-        solar_terms: false,
-        weather_task: false,
-        weather_research: false,
-        charity_task: false,
-        mengchong_task: false,
-        mengchong_hunt: false,
-        auto_use_items: true,
-        rob_treasure: false,
-        fertilizer: 'none',
-        skip_own_weed_bug: false,
-        fertilizer_multi_season: false,
-        fertilizer_land_types: [...allFertilizerLandTypes],
-        fertilizer_smart_seconds: 300,
-      }
+      localAutomationSettings.value.automation = createDefaultAutomation()
     }
     else {
-      const defaults = {
-        farm: false,
-        task: false,
-        sell: false,
-        friend: false,
-        farm_push: false,
-        land_upgrade: false,
-        friend_steal: false,
-        friend_help: false,
-        friend_bad: false,
-        friend_help_exp_limit: false,
-        fertilizer_gift: false,
-        fertilizer_buy_organic: false,
-        fertilizer_buy_normal: false,
-        mystery_shop: false,
-        star_light_up: false,
-        solar_terms: false,
-        weather_task: false,
-        weather_research: false,
-        charity_task: false,
-        mengchong_task: false,
-        mengchong_hunt: false,
-        auto_use_items: true,
-        rob_treasure: false,
-        fertilizer: 'none',
-        skip_own_weed_bug: false,
-        fertilizer_multi_season: false,
-        fertilizer_land_types: [...allFertilizerLandTypes],
-        fertilizer_smart_seconds: 300,
-      }
       localAutomationSettings.value.automation = {
-        ...defaults,
+        ...createDefaultAutomation(),
         ...settings.value.automation,
       }
     }
