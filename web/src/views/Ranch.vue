@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { useIntervalFn } from '@vueuse/core'
 import { storeToRefs } from 'pinia'
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 
 import ConfirmModal from '@/components/ConfirmModal.vue'
 import LoadingState from '@/components/ui/LoadingState.vue'
@@ -68,17 +68,36 @@ const opLimitText = computed(() => {
   return ov.opLimits.map(l => `${l.opId}: ${l.used}/${l.limit}`).join(' · ')
 })
 
-async function refresh() {
-  const id = currentAccountId.value
-  if (!id)
+// 刷新防抖: 挂载/切账号/每次操作都会触发 refresh, 连点按钮会叠加请求;
+// 后端虽有 10s 节流, 前端也压一下(1.5s 内的多次触发只发一次)
+let refreshTimer: ReturnType<typeof setTimeout> | null = null
+
+function refresh(immediate = false) {
+  if (refreshTimer) {
+    clearTimeout(refreshTimer)
+    refreshTimer = null
+  }
+  const run = async () => {
+    refreshTimer = null
+    const id = currentAccountId.value
+    if (!id)
+      return
+    const acc = currentAccount.value
+    if (!acc)
+      return
+    if (!realtimeConnected.value)
+      await statusStore.fetchStatus(id)
+    if (acc.running && status.value?.connection?.connected)
+      ranchStore.fetchOverview(id)
+  }
+  if (immediate) {
+    void run()
     return
-  const acc = currentAccount.value
-  if (!acc)
-    return
-  if (!realtimeConnected.value)
-    await statusStore.fetchStatus(id)
-  if (acc.running && status.value?.connection?.connected)
-    ranchStore.fetchOverview(id)
+  }
+
+  refreshTimer = setTimeout(() => {
+    void run()
+  }, 1500)
 }
 
 async function handleCare() {
@@ -129,9 +148,16 @@ function confirmCare() {
   careVisible.value = true
 }
 
-watch(currentAccountId, () => refresh())
+watch(currentAccountId, () => refresh(true))
 
-onMounted(() => refresh())
+onMounted(() => refresh(true))
+
+onUnmounted(() => {
+  if (refreshTimer) {
+    clearTimeout(refreshTimer)
+    refreshTimer = null
+  }
+})
 </script>
 
 <template>

@@ -155,25 +155,39 @@ function toRanchView(reply) {
 
 // ============ 面板 API ============
 
-async function getRanchOverview() {
-    try {
-        const [detailReply, opTimesReply] = await Promise.all([
-            getRanchDetail(),
-            getRanchOpTimes().catch(() => null),
-        ]);
-        const view = toRanchView(detailReply);
-        view.opLimits = (opTimesReply && opTimesReply.limits || []).map(l => ({
-            opId: toNum(l.op_id),
-            used: toNum(l.used),
-            limit: toNum(l.limit),
-        }));
-        return view;
-    } catch (e) {
-        logWarn('牧场', `获取牧场详情失败: ${e.message}`, {
-            module: 'ranch', event: '获取牧场详情', result: 'error',
-        });
-        throw e;
+// 面板 overview 节流: 同一账号 10s 内的重复请求直接复用上一次结果。
+// 背景: 面板挂载/切账号/操作后都会 refresh, 叠加后台自动化时会把连接打掉线。
+const OVERVIEW_THROTTLE_MS = 10 * 1000;
+let overviewCache = { at: 0, accountId: '', promise: null };
+
+async function getRanchOverview(accountId = '') {
+    const key = String(accountId || process.env.FARM_ACCOUNT_ID || '');
+    const now = Date.now();
+    if (overviewCache.promise && overviewCache.accountId === key && now - overviewCache.at < OVERVIEW_THROTTLE_MS) {
+        return overviewCache.promise;
     }
+    const promise = (async () => {
+        try {
+            const [detailReply, opTimesReply] = await Promise.all([
+                getRanchDetail(),
+                getRanchOpTimes().catch(() => null),
+            ]);
+            const view = toRanchView(detailReply);
+            view.opLimits = (opTimesReply && opTimesReply.limits || []).map(l => ({
+                opId: toNum(l.op_id),
+                used: toNum(l.used),
+                limit: toNum(l.limit),
+            }));
+            return view;
+        } catch (e) {
+            logWarn('牧场', `获取牧场详情失败: ${e.message}`, {
+                module: 'ranch', event: '获取牧场详情', result: 'error',
+            });
+            throw e;
+        }
+    })();
+    overviewCache = { at: now, accountId: key, promise };
+    return promise;
 }
 
 /**

@@ -591,6 +591,40 @@ function resetUnifiedSchedule() {
     nextStealRunAt = now + stealMs;
 }
 
+// ============ 牧场调度(独立于巡田) ============
+// 牧场节奏是分钟级的(产出间隔 180 分钟, 每日操作有次数上限),
+// 不能跟着巡田 3 秒一轮 —— 上一版挂在 farm tick 里每轮 8~10 个 RPC,
+// 直接把连接打掉线了(面板进牧场页就掉线就是这个叠加出来的)。
+let ranchTaskRunning = false;
+let nextRanchRunAt = 0;
+const RANCH_TICK_INTERVAL_MIN_MS = 5 * 60 * 1000;   // 最短 5 分钟
+const RANCH_TICK_INTERVAL_MAX_MS = 8 * 60 * 1000;   // 最长 8 分钟
+// 失败退避: 连续失败时拉长间隔, 避免持续打爆
+let ranchFailStreak = 0;
+
+async function runRanchTick(auto) {
+    if (ranchTaskRunning) return;
+    if (!auto.ranch_auto) return;
+    ranchTaskRunning = true;
+    const base = randomIntervalMs(RANCH_TICK_INTERVAL_MIN_MS, RANCH_TICK_INTERVAL_MAX_MS);
+    try {
+        await ranch.runRanchCare({ claimTasks: false });
+        ranchFailStreak = 0;
+    } catch (e) {
+        ranchFailStreak += 1;
+        logWarn('牧场', `巡牧场失败(连续第 ${ranchFailStreak} 次): ${e.message}`, {
+            module: 'ranch', event: '巡牧场', result: 'error',
+        });
+    } finally {
+        // 正常 5-8 分钟; 连续失败按 2^N 退避, 上限 60 分钟
+        const nextMs = ranchFailStreak > 0
+            ? Math.min(60 * 60 * 1000, base * Math.min(2 ** ranchFailStreak, 64))
+            : base;
+        nextRanchRunAt = Date.now() + nextMs;
+        ranchTaskRunning = false;
+    }
+}
+
 async function runFarmTick(auto) {
     if (farmTaskRunning) return;
     farmTaskRunning = true;
@@ -607,8 +641,6 @@ async function runFarmTick(auto) {
         await openGiftPacksSilently().catch(() => 0);
         // 其余可盲用的道具(成长宝箱/百宝瓶等), 受开关控制, 内部自带节流
         if (auto.auto_use_items) await autoUseBagItems().catch(() => 0);
-        // 牧场自动化(收获/催产/喂食/卖产物/买幼崽/游商/牧草机), 受开关控制, 内部自带节流
-        if (auto.ranch_auto) await ranch.runRanchCare({ claimTasks: false }).catch(() => 0);
     } catch {
         // ignore
     } finally {
@@ -690,13 +722,15 @@ async function runUnifiedTick() {
     const dueFarm = now >= nextFarmRunAt;
     const dueHelp = now >= nextHelpRunAt;
     const dueSteal = now >= nextStealRunAt;
-    if (!dueFarm && !dueHelp && !dueSteal) return;
+    const dueRanch = now >= nextRanchRunAt;
+    if (!dueFarm && !dueHelp && !dueSteal && !dueRanch) return;
 
     const auto = getAutomation();
     // 串行执行而非并行，避免并发请求过多导致超时
     if (dueFarm) await runFarmTick(auto);
     if (dueHelp) await runHelpTick(auto);
     if (dueSteal) await runStealTick(auto);
+    if (dueRanch) await runRanchTick(auto);
 }
 
 function scheduleUnifiedNextTick() {
@@ -708,7 +742,8 @@ function scheduleUnifiedNextTick() {
     const nextAt = Math.min(
         Number(nextFarmRunAt) || (now + 1000),
         Number(nextHelpRunAt) || (now + 1000),
-        Number(nextStealRunAt) || (now + 1000)
+        Number(nextStealRunAt) || (now + 1000),
+        (nextRanchRunAt || (now + 5 * 60 * 1000))
     );
     const delayMs = Math.max(1000, nextAt - now); // 最低 1 秒
 
@@ -1283,7 +1318,7 @@ async function handleApiCall(msg) {
                 result = await require('../services/mengchong').getMengchongOverview();
                 break;
             case 'getRanchOverview':
-                result = await require('../services/ranch').getRanchOverview();
+                result = await require('../services/ranch').getRanchOverview(process.env.FARM_ACCOUNT_ID || '');
                 break;
             case 'runRanchCare':
                 result = await require('../services/ranch').runRanchCare(args[0] || {});
