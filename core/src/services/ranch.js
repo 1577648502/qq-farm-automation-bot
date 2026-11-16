@@ -20,6 +20,31 @@ const { toLong, toNum, log, logWarn, sleep } = require('../utils/utils');
 
 // ============ 底层 RPC ============
 
+// ============ 服务端错误码分类(2026-11-17 线上日志实测) ============
+// 这些错误是"当前状态本来就不满足", 不是故障 —— 按 error 反复打日志只会刷屏,
+// 还会掩盖真正的连接问题。
+const RANCH_ERR = {
+    BUILDING_MISSING: 1045115,   // 牧草机等建筑还没建(牧场刚开, 没摆放)
+    NOTHING_TO_PRODUCE: 1045232, // 没有可生产的动物
+    CANS_EMPTY: 1045234,         // 罐头桶耗尽
+    RATE_LIMITED: 1045202,       // 网络繁忙(服务端限流) → 要退避
+};
+
+/** 从错误信息里提取服务端 code= 数字 */
+function parseRanchErrorCode(e) {
+    const m = /code=(\d+)/.exec(String((e && e.message) || e || ''));
+    return m ? Number(m[1]) : 0;
+}
+
+/** 是不是"状态不满足"类错误(不重试、不算故障) */
+function isExpectedRanchError(e) {
+    const code = parseRanchErrorCode(e);
+    return code === RANCH_ERR.BUILDING_MISSING
+        || code === RANCH_ERR.NOTHING_TO_PRODUCE
+        || code === RANCH_ERR.CANS_EMPTY
+        || code === RANCH_ERR.RATE_LIMITED;
+}
+
 async function getRanchDetail(hostGid = 0) {
     const state = network.getUserState();
     const gid = toNum(hostGid) || toNum(state.gid);
@@ -32,7 +57,10 @@ async function getRanchDetail(hostGid = 0) {
 }
 
 async function getRanchOpTimes() {
-    const body = types.GetRanchOpTimesRequest.encode(types.GetRanchOpTimesRequest.create({})).finish();
+    // 抓包请求体是 `0a00` = {1: 空消息}, 空字节可能被服务端当参数错误
+    const body = types.GetRanchOpTimesRequest.encode(
+        types.GetRanchOpTimesRequest.create({ field1: {} }),
+    ).finish();
     const { body: replyBody } = await network.sendMsgAsync('gamepb.animalpb.RanchService', 'GetRanchOpTimes', body);
     return types.GetRanchOpTimesReply.decode(replyBody);
 }
@@ -214,7 +242,10 @@ async function runRanchCare(opts = {}) {
             result.feedMachineAdded = fm.fed;
             if (fm.fed > 0) result.details.push(`牧草机+${fm.fed}`);
         } catch (e) {
-            logWarn('牧场', `牧草机检查失败: ${e.message}`, { module: 'ranch', event: '牧草机加草', result: 'error' });
+            // 1045115 建筑不存在 = 牧场还没摆放牧草机, 每轮都报一遍只会刷屏
+            if (!isExpectedRanchError(e)) {
+                logWarn('牧场', `牧草机检查失败: ${e.message}`, { module: 'ranch', event: '牧草机加草', result: 'error' });
+            }
         }
     }
     await gap();
@@ -236,7 +267,17 @@ async function runRanchCare(opts = {}) {
             });
         }
     } catch (e) {
-        logWarn('牧场', `收获失败: ${e.message}`, { module: 'ranch', event: '收获牧场', result: 'error' });
+        // 1045202 = 服务端限流("网络繁忙"): 本轮直接放弃, 别再打后续请求火上浇油
+        if (parseRanchErrorCode(e) === RANCH_ERR.RATE_LIMITED) {
+            result.rateLimited = true;
+            log('牧场', '收获被服务端限流(网络繁忙), 本轮巡牧场提前结束', {
+                module: 'ranch', event: '收获牧场', result: 'rate_limited',
+            });
+            return result;
+        }
+        if (!isExpectedRanchError(e)) {
+            logWarn('牧场', `收获失败: ${e.message}`, { module: 'ranch', event: '收获牧场', result: 'error' });
+        }
     }
     await gap();
 
@@ -252,7 +293,17 @@ async function runRanchCare(opts = {}) {
             });
         }
     } catch (e) {
-        logWarn('牧场', `催产失败: ${e.message}`, { module: 'ranch', event: '催产', result: 'error' });
+        // 1045232 没有可生产的动物 = 正常状态(产出冷却中), 不算故障
+        if (parseRanchErrorCode(e) === RANCH_ERR.RATE_LIMITED) {
+            result.rateLimited = true;
+            log('牧场', '催产被服务端限流, 本轮巡牧场提前结束', {
+                module: 'ranch', event: '催产', result: 'rate_limited',
+            });
+            return result;
+        }
+        if (!isExpectedRanchError(e)) {
+            logWarn('牧场', `催产失败: ${e.message}`, { module: 'ranch', event: '催产', result: 'error' });
+        }
     }
     await gap();
 
@@ -263,7 +314,17 @@ async function runRanchCare(opts = {}) {
             await feedAnimal(feedType, 1);
             result.fed += 1;
         } catch (e) {
-            logWarn('牧场', `喂食失败: ${e.message}`, { module: 'ranch', event: '喂食', result: 'error' });
+            // 1045234 罐头耗尽 = 正常状态(等用户买罐头/加牧草)
+            if (parseRanchErrorCode(e) === RANCH_ERR.RATE_LIMITED) {
+                result.rateLimited = true;
+                log('牧场', '喂食被服务端限流, 本轮巡牧场提前结束', {
+                    module: 'ranch', event: '喂食', result: 'rate_limited',
+                });
+                return result;
+            }
+            if (!isExpectedRanchError(e)) {
+                logWarn('牧场', `喂食失败: ${e.message}`, { module: 'ranch', event: '喂食', result: 'error' });
+            }
         }
     }
 

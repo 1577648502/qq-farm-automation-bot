@@ -186,8 +186,10 @@ message HostRef {
 // 抓包响应: [{1:11003, 2:100, 4:100}, {1:11008, 2:20, 4:20}, {1:11009, 2:10, 4:10}]
 // #2=今日已用, #4=上限(推测); 操作 ID 11003/11008/11009 含义待确认
 message GetRanchOpTimesRequest {
-    // 1: 空 msg(占位)
+    EmptyRef field1 = 1;             // 抓包: {1: 空消息}
 }
+
+message EmptyRef {}
 message GetRanchOpTimesReply {
     repeated RanchOpLimit limits = 1;
 }

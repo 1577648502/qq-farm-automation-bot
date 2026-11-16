@@ -608,8 +608,13 @@ async function runRanchTick(auto) {
     ranchTaskRunning = true;
     const base = randomIntervalMs(RANCH_TICK_INTERVAL_MIN_MS, RANCH_TICK_INTERVAL_MAX_MS);
     try {
-        await ranch.runRanchCare({ claimTasks: false });
-        ranchFailStreak = 0;
+        const r = await ranch.runRanchCare({ claimTasks: false });
+        if (r && r.rateLimited) {
+            // 服务端限流: 算一次失败, 退避后重试(避免在限流窗口里反复触发)
+            ranchFailStreak += 1;
+        } else {
+            ranchFailStreak = 0;
+        }
     } catch (e) {
         ranchFailStreak += 1;
         logWarn('牧场', `巡牧场失败(连续第 ${ranchFailStreak} 次): ${e.message}`, {
