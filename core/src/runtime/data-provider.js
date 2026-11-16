@@ -142,6 +142,10 @@ function createDataProvider(options) {
         shareCharity: (accountRef) => callWorkerApi(resolveAccountRefId(accountRef), 'shareCharity'),
         runCharityTasksNow: (accountRef) => callWorkerApi(resolveAccountRefId(accountRef), 'runCharityTasksNow'),
         getMengchongOverview: (accountRef) => callWorkerApi(resolveAccountRefId(accountRef), 'getMengchongOverview'),
+        // 牧场
+        getRanchOverview: (accountRef) => callWorkerApi(resolveAccountRefId(accountRef), 'getRanchOverview'),
+        runRanchCare: (accountRef, opts) => callWorkerApi(resolveAccountRefId(accountRef), 'runRanchCare', [opts || {}]),
+        operateRanch: (accountRef, opts) => callWorkerApi(resolveAccountRefId(accountRef), 'operateRanch', [opts || {}]),
         claimMengchongFreeGift: (accountRef) => callWorkerApi(resolveAccountRefId(accountRef), 'claimMengchongFreeGift'),
         feedMengchongPet: (accountRef) => callWorkerApi(resolveAccountRefId(accountRef), 'feedMengchongPet'),
         autoFeedMengchongPet: (accountRef, opts) => callWorkerApi(resolveAccountRefId(accountRef), 'autoFeedMengchongPet', [opts || {}]),

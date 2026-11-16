@@ -1279,6 +1279,15 @@ async function handleApiCall(msg) {
             case 'getMengchongOverview':
                 result = await require('../services/mengchong').getMengchongOverview();
                 break;
+            case 'getRanchOverview':
+                result = await require('../services/ranch').getRanchOverview();
+                break;
+            case 'runRanchCare':
+                result = await require('../services/ranch').runRanchCare(args[0] || {});
+                break;
+            case 'operateRanch':
+                result = await require('../services/ranch').operateRanch(args[0] || {});
+                break;
             case 'claimMengchongFreeGift':
                 result = await require('../services/mengchong').claimFreeSeedGift();
                 break;

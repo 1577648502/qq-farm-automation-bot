@@ -40,12 +40,27 @@ async function loadProto() {
         getResourcePath('proto', 'solartermspb.proto'),
         getResourcePath('proto', 'weatherpb.proto'),
         getResourcePath('proto', 'charitypb.proto'),
+        getResourcePath('proto', 'animalpb.proto'),
     ], { keepCase: true });
 
     // 网关
     types.GateMessage = root.lookupType('gatepb.Message');
     types.GateMeta = root.lookupType('gatepb.Meta');
     types.EventMessage = root.lookupType('gatepb.EventMessage');
+
+    // 牧场(animalpb)
+    types.RanchInfo = root.lookupType('gamepb.animalpb.RanchInfo');
+    types.AnimalInfo = root.lookupType('gamepb.animalpb.AnimalInfo');
+    types.GetRanchDetailRequest = root.lookupType('gamepb.animalpb.GetRanchDetailRequest');
+    types.GetRanchDetailReply = root.lookupType('gamepb.animalpb.GetRanchDetailReply');
+    types.FeedAnimalRequest = root.lookupType('gamepb.animalpb.FeedAnimalRequest');
+    types.FeedAnimalReply = root.lookupType('gamepb.animalpb.FeedAnimalReply');
+    types.TriggerProduceRequest = root.lookupType('gamepb.animalpb.TriggerProduceRequest');
+    types.TriggerProduceReply = root.lookupType('gamepb.animalpb.TriggerProduceReply');
+    types.HarvestRanchRequest = root.lookupType('gamepb.animalpb.HarvestRanchRequest');
+    types.HarvestRanchReply = root.lookupType('gamepb.animalpb.HarvestRanchReply');
+    types.GetRanchOpTimesRequest = root.lookupType('gamepb.animalpb.GetRanchOpTimesRequest');
+    types.GetRanchOpTimesReply = root.lookupType('gamepb.animalpb.GetRanchOpTimesReply');
 
     // 用户
     types.LoginRequest = root.lookupType('gamepb.userpb.LoginRequest');

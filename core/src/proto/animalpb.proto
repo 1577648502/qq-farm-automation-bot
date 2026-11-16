@@ -1,0 +1,199 @@
+syntax = "proto3";
+
+package gamepb.animalpb;
+
+// ============ 牧场(11-17 新玩法, 25 级解锁) ============
+// 字段语义依据 2026-11-16 两份抓包(wx-code-grabber/captures/20261116-215{130,723}_牧场.*)
+// 逆向得出; 推断不确定的地方在注释里标了"推断"。
+
+// 牧场详情(AnimalService.GetRanchDetail 回包 #1)
+message RanchInfo {
+    int64 host_gid = 1;              // 牧场主人 GID(看好友牧场时是对方的)
+    int64 coop_count = 2;            // 窝数量(小动物: 鸡/兔…, 抓包=3)
+    int64 pen_count = 3;             // 棚数量(大动物: 羊/牛…, 抓包=3; 推断)
+    repeated AnimalInfo animals = 4; // 饲养中的动物(含空槽的占位?)
+    GrassStorage grass = 5;          // #5{#1=100}: 牧草库存(推断: {1:数量})
+    int64 grass_capacity = 6;        // #6=1: 牧草仓库容量档位? (推断)
+    BuildingInfo building = 7;       // 建筑状态(喂食机等; 抓包 {1:类型,2:{...},3:剩余,4:1,5:1})
+    // 8,9 未出现
+}
+
+// 单只动物
+message AnimalInfo {
+    int64 host_gid = 1;              // 归属 GID(10001)
+    int64 slot = 2;                  // 槽位 1..3
+    int64 stage = 3;                 // 生长阶段(幼年→成年; 抓包 1..6)
+    int64 animal_id = 4;             // 动物物品 ID(60001 鸡 / 60002 兔子 …)
+    int64 feed_state = 5;            // 喂养状态(抓包出现 1..4; 推断: 1=饿 2=成长中 3=产出中 4=待收获)
+    int64 fed_flag = 6;              // 出现于喂食后: 已喂标记(推断)
+    // 7,8,9 未出现
+    int64 produce_at = 10;           // 下次产出时刻(ms)
+    int64 can_to_market_at = 11;     // 罐头加成截止时刻(ms; 出现于喂有机罐头后, 推断)
+    int64 field_12 = 12;
+    // 13 未出现
+    int64 last_feed_at = 14;         // 上次喂食/开始计时时刻(ms)
+    int64 field_15 = 15;
+    int64 hungry_flag = 16;          // 1=出现于"没喂罐头"的帧(推断: 待喂标记)
+    int64 trigger_at = 17;           // 催产生效时刻(ms; TriggerProduce 后出现)
+    int64 grown_flag = 18;           // 1(成年标记? 推断)
+    int64 field_19 = 19;
+    int64 active_flag = 20;          // 1(在栏标记?)
+    int64 grass_need = 21;           // 每次消耗牧草数(1 或 360, 推断)
+    CostInfo sell_cost = 22;         // {1007 金券, 2160}: 相关成本(推断)
+    int64 produce_interval = 23;     // 180: 产出间隔分钟(推断)
+    CostInfo feed_cost = 24;         // {1007, 1620}: 喂食成本(推断)
+    int64 trigger_ready_at = 25;     // 催产就绪时刻(ms)
+    // 26..29 未出现
+    MutantInfo mutant = 30;          // 变异信息(#8=1; 巨大变异玩法)
+}
+
+message GrassStorage {
+    int64 grass_count = 1;           // {1=100}: 牧草数量
+}
+
+message BuildingDetail {
+    int64 item_id = 1;               // {1060002}=产物物品 ID(小兔崽)
+    int64 stored = 2;                // {30}=已存数量
+    int64 capacity = 3;              // {30}=容量
+    int64 animal_id = 5;             // {60002}=对应动物
+    int64 field_6 = 6;               // {1}
+}
+
+message CostInfo {
+    int64 item_id = 1;               // 1007 金券
+    int64 amount = 2;
+}
+
+message MutantInfo {
+    int64 field_1 = 1;               // 抓包只有 #8=1 一处, 结构未定
+}
+
+// 建筑(喂食机 3702001 等)
+message BuildingInfo {
+    int64 type = 1;                  // 抓包 =1
+    BuildingDetail detail = 2;       // {1060002,30,30,60002,1} 推断: {产物ID,库存,容量,动物ID,?}
+    int64 stored = 3;                // 30
+    int64 field_4 = 4;               // 1
+    int64 field_5 = 5;               // 1
+}
+
+// ============ 服务: gamepb.animalpb.AnimalService / RanchService ============
+
+// --- 牧场详情 ---
+message GetRanchDetailRequest {
+    // 抓包: 空消息(自己) 或 {2: 空msg}(看好友?) —— #2 结构未定, 先保留
+    HostRef host = 2;
+}
+message GetRanchDetailReply {
+    RanchInfo ranch = 1;
+    int64 ranch_exp = 2;             // 牧场经验(抓包恒 30, 与物品 1102 对应)
+}
+
+// --- 喂食 ---
+// 抓包请求: {1:{1:10001, 2:方式}, 2:数量}
+//   方式 4/5/6 的确切含义待更多抓包; 响应 #5.#3 与请求 #1.#2 一致,
+//   #5.#11{7003/7004=余量} 是被扣的无机/有机罐头桶剩余时长(秒)。
+message FeedAnimalRequest {
+    FeedTarget target = 1;           // {1: hostGid, 2: feedType}
+    int64 count = 2;                 // 喂食数量(1 或 2)
+}
+message FeedAnimalReply {
+    RanchInfo ranch = 1;             // 喂完后的牧场全量
+    int64 storage_value = 2;         // 被扣桶的剩余时长(秒; 推断)
+    int64 ranch_exp = 4;             // 牧场总经验
+    FeedReceipt receipt = 5;         // {1:gid, 2:槽位, 3:喂食方式, 11:{容器ID:余量}}
+}
+message FeedTarget {
+    int64 host_gid = 1;
+    int64 feed_type = 2;             // 4/5/6(具体枚举待确认)
+}
+message FeedReceipt {
+    int64 host_gid = 1;
+    int64 slot = 2;
+    int64 feed_type = 3;
+    // 4..10 未出现
+    ContainerLeft container = 11;    // {7003|7004: 剩余秒数}
+}
+message ContainerLeft {
+    int64 item_id = 1;               // 7003 无机罐头容器 / 7004 有机罐头容器
+    int64 seconds = 2;
+}
+
+// --- 催产 ---
+// 抓包: 空请求 或 {2:{1:10001, 2:槽位}}; 槽位 1 起
+message TriggerProduceRequest {
+    // 1 未出现
+    ProduceTarget target = 2;        // 只在指定槽位时出现
+}
+message ProduceTarget {
+    int64 host_gid = 1;
+    int64 slot = 2;
+}
+message TriggerProduceReply {
+    RanchInfo ranch = 1;
+    // 2 未出现
+    repeated ProduceReceipt receipts = 3;  // 本次催到的产出(可多个)
+}
+message ProduceReceipt {
+    int64 host_gid = 1;              // 10001
+    int64 slot = 2;                  // 槽位
+    int64 count = 3;                 // 产出数量
+    // 4..9 未出现
+    ItemGain gains = 10;             // {1:物品ID, 2:数量, ...来源}
+}
+
+// --- 收获 ---
+// 抓包请求: {2: 空msg, 3: 1} —— #3=1 含义待确认(推断: 收获全部)
+message HarvestRanchRequest {
+    // 1 未出现
+    HostRef host = 2;
+    int64 flag = 3;                  // 抓包恒 1
+}
+message HarvestRanchReply {
+    RanchInfo ranch = 1;
+    // 2,3,4 未出现
+    repeated HarvestGain gains = 5;  // 每个槽位的收获
+}
+message HarvestGain {
+    int64 host_gid = 1;              // 10001
+    int64 kind = 2;                  // 2=产物(蛋/崽), 1=整只(成年收获; 推断)
+    int64 slot = 3;                  // 槽位
+    // 4..9 未出现
+    repeated ItemGain items = 10;    // 收获的物品(可多条: 产物 + 经验)
+}
+
+message ItemGain {
+    int64 item_id = 1;               // 1060001 鸡蛋 / 2060001 整鸡 / 1102 牧场经验
+    int64 count = 2;
+    // 3..99 未出现
+    GainSource source = 100;         // {4:{1:1007金券,2:单价}} 出售参考价
+}
+message GainSource {
+    // 1..3 未出现
+    PriceInfo price = 4;
+}
+message PriceInfo {
+    int64 currency_id = 1;           // 1007 金券
+    int64 price = 2;                 // 单价
+}
+
+message HostRef {
+    // 结构未定(抓包里是空 msg), 先占位
+    int64 host_gid = 1;
+}
+
+// --- 每日操作次数(RanchService.GetRanchOpTimes) ---
+// 抓包响应: [{1:11003, 2:100, 4:100}, {1:11008, 2:20, 4:20}, {1:11009, 2:10, 4:10}]
+// #2=今日已用, #4=上限(推测); 操作 ID 11003/11008/11009 含义待确认
+message GetRanchOpTimesRequest {
+    // 1: 空 msg(占位)
+}
+message GetRanchOpTimesReply {
+    repeated RanchOpLimit limits = 1;
+}
+message RanchOpLimit {
+    int64 op_id = 1;                 // 11003 / 11008 / 11009
+    int64 used = 2;                  // 今日已用(抓包=上限值, 即还没用过)
+    // 3 未出现
+    int64 limit = 4;                 // 每日上限
+}

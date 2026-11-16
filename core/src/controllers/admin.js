@@ -1521,6 +1521,16 @@ app.use('/api', (req, res, next) => {
         } catch (e) { res.json({ ok: false, error: e.message }); }
     });
 
+    // ============ 牧场 API ============
+    // 牧场详情(动物/牧草/经验/每日操作次数)
+    app.get('/api/ranch/overview', withAccount(accountId => provider.getRanchOverview(accountId)));
+
+    // 一键巡牧场: 收获 → 催产 → 喂食
+    app.post('/api/ranch/care', withAccount((accountId, req) => provider.runRanchCare(accountId, req.body || {})));
+
+    // 单项操作: {op: harvest|produce|feed, slot?, feedType?, count?}
+    app.post('/api/ranch/operate', withAccount((accountId, req) => provider.operateRanch(accountId, req.body || {})));
+
     // API: 领取每日免费稀有种子礼包
     app.post('/api/mengchong/claim-free-gift', async (req, res) => {
         const id = getAccId(req);
