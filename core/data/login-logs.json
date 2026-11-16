@@ -53,6 +53,15 @@
       "errorType": null,
       "ip": "127.0.0.1",
       "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36"
+    },
+    {
+      "id": "1792806892730ppssawptq",
+      "timestamp": 1792806892730,
+      "event": "login_success",
+      "username": "admin",
+      "errorType": null,
+      "ip": "127.0.0.1",
+      "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/155.0.0.0 Safari/537.36"
     }
   ]
 }
