@@ -529,7 +529,7 @@
     },
     {
         "id": 1020099,
-        "mutant_group_ids": "1001;1",
+        "mutant_group_ids": "2001;1",
         "mutant_effect_plant": null,
         "name": "油菜",
         "seed_id": 20099,
@@ -573,7 +573,7 @@
     },
     {
         "id": 1020006,
-        "mutant_group_ids": "1001;1",
+        "mutant_group_ids": "3001;1",
         "mutant_effect_plant": null,
         "name": "茄子",
         "seed_id": 20006,
@@ -617,7 +617,7 @@
     },
     {
         "id": 1020051,
-        "mutant_group_ids": "1001;1",
+        "mutant_group_ids": "4001;1",
         "mutant_effect_plant": null,
         "name": "红枣",
         "seed_id": 20051,
@@ -661,7 +661,7 @@
     },
     {
         "id": 1020120,
-        "mutant_group_ids": "1001;1",
+        "mutant_group_ids": "5001;1",
         "mutant_effect_plant": null,
         "name": "蒲公英",
         "seed_id": 20120,
@@ -705,7 +705,7 @@
     },
     {
         "id": 1020259,
-        "mutant_group_ids": "1001;1",
+        "mutant_group_ids": "2001;1",
         "mutant_effect_plant": null,
         "name": "银莲花",
         "seed_id": 20259,
@@ -749,7 +749,7 @@
     },
     {
         "id": 1020007,
-        "mutant_group_ids": "1001;1",
+        "mutant_group_ids": "3001;1",
         "mutant_effect_plant": null,
         "name": "番茄",
         "seed_id": 20007,
@@ -793,7 +793,7 @@
     },
     {
         "id": 1020098,
-        "mutant_group_ids": "1001;1",
+        "mutant_group_ids": "4001;1",
         "mutant_effect_plant": null,
         "name": "花菜",
         "seed_id": 20098,
@@ -837,7 +837,7 @@
     },
     {
         "id": 1020305,
-        "mutant_group_ids": "1001;1",
+        "mutant_group_ids": "5001;1",
         "mutant_effect_plant": null,
         "name": "韭菜",
         "seed_id": 20305,
@@ -881,7 +881,7 @@
     },
     {
         "id": 1020105,
-        "mutant_group_ids": "1001;1",
+        "mutant_group_ids": "2001;1",
         "mutant_effect_plant": null,
         "name": "小雏菊",
         "seed_id": 20105,
@@ -925,7 +925,7 @@
     },
     {
         "id": 1020008,
-        "mutant_group_ids": "1001;1",
+        "mutant_group_ids": "3001;1",
         "mutant_effect_plant": null,
         "name": "豌豆",
         "seed_id": 20008,
@@ -969,7 +969,7 @@
     },
     {
         "id": 1020037,
-        "mutant_group_ids": "1001;1",
+        "mutant_group_ids": "4001;1",
         "mutant_effect_plant": null,
         "name": "莲藕",
         "seed_id": 20037,
@@ -1013,7 +1013,7 @@
     },
     {
         "id": 1020041,
-        "mutant_group_ids": "1001;1",
+        "mutant_group_ids": "5001;1",
         "mutant_effect_plant": null,
         "name": "红玫瑰",
         "seed_id": 20041,
@@ -1057,7 +1057,7 @@
     },
     {
         "id": 1020161,
-        "mutant_group_ids": "1001;1",
+        "mutant_group_ids": "2001;1",
         "mutant_effect_plant": null,
         "name": "秋菊（黄色）",
         "seed_id": 20161,
@@ -1101,7 +1101,7 @@
     },
     {
         "id": 1020110,
-        "mutant_group_ids": "1001;1",
+        "mutant_group_ids": "3001;1",
         "mutant_effect_plant": null,
         "name": "满天星",
         "seed_id": 20110,
@@ -1145,7 +1145,7 @@
     },
     {
         "id": 1020143,
-        "mutant_group_ids": "1001;1",
+        "mutant_group_ids": "4001;1",
         "mutant_effect_plant": null,
         "name": "含羞草",
         "seed_id": 20143,
@@ -1189,7 +1189,7 @@
     },
     {
         "id": 1020147,
-        "mutant_group_ids": "1001;1",
+        "mutant_group_ids": "5001;1",
         "mutant_effect_plant": null,
         "name": "牵牛花",
         "seed_id": 20147,
@@ -1233,7 +1233,7 @@
     },
     {
         "id": 1020162,
-        "mutant_group_ids": "1001;1",
+        "mutant_group_ids": "2001;1",
         "mutant_effect_plant": null,
         "name": "秋菊（红色）",
         "seed_id": 20162,
@@ -1277,7 +1277,7 @@
     },
     {
         "id": 1020009,
-        "mutant_group_ids": "1001;1",
+        "mutant_group_ids": "3001;1",
         "mutant_effect_plant": null,
         "name": "辣椒",
         "seed_id": 20009,
@@ -1321,7 +1321,7 @@
     },
     {
         "id": 1020097,
-        "mutant_group_ids": "1001;1",
+        "mutant_group_ids": "4001;1",
         "mutant_effect_plant": null,
         "name": "黄瓜",
         "seed_id": 20097,
@@ -1365,7 +1365,7 @@
     },
     {
         "id": 1020306,
-        "mutant_group_ids": "1001;1",
+        "mutant_group_ids": "5001;1",
         "mutant_effect_plant": null,
         "name": "芹菜",
         "seed_id": 20306,
@@ -1409,7 +1409,7 @@
     },
     {
         "id": 1020103,
-        "mutant_group_ids": "1001;1",
+        "mutant_group_ids": "2001;1",
         "mutant_effect_plant": null,
         "name": "天香百合",
         "seed_id": 20103,
@@ -1453,7 +1453,7 @@
     },
     {
         "id": 1020010,
-        "mutant_group_ids": "1001;1",
+        "mutant_group_ids": "3001;1",
         "mutant_effect_plant": null,
         "name": "南瓜",
         "seed_id": 20010,
@@ -1497,7 +1497,7 @@
     },
     {
         "id": 1020308,
-        "mutant_group_ids": "1001;1",
+        "mutant_group_ids": "4001;1",
         "mutant_effect_plant": null,
         "name": "核桃",
         "seed_id": 20308,
@@ -1541,7 +1541,7 @@
     },
     {
         "id": 1020091,
-        "mutant_group_ids": "1001;1",
+        "mutant_group_ids": "5001;1",
         "mutant_effect_plant": null,
         "name": "山楂",
         "seed_id": 20091,
@@ -1585,7 +1585,7 @@
     },
     {
         "id": 1020073,
-        "mutant_group_ids": "1001;1",
+        "mutant_group_ids": "2001;1",
         "mutant_effect_plant": null,
         "name": "菠菜",
         "seed_id": 20073,
@@ -1629,7 +1629,7 @@
     },
     {
         "id": 1020001,
-        "mutant_group_ids": "1001;1",
+        "mutant_group_ids": "3001;1",
         "mutant_effect_plant": null,
         "name": "草莓",
         "seed_id": 20001,
@@ -1673,7 +1673,7 @@
     },
     {
         "id": 1020011,
-        "mutant_group_ids": "1001;1",
+        "mutant_group_ids": "4001;1",
         "mutant_effect_plant": null,
         "name": "苹果",
         "seed_id": 20011,
@@ -1717,7 +1717,7 @@
     },
     {
         "id": 1020062,
-        "mutant_group_ids": "1001;1",
+        "mutant_group_ids": "5001;1",
         "mutant_effect_plant": null,
         "name": "四叶草",
         "seed_id": 20062,
@@ -1761,7 +1761,7 @@
     },
     {
         "id": 1020104,
-        "mutant_group_ids": "1001;1",
+        "mutant_group_ids": "2001;1",
         "mutant_effect_plant": null,
         "name": "非洲菊",
         "seed_id": 20104,
@@ -1805,7 +1805,7 @@
     },
     {
         "id": 1020135,
-        "mutant_group_ids": "1001;1",
+        "mutant_group_ids": "3001;1",
         "mutant_effect_plant": null,
         "name": "火绒草",
         "seed_id": 20135,
@@ -1849,7 +1849,7 @@
     },
     {
         "id": 1020141,
-        "mutant_group_ids": "1001;1",
+        "mutant_group_ids": "4001;1",
         "mutant_effect_plant": null,
         "name": "花香根鸢尾",
         "seed_id": 20141,
@@ -1893,7 +1893,7 @@
     },
     {
         "id": 1020142,
-        "mutant_group_ids": "1001;1",
+        "mutant_group_ids": "5001;1",
         "mutant_effect_plant": null,
         "name": "虞美人",
         "seed_id": 20142,
@@ -1937,7 +1937,7 @@
     },
     {
         "id": 1020145,
-        "mutant_group_ids": "1001;1",
+        "mutant_group_ids": "2001;1",
         "mutant_effect_plant": null,
         "name": "向日葵",
         "seed_id": 20145,
@@ -1981,7 +1981,7 @@
     },
     {
         "id": 1020014,
-        "mutant_group_ids": "1001;1",
+        "mutant_group_ids": "3001;1",
         "mutant_effect_plant": null,
         "name": "西瓜",
         "seed_id": 20014,
@@ -2025,7 +2025,7 @@
     },
     {
         "id": 1020070,
-        "mutant_group_ids": "1001;1",
+        "mutant_group_ids": "4001;1",
         "mutant_effect_plant": null,
         "name": "黄豆",
         "seed_id": 20070,
@@ -2069,7 +2069,7 @@
     },
     {
         "id": 1020015,
-        "mutant_group_ids": "1001;1",
+        "mutant_group_ids": "5001;1",
         "mutant_effect_plant": null,
         "name": "香蕉",
         "seed_id": 20015,
@@ -2113,7 +2113,7 @@
     },
     {
         "id": 1020100,
-        "mutant_group_ids": "1001;1",
+        "mutant_group_ids": "2001;1",
         "mutant_effect_plant": null,
         "name": "竹笋",
         "seed_id": 20100,
@@ -2157,7 +2157,7 @@
     },
     {
         "id": 1020018,
-        "mutant_group_ids": "1001;1",
+        "mutant_group_ids": "3001;1",
         "mutant_effect_plant": null,
         "name": "桃子",
         "seed_id": 20018,
@@ -2201,7 +2201,7 @@
     },
     {
         "id": 1020047,
-        "mutant_group_ids": "1001;1",
+        "mutant_group_ids": "4001;1",
         "mutant_effect_plant": null,
         "name": "甘蔗",
         "seed_id": 20047,
@@ -2245,7 +2245,7 @@
     },
     {
         "id": 1020019,
-        "mutant_group_ids": "1001;1",
+        "mutant_group_ids": "5001;1",
         "mutant_effect_plant": null,
         "name": "橙子",
         "seed_id": 20019,
@@ -2289,7 +2289,7 @@
     },
     {
         "id": 1020128,
-        "mutant_group_ids": "1001;1",
+        "mutant_group_ids": "2001;1",
         "mutant_effect_plant": null,
         "name": "茉莉花",
         "seed_id": 20128,
@@ -2333,7 +2333,7 @@
     },
     {
         "id": 1020013,
-        "mutant_group_ids": "1001;1",
+        "mutant_group_ids": "3001;1",
         "mutant_effect_plant": null,
         "name": "葡萄",
         "seed_id": 20013,
@@ -2377,7 +2377,7 @@
     },
     {
         "id": 1020044,
-        "mutant_group_ids": "1001;1",
+        "mutant_group_ids": "4001;1",
         "mutant_effect_plant": null,
         "name": "丝瓜",
         "seed_id": 20044,
@@ -2421,7 +2421,7 @@
     },
     {
         "id": 1020072,
-        "mutant_group_ids": "1001;1",
+        "mutant_group_ids": "5001;1",
         "mutant_effect_plant": null,
         "name": "榛子",
         "seed_id": 20072,
@@ -2465,7 +2465,7 @@
     },
     {
         "id": 1020396,
-        "mutant_group_ids": "1001;1",
+        "mutant_group_ids": "2001;1",
         "mutant_effect_plant": null,
         "name": "迎春花",
         "seed_id": 20396,
@@ -2509,7 +2509,7 @@
     },
     {
         "id": 1020023,
-        "mutant_group_ids": "1001;1",
+        "mutant_group_ids": "3001;1",
         "mutant_effect_plant": null,
         "name": "石榴",
         "seed_id": 20023,
@@ -2553,7 +2553,7 @@
     },
     {
         "id": 1020095,
-        "mutant_group_ids": "1001;1",
+        "mutant_group_ids": "4001;1",
         "mutant_effect_plant": null,
         "name": "栗子",
         "seed_id": 20095,
@@ -2597,7 +2597,7 @@
     },
     {
         "id": 1020026,
-        "mutant_group_ids": "1001;1",
+        "mutant_group_ids": "5001;1",
         "mutant_effect_plant": null,
         "name": "柚子",
         "seed_id": 20026,
@@ -2641,7 +2641,7 @@
     },
     {
         "id": 1020050,
-        "mutant_group_ids": "1001;1",
+        "mutant_group_ids": "2001;1",
         "mutant_effect_plant": null,
         "name": "蘑菇",
         "seed_id": 20050,
@@ -2685,7 +2685,7 @@
     },
     {
         "id": 1020027,
-        "mutant_group_ids": "1001;1",
+        "mutant_group_ids": "3001;1",
         "mutant_effect_plant": null,
         "name": "菠萝",
         "seed_id": 20027,
@@ -2729,7 +2729,7 @@
     },
     {
         "id": 1020036,
-        "mutant_group_ids": "1001;1",
+        "mutant_group_ids": "4001;1",
         "mutant_effect_plant": null,
         "name": "箬竹",
         "seed_id": 20036,
@@ -2773,7 +2773,7 @@
     },
     {
         "id": 1020043,
-        "mutant_group_ids": "1001;1",
+        "mutant_group_ids": "5001;1",
         "mutant_effect_plant": null,
         "name": "无花果",
         "seed_id": 20043,
@@ -2817,7 +2817,7 @@
     },
     {
         "id": 1020029,
-        "mutant_group_ids": "1001;1",
+        "mutant_group_ids": "2001;1",
         "mutant_effect_plant": null,
         "name": "椰子",
         "seed_id": 20029,
@@ -2861,7 +2861,7 @@
     },
     {
         "id": 1020049,
-        "mutant_group_ids": "1001;1",
+        "mutant_group_ids": "3001;1",
         "mutant_effect_plant": null,
         "name": "花生",
         "seed_id": 20049,
@@ -2905,7 +2905,7 @@
     },
     {
         "id": 1020052,
-        "mutant_group_ids": "1001;1",
+        "mutant_group_ids": "4001;1",
         "mutant_effect_plant": null,
         "name": "金针菇",
         "seed_id": 20052,
@@ -2949,7 +2949,7 @@
     },
     {
         "id": 1020031,
-        "mutant_group_ids": "1001;1",
+        "mutant_group_ids": "5001;1",
         "mutant_effect_plant": null,
         "name": "葫芦",
         "seed_id": 20031,
@@ -2993,7 +2993,7 @@
     },
     {
         "id": 1020045,
-        "mutant_group_ids": "1001;1",
+        "mutant_group_ids": "2001;1",
         "mutant_effect_plant": null,
         "name": "猕猴桃",
         "seed_id": 20045,
@@ -3037,7 +3037,7 @@
     },
     {
         "id": 1020054,
-        "mutant_group_ids": "1001;1",
+        "mutant_group_ids": "3001;1",
         "mutant_effect_plant": null,
         "name": "梨",
         "seed_id": 20054,
@@ -3081,7 +3081,7 @@
     },
     {
         "id": 1020442,
-        "mutant_group_ids": "1001;1",
+        "mutant_group_ids": "4001;1",
         "mutant_effect_plant": null,
         "name": "睡莲",
         "seed_id": 20442,
@@ -3125,7 +3125,7 @@
     },
     {
         "id": 1020033,
-        "mutant_group_ids": "1001;1",
+        "mutant_group_ids": "5001;1",
         "mutant_effect_plant": null,
         "name": "火龙果",
         "seed_id": 20033,
@@ -3169,7 +3169,7 @@
     },
     {
         "id": 1020055,
-        "mutant_group_ids": "1001;1",
+        "mutant_group_ids": "2001;1",
         "mutant_effect_plant": null,
         "name": "枇杷",
         "seed_id": 20055,
@@ -3213,7 +3213,7 @@
     },
     {
         "id": 1020034,
-        "mutant_group_ids": "1001;1",
+        "mutant_group_ids": "3001;1",
         "mutant_effect_plant": null,
         "name": "樱桃",
         "seed_id": 20034,
@@ -3257,7 +3257,7 @@
     },
     {
         "id": 1020413,
-        "mutant_group_ids": "1001;1",
+        "mutant_group_ids": "4001;1",
         "mutant_effect_plant": null,
         "name": "李子",
         "seed_id": 20413,
@@ -3301,7 +3301,7 @@
     },
     {
         "id": 1020035,
-        "mutant_group_ids": "1001;1",
+        "mutant_group_ids": "5001;1",
         "mutant_effect_plant": null,
         "name": "荔枝",
         "seed_id": 20035,
@@ -3345,7 +3345,7 @@
     },
     {
         "id": 1020067,
-        "mutant_group_ids": "1001;1",
+        "mutant_group_ids": "2001;1",
         "mutant_effect_plant": null,
         "name": "香瓜",
         "seed_id": 20067,
@@ -3389,7 +3389,7 @@
     },
     {
         "id": 1020038,
-        "mutant_group_ids": "1001;1",
+        "mutant_group_ids": "3001;1",
         "mutant_effect_plant": null,
         "name": "木瓜",
         "seed_id": 20038,
@@ -3433,7 +3433,7 @@
     },
     {
         "id": 1020053,
-        "mutant_group_ids": "1001;1",
+        "mutant_group_ids": "4001;1",
         "mutant_effect_plant": null,
         "name": "桂圆",
         "seed_id": 20053,
@@ -3477,7 +3477,7 @@
     },
     {
         "id": 1020080,
-        "mutant_group_ids": "1001;1",
+        "mutant_group_ids": "5001;1",
         "mutant_effect_plant": null,
         "name": "月柿",
         "seed_id": 20080,
@@ -3521,7 +3521,7 @@
     },
     {
         "id": 1020039,
-        "mutant_group_ids": "1001;1",
+        "mutant_group_ids": "2001;1",
         "mutant_effect_plant": null,
         "name": "杨桃",
         "seed_id": 20039,
@@ -3565,7 +3565,7 @@
     },
     {
         "id": 1020056,
-        "mutant_group_ids": "1001;1",
+        "mutant_group_ids": "3001;1",
         "mutant_effect_plant": null,
         "name": "哈密瓜",
         "seed_id": 20056,
@@ -3609,7 +3609,7 @@
     },
     {
         "id": 1020075,
-        "mutant_group_ids": "1001;1",
+        "mutant_group_ids": "4001;1",
         "mutant_effect_plant": null,
         "name": "桑葚",
         "seed_id": 20075,
@@ -3653,7 +3653,7 @@
     },
     {
         "id": 1020042,
-        "mutant_group_ids": "1001;1",
+        "mutant_group_ids": "5001;1",
         "mutant_effect_plant": null,
         "name": "柠檬",
         "seed_id": 20042,
@@ -3697,7 +3697,7 @@
     },
     {
         "id": 1020057,
-        "mutant_group_ids": "1001;1",
+        "mutant_group_ids": "2001;1",
         "mutant_effect_plant": null,
         "name": "芒果",
         "seed_id": 20057,
@@ -3741,7 +3741,7 @@
     },
     {
         "id": 1020048,
-        "mutant_group_ids": "1001;1",
+        "mutant_group_ids": "3001;1",
         "mutant_effect_plant": null,
         "name": "杨梅",
         "seed_id": 20048,
@@ -3785,7 +3785,7 @@
     },
     {
         "id": 1020058,
-        "mutant_group_ids": "1001;1",
+        "mutant_group_ids": "4001;1",
         "mutant_effect_plant": null,
         "name": "榴莲",
         "seed_id": 20058,
@@ -3829,7 +3829,7 @@
     },
     {
         "id": 1020079,
-        "mutant_group_ids": "1001;1",
+        "mutant_group_ids": "5001;1",
         "mutant_effect_plant": null,
         "name": "番石榴",
         "seed_id": 20079,
@@ -3873,7 +3873,7 @@
     },
     {
         "id": 1020218,
-        "mutant_group_ids": "1001;1",
+        "mutant_group_ids": "2001;1",
         "mutant_effect_plant": null,
         "name": "瓶子树",
         "seed_id": 20218,
@@ -3917,7 +3917,7 @@
     },
     {
         "id": 1020077,
-        "mutant_group_ids": "1001;1",
+        "mutant_group_ids": "3001;1",
         "mutant_effect_plant": null,
         "name": "蓝莓",
         "seed_id": 20077,
@@ -3961,7 +3961,7 @@
     },
     {
         "id": 1020220,
-        "mutant_group_ids": "1001;1",
+        "mutant_group_ids": "4001;1",
         "mutant_effect_plant": null,
         "name": "猪笼草",
         "seed_id": 20220,
@@ -4005,7 +4005,7 @@
     },
     {
         "id": 1020076,
-        "mutant_group_ids": "1001;1",
+        "mutant_group_ids": "5001;1",
         "mutant_effect_plant": null,
         "name": "山竹",
         "seed_id": 20076,
@@ -4049,7 +4049,7 @@
     },
     {
         "id": 1020116,
-        "mutant_group_ids": "1001;1",
+        "mutant_group_ids": "2001;1",
         "mutant_effect_plant": null,
         "name": "曼陀罗华",
         "seed_id": 20116,
@@ -4093,7 +4093,7 @@
     },
     {
         "id": 1020126,
-        "mutant_group_ids": "1001;1",
+        "mutant_group_ids": "3001;1",
         "mutant_effect_plant": null,
         "name": "曼珠沙华",
         "seed_id": 20126,
@@ -4137,7 +4137,7 @@
     },
     {
         "id": 1020063,
-        "mutant_group_ids": "1001;1",
+        "mutant_group_ids": "4001;1",
         "mutant_effect_plant": null,
         "name": "苦瓜",
         "seed_id": 20063,
@@ -4181,7 +4181,7 @@
     },
     {
         "id": 1020221,
-        "mutant_group_ids": "1001;1",
+        "mutant_group_ids": "5001;1",
         "mutant_effect_plant": null,
         "name": "天堂鸟",
         "seed_id": 20221,
@@ -4225,7 +4225,7 @@
     },
     {
         "id": 1020068,
-        "mutant_group_ids": "1001;1",
+        "mutant_group_ids": "2001;1",
         "mutant_effect_plant": null,
         "name": "冬瓜",
         "seed_id": 20068,
@@ -4269,7 +4269,7 @@
     },
     {
         "id": 1020222,
-        "mutant_group_ids": "1001;1",
+        "mutant_group_ids": "3001;1",
         "mutant_effect_plant": null,
         "name": "豹皮花",
         "seed_id": 20222,
@@ -4313,7 +4313,7 @@
     },
     {
         "id": 1020078,
-        "mutant_group_ids": "1001;1",
+        "mutant_group_ids": "4001;1",
         "mutant_effect_plant": null,
         "name": "杏子",
         "seed_id": 20078,
@@ -4357,7 +4357,7 @@
     },
     {
         "id": 1020074,
-        "mutant_group_ids": "1001;1",
+        "mutant_group_ids": "5001;1",
         "mutant_effect_plant": null,
         "name": "金桔",
         "seed_id": 20074,
@@ -4401,7 +4401,7 @@
     },
     {
         "id": 1020083,
-        "mutant_group_ids": "1001;1",
+        "mutant_group_ids": "2001;1",
         "mutant_effect_plant": null,
         "name": "红毛丹",
         "seed_id": 20083,
@@ -4489,7 +4489,7 @@
     },
     {
         "id": 1020084,
-        "mutant_group_ids": "1001;1",
+        "mutant_group_ids": "4001;1",
         "mutant_effect_plant": null,
         "name": "芭蕉",
         "seed_id": 20084,
@@ -4533,7 +4533,7 @@
     },
     {
         "id": 1020226,
-        "mutant_group_ids": "1001;1",
+        "mutant_group_ids": "5001;1",
         "mutant_effect_plant": null,
         "name": "依米花",
         "seed_id": 20226,
@@ -4577,7 +4577,7 @@
     },
     {
         "id": 1020085,
-        "mutant_group_ids": "1001;1",
+        "mutant_group_ids": "2001;1",
         "mutant_effect_plant": null,
         "name": "番荔枝",
         "seed_id": 20085,
@@ -4621,7 +4621,7 @@
     },
     {
         "id": 1020227,
-        "mutant_group_ids": "1001;1",
+        "mutant_group_ids": "3001;1",
         "mutant_effect_plant": null,
         "name": "大王花",
         "seed_id": 20227,
@@ -4665,7 +4665,7 @@
     },
     {
         "id": 1020086,
-        "mutant_group_ids": "1001;1",
+        "mutant_group_ids": "4001;1",
         "mutant_effect_plant": null,
         "name": "橄榄",
         "seed_id": 20086,
@@ -4709,7 +4709,7 @@
     },
     {
         "id": 1020228,
-        "mutant_group_ids": "1001;1",
+        "mutant_group_ids": "5001;1",
         "mutant_effect_plant": null,
         "name": "人参果",
         "seed_id": 20228,
@@ -5674,7 +5674,7 @@
     },
     {
         "id": 1020069,
-        "mutant_group_ids": "1001;1",
+        "mutant_group_ids": "3001;1",
         "mutant_effect_plant": null,
         "name": "莴笋",
         "seed_id": 20069,
@@ -12023,7 +12023,7 @@
         "harvestRandom": null,
         "harvestAllSpineRes": null,
         "harvestAllOffsetPosition": null,
-        "harvestAniName": "anim_harvest_zhenpin",
+        "harvestAniName": "anim_harvest_gold",
         "all_state_spine": null,
         "mature_effect": "effect/prefab/effect_plant_maturation",
         "rare_plant_light_pos": null,
@@ -12067,7 +12067,7 @@
         "harvestRandom": null,
         "harvestAllSpineRes": null,
         "harvestAllOffsetPosition": null,
-        "harvestAniName": "anim_harvest_zhenpin",
+        "harvestAniName": "anim_harvest_gold",
         "all_state_spine": null,
         "mature_effect": "effect/prefab/effect_plant_maturation",
         "rare_plant_light_pos": null,
@@ -13915,7 +13915,7 @@
         "harvestRandom": null,
         "harvestAllSpineRes": null,
         "harvestAllOffsetPosition": null,
-        "harvestAniName": "anim_harvest_zhenpin",
+        "harvestAniName": "anim_harvest_gold",
         "all_state_spine": null,
         "mature_effect": "effect/prefab/effect_plant_maturation",
         "rare_plant_light_pos": null,
@@ -13959,7 +13959,7 @@
         "harvestRandom": null,
         "harvestAllSpineRes": null,
         "harvestAllOffsetPosition": null,
-        "harvestAniName": "anim_harvest_zhenpin",
+        "harvestAniName": "anim_harvest_gold",
         "all_state_spine": null,
         "mature_effect": "effect/prefab/effect_plant_maturation",
         "rare_plant_light_pos": null,
@@ -14013,6 +14013,226 @@
         "fruit_alter": 0,
         "fruit": {
             "id": 1040530,
+            "count": 10
+        },
+        "offsetPosition": {
+            "x": 0,
+            "y": 0
+        },
+        "mutantEffectScale": {
+            "x": 1,
+            "y": 1
+        },
+        "harvestOffsetPosition": {
+            "x": -35,
+            "y": 5
+        },
+        "mature_effect_offset": {
+            "x": 0,
+            "y": 0
+        }
+    },
+    {
+        "id": 1020040,
+        "mutant_group_ids": null,
+        "mutant_effect_plant": null,
+        "name": "牧草",
+        "seed_id": 20040,
+        "land_level_need": 1,
+        "seasons": 1,
+        "grow_phases": "种子:300;大叶子:300;成熟:0;",
+        "exp": 10,
+        "special_fruit": null,
+        "size": null,
+        "harvestRandom": null,
+        "harvestAllSpineRes": null,
+        "harvestAllOffsetPosition": null,
+        "harvestAniName": "anim_harvest_putong",
+        "all_state_spine": null,
+        "mature_effect": "effect/prefab/effect_plant_maturation",
+        "rare_plant_light_pos": null,
+        "exp_root": 0,
+        "exp_alter": 0,
+        "fruit_root": 0,
+        "fruit_alter": 0,
+        "fruit": {
+            "id": 7001,
+            "count": 20
+        },
+        "offsetPosition": {
+            "x": 0,
+            "y": 0
+        },
+        "mutantEffectScale": {
+            "x": 1,
+            "y": 1
+        },
+        "harvestOffsetPosition": {
+            "x": -35,
+            "y": 5
+        },
+        "mature_effect_offset": {
+            "x": 0,
+            "y": 0
+        }
+    },
+    {
+        "id": 1026038,
+        "mutant_group_ids": 1003,
+        "mutant_effect_plant": "5:1126038:1",
+        "name": "款冬花",
+        "seed_id": 26038,
+        "land_level_need": 1,
+        "seasons": 1,
+        "grow_phases": "种子:8640;发芽:8640;小叶子:8640;大叶子:8640;初熟:8640;成熟:0;",
+        "exp": 1680,
+        "special_fruit": null,
+        "size": null,
+        "harvestRandom": null,
+        "harvestAllSpineRes": null,
+        "harvestAllOffsetPosition": null,
+        "harvestAniName": "anim_harvest_zhenpin",
+        "all_state_spine": null,
+        "mature_effect": "effect/prefab/effect_plant_maturation",
+        "rare_plant_light_pos": null,
+        "exp_root": 1.6,
+        "exp_alter": 991,
+        "fruit_root": 2,
+        "fruit_alter": 36,
+        "fruit": {
+            "id": 46038,
+            "count": 48
+        },
+        "offsetPosition": {
+            "x": 0,
+            "y": 0
+        },
+        "mutantEffectScale": {
+            "x": 1,
+            "y": 1
+        },
+        "harvestOffsetPosition": {
+            "x": -35,
+            "y": 5
+        },
+        "mature_effect_offset": {
+            "x": 0,
+            "y": 0
+        }
+    },
+    {
+        "id": 1026084,
+        "mutant_group_ids": 1003,
+        "mutant_effect_plant": "5:1126084:1",
+        "name": "山茶花",
+        "seed_id": 26084,
+        "land_level_need": 1,
+        "seasons": 1,
+        "grow_phases": "种子:8640;发芽:8640;小叶子:8640;大叶子:8640;初熟:8640;成熟:0;",
+        "exp": 1680,
+        "special_fruit": null,
+        "size": null,
+        "harvestRandom": null,
+        "harvestAllSpineRes": null,
+        "harvestAllOffsetPosition": null,
+        "harvestAniName": "anim_harvest_zhenpin",
+        "all_state_spine": null,
+        "mature_effect": "effect/prefab/effect_plant_maturation",
+        "rare_plant_light_pos": null,
+        "exp_root": 1.6,
+        "exp_alter": 991,
+        "fruit_root": 2,
+        "fruit_alter": 36,
+        "fruit": {
+            "id": 46084,
+            "count": 48
+        },
+        "offsetPosition": {
+            "x": 0,
+            "y": 0
+        },
+        "mutantEffectScale": {
+            "x": 1,
+            "y": 1
+        },
+        "harvestOffsetPosition": {
+            "x": -35,
+            "y": 5
+        },
+        "mature_effect_offset": {
+            "x": 0,
+            "y": 0
+        }
+    },
+    {
+        "id": 1126038,
+        "mutant_group_ids": null,
+        "mutant_effect_plant": null,
+        "name": "黄金·款冬花",
+        "seed_id": null,
+        "land_level_need": 1,
+        "seasons": 1,
+        "grow_phases": "种子:8640;发芽:8640;小叶子:8640;大叶子:8640;初熟:8640;成熟:0;",
+        "exp": 1680,
+        "special_fruit": null,
+        "size": null,
+        "harvestRandom": null,
+        "harvestAllSpineRes": null,
+        "harvestAllOffsetPosition": null,
+        "harvestAniName": "anim_harvest_gold",
+        "all_state_spine": null,
+        "mature_effect": "effect/prefab/effect_plant_maturation",
+        "rare_plant_light_pos": null,
+        "exp_root": 1.6,
+        "exp_alter": 991,
+        "fruit_root": 0,
+        "fruit_alter": 0,
+        "fruit": {
+            "id": 1046038,
+            "count": 10
+        },
+        "offsetPosition": {
+            "x": 0,
+            "y": 0
+        },
+        "mutantEffectScale": {
+            "x": 1,
+            "y": 1
+        },
+        "harvestOffsetPosition": {
+            "x": -35,
+            "y": 5
+        },
+        "mature_effect_offset": {
+            "x": 0,
+            "y": 0
+        }
+    },
+    {
+        "id": 1126084,
+        "mutant_group_ids": null,
+        "mutant_effect_plant": null,
+        "name": "黄金·山茶花",
+        "seed_id": null,
+        "land_level_need": 1,
+        "seasons": 1,
+        "grow_phases": "种子:8640;发芽:8640;小叶子:8640;大叶子:8640;初熟:8640;成熟:0;",
+        "exp": 1680,
+        "special_fruit": null,
+        "size": null,
+        "harvestRandom": null,
+        "harvestAllSpineRes": null,
+        "harvestAllOffsetPosition": null,
+        "harvestAniName": "anim_harvest_gold",
+        "all_state_spine": null,
+        "mature_effect": "effect/prefab/effect_plant_maturation",
+        "rare_plant_light_pos": null,
+        "exp_root": 1.6,
+        "exp_alter": 991,
+        "fruit_root": 0,
+        "fruit_alter": 0,
+        "fruit": {
+            "id": 1046084,
             "count": 10
         },
         "offsetPosition": {

@@ -202,6 +202,11 @@ async function runRanchCare(opts = {}) {
         details: [],
     };
 
+    // 各步骤之间的最小间隔: 一轮原来 20ms 内打完 10 个 RPC,
+    // 服务端会把这种"突发"当异常, 是掉线的直接原因之一。
+    const STEP_GAP_MS = Math.max(200, toNum(opts.stepGapMs) || 800);
+    const gap = () => sleep(STEP_GAP_MS);
+
     // 0. 牧草机补草(任务"给牧草机添加牧草"也靠它驱动)
     if (opts.feedMachine !== false) {
         try {
@@ -212,6 +217,7 @@ async function runRanchCare(opts = {}) {
             logWarn('牧场', `牧草机检查失败: ${e.message}`, { module: 'ranch', event: '牧草机加草', result: 'error' });
         }
     }
+    await gap();
 
     // 1. 收获(蛋/崽/整只; 任务"完成1次收获""收获鸡蛋N个""收获整鸡N次"靠它驱动)
     try {
@@ -232,6 +238,7 @@ async function runRanchCare(opts = {}) {
     } catch (e) {
         logWarn('牧场', `收获失败: ${e.message}`, { module: 'ranch', event: '收获牧场', result: 'error' });
     }
+    await gap();
 
     // 2. 催产(空请求 = 全部槽位; 任务"生产N次"靠它驱动)
     try {
@@ -247,6 +254,7 @@ async function runRanchCare(opts = {}) {
     } catch (e) {
         logWarn('牧场', `催产失败: ${e.message}`, { module: 'ranch', event: '催产', result: 'error' });
     }
+    await gap();
 
     // 3. 喂食(任务"饲养幼崽N个"靠它驱动)
     if (opts.feedType !== 0) {
@@ -258,6 +266,8 @@ async function runRanchCare(opts = {}) {
             logWarn('牧场', `喂食失败: ${e.message}`, { module: 'ranch', event: '喂食', result: 'error' });
         }
     }
+
+    await gap();
 
     // 4. 出售产物(任务"出售鸡蛋"靠它驱动; type=107 的蛋/崽)
     if (opts.sell !== false) {
@@ -271,6 +281,8 @@ async function runRanchCare(opts = {}) {
         }
     }
 
+    await gap();
+
     // 5. 买幼崽(任务"领养鸡幼崽N个"靠它驱动; 按收益比优先)
     if (opts.buyCubs !== false) {
         try {
@@ -281,6 +293,8 @@ async function runRanchCare(opts = {}) {
             logWarn('牧场', `买幼崽失败: ${e.message}`, { module: 'ranch', event: '买幼崽', result: 'error' });
         }
     }
+
+    await gap();
 
     // 6. 游商兑换(便便换有机化肥, 纯赚)
     if (opts.rotationShop !== false) {
