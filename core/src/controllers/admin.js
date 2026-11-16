@@ -1531,6 +1531,19 @@ app.use('/api', (req, res, next) => {
     // 单项操作: {op: harvest|produce|feed, slot?, feedType?, count?}
     app.post('/api/ranch/operate', withAccount((accountId, req) => provider.operateRanch(accountId, req.body || {})));
 
+    // 幼崽商店(带收益比, 供"利益最大"展示)
+    app.get('/api/ranch/cub-shop', withAccount(async (accountId) => {
+        const shop = await provider.getCubShop(accountId);
+        const best = shop.find(g => g.unlocked && g.valueRatio > 0) || null;
+        return { shop, best };
+    }));
+
+    // 游商(兑换集市)
+    app.get('/api/ranch/rotation-shop', withAccount(async (accountId) => {
+        const shop = await provider.getRotationShop(accountId);
+        return { open: shop.open, refreshAt: shop.refreshAt, groups: shop.groups, goods: shop.goods };
+    }));
+
     // API: 领取每日免费稀有种子礼包
     app.post('/api/mengchong/claim-free-gift', async (req, res) => {
         const id = getAccId(req);

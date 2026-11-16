@@ -724,6 +724,7 @@ function createDefaultAutomation(fertilizer: string = 'none') {
     mengchong_task: false,
     mengchong_hunt: false,
     auto_use_items: true,
+    ranch_auto: true,
     rob_treasure: false,
     fertilizer,
     skip_own_weed_bug: false,
@@ -2434,6 +2435,8 @@ async function onBackupFileChange(ev: Event) {
               <div class="grid gap-3 2xl:grid-cols-2 sm:grid-cols-2 xl:grid-cols-1">
                 <BaseSwitch v-model="localAutomationSettings.automation.fertilizer_gift" label="自动填充化肥" />
                 <BaseSwitch v-model="localAutomationSettings.automation.auto_use_items" label="自动使用背包道具" />
+                <BaseSwitch v-model="localAutomationSettings.automation.ranch_auto" label="自动经营牧场" />
+                <span class="col-span-full text-xs text-gray-400 dark:text-gray-500">收获/催产/喂食/卖产物/按收益买幼崽/游商兑换/牧草机补草，跟随巡田节奏自动执行。</span>
                 <span class="col-span-full text-xs text-gray-400 dark:text-gray-500">宝箱、各类礼包等可直接使用的道具会自动用掉；化肥/罐头容器、种子解锁卡、狗粮、活动道具、红包与兑换券不会自动用。</span>
                 <BaseSwitch v-model="localAutomationSettings.automation.fertilizer_buy_organic" label="自动购买有机化肥" />
                 <BaseSwitch v-model="localAutomationSettings.automation.fertilizer_buy_normal" label="自动购买无机化肥" />

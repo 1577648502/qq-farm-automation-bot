@@ -1421,6 +1421,8 @@ async function checkAndBuyFertilizerBoth(options) {
 module.exports = {
     getMallCatalog,
     purchaseCatalogGoods,
+    getShopGoodsList,
+    purchaseShopGoods,
     autoBuyOrganicFertilizer,
     autoBuyFertilizer,
     checkAndBuyChallengeBooks,

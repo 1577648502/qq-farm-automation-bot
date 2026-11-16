@@ -22,6 +22,7 @@ const treasureRob = require('../services/treasure-rob');
 const autumnWish = require('../services/autumn-wish');
 const happyShare = require('../services/happy-share');
 const milkTea = require('../services/milk-tea');
+const ranch = require('../services/ranch');
 const adGift = require('../services/ad-gift');
 const { getActivityOverview, drawLottery, drawActivity, claimBattlePassRewards, claimActivityTasks, claimDailySignin, exchangeShopGoods, performQingniangBrew, sellQingniangBrew, shareSellQingniangBrew, getStarActivityOverview, exchangeStarShopGoods, lightUpStarRegister, checkAndLightUpStar } = require('../services/activity');
 const { performDailyMonthCardGift, getMonthCardDailyState } = require('../services/monthcard');
@@ -606,6 +607,8 @@ async function runFarmTick(auto) {
         await openGiftPacksSilently().catch(() => 0);
         // 其余可盲用的道具(成长宝箱/百宝瓶等), 受开关控制, 内部自带节流
         if (auto.auto_use_items) await autoUseBagItems().catch(() => 0);
+        // 牧场自动化(收获/催产/喂食/卖产物/买幼崽/游商/牧草机), 受开关控制, 内部自带节流
+        if (auto.ranch_auto) await ranch.runRanchCare({ claimTasks: false }).catch(() => 0);
     } catch {
         // ignore
     } finally {
@@ -1287,6 +1290,12 @@ async function handleApiCall(msg) {
                 break;
             case 'operateRanch':
                 result = await require('../services/ranch').operateRanch(args[0] || {});
+                break;
+            case 'getCubShop':
+                result = await require('../services/ranch').getCubShop();
+                break;
+            case 'getRotationShop':
+                result = await require('../services/ranch').getRotationShop();
                 break;
             case 'claimMengchongFreeGift':
                 result = await require('../services/mengchong').claimFreeSeedGift();

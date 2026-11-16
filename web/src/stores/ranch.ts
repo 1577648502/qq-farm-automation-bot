@@ -14,6 +14,29 @@ export interface RanchAnimal {
   mutant: boolean
 }
 
+export interface CubShopItem {
+  goodsId: number
+  animalId: number
+  name: string
+  price: number
+  limit: number
+  bought: number
+  unlocked: boolean
+  currencyId: number
+  valueRatio: number
+}
+
+export interface RotationShopGoods {
+  group: number
+  seq: number
+  itemId: number
+  currencyId: number
+  price: number
+  discountPrice?: number
+  limit: number
+  uid: number
+}
+
 export interface RanchOverview {
   hostGid: number
   coopCount: number
@@ -56,6 +79,24 @@ export const useRanchStore = defineStore('ranch', () => {
     return data.data
   }
 
+  async function fetchCubShop(accountId: string) {
+    const { data } = await api.get('/api/ranch/cub-shop', {
+      headers: { 'x-account-id': accountId },
+    })
+    if (!data?.ok)
+      throw new Error(data?.error || '获取幼崽商店失败')
+    return data.data as { shop: CubShopItem[], best: CubShopItem | null }
+  }
+
+  async function fetchRotationShop(accountId: string) {
+    const { data } = await api.get('/api/ranch/rotation-shop', {
+      headers: { 'x-account-id': accountId },
+    })
+    if (!data?.ok)
+      throw new Error(data?.error || '获取游商失败')
+    return data.data as { open: boolean, refreshAt: number, goods: RotationShopGoods[] }
+  }
+
   async function operate(accountId: string, opts: { op: string, slot?: number, feedType?: number, count?: number }) {
     const { data } = await api.post('/api/ranch/operate', opts, {
       headers: { 'x-account-id': accountId },
@@ -65,5 +106,5 @@ export const useRanchStore = defineStore('ranch', () => {
     return data.data
   }
 
-  return { overview, loading, operating, fetchOverview, care, operate }
+  return { overview, loading, operating, fetchOverview, fetchCubShop, fetchRotationShop, care, operate }
 })

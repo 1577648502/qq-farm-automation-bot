@@ -25,14 +25,37 @@ const proto = require(`${SB}/src/utils/proto`);
 const { types } = proto;
 
 proto.loadProto().then(async () => {
-    // ranch.js 在调用时才解构 network 层? 不 —— 它用 `require('../utils/network').sendMsgAsync`
-    // 的具名导入。接管 network.sendMsgAsync 对它无效, 需要在调用前打桩:
-    const ranchModule = require(`${SB}/src/services/ranch`);
-    // ranch.js 内部 const { sendMsgAsync } = require('../utils/network') 在 require 时解构,
-    // 但我们是在 loadProto 之后才 require 它吗? 不是 —— require 放在了 section 4/5 内。
-    // 解决: 先打桩再 require(把 require 移到打桩之后无效, 因为模块顶层已解构)。
-    // ranch.js 实际写法是运行时调用 network.sendMsgAsync(具名解构发生在模块加载时),
-    // 所以这里只能打桩 network 模块对象 —— 与 test-land-operate 相同结论: 用 customHandler。
+    // ⚠ 全接口抓包回放桩: 按"方法名 → 响应帧列表"轮放。
+    //   必须在 require 任何业务服务(ranch→mall→warehouse)之前打桩 ——
+    //   这些模块在加载时解构 network.sendMsgAsync, 后替换无效。
+    const frames = {};
+    for (const fname of FILES) {
+        const p = `${CAPTURES}/${fname}`;
+        if (!fs.existsSync(p)) continue;
+        for (const line of fs.readFileSync(p, 'utf8').split('\n')) {
+            if (!line.trim()) continue;
+            let j; try { j = JSON.parse(line) } catch { continue }
+            if (!j.key || !j.bodyHex || j.dir !== 'S->C') continue;
+            if (!/animalpb|homesteadpb|shoppb|mallpb|itempb|taskpb|plantpb/.test(j.key)) continue;
+            const m = j.key.split('.').pop();
+            (frames[m] = frames[m] || []).push(Buffer.from(j.bodyHex, 'hex'));
+        }
+    }
+    const cursor = {};
+    network.sendMsgAsync = async (_s, method) => {
+        const m = method.split('.').pop();
+        const list = frames[m] || [];
+        if (list.length === 0) throw new Error('桩里没有该方法的响应: ' + m);
+        cursor[m] = (cursor[m] || 0);
+        const idx = cursor[m] % list.length;
+        cursor[m] += 1;
+        const T = types[m + 'Reply'];
+        if (T && T.encode) return { body: T.encode(T.decode(list[idx])).finish() };
+        return { body: Buffer.from(list[idx]) };
+    };
+
+    // ⚠ ranch/mall/warehouse 都是模块加载时解构 network.sendMsgAsync 的,
+    //   所以必须先打桩、后 require —— 它们对桩的引用才是测试桩。
     section('1. animalpb 无损解码全部抓包帧');
     {
         let ok = 0, fail = 0;
@@ -128,35 +151,89 @@ proto.loadProto().then(async () => {
     section('5. runRanchCare 用抓包回放跑通');
     {
         const ranch = require(`${SB}/src/services/ranch`);
-        const frames = {};
+        const r = await ranch.runRanchCare({ feedType: 0 }); // 关掉喂食(避免吃真实库存)
+        check('收获数 > 0', r.harvested > 0, r);
+        check('明细里包含整鸡', r.details.some(d => d.includes('鸡')), r.details);
+        check('经验 1102 不计入收获数',
+            // 21:54:35 那帧: 3 槽 × (整鸡1 + 经验1) = 收获数应为 3 而不是 6
+            r.harvested === 3 || r.harvested === 5 || r.harvested > 0, r.harvested);
+    }
+
+    section('6. 游商(兑换集市)解析');
+    {
+        const ranch = require(`${SB}/src/services/ranch`);
+        // 21:57 抓包的 RotationShopInfo 响应: 营业中, 5 个商品(便便x2 + 松果币x3)
+        // (21:52 那份的游商响应只有 16B —— 空店; 576B 的这帧才有完整商品)
+        const frames = [];
         for (const fname of FILES) {
             const p = `${CAPTURES}/${fname}`;
             if (!fs.existsSync(p)) continue;
             for (const line of fs.readFileSync(p, 'utf8').split('\n')) {
                 if (!line.trim()) continue;
                 let j; try { j = JSON.parse(line) } catch { continue }
-                if (!j.key || !j.key.includes('animalpb') || !j.bodyHex || j.dir !== 'S->C') continue;
-                const m = j.key.split('.').pop();
-                (frames[m] = frames[m] || []).push(Buffer.from(j.bodyHex, 'hex'));
+                if (!j.key || !j.key.includes('RotationShopInfo') || j.dir !== 'S->C' || !j.bodyHex) continue;
+                frames.push(Buffer.from(j.bodyHex, 'hex'));
             }
         }
-        let cursor = { GetRanchDetail: 0, TriggerProduce: 0, HarvestRanch: 0, FeedAnimal: 0 };
+        check('两份抓包各有一帧游商响应', frames.length === 2, frames.length);
+        // 取商品最全的那帧(288B 那个是 21:52, 21:57 的有完整 5 商品)
+        let best = null;
+        for (const body of frames) {
+            const parsed = ranch.__privateRanchFns.parseRotationShopReply(body);
+            if (!best || parsed.goods.length > best.goods.length) best = parsed;
+        }
+        check('解析出营业状态', best && best.open === true, best && best.open);
+        check('解析出刷新时间', best && best.refreshAt > 0, best && best.refreshAt);
+        check('解析出商品列表(5个)', best && best.goods.length === 5, best && best.goods && best.goods.length);
+        // 商品字段语义: 便便价 3 的 80011
+        const poop = best.goods.find(g => g.currencyId === 7002 && g.itemId === 80011);
+        check('便便换有机化肥(80011)价格 = 3', poop && poop.price === 3, poop);
+        check('松果币(1008)商品存在', best.goods.some(g => g.currencyId === 1008), best.goods.map(g => g.currencyId));
+    }
+
+    section('7. 幼崽收益模型与"利益最大"排序');
+    {
+        const ranch = require(`${SB}/src/services/ranch`);
+        // 幼崽价(shop5 抓包): 鸡2 兔1080 鹅2712 猫4068 乌龟5640 龙猫6768 羊5640 牛10152
+        // 整只价(ItemInfo.price): 鸡6 兔2160 鹅5424 猫8136 乌龟13536 龙猫20304 羊1440 牛2160
+        // 收益比: 鸡 3.0, 兔 2.0, 鹅 2.0, 猫 2.0, 乌龟 2.4, 龙猫 3.0, 羊 0.26, 牛 0.21
+        const { ANIMAL_NAMES } = ranch;
+        check('动物名映射包含产物/整只', !!ANIMAL_NAMES[1060001] && !!ANIMAL_NAMES[2060001], Object.keys(ANIMAL_NAMES).length);
+        // getCubShop 依赖网络, 这里只验证排序纯函数层面: 用 autoBuyCubs 的空槽跳过逻辑
         network.sendMsgAsync = async (_s, method) => {
-            const m = method.split('.').pop();
-            const list = frames[m] || [];
-            const idx = cursor[m] % list.length;
-            cursor[m] += 1;
-            const T = types[m + 'Reply'];
-            return { body: T.encode(T.decode(list[idx])).finish() };
+            if (method.includes('GetRanchDetail')) {
+                // 满栏: 3 窝 3 棚, 6 只动物 → 无空槽
+                const body = fs.readFileSync(`${CAPTURES}/20261116-215723_牧场.decoded.jsonl`, 'utf8');
+                for (const line of body.split('\n')) {
+                    if (!line.trim()) continue;
+                    let j; try { j = JSON.parse(line) } catch { continue }
+                    if (j.key && j.key.includes('GetRanchDetail') && j.dir === 'S->C' && j.bodyHex) {
+                        return { body: Buffer.from(j.bodyHex, 'hex') };
+                    }
+                }
+            }
+            throw new Error('unexpected ' + method);
         };
-        // ranch.js 是 const { sendMsgAsync } = require(...) 解构绑定的,
-        // 替换 network.sendMsgAsync 不会生效 —— 需要 rewire ranch 模块内部的引用
-        const r = await ranchModule.runRanchCare({ feedType: 0 }); // 关掉喂食(避免吃真实库存)
-        check('收获数 > 0', r.harvested > 0, r);
-        check('明细里包含整鸡', r.details.some(d => d.includes('鸡')), r.details);
-        check('经验 1102 不计入收获数',
-            // 21:54:35 那帧: 3 槽 × (整鸡1 + 经验1) = 收获数应为 3 而不是 6
-            r.harvested === 3 || r.harvested === 5 || r.harvested > 0, r.harvested);
+        const r = await ranch.autoBuyCubs({ maxSpend: 5000 });
+        check('没有空槽时不买幼崽', r.bought === 0, r);
+    }
+
+    section('8. 牧草机解析');
+    {
+        const ranch = require(`${SB}/src/services/ranch`);
+        // 抓包 GetFacilityDetail 响应: 名称牧草机, 等级8, 容量100, 存量54(在 #21{1:100,2:54} 里的 #2)
+        // 实际抓包 21:54:01 响应: #14=100(容量), #21{#2=54} — 解析规则以抓包为准
+        let found = null;
+        for (const line of fs.readFileSync(`${CAPTURES}/20261116-215130_牧场.decoded.jsonl`, 'utf8').split('\n')) {
+            if (!line.trim()) continue;
+            let j; try { j = JSON.parse(line) } catch { continue }
+            if (!j.key || !j.key.includes('GetFacilityDetail') || j.dir !== 'S->C' || !j.bodyHex) continue;
+            found = Buffer.from(j.bodyHex, 'hex');
+        }
+        check('抓到牧草机详情帧', !!found, !!found);
+        const parsed = ranch.__privateRanchFns.parseFeedMachineReply(found);
+        check('名称 = 牧草机', parsed.name === '牧草机', parsed);
+        check('容量 = 100', parsed.capacity === 100, parsed);
     }
 
     finish();

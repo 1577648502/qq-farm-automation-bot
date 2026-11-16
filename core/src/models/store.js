@@ -161,6 +161,7 @@ const DEFAULT_ACCOUNT_CONFIG = {
         // open_server_gift: true,
         fertilizer_gift: false,
         auto_use_items: true, // 背包里能直接用的道具(宝箱/各类礼包/百宝瓶…)自动使用
+        ranch_auto: true,     // 牧场自动化: 收获/催产/喂食/卖产物/买幼崽/游商兑换/牧草机补草
         fertilizer_buy_organic: false,
         fertilizer_buy_normal: false,
         mystery_shop: false, // 神秘商店自动购买

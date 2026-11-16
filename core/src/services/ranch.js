@@ -12,7 +12,9 @@
  *   · 阶段走到顶(整鸡 2060001)可收获整只
  *   · 每日操作有次数上限(GetRanchOpTimes: 11003/11008/11009)
  */
+const protobuf = require('protobufjs');
 const network = require('../utils/network');
+const { getShopGoodsList, purchaseShopGoods } = require('./mall');
 const { types } = require('../utils/proto');
 const { toLong, toNum, log, logWarn, sleep } = require('../utils/utils');
 
@@ -180,26 +182,45 @@ async function getRanchOverview() {
  * @returns {{harvested: number, produced: number, fed: number, details: string[]}}
  */
 async function runRanchCare(opts = {}) {
-    const result = { harvested: 0, produced: 0, fed: 0, details: [] };
+    const result = {
+        harvested: 0, produced: 0, fed: 0, sold: 0, earned: 0,
+        boughtCubs: 0, feedMachineAdded: 0, rotationBought: 0,
+        details: [],
+    };
+
+    // 0. 牧草机补草(任务"给牧草机添加牧草"也靠它驱动)
+    if (opts.feedMachine !== false) {
+        try {
+            const fm = await autoFeedMachine(opts);
+            result.feedMachineAdded = fm.fed;
+            if (fm.fed > 0) result.details.push(`牧草机+${fm.fed}`);
+        } catch (e) {
+            logWarn('牧场', `牧草机检查失败: ${e.message}`, { module: 'ranch', event: '牧草机加草', result: 'error' });
+        }
+    }
+
+    // 1. 收获(蛋/崽/整只; 任务"完成1次收获""收获鸡蛋N个""收获整鸡N次"靠它驱动)
     try {
-        // 1. 收获
         const harvestReply = await harvestRanch(1);
         for (const gain of (harvestReply.gains || [])) {
             for (const item of (gain.items || [])) {
                 const itemId = toNum(item.item_id);
                 if (itemId === 1102) continue; // 牧场经验不算收获物
                 result.harvested += toNum(item.count);
-                const name = getAnimalName(itemId) || `物品#${itemId}`;
-                result.details.push(`${name}x${toNum(item.count)}`);
+                result.details.push(`${getAnimalName(itemId) || itemId}x${toNum(item.count)}`);
             }
         }
         if (result.harvested > 0) {
-            log('牧场', `收获完成: ${result.details.join('，')}`, {
+            log('牧场', `收获完成: ${result.details.slice(0, 6).join('，')}`, {
                 module: 'ranch', event: '收获牧场', result: 'ok', count: result.harvested,
             });
         }
+    } catch (e) {
+        logWarn('牧场', `收获失败: ${e.message}`, { module: 'ranch', event: '收获牧场', result: 'error' });
+    }
 
-        // 2. 催产(空请求 = 全部槽位; 抓包确认空请求也有效)
+    // 2. 催产(空请求 = 全部槽位; 任务"生产N次"靠它驱动)
+    try {
         const produceReply = await triggerProduce(0);
         for (const r of (produceReply.receipts || [])) {
             result.produced += toNum(r.count);
@@ -209,20 +230,436 @@ async function runRanchCare(opts = {}) {
                 module: 'ranch', event: '催产', result: 'ok', count: result.produced,
             });
         }
+    } catch (e) {
+        logWarn('牧场', `催产失败: ${e.message}`, { module: 'ranch', event: '催产', result: 'error' });
+    }
 
-        // 3. 喂食(方式枚举待确认, 默认按抓包最常见的 4; 数量 1)
-        if (opts.feedType !== 0) {
-            const feedType = toNum(opts.feedType) || 4;
-            const feedReply = await feedAnimal(feedType, 1);
-            if (feedReply && feedReply.receipt) {
-                result.fed += 1;
+    // 3. 喂食(任务"饲养幼崽N个"靠它驱动)
+    if (opts.feedType !== 0) {
+        const feedType = toNum(opts.feedType) || 4;
+        try {
+            await feedAnimal(feedType, 1);
+            result.fed += 1;
+        } catch (e) {
+            logWarn('牧场', `喂食失败: ${e.message}`, { module: 'ranch', event: '喂食', result: 'error' });
+        }
+    }
+
+    // 4. 出售产物(任务"出售鸡蛋"靠它驱动; type=107 的蛋/崽)
+    if (opts.sell !== false) {
+        try {
+            const r = await autoSellRanchProducts(opts);
+            result.sold = r.sold;
+            result.earned = r.earned;
+            if (r.sold > 0) result.details.push(`卖出${r.sold}→金券${r.earned}`);
+        } catch (e) {
+            logWarn('牧场', `出售产物失败: ${e.message}`, { module: 'ranch', event: '出售产物', result: 'error' });
+        }
+    }
+
+    // 5. 买幼崽(任务"领养鸡幼崽N个"靠它驱动; 按收益比优先)
+    if (opts.buyCubs !== false) {
+        try {
+            const r = await autoBuyCubs(opts);
+            result.boughtCubs = r.bought;
+            if (r.bought > 0) result.details.push(`买${r.details.join('/')}`);
+        } catch (e) {
+            logWarn('牧场', `买幼崽失败: ${e.message}`, { module: 'ranch', event: '买幼崽', result: 'error' });
+        }
+    }
+
+    // 6. 游商兑换(便便换有机化肥, 纯赚)
+    if (opts.rotationShop !== false) {
+        try {
+            const r = await autoBuyRotationShop(opts);
+            result.rotationBought = r.bought;
+            if (r.bought > 0) result.details.push(`游商x${r.bought}`);
+        } catch (e) {
+            logWarn('牧场', `游商兑换失败: ${e.message}`, { module: 'ranch', event: '游商购买', result: 'error' });
+        }
+    }
+
+    // 7. 主线任务奖励领取(牧场任务 300xxx/400xxx 都在 tasks 列表, 复用任务模块的扫描)
+    if (opts.claimTasks !== false) {
+        try {
+            const { checkAndClaimTasks } = require('./task');
+            await checkAndClaimTasks();
+        } catch (e) {
+            logWarn('牧场', `任务领取失败: ${e.message}`, { module: 'ranch', event: '任务领取', result: 'error' });
+        }
+    }
+
+    return result;
+}
+
+// ============ 游商(兑换集市, RotationShop 7) ============
+// 公告: 金豆豆可兑换牧场道具、松果币可兑换农场道具, 每日限时营业。
+// 抓包: RotationShopInfo(1=7) → {1:营业, 3:刷新时间戳, 5:[分组], 6:[商品]}
+//   商品 = {1:分组, 2:序号, 3:物品ID, 5:货币ID(7002便便/1008松果币), 6:原价, 7:折后价,
+//           8/9:折扣时段, 10:限购, 13:唯一序号}
+// 抓包里没有"购买游商商品"的请求 —— 商品挂在 mall slot 7 下, 用 MallService.Purchase 买。
+const ROTATION_SHOP_ID = 7;
+const ROTATION_MALL_SLOT = 7;
+
+/** 查询游商(兑换集市)状态与商品 */
+async function getRotationShop() {
+    const body = types.GetRanchDetailRequest.encode(types.GetRanchDetailRequest.create({})).finish();
+    void body; // RotationShopInfo 的请求体就是 {1:7}, 不依赖 ranch proto
+    const reqBody = protobuf.Writer.create().uint32((1 << 3) | 0).int64(toLong(ROTATION_SHOP_ID)).finish();
+    const { body: replyBody } = await network.sendMsgAsync('gamepb.shoppb.ShopService', 'RotationShopInfo', reqBody);
+    // RotationShopInfoReply 尚无 proto 定义, 用通用 wire 解析提取关键字段
+    return parseRotationShopReply(replyBody);
+}
+
+/** 通用解析 RotationShopInfoReply(等抓包补齐 proto 后再换强类型) */
+function parseRotationShopReply(bodyBytes) {
+    const buf = Buffer.isBuffer(bodyBytes) ? bodyBytes : Buffer.from(bodyBytes || []);
+    const out = { open: false, refreshAt: 0, groups: [], goods: [] };
+    const top = walkWire(buf);
+    for (const [f, w, v] of top) {
+        if (f === 1 && w === 0) out.open = v === 1n;
+        else if (f === 3 && w === 0) out.refreshAt = Number(v) * 1000;
+        else if (f === 5 && w === 2) {
+            const g = {};
+            for (const [f2, , v2] of walkWire(v)) {
+                if (f2 === 1) g.id = Number(v2);
+                else if (f2 === 2) g.name = v2.toString('utf8');
+                else if (f2 === 3) g.limit = Number(v2);
+            }
+            out.groups.push(g);
+        } else if (f === 6 && w === 2) {
+            const g = {};
+            for (const [f2, w2, v2] of walkWire(v)) {
+                if (f2 === 1) g.group = Number(v2);
+                else if (f2 === 2) g.seq = Number(v2);
+                else if (f2 === 3) g.itemId = Number(v2);
+                else if (f2 === 5) g.currencyId = Number(v2);
+                else if (f2 === 6) g.price = Number(v2);
+                else if (f2 === 7) g.discountPrice = Number(v2);
+                else if (f2 === 8) g.discountFrom = Number(v2) * 1000;
+                else if (f2 === 9) g.discountTo = Number(v2) * 1000;
+                else if (f2 === 10) g.limit = Number(v2);
+                else if (f2 === 13) g.uid = Number(v2);
+            }
+            out.goods.push(g);
+        }
+    }
+    return out;
+}
+
+/** 通用 protobuf wire 解析(无 proto 定义时兜底) */
+function walkWire(buf) {
+    const out = [];
+    let i = 0;
+    while (i < buf.length) {
+        let tag = 0, shift = 0;
+        while (true) {
+            if (i >= buf.length) return out;
+            const b = buf[i++];
+            tag += (b & 0x7f) * 2 ** shift;
+            shift += 7;
+            if (!(b & 0x80)) break;
+        }
+        const field = tag >> 3, wire = tag & 7;
+        if (wire === 0) {
+            let v = 0n; shift = 0n;
+            while (true) {
+                if (i >= buf.length) return out;
+                const b = buf[i++];
+                v += BigInt(b & 0x7f) * (2n ** shift);
+                shift += 7n;
+                if (!(b & 0x80)) break;
+            }
+            out.push([field, 0, v]);
+        } else if (wire === 1) {
+            if (i + 8 > buf.length) return out;
+            out.push([field, 1, buf.readBigUInt64LE(i)]);
+            i += 8;
+        } else if (wire === 2) {
+            let len = 0; shift = 0;
+            while (true) {
+                if (i >= buf.length) return out;
+                const b = buf[i++];
+                len += (b & 0x7f) * 2 ** shift;
+                shift += 7;
+                if (!(b & 0x80)) break;
+            }
+            if (i + len > buf.length) return out;
+            out.push([field, 2, buf.subarray(i, i + len)]);
+            i += len;
+        } else if (wire === 5) {
+            if (i + 4 > buf.length) return out;
+            out.push([field, 5, buf.readUInt32LE(i)]);
+            i += 4;
+        } else return out;
+    }
+    return out;
+}
+
+/**
+ * 自动购买游商商品。
+ * 策略: 只买"用便便(7002)换有机化肥"的档 —— 便便是清理牧场获得的副产品,
+ * 换化肥纯赚; 松果币(1008)来源未知, 不自动花。
+ * @returns {{bought: number, details: string[]}}
+ */
+async function autoBuyRotationShop(opts = {}) {
+    const result = { bought: 0, details: [] };
+    const shop = await getRotationShop();
+    if (!shop.open) {
+        log('游商', '兑换集市未营业, 跳过', { module: 'ranch', event: '游商', result: 'skip' });
+        return result;
+    }
+    // 只考虑便便计价的商品
+    const targets = shop.goods.filter(g => g.currencyId === 7002 && g.price > 0);
+    if (targets.length === 0) return result;
+
+    // 背包里的便便数量
+    const { getBagDetail } = require('./warehouse');
+    const bag = await getBagDetail();
+    const poop = bag.items.find(it => Number(it.id) === 7002);
+    let poopCount = poop ? Number(poop.count) : 0;
+    if (poopCount <= 0) {
+        log('游商', '没有便便可兑换', { module: 'ranch', event: '游商', result: 'skip' });
+        return result;
+    }
+
+    for (const g of targets) {
+        if (poopCount < g.price) continue;
+        // 限购次数
+        const maxByLimit = g.limit > 0 ? g.limit : 99;
+        const affordable = Math.floor(poopCount / g.price);
+        const count = Math.min(maxByLimit, affordable);
+        if (count <= 0) continue;
+        try {
+            // 游商商品挂在 mall slot 7; 用 Purchase(商品唯一序号 uid 走 goodsId 通道)
+            const r = await purchaseCatalogGoods(g.uid, count, ROTATION_MALL_SLOT, 'mall');
+            if (r && (r.ok !== false)) {
+                poopCount -= g.price * count;
+                result.bought += count;
+                result.details.push(`#${g.itemId}x${count}(便便${g.price * count})`);
+            }
+        } catch (e) {
+            logWarn('游商', `购买失败 #${g.itemId}: ${e.message}`, {
+                module: 'ranch', event: '游商购买', result: 'error', itemId: g.itemId,
+            });
+        }
+        await sleep(300);
+    }
+    if (result.bought > 0) {
+        log('游商', `兑换完成: ${result.details.join('，')}`, {
+            module: 'ranch', event: '游商购买', result: 'ok', count: result.bought,
+        });
+    }
+    return result;
+}
+
+// ============ 牧草机(homesteadpb) ============
+// 抓包: GetFacilityDetail(1=10002) → {2:"牧草机", 5:等级8, 6:{1007金券,6000升级价}, 14:100容量, 21:{1:当前,2:54}}
+//       FeedMachineService.AddFeed(1=10002, 2=数量) → {1:当前, 2:剩余?, ...}
+// 10001/10002/10000 = 设备实例 ID(窝/牧草机/棚?)
+const FEED_MACHINE_ID = 10002;
+
+async function getFeedMachine() {
+    const w = protobuf.Writer.create();
+    w.uint32((1 << 3) | 0).int64(toLong(FEED_MACHINE_ID));
+    const { body: replyBody } = await network.sendMsgAsync('gamepb.homesteadpb.HomesteadService', 'GetFacilityDetail', w.finish());
+    return parseFeedMachineReply(replyBody);
+}
+
+function parseFeedMachineReply(bodyBytes) {
+    const buf = Buffer.isBuffer(bodyBytes) ? bodyBytes : Buffer.from(bodyBytes || []);
+    const out = { name: '', level: 0, stored: 0, capacity: 0 };
+    const top = walkWire(buf);
+    for (const [f, w, v] of top) {
+        if (f === 1 && w === 2) {
+            for (const [f2, w2, v2] of walkWire(v)) {
+                if (f2 === 2 && w2 === 2) out.name = v2.toString('utf8');
+                else if (f2 === 5 && w2 === 0) out.level = Number(v2);
+                else if (f2 === 14 && w2 === 0) out.capacity = Number(v2);
+                else if (f2 === 21 && w2 === 2) {
+                    for (const [f3, , v3] of walkWire(v2)) {
+                        if (f3 === 1) out.stored = Number(v3);
+                    }
+                }
             }
         }
-    } catch (e) {
-        logWarn('牧场', `巡牧场失败: ${e.message}`, {
-            module: 'ranch', event: '巡牧场', result: 'error',
+    }
+    return out;
+}
+
+/** 给牧草机添加牧草(从背包把牧草 7001 加进去) */
+async function addFeedToMachine(count = 100) {
+    const w = protobuf.Writer.create();
+    w.uint32((1 << 3) | 0).int64(toLong(FEED_MACHINE_ID));
+    w.uint32((2 << 3) | 0).int64(toLong(count));
+    const { body: replyBody } = await network.sendMsgAsync('gamepb.homesteadpb.FeedMachineService', 'AddFeed', w.finish());
+    // 响应 {1:加完后的存量, 2:剩余?}
+    const top = walkWire(Buffer.from(replyBody));
+    let stored = 0;
+    for (const [f, , v] of top) {
+        if (f === 1) { stored = Number(v); break; }
+    }
+    log('牧场', `牧草机添加牧草 x${count} → 存量 ${stored}`, {
+        module: 'ranch', event: '牧草机加草', result: 'ok', count, stored,
+    });
+    return { ok: true, stored };
+}
+
+/** 牧草机缺草时自动从背包补(留 20 余量防清空) */
+async function autoFeedMachine(opts = {}) {
+    const threshold = Math.max(1, toNum(opts.threshold) || 20);
+    const machine = await getFeedMachine();
+    if (machine.stored > threshold) return { fed: 0, stored: machine.stored };
+    // 背包里的散装牧草
+    const { getBagDetail } = require('./warehouse');
+    const bag = await getBagDetail();
+    const grass = bag.items.find(it => Number(it.id) === 7001);
+    const have = grass ? Number(grass.count) : 0;
+    if (have <= 0) {
+        log('牧场', `牧草机存量 ${machine.stored} 但背包没有牧草`, {
+            module: 'ranch', event: '牧草机加草', result: 'skip',
         });
-        throw e;
+        return { fed: 0, stored: machine.stored };
+    }
+    const add = Math.min(have, machine.capacity > 0 ? Math.max(0, machine.capacity - machine.stored) : have, 100);
+    if (add <= 0) return { fed: 0, stored: machine.stored };
+    const r = await addFeedToMachine(add);
+    return { fed: add, stored: r.stored };
+}
+
+// ============ 买幼崽(收益最大) ============
+// 幼崽商店 = ShopInfo(5); 价格货币 = 金券(1007)
+// 收益模型(由物品表 price 推出, 单位金券):
+//   鸡   幼崽 2    产蛋 3/个   整鸡 6
+//   兔   幼崽 1080 产物 54      整兔 2160
+//   鹅   幼崽 2712  产物 135     整鹅 5424
+//   猫   幼崽 4068  产物 203     整猫 8136
+//   乌龟 幼崽 5640  产物 338     整龟 13536
+//   龙猫 幼崽 6768  产物 507     整龙猫 20304
+//   羊   幼崽 5640  羊毛 36      整羊 1440
+//   牛   幼崽 10152 牛奶 54      整牛 2160
+// "利益最大"按 每金券投入的整只回收率 排序: 整只价 / 幼崽价。
+// 鸡 = 6/2 = 3.0 最高(且鸡蛋 3×N 持续产出), 兔 = 2.0, 鹅 = 2.0, 其余更低。
+const CUB_SHOP_ID = 5;
+const GROWN_VALUE = {
+    60001: 6, 60002: 2160, 60003: 5424, 60004: 8136, 60005: 13536, 60006: 20304,
+    70001: 1440, 70002: 2160,
+};
+
+/** 幼崽商店列表(带收益比) */
+async function getCubShop() {
+    const goods = await getShopGoodsList(CUB_SHOP_ID);
+    return goods.map(g => ({
+        goodsId: toNum(g.id),
+        animalId: toNum(g.item_id),
+        name: getAnimalName(toNum(g.item_id)),
+        price: toNum(g.price),
+        limit: toNum(g.limit_count),
+        bought: toNum(g.bought_num),
+        unlocked: !!g.unlocked,
+        currencyId: toNum(g.price_id) || 1007,
+        // 收益比 = 整只回收 / 幼崽成本
+        valueRatio: GROWN_VALUE[toNum(g.item_id)]
+            ? GROWN_VALUE[toNum(g.item_id)] / Math.max(1, toNum(g.price))
+            : 0,
+    })).sort((a, b) => b.valueRatio - a.valueRatio);
+}
+
+/**
+ * 自动买幼崽: 按收益比从高到低, 优先买还有空槽能养、收益比最高的。
+ * @param opts.maxSpend 本次最多花多少金券(默认 5000)
+ * @param opts.slots 空槽位数(默认从牧场详情算)
+ */
+async function autoBuyCubs(opts = {}) {
+    const result = { bought: 0, spent: 0, details: [] };
+    const shop = await getCubShop();
+    const usable = shop.filter(g => g.unlocked && g.price > 0 && g.valueRatio > 0);
+    if (usable.length === 0) {
+        log('牧场', '幼崽商店没有可买的(未解锁或价格为 0)', { module: 'ranch', event: '买幼崽', result: 'skip' });
+        return result;
+    }
+
+    // 空槽 = 窝+棚 总位 - 已养数
+    let slots = toNum(opts.slots) || 0;
+    if (slots <= 0) {
+        try {
+            const view = toRanchView(await getRanchDetail());
+            slots = Math.max(0, (view.coopCount + view.penCount) - view.animals.length);
+        } catch { slots = 0; }
+    }
+    if (slots <= 0) {
+        log('牧场', '没有空槽位, 跳过买幼崽', { module: 'ranch', event: '买幼崽', result: 'skip' });
+        return result;
+    }
+
+    const maxSpend = Math.max(0, toNum(opts.maxSpend) || 5000);
+    let spend = 0;
+    for (const g of usable) {
+        if (result.bought >= slots || spend >= maxSpend) break;
+        // 限购余量
+        const remain = g.limit > 0 ? Math.max(0, g.limit - g.bought) : 99;
+        if (remain <= 0) continue;
+        const affordable = Math.floor((maxSpend - spend) / g.price);
+        const count = Math.min(slots - result.bought, remain, affordable);
+        if (count <= 0) continue;
+        try {
+            const reply = await purchaseShopGoods(g.goodsId, count, g.price);
+            const costItems = (reply && reply.cost_items) || [];
+            const spentThis = costItems.reduce((s, it) => s + toNum(it.count), 0);
+            spend += spentThis || g.price * count;
+            result.bought += count;
+            result.details.push(`${g.name}x${count}`);
+            log('牧场', `购买幼崽: ${g.name}x${count} (收益比 ${g.valueRatio.toFixed(2)}, 花费 ${spentThis || g.price * count} 金券)`, {
+                module: 'ranch', event: '买幼崽', result: 'ok',
+                animalId: g.animalId, count, ratio: g.valueRatio,
+            });
+        } catch (e) {
+            logWarn('牧场', `买幼崽失败 ${g.name}: ${e.message}`, {
+                module: 'ranch', event: '买幼崽', result: 'error', animalId: g.animalId,
+            });
+            break;
+        }
+        await sleep(300);
+    }
+    result.spent = spend;
+    if (result.bought > 0) {
+        log('牧场', `买幼崽完成: ${result.details.join('，')}，共 ${result.bought} 只 / ${spend} 金券`, {
+            module: 'ranch', event: '买幼崽', result: 'ok', count: result.bought, spent: spend,
+        });
+    }
+    return result;
+}
+
+// ============ 自动出售牧场产物 ============
+// 抓包: ItemService.Sell {1:{1:1060001, 2:15, 6:uid}} → 金券
+// 产物 = type 107(蛋/崽); 整只(type 106)留不吃(任务要"收获整鸡", 出售整只也行)
+const PRODUCE_ITEM_TYPE = 107;
+
+async function autoSellRanchProducts(opts = {}) {
+    const result = { sold: 0, earned: 0, details: [] };
+    const { getBagDetail, sellItems } = require('./warehouse');
+    const bag = await getBagDetail();
+    const products = bag.items.filter(it => Number(it.itemType) === PRODUCE_ITEM_TYPE && Number(it.count) > 0);
+    if (products.length === 0) return result;
+
+    const payload = [];
+    for (const it of products) {
+        payload.push({ id: toNum(it.id), count: toNum(it.count) });
+        result.sold += toNum(it.count);
+        result.details.push(`${getAnimalName(toNum(it.id)) || it.id}x${toNum(it.count)}`);
+    }
+    try {
+        const reply = await sellItems(payload);
+        for (const it of (reply && reply.get_items) || []) {
+            if (toNum(it.id) === 1007) result.earned += toNum(it.count);
+        }
+        log('牧场', `出售产物: ${result.details.join('，')} → 金券 ${result.earned}`, {
+            module: 'ranch', event: '出售产物', result: 'ok', count: result.sold, earned: result.earned,
+        });
+    } catch (e) {
+        logWarn('牧场', `出售产物失败: ${e.message}`, {
+            module: 'ranch', event: '出售产物', result: 'error',
+        });
     }
     return result;
 }
@@ -274,4 +711,13 @@ module.exports = {
     toRanchView,
     getAnimalName,
     ANIMAL_NAMES,
+    getRotationShop,
+    autoBuyRotationShop,
+    getFeedMachine,
+    addFeedToMachine,
+    autoFeedMachine,
+    getCubShop,
+    autoBuyCubs,
+    autoSellRanchProducts,
+    __privateRanchFns: { parseRotationShopReply, parseFeedMachineReply, walkWire },
 };
