@@ -1,0 +1,9 @@
+# 本地凭据，绝不提交（仓库有 GitHub 远端）
+submit.config.json
+# 登录换来的 admin token 缓存（服务重启即失效，会自动重登刷新）
+.admin-token.json
+captures/
+__pycache__/
+tools/__pycache__/
+*.pyc
+.DS_Store
