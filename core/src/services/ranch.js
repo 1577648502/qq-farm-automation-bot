@@ -56,8 +56,8 @@ function isExpectedRanchError(e) {
 const FARM_SCENE_TYPE = 1;
 const RANCH_SCENE_TYPE = 2;
 
-// 牧场场景未解锁(code=1045002, 等级不到 25)的账号: 记住状态, 1 小时内不重试。
-// 不永久锁死 —— 1045002 也可能是多账号并发时场景状态被干扰, 定时放行一次探测。
+// 场景被拒(code=1045002)时记住状态, 1 小时内不重试(避免刷屏)。
+// 常见根因: 客户端版本过旧(见 config.clientVersion); 定时放行探测以便升级后自动恢复。
 let sceneLocked = false;
 let sceneLockedAt = 0;
 const SCENE_LOCK_RETRY_MS = 60 * 60 * 1000;
@@ -67,33 +67,13 @@ const SCENE_LOCK_RETRY_MS = 60 * 60 * 1000;
  * 必须在调用任何牧场 RPC 之前执行, 否则服务端返回空数据并限流。
  * @returns {boolean} 是否成功进入(未解锁返回 false 且只报一次日志)
  */
-// 是否已在本连接上走过农场场景(0801)。⭐ 20261117 抓包确认:
-// 客户端每次登录后必先 PlayerSceneLogin{1:1}(农场) 才能切 {1:2}(牧场),
-// 跳过 0801 直接 0802 → 服务端拒 1045002(哪怕账号早已解锁)。
-let farmSceneEntered = false;
-
-async function enterFarmScene() {
-    if (farmSceneEntered) return true;
-    const w = protobuf.Writer.create();
-    w.uint32((1 << 3) | 0).int64(toLong(FARM_SCENE_TYPE));
-    await network.sendMsgAsync(
-        'gamepb.globalscenepb.GlobalSceneService', 'PlayerSceneLogin', w.finish());
-    farmSceneEntered = true;
-    return true;
-}
-
+// ⚠ 1045002「该场景还未解锁」的根因(2026-11-17 实测确认):
+//   不是等级、不是场景切换顺序, 而是**客户端版本号**。
+//   旧版 1.14.2.15_20260922 一律被拒; 换成抓包实测的 1.17.0.4_20261117 后,
+//   同一个号「直接 0802」直接成功(见 config.clientVersion)。
+//   所以这里不再做 0801 前置(那是基于抓包顺序的错误推断, 已实测否定)。
 async function enterRanchScene() {
     if (sceneLocked && Date.now() - sceneLockedAt < SCENE_LOCK_RETRY_MS) return false;
-    // 先确保农场场景已进过(服务端要求场景切换链: 0801 → 0802)
-    try {
-        await enterFarmScene();
-    } catch (e) {
-        // 农场场景进不去是连接级问题, 不当牧场锁死处理
-        logWarn('牧场', `进入农场场景失败: ${e.message}`, {
-            module: 'ranch', event: '场景切换', result: 'error',
-        });
-        return false;
-    }
     const w = protobuf.Writer.create();
     w.uint32((1 << 3) | 0).int64(toLong(RANCH_SCENE_TYPE));
     try {
@@ -110,7 +90,7 @@ async function enterRanchScene() {
     } catch (e) {
         if (parseRanchErrorCode(e) === RANCH_ERR.SCENE_LOCKED) {
             if (!sceneLocked) {
-                logWarn('牧场', '牧场场景未解锁(需要农场主 25 级), 暂停牧场自动化(每小时自动探测一次)', {
+                logWarn('牧场', '牧场场景不可用(code=1045002), 暂停牧场自动化(每小时重试一次); 常见原因是客户端版本过旧', {
                     module: 'ranch', event: '场景切换', result: 'locked', code: RANCH_ERR.SCENE_LOCKED,
                 });
             }
@@ -760,7 +740,6 @@ function startRanchCheckLoop(options = {}) {
     externalRanchSchedulerMode = !!options.externalScheduler;
     ranchLoopRunning = true;
     ranchFailStreak = 0;
-    farmSceneEntered = false;   // 新连接需要重新走 0801 → 0802 场景链
     sceneLocked = false;        // 场景锁定状态是 per-connection 的, 新连接重新探测
     sceneLockedAt = 0;
     networkEvents.on('ranchFacilitiesChanged', onRanchFacilitiesChanged);

@@ -1,10 +1,10 @@
 // 诊断: 同一账号分别试探「直接 0802」与「0801 → 0802」，确认 1045002 的真实触发条件
 const path = require('path');
 
-const network = require('/Users/liufaguang/Desktop/工作/qq-farm-automation-bot/core/src/utils/network');
-const protobuf = require('/Users/liufaguang/Desktop/工作/qq-farm-automation-bot/node_modules/protobufjs');
-const { toLong } = require('/Users/liufaguang/Desktop/工作/qq-farm-automation-bot/core/src/utils/utils');
-const { loadProto } = require('/Users/liufaguang/Desktop/工作/qq-farm-automation-bot/core/src/utils/proto');
+const network = require('../src/utils/network');
+const protobuf = require('protobufjs');
+const { toLong } = require('../src/utils/utils');
+const { loadProto } = require('../src/utils/proto');
 
 const psl = (scene) => {
   const w = protobuf.Writer.create();

@@ -5,7 +5,7 @@ const process = require('node:process');
 
 const DEFAULT_SYSTEM_CONFIG = {
     serverUrl: 'wss://gate-obt.nqf.qq.com/prod/ws',
-    clientVersion: '1.14.2.15_20260922',   // 取自线上服务器手动更新的版本(2026-10-15), 避免每次拉代码冲突
+    clientVersion: '1.17.0.4_20261117',   // 2026-11-17 抓包实测(真实客户端 1.17.0.4_20261117)
     platform: 'qq',
     os: 'iOS',
     // 活动入口默认开关 (前端菜单显隐)

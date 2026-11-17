@@ -245,6 +245,10 @@ function handleNotify(msg) {
         const event = types.EventMessage.decode(msg.body);
         const type = event.message_type || '';
         const eventBody = event.body;
+        // 诊断钩子: FARM_DEBUG_NOTIFY=1 时打印所有推送类型与 body hex
+        if (process.env.FARM_DEBUG_NOTIFY === '1') {
+            console.log('[NOTIFY]', type, Buffer.from(eventBody || []).toString('hex'));
+        }
 
         // 被踢下线
         if (type.includes('Kickout')) {
