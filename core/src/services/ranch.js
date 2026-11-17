@@ -53,6 +53,7 @@ function isExpectedRanchError(e) {
 }
 
 // 场景类型(抓包 20261116: PlayerSceneLogin 请求体 {1:1}=农场(0801), {1:2}=牧场(0802))
+const FARM_SCENE_TYPE = 1;
 const RANCH_SCENE_TYPE = 2;
 
 // 牧场场景未解锁(code=1045002, 等级不到 25)的账号: 记住状态, 1 小时内不重试。
@@ -66,8 +67,33 @@ const SCENE_LOCK_RETRY_MS = 60 * 60 * 1000;
  * 必须在调用任何牧场 RPC 之前执行, 否则服务端返回空数据并限流。
  * @returns {boolean} 是否成功进入(未解锁返回 false 且只报一次日志)
  */
+// 是否已在本连接上走过农场场景(0801)。⭐ 20261117 抓包确认:
+// 客户端每次登录后必先 PlayerSceneLogin{1:1}(农场) 才能切 {1:2}(牧场),
+// 跳过 0801 直接 0802 → 服务端拒 1045002(哪怕账号早已解锁)。
+let farmSceneEntered = false;
+
+async function enterFarmScene() {
+    if (farmSceneEntered) return true;
+    const w = protobuf.Writer.create();
+    w.uint32((1 << 3) | 0).int64(toLong(FARM_SCENE_TYPE));
+    await network.sendMsgAsync(
+        'gamepb.globalscenepb.GlobalSceneService', 'PlayerSceneLogin', w.finish());
+    farmSceneEntered = true;
+    return true;
+}
+
 async function enterRanchScene() {
     if (sceneLocked && Date.now() - sceneLockedAt < SCENE_LOCK_RETRY_MS) return false;
+    // 先确保农场场景已进过(服务端要求场景切换链: 0801 → 0802)
+    try {
+        await enterFarmScene();
+    } catch (e) {
+        // 农场场景进不去是连接级问题, 不当牧场锁死处理
+        logWarn('牧场', `进入农场场景失败: ${e.message}`, {
+            module: 'ranch', event: '场景切换', result: 'error',
+        });
+        return false;
+    }
     const w = protobuf.Writer.create();
     w.uint32((1 << 3) | 0).int64(toLong(RANCH_SCENE_TYPE));
     try {
@@ -84,7 +110,7 @@ async function enterRanchScene() {
     } catch (e) {
         if (parseRanchErrorCode(e) === RANCH_ERR.SCENE_LOCKED) {
             if (!sceneLocked) {
-                logWarn('牧场', '牧场场景未解锁(需要农场 25 级), 暂停牧场自动化(每小时自动探测一次)', {
+                logWarn('牧场', '牧场场景未解锁(需要农场主 25 级), 暂停牧场自动化(每小时自动探测一次)', {
                     module: 'ranch', event: '场景切换', result: 'locked', code: RANCH_ERR.SCENE_LOCKED,
                 });
             }
@@ -734,6 +760,9 @@ function startRanchCheckLoop(options = {}) {
     externalRanchSchedulerMode = !!options.externalScheduler;
     ranchLoopRunning = true;
     ranchFailStreak = 0;
+    farmSceneEntered = false;   // 新连接需要重新走 0801 → 0802 场景链
+    sceneLocked = false;        // 场景锁定状态是 per-connection 的, 新连接重新探测
+    sceneLockedAt = 0;
     networkEvents.on('ranchFacilitiesChanged', onRanchFacilitiesChanged);
     if (!externalRanchSchedulerMode) {
         scheduleNextRanchCheck(randomRanchIntervalMs());
