@@ -165,6 +165,7 @@ const DEFAULT_ACCOUNT_CONFIG = {
         ranch_sell: true,     // 自动出售牧场产物
         ranch_buy_cubs: true, // 自动买幼崽(收益最大)
         ranch_rotation: true, // 自动游商兑换
+        ranch_clean_friends: true, // 自动清理好友牧场(产便便 → 游商货币)
         fertilizer_buy_organic: false,
         fertilizer_buy_normal: false,
         mystery_shop: false, // 神秘商店自动购买

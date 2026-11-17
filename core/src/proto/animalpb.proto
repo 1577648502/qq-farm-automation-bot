@@ -2,6 +2,8 @@ syntax = "proto3";
 
 package gamepb.animalpb;
 
+import "corepb.proto";
+
 // ============ 牧场(11-17 新玩法, 25 级解锁) ============
 // 字段语义依据 2026-11-16 两份抓包(wx-code-grabber/captures/20261116-215{130,723}_牧场.*)
 // 逆向得出; 推断不确定的地方在注释里标了"推断"。
@@ -80,9 +82,10 @@ message BuildingInfo {
 // ============ 服务: gamepb.animalpb.AnimalService / RanchService ============
 
 // --- 牧场详情 ---
+// 抓包(20261117): 空消息(自己, 1200) 或 {1:gid, 2:{}}(看好友, 08<gid>1200)
 message GetRanchDetailRequest {
-    // 抓包: 空消息(自己) 或 {2: 空msg}(看好友?) —— #2 结构未定, 先保留
-    HostRef host = 2;
+    int64 host_gid = 1;              // 看好友牧场时填对方 gid; 自己不发
+    HostRef host = 2;                // 看好友时带空 msg({})); 自己不发
 }
 message GetRanchDetailReply {
     RanchInfo ranch = 1;
@@ -145,9 +148,22 @@ message ProduceReceipt {
 // --- 收获 ---
 // 抓包请求: {2: 空msg, 3: 1} —— #3=1 含义待确认(推断: 收获全部)
 message HarvestRanchRequest {
-    // 1 未出现
+    // 抓包(20261117 自己牧场): 12001801 = {2:{}, 3:1} —— #2 是空 msg, 不带 gid
     HostRef host = 2;
     int64 flag = 3;                  // 抓包恒 1
+}
+
+// --- 清理好友牧场(RanchService.CleanAllRanch, 20261117 抓包) ---
+// 请求: {1: 好友gid, 2:{}} (08<gid>1200); 清理产出便便(7002), 收获产物另走 HarvestRanch
+// 客户端流程: EnterHomestead{1:gid,2:2} → GetRanchOpTimes → GetRanchDetail{1:gid,2:{}}
+//             → CleanAllRanch{1:gid,2:{}} → LeaveHomestead{1:gid}
+message CleanAllRanchRequest {
+    int64 host_gid = 1;
+    HostRef host = 2;
+}
+message CleanAllRanchReply {
+    RanchInfo ranch = 1;             // 清理后的牧场全量(抓包 424B)
+    repeated corepb.Item gains = 2;  // 未确认(抓包响应里动物块在 #4, 便便收益结构待更多抓包)
 }
 message HarvestRanchReply {
     RanchInfo ranch = 1;

@@ -82,10 +82,14 @@ async function getMallListBySlotType(slotType = 1, options = {}) {
         : (Number(options.flag) ? 1 : 0);
     // 手工拼字节: 客户端连 **值为 0 的 #2 也照发**(08 01 10 00 18 01),
     // 用 protobufjs + .proto 编码会把 0 略掉, 与抓包不一致 → 这里显式写。
+    // #3: 20261117 抓包实测随场景变 —— slot5(农场)=1, slot6/7(牧场)=2, 可被 options 覆盖。
     const writer = protobuf.Writer.create();
     writer.uint32((1 << 3) | 0).int32(slot);                             // #1 slot_type
     writer.uint32((MALL_LIST_FLAG_FIELD << 3) | 0).int32(flag ? 1 : 0);   // #2 标志
-    writer.uint32((MALL_LIST_CONST_FIELD << 3) | 0).int32(MALL_LIST_CONST_FIELD_VALUE); // #3 恒 1
+    const constVal = options.constField !== undefined
+        ? Number(options.constField)
+        : (slot === 6 || slot === 7 ? 2 : 1);   // 农场类 slot(1/5)=1, 牧场类 slot(6/7)=2 (20261117 抓包)
+    writer.uint32((MALL_LIST_CONST_FIELD << 3) | 0).int32(constVal);
     const body = writer.finish();
     const { body: replyBody } = await sendMsgAsync('gamepb.mallpb.MallService', 'GetMallListBySlotType', body);
     return types.GetMallListBySlotTypeResponse.decode(replyBody);
@@ -182,6 +186,7 @@ async function purchaseShopGoods(goodsId, count, price) {
         goods_id: Number(goodsId) || 0,
         num: Number(count) || 1,
         price: Number(price) || 0,
+        field4: 1,   // 20261117 抓包: 客户端恒发 1
     })).finish();
     const { body: replyBody } = await sendMsgAsync('gamepb.shoppb.ShopService', 'BuyGoods', body);
     return types.BuyGoodsReply.decode(replyBody);
@@ -984,17 +989,26 @@ async function buyFreeGifts(force = false) {
     freeGiftLastCheckAt = now;
 
     try {
-        const mall = await getMallListBySlotType(1);
-        const raw = Array.isArray(mall && mall.goods_list) ? mall.goods_list : [];
+        // 20261117 抓包: 每日福利(免费罐头)在 slot 6, 不在 slot 1; 两个都扫。
         const goods = [];
-        for (const b of raw) {
+        for (const slot of [1, 6]) {
             try {
-                goods.push(types.MallGoods.decode(b));
+                const mall = await getMallListBySlotType(slot);
+                const raw = Array.isArray(mall && mall.goods_list) ? mall.goods_list : [];
+                for (const b of raw) {
+                    try {
+                        goods.push(types.MallGoods.decode(b));
+                    } catch {
+                        // ignore
+                    }
+                }
             } catch {
-                // ignore
+                // 单个 slot 失败跳过
             }
         }
-        const free = goods.filter((g) => !!g && g.is_free === true && Number(g.goods_id || 0) > 0);
+        // 免费 = is_free 标志, 或没有价格字段(#5 不下发, 如 slot6 每日福利 2001)
+        const free = goods.filter((g) => !!g && Number(g.goods_id || 0) > 0
+            && (g.is_free === true || !g.price || !Buffer.isBuffer(g.price) || g.price.length === 0));
         if (!free.length) {
             freeGiftDoneDateKey = getDateKey();
             log('商城', '今日暂无可领取免费礼包', {

@@ -74,12 +74,11 @@ async function getRanchDetail(hostGid = 0) {
             });
         });
     }
-    // 抓包实测: 请求体是 `1200` = {2: 空消息}(看自己牧场时不带 gid)。
-    // 编码成 {2:{1:gid}} 与客户端行为不一致, 已实测导致返回空数据。
-    // 只有显式传 hostGid(看好友) 时才填。
+    // 抓包(20261117): 自己=空 body(`1200` 是 {2:{}} 的等价编码, 空也行);
+    // 看好友 = {1:gid, 2:{}}(`08<gid>1200`)。
     const payload = toNum(hostGid) > 0
-        ? { host: { host_gid: toLong(toNum(hostGid)) } }
-        : { host: {} };
+        ? { host_gid: toLong(toNum(hostGid)), host: {} }
+        : {};
     const body = types.GetRanchDetailRequest.encode(
         types.GetRanchDetailRequest.create(payload),
     ).finish();
@@ -130,14 +129,50 @@ async function triggerProduce(slot = 0, hostGid = 0) {
  * @param flag 抓包恒 1, 原样透传
  */
 async function harvestRanch(flag = 1, hostGid = 0) {
-    const state = network.getUserState();
-    const gid = toNum(hostGid) || toNum(state.gid);
+    // 抓包(20261117): 自己牧场 = {2:{}, 3:1}, #2 是空 msg 不带 gid。
+    // 服务端从会话场景推导主人, 带 gid=0 反而和客户端行为不一致。
     const body = types.HarvestRanchRequest.encode(types.HarvestRanchRequest.create({
-        host: { host_gid: toLong(gid) },
+        host: {},
         flag: toLong(flag),
     })).finish();
     const { body: replyBody } = await network.sendMsgAsync('gamepb.animalpb.AnimalService', 'HarvestRanch', body);
     return types.HarvestRanchReply.decode(replyBody);
+}
+
+/**
+ * 清理好友牧场(RanchService.CleanAllRanch, 20261117 抓包):
+ * 产出便便(7002)的唯一来源之一, 便便是游商兑换有机罐头的货币。
+ * 客户端流程: EnterHomestead{1:gid, 2:2} → CleanAllRanch{1:gid, 2:{}}
+ *             → LeaveHomestead{1:gid}
+ * @returns {{ok: boolean, detail: string}}
+ */
+async function cleanFriendRanch(hostGid) {
+    const gid = toNum(hostGid);
+    if (!gid) throw new Error('缺少好友 gid');
+    // EnterHomesteadRequest 无 proto 定义, 手拼字节(抓包: {1:gid, 2:2} 2=牧场场景)
+    const enterBody = (() => {
+        const w = protobuf.Writer.create();
+        w.uint32((1 << 3) | 0).int64(toLong(gid));
+        w.uint32((2 << 3) | 0).int64(toLong(2));
+        return w.finish();
+    })();
+    await network.sendMsgAsync('gamepb.visitpb.VisitService', 'EnterHomestead', enterBody);
+    await sleep(300);
+    try {
+        const cleanBody = types.CleanAllRanchRequest.encode(types.CleanAllRanchRequest.create({
+            host_gid: toLong(gid), host: {},
+        })).finish();
+        await network.sendMsgAsync('gamepb.animalpb.RanchService', 'CleanAllRanch', cleanBody);
+    } finally {
+        await sleep(300);
+        const leaveBody = (() => {
+            const w = protobuf.Writer.create();
+            w.uint32((1 << 3) | 0).int64(toLong(gid));
+            return w.finish();
+        })();
+        await network.sendMsgAsync('gamepb.visitpb.VisitService', 'LeaveHomestead', leaveBody).catch(() => {});
+    }
+    return { ok: true, gid };
 }
 
 // ============ 展示层: 面板用的视图 ============
@@ -331,7 +366,7 @@ async function getRanchOverview(accountId = '') {
 async function runRanchCare(opts = {}) {
     const result = {
         harvested: 0, produced: 0, fed: 0, sold: 0, earned: 0,
-        boughtCubs: 0, feedMachineAdded: 0, rotationBought: 0,
+        boughtCubs: 0, feedMachineAdded: 0, rotationBought: 0, cleanedFriends: 0,
         details: [],
     };
 
@@ -457,6 +492,19 @@ async function runRanchCare(opts = {}) {
             if (r.bought > 0) result.details.push(`买${r.details.join('/')}`);
         } catch (e) {
             logWarn('牧场', `买幼崽失败: ${e.message}`, { module: 'ranch', event: '买幼崽', result: 'error' });
+        }
+    }
+
+    await gap();
+
+    // 5.5 清理好友牧场(便便是游商兑换的货币, 必须在游商步骤之前清出今天的便便)
+    if (opts.cleanFriends !== false && isAutomationOn('ranch_clean_friends')) {
+        try {
+            const r = await autoCleanFriendRanches(opts);
+            result.cleanedFriends = r.cleaned;
+            if (r.cleaned > 0) result.details.push(`清理${r.cleaned}个牧场`);
+        } catch (e) {
+            logWarn('牧场', `清理好友牧场失败: ${e.message}`, { module: 'ranch', event: '清理好友牧场', result: 'error' });
         }
     }
 
@@ -734,6 +782,46 @@ function walkWire(buf) {
  * 换化肥纯赚; 松果币(1008)来源未知, 不自动花。
  * @returns {{bought: number, details: string[]}}
  */
+/**
+ * 自动清理好友牧场(20261117 抓包的 CleanAllRanch 链路)。
+ * 节流: 每个好友每天只清一次(内存记录, 重启重置无妨 —— 服务端有自己的每日上限)。
+ * @returns {{cleaned: number, details: string[]}}
+ */
+const _cleanedToday = new Map();   // gid -> dateKey
+async function autoCleanFriendRanches(opts = {}) {
+    const result = { cleaned: 0, details: [] };
+    const maxPerRound = Math.max(1, toNum(opts.maxCleanPerRound) || 10);
+    const todayKey = new Date().toDateString();
+
+    const { getFriendsList } = require('./friend');
+    const friends = await getFriendsList().catch(() => []);
+    if (!Array.isArray(friends) || friends.length === 0) return result;
+
+    for (const f of friends.slice(0, 40)) {
+        if (result.cleaned >= maxPerRound) break;
+        const gid = toNum(f && f.gid);
+        if (!gid) continue;
+        if (_cleanedToday.get(gid) === todayKey) continue;
+        try {
+            await cleanFriendRanch(gid);
+            _cleanedToday.set(gid, todayKey);
+            result.cleaned += 1;
+            result.details.push(f.name || gid);
+            await sleep(800);
+        } catch (e) {
+            // 清理失败(没得清/权限不足)也标记今天, 别每轮都撞
+            _cleanedToday.set(gid, todayKey);
+            await sleep(500);
+        }
+    }
+    if (result.cleaned > 0) {
+        log('牧场', `清理好友牧场 x${result.cleaned}: ${result.details.slice(0, 6).join('，')}`, {
+            module: 'ranch', event: '清理好友牧场', result: 'ok', count: result.cleaned,
+        });
+    }
+    return result;
+}
+
 async function autoBuyRotationShop(opts = {}) {
     const result = { bought: 0, details: [] };
     const shop = await getRotationShop();
@@ -1017,7 +1105,7 @@ async function operateRanch(opts = {}) {
     // 便于定位"半更新"部署下 admin/worker 版本不一致的问题
     if (typeof opts === 'string') opts = { op: opts };
     const op = String((opts && opts.op) || '').trim();
-    if (op && !['harvest', 'produce', 'feed', 'feedmachine', 'buycub', 'rotation'].includes(op)) {
+    if (op && !['harvest', 'produce', 'feed', 'feedmachine', 'buycub', 'rotation', 'clean'].includes(op)) {
         logWarn('牧场', `收到未知操作: ${JSON.stringify(opts).slice(0, 200)}`, {
             module: 'ranch', event: '操作牧场', result: 'unknown_op', op,
         });
@@ -1071,6 +1159,19 @@ async function operateRanch(opts = {}) {
                 detail: r.bought > 0 ? r.details.join('，') : '集市未营业或没有便便',
             };
         }
+        case 'clean': {
+            // 清理好友牧场(opts.gid 指定单个好友; 不传则批量)
+            if (opts.gid) {
+                await cleanFriendRanch(toNum(opts.gid));
+                return { ok: true, action: '清理牧场', detail: `gid=${toNum(opts.gid)}` };
+            }
+            const r = await autoCleanFriendRanches(opts);
+            return {
+                ok: true,
+                action: '清理好友牧场',
+                detail: r.cleaned > 0 ? `清理${r.cleaned}个: ${r.details.slice(0, 6).join('，')}` : '今天没有可清理的好友牧场',
+            };
+        }
         default:
             throw new Error(`不支持的操作: ${JSON.stringify(op)} (收到参数: ${JSON.stringify(opts).slice(0, 300)})`);
     }
@@ -1101,6 +1202,8 @@ module.exports = {
     getCubShop,
     autoBuyCubs,
     autoSellRanchProducts,
+    cleanFriendRanch,
+    autoCleanFriendRanches,
     getRanchWeightScore,
     __privateRanchFns: { parseRotationShopReply, parseFeedMachineReply, walkWire, isEmptyRanchView },
 };

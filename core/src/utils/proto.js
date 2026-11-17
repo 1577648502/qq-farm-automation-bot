@@ -61,6 +61,8 @@ async function loadProto() {
     types.HarvestRanchReply = root.lookupType('gamepb.animalpb.HarvestRanchReply');
     types.GetRanchOpTimesRequest = root.lookupType('gamepb.animalpb.GetRanchOpTimesRequest');
     types.GetRanchOpTimesReply = root.lookupType('gamepb.animalpb.GetRanchOpTimesReply');
+    types.CleanAllRanchRequest = root.lookupType('gamepb.animalpb.CleanAllRanchRequest');
+    types.CleanAllRanchReply = root.lookupType('gamepb.animalpb.CleanAllRanchReply');
 
     // 用户
     types.LoginRequest = root.lookupType('gamepb.userpb.LoginRequest');
