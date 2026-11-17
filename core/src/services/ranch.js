@@ -195,6 +195,36 @@ function isEmptyRanchView(view) {
 const OVERVIEW_THROTTLE_MS = 10 * 1000;
 let overviewCache = { at: 0, accountId: '', promise: null };
 
+/**
+ * 拉取牧场建筑列表(窝/棚/牧草机)。
+ * 实例槽位号固定: 10000=? 10001=窝 10002=牧草机(抓包实测 GetFacilityDetail(10002) 名称="牧草机")
+ * 从 FacilitiesNotify 推送观察: 10001→实例6001001(窝), 10002→7001001(棚类), 10000→11001001
+ */
+const FACILITY_SLOTS = [10000, 10001, 10002];
+
+async function getFacilities() {
+    const facilities = [];
+    for (const slot of FACILITY_SLOTS) {
+        try {
+            const w = protobuf.Writer.create();
+            w.uint32((1 << 3) | 0).int64(toLong(slot));
+            const { body: replyBody } = await network.sendMsgAsync('gamepb.homesteadpb.HomesteadService', 'GetFacilityDetail', w.finish());
+            const f = parseFeedMachineReply(replyBody);
+            if (!f.name && !f.capacity && !f.level) continue;
+            facilities.push({ slot, ...f });
+        } catch (e) {
+            // 1045115 建筑不存在 = 该槽位没建筑, 正常跳过
+            if (parseRanchErrorCode(e) !== RANCH_ERR.BUILDING_MISSING) {
+                logWarn('牧场', `建筑#${slot} 查询失败: ${e.message}`, {
+                    module: 'ranch', event: '建筑查询', result: 'error', slot,
+                });
+            }
+        }
+        await sleep(150);
+    }
+    return facilities;
+}
+
 async function getRanchOverview(accountId = '') {
     const key = String(accountId || process.env.FARM_ACCOUNT_ID || '');
     const now = Date.now();
@@ -203,29 +233,19 @@ async function getRanchOverview(accountId = '') {
     }
     const promise = (async () => {
         try {
-            const [detailReply, opTimesReply] = await Promise.all([
+            const [detailReply, opTimesReply, facilities] = await Promise.all([
                 getRanchDetail(),
                 getRanchOpTimes().catch(() => null),
+                getFacilities().catch(() => []),
             ]);
-            let view = toRanchView(detailReply);
-
-            // 抓包实测(20261116 21:53:18 → 21:53:48): 服务端对首次 GetRanchDetail
-            // 会返回"空 ranch"(只有经验, 窝/棚/动物全空), 30 秒后的同样请求才带全量数据
-            // —— 牧场模块是懒初始化的。空 ranch 时等 2 秒重试一次, 面板就不会"打开啥都不显示"。
-            if (isEmptyRanchView(view)) {
-                await sleep(2000);
-                const retry = await getRanchDetail().catch(() => null);
-                if (retry) {
-                    const retryView = toRanchView(retry);
-                    if (!isEmptyRanchView(retryView)) view = retryView;
-                }
-            }
+            const view = toRanchView(detailReply);
 
             view.opLimits = (opTimesReply && opTimesReply.limits || []).map(l => ({
                 opId: toNum(l.op_id),
                 used: toNum(l.used),
                 limit: toNum(l.limit),
             }));
+            view.facilities = facilities;
             return view;
         } catch (e) {
             logWarn('牧场', `获取牧场详情失败: ${e.message}`, {

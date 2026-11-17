@@ -37,6 +37,14 @@ export interface RotationShopGoods {
   uid: number
 }
 
+export interface RanchFacility {
+  slot: number
+  name: string
+  level: number
+  stored: number
+  capacity: number
+}
+
 export interface RanchOverview {
   hostGid: number
   coopCount: number
@@ -44,6 +52,7 @@ export interface RanchOverview {
   grassCount: number
   ranchExp: number
   animals: RanchAnimal[]
+  facilities?: RanchFacility[]
   opLimits?: Array<{ opId: number, used: number, limit: number }>
 }
 

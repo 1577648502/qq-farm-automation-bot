@@ -62,6 +62,13 @@ const careSummary = computed(() => {
   }
 })
 
+const facilityText = computed(() => {
+  const fs = overview.value?.facilities || []
+  if (!fs.length)
+    return ''
+  return fs.map(f => `${f.name || '建筑'}${f.level ? ` Lv${f.level}` : ''}`).join(' · ')
+})
+
 const opLimitText = computed(() => {
   const ov = overview.value
   if (!ov?.opLimits?.length)
@@ -237,6 +244,13 @@ onUnmounted(() => {
           <i class="i-carbon-star" />
           <span class="font-medium">变异 {{ careSummary.mutant }}</span>
         </div>
+        <div
+          v-if="overview?.facilities?.length"
+          class="flex items-center gap-1 rounded-full bg-sky-100 px-2.5 py-1 text-sky-700 dark:bg-sky-900/30 dark:text-sky-400"
+        >
+          <i class="i-carbon-home" />
+          <span class="font-medium">{{ facilityText }}</span>
+        </div>
         <div v-if="opLimitText" class="ml-auto text-[11px] text-gray-400">
           今日次数 {{ opLimitText }}
         </div>
@@ -277,8 +291,15 @@ onUnmounted(() => {
             然后刷新本页重试（首次进入服务端可能返回空数据，已自动重试）。
           </div>
         </div>
-        <div v-else-if="overview.animals.length === 0" class="py-8 text-center text-sm text-gray-500">
-          牧场还没有动物 —— 去 QQ 农场的牧场里放几只幼崽吧
+        <div v-else-if="overview.animals.length === 0" class="flex flex-col items-center justify-center gap-3 py-10 text-center">
+          <div class="i-fas-paw text-4xl text-gray-300" />
+          <div class="text-base text-gray-600 font-medium dark:text-gray-300">
+            牧场还没有动物
+          </div>
+          <div class="max-w-md text-xs text-gray-400 leading-relaxed">
+            点击上方「买幼崽（收益最大）」自动买入收益最高的幼崽；
+            也可以去 QQ 农场的牧场里手动摆放。
+          </div>
         </div>
 
         <!-- 动物卡片 -->
