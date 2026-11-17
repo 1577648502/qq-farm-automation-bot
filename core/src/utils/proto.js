@@ -290,6 +290,8 @@ async function loadProto() {
 
     // 活动
     types.ActivityListRequest = root.lookupType('gamepb.activitypb.ListRequest');
+    types.GetGroupRequest = root.lookupType('gamepb.activitypb.GetGroupRequest');
+    types.GetGroupReply = root.lookupType('gamepb.activitypb.GetGroupReply');
     types.ActivityListReply = root.lookupType('gamepb.activitypb.ListReply');
     types.ActivityOperateRequest = root.lookupType('gamepb.activitypb.OperateRequest');
     types.ActivityOperateReply = root.lookupType('gamepb.activitypb.OperateReply');

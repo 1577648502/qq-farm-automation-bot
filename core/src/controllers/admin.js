@@ -3145,6 +3145,10 @@ app.use('/api', (req, res, next) => {
     app.post('/api/pet/capital-mode/save', withAccount((accountId, req) => provider.setCapitalMode(accountId, req.body)));
 // ============ Activity (活动) API ============
     app.get('/api/activity/overview', withAccount((accountId, req) => provider.getActivityOverview({ ...req.query, activityName: req.query.name }), { softErrors: false }));
+    // 「牧歌初启」完成情况(只读)
+    app.get('/api/activity/muge', withAccount(accountId => provider.getMugeOverview(accountId), { softErrors: true }));
+    // 「牧歌初启」手动领取
+    app.post('/api/activity/muge/claim', withAccount((accountId, req) => provider.claimMugeActivity(req.body || {}), { softErrors: true }));
 
     app.post('/api/activity/draw', withAccount((accountId, req) => provider.drawActivityLottery(req.body || {}), { softErrors: false }));
 

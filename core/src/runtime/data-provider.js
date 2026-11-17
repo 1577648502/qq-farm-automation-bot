@@ -492,6 +492,8 @@ function createDataProvider(options) {
         getCapitalMode: (accountRef) => callWorkerApi(resolveAccountRefId(accountRef), 'getCapitalMode'),
         setCapitalMode: (accountRef, config) => callWorkerApi(resolveAccountRefId(accountRef), 'setCapitalMode', config),
         getActivityOverview: (accountRef, options) => callWorkerApi(resolveAccountRefId(accountRef), 'getActivityOverview', options),
+        getMugeOverview: (accountRef) => callWorkerApi(resolveAccountRefId(accountRef), 'getMugeOverview', {}),
+        claimMugeActivity: (accountRef, options) => callWorkerApi(resolveAccountRefId(accountRef), 'claimMugeActivity', options || {}),
         drawActivityLottery: (accountRef, options) => callWorkerApi(resolveAccountRefId(accountRef), 'drawActivityLottery', options),
         drawActivity: (accountRef, options) => callWorkerApi(resolveAccountRefId(accountRef), 'drawActivity', options),
         sellQingniangBrew: (accountRef, options) => callWorkerApi(resolveAccountRefId(accountRef), 'sellQingniangBrew', options),

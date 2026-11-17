@@ -130,6 +130,37 @@ function isHarvestable(a: { harvestable?: boolean, harvestInSec?: number | null,
   return sec !== null && sec <= 0
 }
 
+// 动物视觉标识: 游戏里动物是 Spine/3D 模型, 没有可用的静态图标资源
+// → 用 emoji + 配色区分(用户确认先这样)
+const ANIMAL_VISUAL: Record<string, { emoji: string, bg: string }> = {
+  鸡: { emoji: '🐔', bg: 'bg-amber-100/60 dark:bg-amber-900/25' },
+  鸭: { emoji: '🦆', bg: 'bg-yellow-100/60 dark:bg-yellow-900/25' },
+  鹅: { emoji: '🦢', bg: 'bg-slate-100/60 dark:bg-slate-800/40' },
+  猫: { emoji: '🐱', bg: 'bg-orange-100/60 dark:bg-orange-900/25' },
+  乌龟: { emoji: '🐢', bg: 'bg-emerald-100/60 dark:bg-emerald-900/25' },
+  龙猫: { emoji: '🐭', bg: 'bg-violet-100/60 dark:bg-violet-900/25' },
+  松鼠: { emoji: '🐿️', bg: 'bg-amber-100/60 dark:bg-amber-900/25' },
+  刺猬: { emoji: '🦔', bg: 'bg-stone-100/60 dark:bg-stone-800/40' },
+  狐狸: { emoji: '🦊', bg: 'bg-orange-100/60 dark:bg-orange-900/25' },
+  羊: { emoji: '🐑', bg: 'bg-gray-100/60 dark:bg-gray-800/40' },
+  牛: { emoji: '🐄', bg: 'bg-neutral-100/60 dark:bg-neutral-800/40' },
+  猴子: { emoji: '🐒', bg: 'bg-amber-100/60 dark:bg-amber-900/25' },
+  迷你猪: { emoji: '🐷', bg: 'bg-pink-100/60 dark:bg-pink-900/25' },
+  袋鼠: { emoji: '🦘', bg: 'bg-yellow-100/60 dark:bg-yellow-900/25' },
+  驴: { emoji: '🫏', bg: 'bg-stone-100/60 dark:bg-stone-800/40' },
+  梅花鹿: { emoji: '🦌', bg: 'bg-orange-100/60 dark:bg-orange-900/25' },
+  羚羊: { emoji: '🐐', bg: 'bg-amber-100/60 dark:bg-amber-900/25' },
+  长颈鹿: { emoji: '🦒', bg: 'bg-yellow-100/60 dark:bg-yellow-900/25' },
+  鸵鸟: { emoji: '🦤', bg: 'bg-stone-100/60 dark:bg-stone-800/40' },
+  牦牛: { emoji: '🐃', bg: 'bg-neutral-100/60 dark:bg-neutral-800/40' },
+  浣熊: { emoji: '🦝', bg: 'bg-gray-100/60 dark:bg-gray-800/40' },
+  兔子: { emoji: '🐰', bg: 'bg-pink-100/60 dark:bg-pink-900/25' },
+}
+function animalVisual(name: string) {
+  const key = Object.keys(ANIMAL_VISUAL).find(k => String(name || '').includes(k))
+  return key ? ANIMAL_VISUAL[key] : { emoji: '🐾', bg: 'bg-gray-100/60 dark:bg-gray-800/40' }
+}
+
 function formatTime(sec: number) {
   if (sec <= 0)
     return ''
@@ -210,18 +241,15 @@ const pensView = computed<PenView[]>(() => {
 })
 
 const facilityText = computed(() => {
-  const fs = overview.value?.facilities || []
+  // 留言板/装饰位没有等级概念, 不显示
+  const fs = (overview.value?.facilities || []).filter(f => f.kind !== 'decor')
   if (!fs.length)
     return ''
   return fs.map(f => `${f.name || '建筑'}${f.level ? ` Lv${f.level}` : ''}`).join(' · ')
 })
 
-const opLimitText = computed(() => {
-  const ov = overview.value
-  if (!ov?.opLimits?.length)
-    return ''
-  return ov.opLimits.map(l => `${l.opId}: ${l.used}/${l.limit}`).join(' · ')
-})
+// 今日次数: op id(11003/11008/11009) 的官方语义未确认, 先不展示, 避免误导
+const opLimitText = computed(() => '')
 
 // 刷新防抖: 挂载/切账号/每次操作都会触发 refresh, 连点按钮会叠加请求;
 // 后端虽有 10s 节流, 前端也压一下(1.5s 内的多次触发只发一次)
@@ -583,8 +611,8 @@ onUnmounted(() => {
                     变异
                   </div>
 
-                  <div class="mb-1 mt-3 h-10 w-10 flex items-center justify-center sm:h-12 sm:w-12">
-                    <div class="i-fas-paw text-4xl text-amber-500" />
+                  <div class="mb-1 mt-3 h-10 w-10 flex items-center justify-center rounded-full sm:h-12 sm:w-12" :class="animalVisual(a.name)?.bg || 'bg-gray-100/60'">
+                    <span class="text-2xl leading-none sm:text-3xl">{{ animalVisual(a.name)?.emoji || '🐾' }}</span>
                   </div>
 
                   <div class="w-full truncate px-1 text-center text-xs font-bold" :title="`#${a.animalId}`">

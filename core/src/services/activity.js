@@ -1350,6 +1350,62 @@ function taskLooksActivityRelated(task, activityItemIds, terms) {
  * 领取策略: 对 02/03/04 发一次 {1:0}=领全部可领; 分享任务需要逐个领(每档一次 cmd=86),
  * 分享本体(87/89)依赖真实分享回执, 不自动做 —— 只领已完成的。
  */
+/**
+ * 查询「牧歌初启」完成情况(只读, 不领取)。
+ * 用 GetGroup 拉主组数据, 解析四个子活动的进度。
+ * @returns {{tiers, invites, tasks, shares, summary}}
+ */
+async function getMugeOverview() {
+    const out = { tiers: [], invites: [], tasks: [], shares: [], error: null };
+    try {
+        const body = types.GetGroupRequest.encode(types.GetGroupRequest.create({
+            group_id: toLong(MUGE_ACTIVITY_GROUP),
+        })).finish();
+        const { body: replyBody } = await sendMsgAsync(ACTIVITY_SERVICE, 'GetGroup', body);
+        const reply = types.GetGroupReply.decode(replyBody);
+        const group = reply && reply.group;
+        if (!group) return { ...out, error: '活动未开启' };
+        const children = group.children || [];
+        for (const data of children) {
+            const head = data.head || {};
+            const id = toNum(head.id);
+            if (id === MUGE_SUB_IDS.TIERS && data.muge_tiers) {
+                const t = data.muge_tiers;
+                out.tiers = (t.tiers || []).map(x => ({
+                    seq: toNum(x.seq), requiredWeight: toNum(x.required_weight),
+                    status: toNum(x.status), reward: x.reward ? { id: toNum(x.reward.id), count: toNum(x.reward.count) } : null,
+                }));
+                out.totalWeight = toNum(t.total_weight);
+            } else if (id === MUGE_SUB_IDS.INVITE && data.muge_invite) {
+                out.invites = (data.muge_invite.tiers || []).map(x => ({
+                    seq: toNum(x.seq), required: toNum(x.required),
+                    status: toNum(x.status), reward: x.reward ? { id: toNum(x.reward.id), count: toNum(x.reward.count) } : null,
+                }));
+            } else if (id === MUGE_SUB_IDS.TASKS && data.muge_tasks) {
+                out.tasks = (data.muge_tasks.tasks || []).map(x => ({
+                    seq: toNum(x.seq), progress: toNum(x.progress), target: toNum(x.target),
+                    status: toNum(x.status), desc: String(x.desc || ''),
+                    reward: x.reward ? { id: toNum(x.reward.id), count: toNum(x.reward.count) } : null,
+                }));
+            } else if (id === MUGE_SUB_IDS.SHARE && data.muge_share) {
+                out.shares = (data.muge_share.tasks || []).map(x => ({
+                    seq: toNum(x.seq), count: toNum(x.count),
+                }));
+            }
+        }
+        // 汇总: status 3=已领 / 2=可领 / 1=未达标
+        const stat = (list) => ({
+            total: list.length,
+            claimed: list.filter(x => x.status === 3).length,
+            claimable: list.filter(x => x.status === 2).length,
+        });
+        out.summary = { tiers: stat(out.tiers), invites: stat(out.invites), tasks: stat(out.tasks) };
+    } catch (e) {
+        out.error = e && e.message ? e.message : String(e);
+    }
+    return out;
+}
+
 async function claimMugeActivity(options = {}) {
     const result = { tiers: 0, invites: 0, tasks: 0, shares: 0, details: [], skipped: [] };
     if (options.enabled === false) return result;
@@ -1517,6 +1573,7 @@ module.exports = {
     buildActivityCatalog,
     claimActivityTasks,
     claimMugeActivity,
+    getMugeOverview,
     claimBattlePassRewards,
     claimDailySignin,
     drawActivity,

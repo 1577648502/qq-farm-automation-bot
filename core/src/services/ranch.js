@@ -476,6 +476,15 @@ let overviewCache = { at: 0, accountId: '', promise: null };
 // 建筑槽: 10000=留言板(装饰) 10001=窝 10002=喂食机(牧草机)
 // ⚠ 棚不是固定槽位, 它的实例号在 AllCells 里(如 inst=3, buildingId=6002001)
 const FACILITY_SLOTS = [10000, 10001, 10002];
+
+/** 查询任意建筑实例详情(棚的 instId 不固定, 只能从 AllCells 拿) */
+async function getFacilityDetailByInstance(instId) {
+    const w = protobuf.Writer.create();
+    w.uint32((1 << 3) | 0).int64(toLong(toNum(instId)));
+    const { body: replyBody } = await network.sendMsgAsync(
+        'gamepb.homesteadpb.HomesteadService', 'GetFacilityDetail', w.finish());
+    return parseFeedMachineReply(replyBody);
+}
 // 建筑配置 → 用途(ItemInfo: 3601001=牧场窝 target 6001001, 3602001=牧场棚 target 6002001, 3702001=喂食机 target 7001001)
 const BUILDING_KINDS = {
     6001001: 'coop', 6001002: 'coop', 6001003: 'coop',
@@ -563,6 +572,31 @@ async function getRanchOverview(accountId = '') {
                 view.coopBuildings = view.buildings.filter(b => b.kind === 'coop');
                 view.penBuildings = view.buildings.filter(b => b.kind === 'pen');
                 view.feedBuildings = view.buildings.filter(b => b.kind === 'feed');
+
+                // ⭐ 从没进过牧场的号: GetRanchDetail 返回空 RanchInfo(窝0棚0牧草0),
+                //   但 AllCells / GetFacilityDetail 里的建筑是真实的。
+                //   用真实建筑的 capacity 兜底(不猜数值), 避免面板一片空白。
+                if (!view.coopCount && !view.penCount) {
+                    view.emptyRanchInfo = true;
+                    const coopFac = view.facilities.find(f => f.slot === 10001);
+                    view.coopCount = toNum(coopFac && coopFac.capacity) || view.coopBuildings.length;
+                    // 棚的 instId 不固定(实测 inst=3), 用真实实例查容量
+                    const penB = view.penBuildings[0];
+                    if (penB) {
+                        try {
+                            const pf = await getFacilityDetailByInstance(penB.instId);
+                            view.penCount = toNum(pf.capacity) || 0;
+                            if (view.penCount > 0) {
+                                view.facilities.push({
+                                    slot: penB.instId, kind: 'pen', name: '棚',
+                                    level: toNum(pf.level), stored: 0,
+                                    capacity: view.penCount, buildingId: penB.buildingId,
+                                    buildingKind: 'pen', upgrading: false,
+                                });
+                            }
+                        } catch { view.penCount = 0; }
+                    }
+                }
             } catch {
                 view.buildings = [];
             }

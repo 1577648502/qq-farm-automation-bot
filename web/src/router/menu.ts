@@ -100,6 +100,14 @@ export const menuRoutes: MenuItem[] = [
   },
 
   {
+    path: 'muge-activity',
+    name: 'muge-activity',
+    label: '牧歌初启',
+    icon: 'i-carbon-music',
+    component: () => import('@/views/MugeActivity.vue'),
+  },
+
+  {
     path: 'weather-activity',
     name: 'weather-activity',
     label: '雨落成诗',

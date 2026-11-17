@@ -1481,6 +1481,12 @@ async function handleApiCall(msg) {
                 result = await purchaseCatalogGoods(goodsId, count, slotType, source, shopId);
                 break;
             }
+            case 'claimMugeActivity':
+                result = await require('../services/activity').claimMugeActivity(args[0] || {});
+                break;
+            case 'getMugeOverview':
+                result = await require('../services/activity').getMugeOverview();
+                break;
             case 'getActivityOverview':
                 result = await getActivityOverview(args[0] || {});
                 break;
