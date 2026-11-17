@@ -47,12 +47,25 @@ function isExpectedRanchError(e) {
 }
 
 async function getRanchDetail(hostGid = 0) {
-    const state = network.getUserState();
-    const gid = toNum(hostGid) || toNum(state.gid);
-    // 抓包: 请求体是 {2: 空 msg} 的形态, #2 是 host 引用(结构未定, 空 msg 也能拿到全量)
-    const body = types.GetRanchDetailRequest.encode(types.GetRanchDetailRequest.create({
-        host: { host_gid: toLong(gid) },
-    })).finish();
+    // ⭐ 抓包实测(20261116 21:57): 必须先 PlayerSceneLogin {1:2} 切到牧场场景,
+    //    之后的 GetRanchDetail 才返回真实数据; 不切场景 → 返回"空 ranch"
+    //    (没有动物、窝/棚全 0), 还会触发服务端限流(在错误场景反复调用)。
+    if (toNum(hostGid) === 0) {
+        await enterRanchScene().catch((e) => {
+            logWarn('牧场', `进入牧场场景失败: ${e.message}`, {
+                module: 'ranch', event: '场景切换', result: 'error',
+            });
+        });
+    }
+    // 抓包实测: 请求体是 `1200` = {2: 空消息}(看自己牧场时不带 gid)。
+    // 编码成 {2:{1:gid}} 与客户端行为不一致, 已实测导致返回空数据。
+    // 只有显式传 hostGid(看好友) 时才填。
+    const payload = toNum(hostGid) > 0
+        ? { host: { host_gid: toLong(toNum(hostGid)) } }
+        : { host: {} };
+    const body = types.GetRanchDetailRequest.encode(
+        types.GetRanchDetailRequest.create(payload),
+    ).finish();
     const { body: replyBody } = await network.sendMsgAsync('gamepb.animalpb.AnimalService', 'GetRanchDetail', body);
     return types.GetRanchDetailReply.decode(replyBody);
 }
@@ -266,6 +279,8 @@ async function getRanchOverview(accountId = '') {
     }
     const promise = (async () => {
         try {
+            // ⭐ 先切牧场场景(必须, 否则所有牧场接口返回空/被限流), 再并发查询
+            await enterRanchScene().catch(() => {});
             const [detailReply, opTimesReply, facilities] = await Promise.all([
                 getRanchDetail(),
                 getRanchOpTimes().catch(() => null),
