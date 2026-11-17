@@ -1326,10 +1326,11 @@ async function handleApiCall(msg) {
                 result = await require('../services/ranch').getRanchOverview(process.env.FARM_ACCOUNT_ID || '');
                 break;
             case 'runRanchCare':
-                result = await require('../services/ranch').runRanchCare(args[0] || {});
+                // provider 传 [opts], rest 展开后 args = [[opts]] — 双层数组
+                result = await require('../services/ranch').runRanchCare(Array.isArray(args[0]) ? args[0][0] || {} : args[0] || {});
                 break;
             case 'operateRanch':
-                result = await require('../services/ranch').operateRanch(args[0] || {});
+                result = await require('../services/ranch').operateRanch(Array.isArray(args[0]) ? args[0][0] || {} : args[0] || {});
                 break;
             case 'getCubShop':
                 result = await require('../services/ranch').getCubShop();
