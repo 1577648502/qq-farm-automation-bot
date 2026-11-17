@@ -32,6 +32,8 @@ const RANCH_ERR = {
     NOTHING_TO_PRODUCE: 1045232, // 没有可生产的动物
     CANS_EMPTY: 1045234,         // 罐头桶耗尽
     RATE_LIMITED: 1045202,       // 网络繁忙(服务端限流) → 要退避
+    SCENE_LOCKED: 1045002,       // 牧场场景未解锁(等级不到 25 级) → 停自动化直到重登
+    NOTHING_TO_HARVEST: 1045211, // 当前没有可收取的产物(正常状态)
 };
 
 /** 从错误信息里提取服务端 code= 数字 */
@@ -46,21 +48,52 @@ function isExpectedRanchError(e) {
     return code === RANCH_ERR.BUILDING_MISSING
         || code === RANCH_ERR.NOTHING_TO_PRODUCE
         || code === RANCH_ERR.CANS_EMPTY
-        || code === RANCH_ERR.RATE_LIMITED;
+        || code === RANCH_ERR.RATE_LIMITED
+        || code === RANCH_ERR.NOTHING_TO_HARVEST;
 }
 
 // 场景类型(抓包 20261116: PlayerSceneLogin 请求体 {1:1}=农场(0801), {1:2}=牧场(0802))
 const RANCH_SCENE_TYPE = 2;
 
+// 牧场场景未解锁(code=1045002, 等级不到 25)的账号: 记住状态, 1 小时内不重试。
+// 不永久锁死 —— 1045002 也可能是多账号并发时场景状态被干扰, 定时放行一次探测。
+let sceneLocked = false;
+let sceneLockedAt = 0;
+const SCENE_LOCK_RETRY_MS = 60 * 60 * 1000;
+
 /**
  * 切换到牧场场景(globalscenepb.GlobalSceneService.PlayerSceneLogin {1:2})。
  * 必须在调用任何牧场 RPC 之前执行, 否则服务端返回空数据并限流。
+ * @returns {boolean} 是否成功进入(未解锁返回 false 且只报一次日志)
  */
 async function enterRanchScene() {
+    if (sceneLocked && Date.now() - sceneLockedAt < SCENE_LOCK_RETRY_MS) return false;
     const w = protobuf.Writer.create();
     w.uint32((1 << 3) | 0).int64(toLong(RANCH_SCENE_TYPE));
-    await network.sendMsgAsync(
-        'gamepb.globalscenepb.GlobalSceneService', 'PlayerSceneLogin', w.finish());
+    try {
+        await network.sendMsgAsync(
+            'gamepb.globalscenepb.GlobalSceneService', 'PlayerSceneLogin', w.finish());
+        if (sceneLocked) {
+            log('牧场', '牧场场景已恢复访问, 恢复牧场自动化', {
+                module: 'ranch', event: '场景切换', result: 'unlocked',
+            });
+        }
+        sceneLocked = false;
+        sceneLockedAt = 0;
+        return true;
+    } catch (e) {
+        if (parseRanchErrorCode(e) === RANCH_ERR.SCENE_LOCKED) {
+            if (!sceneLocked) {
+                logWarn('牧场', '牧场场景未解锁(需要农场 25 级), 暂停牧场自动化(每小时自动探测一次)', {
+                    module: 'ranch', event: '场景切换', result: 'locked', code: RANCH_ERR.SCENE_LOCKED,
+                });
+            }
+            sceneLocked = true;
+            sceneLockedAt = Date.now();
+            return false;
+        }
+        throw e;
+    }
 }
 
 async function getRanchDetail(hostGid = 0) {
@@ -68,11 +101,16 @@ async function getRanchDetail(hostGid = 0) {
     //    之后的 GetRanchDetail 才返回真实数据; 不切场景 → 返回"空 ranch"
     //    (没有动物、窝/棚全 0), 还会触发服务端限流(在错误场景反复调用)。
     if (toNum(hostGid) === 0) {
-        await enterRanchScene().catch((e) => {
+        const entered = await enterRanchScene().catch((e) => {
             logWarn('牧场', `进入牧场场景失败: ${e.message}`, {
                 module: 'ranch', event: '场景切换', result: 'error',
             });
+            return false;
         });
+        if (!entered) {
+            // 场景未解锁: 抛出让上层(overview/care)短路, 不再打后续请求
+            throw new Error(`牧场场景未解锁(code=${RANCH_ERR.SCENE_LOCKED})`);
+        }
     }
     // 抓包(20261117): 自己=空 body(`1200` 是 {2:{}} 的等价编码, 空也行);
     // 看好友 = {1:gid, 2:{}}(`08<gid>1200`)。
@@ -364,6 +402,8 @@ async function getRanchOverview(accountId = '') {
  * @returns {{harvested: number, produced: number, fed: number, details: string[]}}
  */
 async function runRanchCare(opts = {}) {
+    // 场景未解锁(等级不够): 本进程内已确认过的直接短路, 不打任何 RPC
+    if (sceneLocked) return { skipped: true, reason: 'scene_locked' };
     const result = {
         harvested: 0, produced: 0, fed: 0, sold: 0, earned: 0,
         boughtCubs: 0, feedMachineAdded: 0, rotationBought: 0, cleanedFriends: 0,
@@ -448,7 +488,10 @@ async function runRanchCare(opts = {}) {
     await gap();
 
     // 3. 喂食(任务"饲养幼崽N个"靠它驱动)
-    if (opts.feedType !== 0) {
+    // ⚠ 20261117 抓包: 真实客户端全程没调 FeedAnimal —— 动物吃牧草机里的草是自动的,
+    //   这个接口是手动"投喂罐头"用的(消耗罐头 80021+)。自动巡牧场默认不发,
+    //   需要 runRanchCare({ feedType: 4 }) 显式传入才执行。
+    if (opts.feedType && opts.feedType !== 0) {
         const feedType = toNum(opts.feedType) || 4;
         try {
             await feedAnimal(feedType, 1);
@@ -587,6 +630,7 @@ async function checkRanch() {
     isCheckingRanch = true;
     try {
         const result = await runRanchCare({ claimTasks: false });
+        if (result && result.skipped === 'scene_locked') return false;
 
         // 统计(对照农场 recordOperation)
         if (result.harvested > 0) recordOperation('ranchHarvest', result.harvested);

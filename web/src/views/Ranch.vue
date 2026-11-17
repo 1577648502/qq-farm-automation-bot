@@ -150,6 +150,8 @@ interface PenView {
   facility?: { slot: number, name: string, level: number, stored: number, capacity: number }
   animals: any[]
   emptySlots: number
+  /** 容量为 0 且没动物 = 该建筑还没解锁(如棚要牧场等级更高才开) */
+  locked: boolean
 }
 
 const pensView = computed<PenView[]>(() => {
@@ -165,6 +167,7 @@ const pensView = computed<PenView[]>(() => {
       facility: (ov.facilities || []).find(f => f.slot === 10001),
       animals: ov.animals.filter(a => a.animalId < 70000 && a.animalId >= 60000),
       emptySlots: 0,
+      locked: false,
     },
     {
       key: 'pen',
@@ -174,12 +177,15 @@ const pensView = computed<PenView[]>(() => {
       facility: (ov.facilities || []).find(f => f.slot === 10002),
       animals: ov.animals.filter(a => a.animalId >= 70000 && a.animalId < 80000),
       emptySlots: 0,
+      locked: false,
     },
   ]
   for (const p of pens) {
     p.emptySlots = Math.max(0, (p.capacity || 0) - p.animals.length)
+    // 容量 0 且没动物: 棚比窝晚解锁(等级门槛), 显示"未解锁"而不是整组隐藏
+    p.locked = (p.capacity || 0) === 0 && p.animals.length === 0
   }
-  return pens.filter(p => p.capacity > 0 || p.animals.length > 0)
+  return pens
 })
 
 const facilityText = computed(() => {
@@ -568,14 +574,31 @@ onUnmounted(() => {
                 <h4 class="flex items-center gap-1.5 text-sm text-gray-700 font-bold dark:text-gray-200">
                   <i :class="pen.icon" class="text-base" aria-hidden="true" />
                   {{ pen.title }}
-                  <span class="text-xs text-gray-400 font-normal">{{ pen.animals.length }}/{{ pen.capacity }} 在养</span>
+                  <span v-if="!pen.locked" class="text-xs text-gray-400 font-normal">{{ pen.animals.length }}/{{ pen.capacity }} 在养</span>
+                  <span
+                    v-else
+                    class="rounded bg-gray-100 px-1.5 py-0.5 text-[10px] text-gray-400 font-normal dark:bg-gray-800"
+                  >
+                    未解锁
+                  </span>
                 </h4>
                 <div v-if="pen.facility" class="text-[11px] text-gray-400">
                   {{ pen.facility.name || pen.title }}{{ pen.facility.level ? ` Lv${pen.facility.level}` : '' }}
                 </div>
               </div>
 
-              <div class="grid grid-cols-2 gap-3 md:grid-cols-4 sm:grid-cols-3">
+              <!-- 未解锁: 占位说明, 不渲染槽位 -->
+              <div
+                v-if="pen.locked"
+                class="min-h-[80px] flex flex-col items-center justify-center border border-gray-200 rounded-lg border-dashed p-4 text-gray-300 dark:border-gray-700"
+              >
+                <div class="i-carbon-lock text-2xl" />
+                <div class="mt-2 text-[11px] text-gray-400">
+                  该建筑尚未解锁(提升牧场等级后开放)
+                </div>
+              </div>
+
+              <div v-else class="grid grid-cols-2 gap-3 md:grid-cols-4 sm:grid-cols-3">
                 <!-- 已养的动物 -->
                 <div
                   v-for="a in pen.animals"
