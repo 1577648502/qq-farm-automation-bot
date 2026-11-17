@@ -8,6 +8,7 @@ const { types } = require('../utils/proto');
 const { toLong, toNum, log, logWarn, sleep } = require('../utils/utils');
 const { createScheduler } = require('./scheduler');
 const { recordOperation } = require('./stats');
+const { getItemById } = require('../config/gameConfig');
 
 let checking = false;
 let taskClaimDoneDateKey = '';
@@ -126,10 +127,20 @@ function getRewardSummary(items) {
     for (const item of items) {
         const id = toNum(item.id);
         const count = toNum(item.count);
-        if (id === 1 || id === 1001) summary.push(`金币${count}`);
-        else if (id === 2 || id === 1101) summary.push(`经验${count}`);
-        else if (id === 1002) summary.push(`点券${count}`);
-        else summary.push(`物品#${id}x${count}`);
+        // 货币用固定叫法, 其余从游戏配置查名字(原来只会显示"物品#80031x30")
+        let name = '';
+        if (id === 1 || id === 1001) name = '金币';
+        else if (id === 2 || id === 1101) name = '经验';
+        else if (id === 1002) name = '点券';
+        else if (id === 1007) name = '金券';
+        else if (id === 1008) name = '松果';
+        if (!name) {
+            try {
+                const info = getItemById(id);
+                if (info && info.name) name = String(info.name);
+            } catch { /* 配置没加载就退回 id */ }
+        }
+        summary.push(name ? `${name}x${count}` : `物品#${id}x${count}`);
     }
     return summary.join('/');
 }

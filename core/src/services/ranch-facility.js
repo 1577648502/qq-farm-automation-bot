@@ -19,11 +19,18 @@ const { toLong, toNum, log, logWarn, sleep } = require('../utils/utils');
 
 const SERVICE = 'gamepb.homesteadpb.HomesteadService';
 
+// 已发起升级、等待竣工的建筑实例(进程内记忆)。
+// 服务端没有可靠的"可领取"标志(AllCells 没这个字段),
+// 与其每轮对所有建筑盲试, 不如只记我们真正发起过的那些。
+const _pendingUpgrades = new Set();
+let _scannedOnce = false;   // 重启后是否已做过一次全量探测
+
 const HOME_ERR = {
     NO_SPACE: 10441116,
     NOT_REMOVABLE: 10441119,
     UPGRADING: 10441121,
     NOT_READY: 10441122,
+    NOT_READY_2: 1045122,   // 升级尚未完成(实测线上实际返回这个, 不是 10441122)
     SPEEDUP_TOO_MANY: 10441125,
     NO_SUCH_INSTANCE: 10441126,
     MAX_LEVEL: 10441117,
@@ -41,7 +48,7 @@ function parseHomeErrorCode(e) {
 /** 是不是"当前状态不满足"类错误(不算故障) */
 function isExpectedHomeError(e) {
     const c = parseHomeErrorCode(e);
-    return c === HOME_ERR.UPGRADING || c === HOME_ERR.NOT_READY
+    return c === HOME_ERR.UPGRADING || c === HOME_ERR.NOT_READY || c === HOME_ERR.NOT_READY_2
         || c === HOME_ERR.MAX_LEVEL || c === HOME_ERR.NOT_FOUND
         || c === HOME_ERR.NO_SUCH_INSTANCE || c === HOME_ERR.NO_SPACE
         || c === HOME_ERR.NOT_REMOVABLE || c === HOME_ERR.RATE_LIMITED
@@ -235,24 +242,57 @@ async function autoUpgradeBuildings(opts = {}) {
         }
         return result;
     }
-    // 1. 先领已完成的升级
-    // ⚠ AllCells 不返回 has_ready_upgrade(实测), 所以不能靠标志位判断;
-    //   对每个建筑都尝试 CompleteBuildingUpgrade, 未竣工的会返回 10441122/10441121(正常错误, 静默)。
-    for (const it of list.items) {
+    // 1. 领取已完成的升级
+    // ⚠ 不能对每个建筑盲目发 CompleteBuildingUpgrade(线上实测会刷 1045122 升级尚未完成,
+    //   而且是纯浪费请求)。只对"我们发起过升级"的建筑尝试领取。
+    const pendingUpgrades = _pendingUpgrades;
+    // 进程重启后 _pendingUpgrades 是空的, 但可能真有升级中的建筑。
+    // 首轮对全部建筑静默探一次, 把"正在升级"的收进 pending(不会重复刷日志)。
+    if (!pendingUpgrades.size && !_scannedOnce) {
+        _scannedOnce = true;
+        for (const it of list.items) {
+            try {
+                const r = await completeBuildingUpgrade(it.instId);
+                if (r.facility) {
+                    result.completed += 1;
+                    result.details.push(`竣工#${it.instId}→Lv${r.facility.level}`);
+                    log('牧场', `建筑#${it.instId} 升级完成 → Lv${r.facility.level}`, {
+                        module: 'ranch', event: '建筑升级', result: 'ok', instId: it.instId, level: r.facility.level,
+                    });
+                }
+            } catch (e) {
+                const code = parseHomeErrorCode(e);
+                // 还在升级中 → 收进待领列表
+                if (code === HOME_ERR.NOT_READY_2 || code === HOME_ERR.NOT_READY || code === HOME_ERR.UPGRADING) {
+                    pendingUpgrades.add(it.instId);
+                }
+            }
+            await sleep(300);
+        }
+    }
+    for (const instId of [...pendingUpgrades]) {
         if (result.completed >= maxPerRound) break;
         try {
-            const r = await completeBuildingUpgrade(it.instId);
+            const r = await completeBuildingUpgrade(instId);
             if (r.facility) {
                 result.completed += 1;
-                result.details.push(`竣工#${it.instId}→Lv${r.facility.level}`);
-                log('牧场', `建筑#${it.instId} 升级完成 → Lv${r.facility.level}`, {
-                    module: 'ranch', event: '建筑升级', result: 'ok', instId: it.instId, level: r.facility.level,
+                result.details.push(`竣工#${instId}→Lv${r.facility.level}`);
+                log('牧场', `建筑#${instId} 升级完成 → Lv${r.facility.level}`, {
+                    module: 'ranch', event: '建筑升级', result: 'ok', instId, level: r.facility.level,
                 });
+                pendingUpgrades.delete(instId);   // 领到了, 移除
             }
             await sleep(400);
         } catch (e) {
-            if (!isExpectedHomeError(e)) {
-                logWarn('牧场', `领取竣工失败 #${it.instId}: ${e.message}`, { module: 'ranch', event: '建筑升级', result: 'error' });
+            const code = parseHomeErrorCode(e);
+            // 还在升级中/未完成 → 保留在待领列表, 下次再试
+            if (code === HOME_ERR.NOT_READY_2 || code === HOME_ERR.NOT_READY || code === HOME_ERR.UPGRADING) {
+                // 静默, 下次继续
+            } else {
+                pendingUpgrades.delete(instId);   // 其他错误(没这个建筑等), 不再重试
+                if (!isExpectedHomeError(e)) {
+                    logWarn('牧场', `领取竣工失败 #${instId}: ${e.message}`, { module: 'ranch', event: '建筑升级', result: 'error' });
+                }
             }
         }
     }
@@ -264,6 +304,7 @@ async function autoUpgradeBuildings(opts = {}) {
         try {
             const r = await upgradeBuilding(it.instId);
             result.upgraded += 1;
+            pendingUpgrades.add(it.instId);   // 记下, 后续轮次只对它在尝试领竣工
             result.details.push(`升级#${it.instId}→Lv${r.level}`);
             log('牧场', `建筑#${it.instId} 开始升级 → Lv${r.level}`, {
                 module: 'ranch', event: '建筑升级', result: 'ok', instId: it.instId, level: r.level,
