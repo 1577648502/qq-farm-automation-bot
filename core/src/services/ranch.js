@@ -843,7 +843,15 @@ async function autoSellRanchProducts(opts = {}) {
 
 // 单槽喂食/催产(面板手动操作)
 async function operateRanch(opts = {}) {
-    const op = String(opts.op || '').trim();
+    // 兼容错误的调用形态(opts 被传成字符串), 并在未知 op 时把收到的参数打进错误里,
+    // 便于定位"半更新"部署下 admin/worker 版本不一致的问题
+    if (typeof opts === 'string') opts = { op: opts };
+    const op = String((opts && opts.op) || '').trim();
+    if (op && !['harvest', 'produce', 'feed', 'feedmachine', 'buycub', 'rotation'].includes(op)) {
+        logWarn('牧场', `收到未知操作: ${JSON.stringify(opts).slice(0, 200)}`, {
+            module: 'ranch', event: '操作牧场', result: 'unknown_op', op,
+        });
+    }
     const slot = toNum(opts.slot) || 0;
     const feedType = toNum(opts.feedType) || 4;
     const count = toNum(opts.count) || 1;
