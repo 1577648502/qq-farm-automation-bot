@@ -707,6 +707,46 @@ async function getBagDetail() {
     return buildBagDetailFromItems(rawItems);
 }
 
+// ============ 牧场背包(独立于农场, 2026-11-17 实测) ============
+// ⚠ ItemService.Bag 返回的是**农场**背包, 牧场物(牧草/幼崽/便便/罐头)在里面是 0;
+//   牧场仓库必须用 GetBag{global_scene_id:2}。
+//   见 docs/mc-ranch/牧场仓库（MCWarehouse）功能文档.md
+const RANCH_SCENE_ID = 2;
+
+/** 拉牧场背包(全量) */
+async function getRanchBag() {
+    const body = types.GetBagRequest.encode(types.GetBagRequest.create({
+        global_scene_id: toLong(RANCH_SCENE_ID),
+        tab_id: toLong(0),
+    })).finish();
+    const { body: replyBody } = await sendMsgAsync('gamepb.itempb.ItemService', 'GetBag', body);
+    return types.GetBagReply.decode(replyBody);
+}
+
+/** 牧场背包物品列表 [{id, count, itemType?}] */
+async function getRanchBagItems() {
+    const reply = await getRanchBag();
+    return (reply && reply.items ? reply.items : []).map(it => ({
+        id: toNum(it.id),
+        count: toNum(it.count),
+        uid: toNum(it.uid),
+    }));
+}
+
+/** 牧场背包 → 与 getBagDetail 同形 */
+async function getRanchBagDetail() {
+    return buildBagDetailFromItems(await getRanchBagItems());
+}
+
+/** 牧场背包页签 */
+async function getRanchBagTabs() {
+    const body = types.GetBagTabRequest.encode(types.GetBagTabRequest.create({
+        global_scene_id: toLong(RANCH_SCENE_ID),
+    })).finish();
+    const { body: replyBody } = await sendMsgAsync('gamepb.itempb.ItemService', 'GetBagTab', body);
+    return types.GetBagTabReply.decode(replyBody);
+}
+
 // ============ 出售逻辑 ============
 
 /**
@@ -978,6 +1018,10 @@ module.exports = {
     getBag,
     getBagDetail,
     sellItems,
+    getRanchBag,
+    getRanchBagItems,
+    getRanchBagDetail,
+    getRanchBagTabs,
     useItem,
     batchUseItems,
     openFertilizerGiftPacksSilently,

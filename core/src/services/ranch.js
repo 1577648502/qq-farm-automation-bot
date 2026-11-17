@@ -439,7 +439,7 @@ async function runRanchCare(opts = {}) {
     if (sceneLocked) return { skipped: true, reason: 'scene_locked' };
     const result = {
         harvested: 0, produced: 0, fed: 0, sold: 0, earned: 0,
-        boughtCubs: 0, feedMachineAdded: 0, rotationBought: 0, cleanedFriends: 0,
+        boughtCubs: 0, feedMachineAdded: 0, rotationBought: 0, cleanedFriends: 0, ranchTasksClaimed: 0,
         details: [],
     };
 
@@ -574,7 +574,7 @@ async function runRanchCare(opts = {}) {
     await gap();
 
     // 5.5a 清理自己的牧场(20261117 抓包: CleanAllRanch 清自己, 产便便 → 游商货币)
-    if (opts.cleanOwn !== false) {
+    if (opts.cleanOwn !== false && isAutomationOn('ranch_clean')) {
         try {
             const r = await autoCleanOwnRanch();
             result.cleanedFriends += r.cleaned;   // 沿用统计字段
@@ -610,13 +610,18 @@ async function runRanchCare(opts = {}) {
         }
     }
 
-    // 7. 主线任务奖励领取(牧场任务 300xxx/400xxx 都在 tasks 列表, 复用任务模块的扫描)
-    if (opts.claimTasks !== false) {
+    // 7. 牧场任务领取
+    // ⚠ 修正: 牧场任务与农场任务完全独立, 必须用 TaskInfo{scene_id:2} 拉列表
+    //   (见 docs/mc-ranch/牧场任务系统功能文档.md); 之前调 checkAndClaimTasks()
+    //   拉的是农场任务列表, 牧场任务从来没领过。
+    if (opts.claimTasks !== false && isAutomationOn('ranch_task')) {
         try {
-            const { checkAndClaimTasks } = require('./task');
-            await checkAndClaimTasks();
+            const { checkAndClaimRanchTasks } = require('./task');
+            const r = await checkAndClaimRanchTasks();
+            result.ranchTasksClaimed = r.claimed;
+            if (r.claimed > 0) result.details.push(`任务${r.claimed}`);
         } catch (e) {
-            logWarn('牧场', `任务领取失败: ${e.message}`, { module: 'ranch', event: '任务领取', result: 'error' });
+            logWarn('牧场', `牧场任务领取失败: ${e.message}`, { module: 'ranch', event: '牧场任务', result: 'error' });
         }
     }
 
@@ -965,8 +970,8 @@ async function autoBuyRotationShop(opts = {}) {
     if (targets.length === 0) return result;
 
     // 背包里的便便数量
-    const { getBagDetail } = require('./warehouse');
-    const bag = await getBagDetail();
+    const { getRanchBagDetail } = require('./warehouse');
+    const bag = await getRanchBagDetail();
     const poop = bag.items.find(it => Number(it.id) === 7002);
     let poopCount = poop ? Number(poop.count) : 0;
     if (poopCount <= 0) {
@@ -1078,8 +1083,8 @@ async function autoFeedMachine(opts = {}) {
     const machine = await getFeedMachine();
     if (machine.stored > threshold) return { fed: 0, stored: machine.stored };
     // 背包里的散装牧草
-    const { getBagDetail } = require('./warehouse');
-    const bag = await getBagDetail();
+    const { getRanchBagDetail } = require('./warehouse');
+    const bag = await getRanchBagDetail();
     const grass = bag.items.find(it => Number(it.id) === 7001);
     const have = grass ? Number(grass.count) : 0;
     if (have <= 0) {
@@ -1204,8 +1209,8 @@ const PRODUCE_ITEM_TYPE = 107;
 
 async function autoSellRanchProducts(opts = {}) {
     const result = { sold: 0, earned: 0, details: [] };
-    const { getBagDetail, sellItems } = require('./warehouse');
-    const bag = await getBagDetail();
+    const { getRanchBagDetail, sellItems } = require('./warehouse');
+    const bag = await getRanchBagDetail();
     const products = bag.items.filter(it => Number(it.itemType) === PRODUCE_ITEM_TYPE && Number(it.count) > 0);
     if (products.length === 0) return result;
 

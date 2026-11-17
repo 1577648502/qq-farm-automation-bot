@@ -46,3 +46,33 @@ message BatchUseReply {
     repeated corepb.Item used_items = 1;
     repeated corepb.Item items = 2;
 }
+
+// --- 牧场背包(2026-11-17 实测, 见 docs/mc-ranch/牧场仓库功能文档) ---
+// 牧场背包是独立的一套: ItemService.Bag 返回农场背包(牧场物为 0),
+// GetBag{global_scene_id:2} 才是牧场仓库(牧草/幼崽/便便/罐头都在这里)。
+message GetBagTabRequest {
+    int64 global_scene_id = 1;   // 2 = 牧场(大农场)
+}
+message GetBagTabReply {
+    repeated BagTab tabs = 1;
+    int64 global_scene_id = 2;
+}
+message BagTab {
+    int64 id = 1;
+    string name = 2;
+    int64 capacity = 3;
+    int64 field4 = 4;
+    bool has_red_dot = 5;
+}
+message GetBagRequest {
+    int64 global_scene_id = 1;   // 2 = 牧场
+    int64 tab_id = 2;            // 0 = 全部
+}
+message GetBagReply {
+    // 实测(20261117) 顶层: #1=物品(repeated) #2=虚拟货币(repeated) #3=容量 #4=已用 #5=tab
+    repeated corepb.Item items = 1;
+    repeated corepb.Item virtual_items = 2;
+    int64 capacity = 3;          // 210
+    int64 used = 4;              // 9
+    int64 tab_id = 5;
+}

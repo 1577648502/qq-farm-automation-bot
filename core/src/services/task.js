@@ -28,8 +28,15 @@ function getDateKey() {
 
 // ============ 任务 API ============
 
-async function getTaskInfo() {
-    const body = types.TaskInfoRequest.encode(types.TaskInfoRequest.create({})).finish();
+/**
+ * 拉任务列表。
+ * @param {{sceneId?: number}} opts  sceneId=2 拉牧场任务(GLOBAL_SCENE_ID_BIG_FARM), 省略=农场
+ */
+async function getTaskInfo(opts = {}) {
+    const sceneId = toNum(opts && opts.sceneId) || 0;
+    const body = types.TaskInfoRequest.encode(types.TaskInfoRequest.create({
+        scene_id: toLong(sceneId),
+    })).finish();
     const { body: replyBody } = await sendMsgAsync('gamepb.taskpb.TaskService', 'TaskInfo', body);
     return types.TaskInfoReply.decode(replyBody);
 }
@@ -203,6 +210,9 @@ async function checkAndClaimIllustratedRewards() {
     }
 }
 
+// 牧场(大农场)场景 ID —— 见 docs/mc-ranch/牧场任务系统功能文档.md
+const RANCH_SCENE_ID = 2;
+
 // ============ 自动领取 ============
 
 async function checkAndClaimTasks() {
@@ -249,6 +259,61 @@ async function checkAndClaimTasks() {
     } finally {
         checking = false;
     }
+}
+
+/**
+ * 「牧场任务」自动领取(2026-11-17, 见 docs/mc-ranch/牧场任务系统功能文档.md)。
+ *
+ * 牧场任务与农场任务**完全独立**, 共用 TaskService 但列表按 scene_id=2 拉取;
+ * 牧场任务只保留 task_type 4(成长)/5(日常)/6(支线), 农场的是 1/2/3。
+ * 日常活跃宝箱牧场侧不领取(actives 被客户端过滤)。
+ *
+ * @returns {{claimable:number, claimed:number, tasks:string[]}}
+ */
+async function checkAndClaimRanchTasks() {
+    const result = { claimable: 0, claimed: 0, tasks: [] };
+    if (!isAutomationOn('task')) return result;
+    try {
+        const reply = await getTaskInfo({ sceneId: RANCH_SCENE_ID });
+        const ti = (reply && reply.task_info) || null;
+        if (!ti) return result;
+
+        // 只保留牧场任务类型(4/5/6), 兼容分组列表与扁平列表
+        const MC_TYPES = new Set([4, 5, 6]);
+        const groups = [
+            ...(Array.isArray(ti.growth_tasks) ? ti.growth_tasks : []),
+            ...(Array.isArray(ti.daily_tasks) ? ti.daily_tasks : []),
+            ...(Array.isArray(ti.side_tasks) ? ti.side_tasks : []),
+            ...(Array.isArray(ti.tasks) ? ti.tasks : []),
+        ];
+        const mcTasks = groups.filter(t => MC_TYPES.has(toNum(t && t.task_type)));
+
+        const claimable = analyzeTaskList(mcTasks, 'daily')
+            .filter(t => t.progress >= t.totalProgress && !t.isClaimed);
+        result.claimable = claimable.length;
+        if (claimable.length === 0) return result;
+
+        log('牧场', `发现 ${claimable.length} 个可领取牧场任务`, {
+            module: 'ranch', event: '牧场任务', result: 'ok', count: claimable.length,
+        });
+        for (const task of claimable) {
+            const ok = await doClaim(task);
+            if (ok) {
+                result.claimed += 1;
+                result.tasks.push(task.desc);
+            }
+        }
+        if (result.claimed > 0) {
+            log('牧场', `领取牧场任务 x${result.claimed}: ${result.tasks.slice(0, 6).join('，')}`, {
+                module: 'ranch', event: '牧场任务', result: 'ok', count: result.claimed,
+            });
+        }
+    } catch (e) {
+        logWarn('牧场', `牧场任务领取失败: ${e.message}`, {
+            module: 'ranch', event: '牧场任务', result: 'error',
+        });
+    }
+    return result;
 }
 
 async function doClaim(task) {
@@ -323,6 +388,7 @@ function cleanupTaskSystem() {
 module.exports = {
     getTaskInfo,
     checkAndClaimTasks,
+    checkAndClaimRanchTasks,
     initTaskSystem,
     cleanupTaskSystem,
     claimTaskReward,

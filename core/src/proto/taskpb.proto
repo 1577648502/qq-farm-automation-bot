@@ -66,7 +66,10 @@ message TaskInfo {
 // ============ 请求/回复 ============
 
 // --- 获取任务信息 ---
-message TaskInfoRequest {}
+message TaskInfoRequest {
+    // 0=农场(旧行为); 2=牧场(GLOBAL_SCENE_ID_BIG_FARM, 见 docs/mc-ranch/牧场任务系统功能文档.md)
+    int64 scene_id = 1;
+}
 
 message TaskInfoReply {
     TaskInfo task_info = 1;

@@ -102,6 +102,10 @@ async function loadProto() {
 
     // 背包/仓库
     types.BagRequest = root.lookupType('gamepb.itempb.BagRequest');
+    types.GetBagTabRequest = root.lookupType('gamepb.itempb.GetBagTabRequest');
+    types.GetBagTabReply = root.lookupType('gamepb.itempb.GetBagTabReply');
+    types.GetBagRequest = root.lookupType('gamepb.itempb.GetBagRequest');
+    types.GetBagReply = root.lookupType('gamepb.itempb.GetBagReply');
     types.BagReply = root.lookupType('gamepb.itempb.BagReply');
     types.SellRequest = root.lookupType('gamepb.itempb.SellRequest');
     types.SellReply = root.lookupType('gamepb.itempb.SellReply');
