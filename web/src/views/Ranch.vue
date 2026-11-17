@@ -27,6 +27,7 @@ void currentAccount
 const careVisible = ref(false)
 const careLoading = ref(false)
 const operateLoading = ref(-1)
+const opBusy = ref('')
 
 // 产出倒计时本地递减: 数据刷新时基准归零, 每秒往后走 1 格(显示平滑, 不回读)
 const elapsedSec = ref(0)
@@ -126,10 +127,11 @@ async function handleCare() {
   }
 }
 
-async function handleOperate(op: string, slot: number) {
+async function runOp(op: string, slot = 0) {
   const id = currentAccountId.value
   if (!id)
     return
+  opBusy.value = op
   operateLoading.value = slot
   try {
     const r = await ranchStore.operate(id, { op, slot })
@@ -139,6 +141,7 @@ async function handleOperate(op: string, slot: number) {
     toast.error(e?.message || '操作失败')
   }
   finally {
+    opBusy.value = ''
     operateLoading.value = -1
     refresh()
   }
@@ -176,16 +179,43 @@ onUnmounted(() => {
             <span>经验 {{ overview.ranchExp }}</span>
           </div>
         </div>
-        <!-- 一键巡牧场 -->
-        <div class="grid grid-cols-1 gap-2 sm:flex sm:flex-wrap sm:justify-end">
+        <!-- 整场操作(对照农场的整田操作): 有牧场数据才显示 -->
+        <div v-if="overview" class="grid grid-cols-2 gap-2 sm:flex sm:flex-wrap sm:justify-end">
           <button
             type="button"
-            class="min-h-[44px] flex items-center justify-center gap-1.5 border border-orange-600 rounded-lg bg-orange-600 px-3 py-2 text-sm text-white font-medium shadow-sm transition-colors active:scale-[0.98] disabled:cursor-not-allowed hover:border-orange-700 hover:bg-orange-700 disabled:opacity-50"
-            :disabled="careLoading"
+            class="col-span-2 min-h-[44px] flex items-center justify-center gap-1.5 border border-orange-600 rounded-lg bg-orange-600 px-3 py-2 text-sm text-white font-medium shadow-sm transition-colors sm:col-auto active:scale-[0.98] disabled:cursor-not-allowed hover:border-orange-700 hover:bg-orange-700 disabled:opacity-50"
+            :disabled="careLoading || opBusy !== ''"
             @click="confirmCare"
           >
             <i class="i-carbon-flash shrink-0 text-base" aria-hidden="true" />
             一键巡牧场（收获 → 催产 → 喂食）
+          </button>
+          <button
+            type="button"
+            class="min-h-[44px] flex items-center justify-center gap-1.5 border border-green-300 rounded-lg bg-green-50 px-3 py-2 text-sm text-green-700 font-medium transition-colors active:scale-[0.98] disabled:cursor-not-allowed dark:border-green-700 dark:bg-green-900/30 hover:bg-green-100 dark:text-green-300 disabled:opacity-40"
+            :disabled="careLoading || opBusy !== ''"
+            @click="runOp('buycub')"
+          >
+            <i class="i-fas-paw shrink-0 text-base" aria-hidden="true" />
+            买幼崽（收益最大）
+          </button>
+          <button
+            type="button"
+            class="min-h-[44px] flex items-center justify-center gap-1.5 border border-amber-300 rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-700 font-medium transition-colors active:scale-[0.98] disabled:cursor-not-allowed dark:border-amber-700 dark:bg-amber-900/30 hover:bg-amber-100 dark:text-amber-300 disabled:opacity-40"
+            :disabled="careLoading || opBusy !== ''"
+            @click="runOp('feedmachine')"
+          >
+            <i class="i-carbon-zap shrink-0 text-base" aria-hidden="true" />
+            牧草机补草
+          </button>
+          <button
+            type="button"
+            class="min-h-[44px] flex items-center justify-center gap-1.5 border border-lime-300 rounded-lg bg-lime-50 px-3 py-2 text-sm text-lime-700 font-medium transition-colors active:scale-[0.98] disabled:cursor-not-allowed dark:border-lime-700 dark:bg-lime-900/30 hover:bg-lime-100 dark:text-lime-300 disabled:opacity-40"
+            :disabled="careLoading || opBusy !== ''"
+            @click="runOp('rotation')"
+          >
+            <i class="i-carbon-shopping-cart shrink-0 text-base" aria-hidden="true" />
+            游商兑换
           </button>
         </div>
       </div>
@@ -237,12 +267,14 @@ onUnmounted(() => {
             </div>
           </div>
         </div>
-        <div v-else-if="!overview" class="py-8 text-center text-sm text-gray-500">
-          <div class="mb-1 text-base">
+        <div v-else-if="!overview" class="flex flex-col items-center justify-center gap-3 py-12 text-center">
+          <div class="i-carbon-warning-alt text-4xl text-gray-300" />
+          <div class="text-base text-gray-600 font-medium dark:text-gray-300">
             暂无牧场数据
           </div>
-          <div class="text-xs text-gray-400">
-            牧场 11-17 上线，农场 25 级解锁；账号升级后这里会自动出现数据
+          <div class="max-w-md text-xs text-gray-400 leading-relaxed">
+            牧场需要农场主 25 级解锁；若已解锁，请更新账号 Code 并确保账号在运行中，
+            然后刷新本页重试（首次进入服务端可能返回空数据，已自动重试）。
           </div>
         </div>
         <div v-else-if="overview.animals.length === 0" class="py-8 text-center text-sm text-gray-500">
@@ -299,7 +331,7 @@ onUnmounted(() => {
                 type="button"
                 class="min-h-[36px] flex-1 border border-amber-300 rounded-lg bg-amber-50 px-2 py-1.5 text-xs text-amber-700 font-medium transition dark:border-amber-700 dark:bg-amber-900/30 hover:bg-amber-100 dark:text-amber-300 disabled:opacity-40"
                 :disabled="operateLoading === a.slot"
-                @click="handleOperate('harvest', a.slot)"
+                @click="runOp('harvest', a.slot)"
               >
                 收获
               </button>
@@ -307,7 +339,7 @@ onUnmounted(() => {
                 type="button"
                 class="min-h-[36px] flex-1 border border-sky-300 rounded-lg bg-sky-50 px-2 py-1.5 text-xs text-sky-700 font-medium transition dark:border-sky-700 dark:bg-sky-900/30 hover:bg-sky-100 dark:text-sky-300 disabled:opacity-40"
                 :disabled="operateLoading === a.slot"
-                @click="handleOperate('produce', a.slot)"
+                @click="runOp('produce', a.slot)"
               >
                 催产
               </button>

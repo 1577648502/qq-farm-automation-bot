@@ -181,6 +181,13 @@ function toRanchView(reply) {
     };
 }
 
+/** 是不是"空 ranch"(懒初始化未完成): 全部关键字段都为 0 且没有动物 */
+function isEmptyRanchView(view) {
+    return !view
+        || (!view.hostGid && !view.coopCount && !view.penCount
+            && (view.animals || []).length === 0);
+}
+
 // ============ 面板 API ============
 
 // 面板 overview 节流: 同一账号 10s 内的重复请求直接复用上一次结果。
@@ -200,7 +207,20 @@ async function getRanchOverview(accountId = '') {
                 getRanchDetail(),
                 getRanchOpTimes().catch(() => null),
             ]);
-            const view = toRanchView(detailReply);
+            let view = toRanchView(detailReply);
+
+            // 抓包实测(20261116 21:53:18 → 21:53:48): 服务端对首次 GetRanchDetail
+            // 会返回"空 ranch"(只有经验, 窝/棚/动物全空), 30 秒后的同样请求才带全量数据
+            // —— 牧场模块是懒初始化的。空 ranch 时等 2 秒重试一次, 面板就不会"打开啥都不显示"。
+            if (isEmptyRanchView(view)) {
+                await sleep(2000);
+                const retry = await getRanchDetail().catch(() => null);
+                if (retry) {
+                    const retryView = toRanchView(retry);
+                    if (!isEmptyRanchView(retryView)) view = retryView;
+                }
+            }
+
             view.opLimits = (opTimesReply && opTimesReply.limits || []).map(l => ({
                 opId: toNum(l.op_id),
                 used: toNum(l.used),
@@ -783,6 +803,28 @@ async function operateRanch(opts = {}) {
             await feedAnimal(feedType, count);
             return { ok: true, action: '喂食', detail: `方式${feedType}x${count}` };
         }
+        case 'feedmachine': {
+            // 给牧草机补草(默认拉满 100, 实际受背包存量限制)
+            const r = await addFeedToMachine(count || 100);
+            return { ok: true, action: '牧草机加草', detail: `存量 ${r.stored}` };
+        }
+        case 'buycub': {
+            // 买幼崽(利益最大: 按 整只回收/幼崽成本 收益比排序)
+            const r = await autoBuyCubs({ maxSpend: toNum(opts.maxSpend) || 5000 });
+            return {
+                ok: true,
+                action: '买幼崽',
+                detail: r.bought > 0 ? `${r.details.join('，')} / 花 ${r.spent} 金券` : '没有空槽或可买幼崽',
+            };
+        }
+        case 'rotation': {
+            const r = await autoBuyRotationShop(opts);
+            return {
+                ok: true,
+                action: '游商兑换',
+                detail: r.bought > 0 ? r.details.join('，') : '集市未营业或没有便便',
+            };
+        }
         default:
             throw new Error('不支持的操作: ' + op);
     }
@@ -808,5 +850,5 @@ module.exports = {
     getCubShop,
     autoBuyCubs,
     autoSellRanchProducts,
-    __privateRanchFns: { parseRotationShopReply, parseFeedMachineReply, walkWire },
+    __privateRanchFns: { parseRotationShopReply, parseFeedMachineReply, walkWire, isEmptyRanchView },
 };
