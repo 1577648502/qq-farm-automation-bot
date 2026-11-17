@@ -1,0 +1,149 @@
+syntax = "proto3";
+
+package gamepb.homesteadpb;
+
+import "corepb.proto";
+
+// ============ 牧场建筑/地块(2026-11-17 文档 + RPC 探测确认) ============
+// 官方文档见 docs/mc-ranch/建筑升级进度·地块解锁进度·加速道具功能文档.md
+//               docs/mc-ranch/建筑编辑与收纳功能文档.md
+
+// --- 建筑列表 ---
+message GetBuildingListRequest {}
+message GetBuildingListReply {
+    repeated BuildingItemInfo items = 1;
+    bool has_ready_upgrade = 2;
+}
+message BuildingItemInfo {
+    int64 inst_id = 1;               // 实例 id(未放置时在这里)
+    int64 building_id = 2;           // 建筑配置 id
+    int64 level = 3;
+    int64 status = 4;                // READY / UPGRADING ...
+    // 其余字段未解析
+}
+
+// --- 建筑升级 ---
+message UpgradeBuildingRequest {
+    int64 inst_id = 1;
+}
+message UpgradeBuildingReply {
+    BuildingUpgradeInfo upgrade = 1;
+}
+message CompleteBuildingUpgradeRequest {
+    int64 inst_id = 1;
+}
+message CompleteBuildingUpgradeReply {
+    BuildingItemInfo facility = 1;
+    BuildingItemInfo item = 2;
+}
+message SpeedUpBuildingUpgradeRequest {
+    int64 inst_id = 1;
+    int64 item_id = 2;               // 加速道具 id
+    int64 count = 3;                 // 道具数量(1 道具 = 1 秒)
+}
+message SpeedUpBuildingUpgradeReply {
+    BuildingUpgradeInfo upgrade = 1;
+    repeated corepb.Item consumed = 2;
+}
+message BuildingUpgradeInfo {
+    int64 inst_id = 1;
+    int64 level = 2;
+    int64 end_time = 3;              // 升级完成时间(秒)
+    int64 status = 4;                // 1=升级中 2=待领取 (推断)
+}
+
+// --- 地块解锁 ---
+message UnlockRegionRequest {
+    int64 region_id = 1;
+}
+message UnlockRegionReply {
+    RegionInfo region = 1;
+    int64 region_occupied_count = 2;
+    int64 region_quota_count = 3;
+}
+message CompleteRegionUnlockRequest {
+    int64 region_id = 1;
+}
+message CompleteRegionUnlockReply {
+    RegionInfo region = 1;
+}
+message SpeedUpRegionUnlockRequest {
+    int64 region_id = 1;
+    int64 item_id = 2;
+    int64 count = 3;
+}
+message SpeedUpRegionUnlockReply {
+    RegionInfo region = 1;
+    repeated corepb.Item consumed = 2;
+}
+message RegionInfo {
+    int64 region_id = 1;
+    int64 status = 2;                // 0=锁定 1=解锁中 2=待确认 3=已开放
+    int64 end_time = 3;
+}
+
+// --- 全量地块(登录/校准) ---
+message AllCellsRequest {}
+// 实测(20261117) 顶层: #1=25 #2=25 (占用/配额), #3=91 个地块, #4=4 个建筑, #7/#8/#9
+message AllCellsReply {
+    int64 region_occupied_count = 1;   // 25
+    int64 region_quota_count = 2;      // 25
+    repeated RegionCell cells = 3;     // 91 个
+    repeated BuildingCell buildings = 4;
+    int64 field7 = 7;
+    int64 field8 = 8;
+    SpeedUpInfo region_speed_up = 9;
+    repeated corepb.Item unused = 20;
+}
+// 单个地块(实测: {1:20261030001, 2:9, 3:7, 4:1, 5:建筑实例, 6:1, 7:{1007,100}, 10:ts, 11:100})
+message RegionCell {
+    int64 region_id = 1;               // 20261030001
+    int64 cell_type = 2;               // 9/10/11/12
+    int64 seq = 3;                     // 7,8,9...
+    int64 status = 4;                  // 1=锁定 2=已解锁/占用 (实测 1/2)
+    int64 inst_id = 5;                 // 建筑实例 id(有建筑时才有)
+    int64 field6 = 6;
+    corepb.Item cost = 7;              // {1007, 100}
+    int64 unlock_at = 10;
+    int64 capacity = 11;
+}
+message BuildingCell {
+    int64 inst_id = 1;
+    int64 building_id = 2;
+    int64 level = 3;
+    int64 status = 4;
+    int64 pos_x = 5;
+    int64 pos_y = 6;
+    int64 rotation = 7;
+}
+message SpeedUpInfo {
+    int64 item_id = 1;
+    int64 own_count = 2;
+    int64 secs_per_item = 3;
+}
+
+// --- 建筑编辑与收纳 ---
+message PlaceFacilityRequest {
+    int64 inst_id = 1;
+    int64 position_x = 2;
+    int64 position_y = 3;
+    int64 rotation = 4;
+}
+message PlaceFacilityReply {
+    BuildingItemInfo facility = 1;
+}
+message MoveFacilityRequest {
+    int64 instance_id = 1;
+    int64 new_position_x = 2;
+    int64 new_position_y = 3;
+    int64 new_rotation = 4;
+}
+message MoveFacilityReply {
+    BuildingItemInfo facility = 1;
+}
+message RemoveFacilityRequest {
+    int64 instance_id = 1;
+}
+message RemoveFacilityReply {
+    BuildingItemInfo item = 1;
+}

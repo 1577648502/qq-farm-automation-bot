@@ -168,6 +168,8 @@ const DEFAULT_ACCOUNT_CONFIG = {
         ranch_clean: true,     // 自动清理自己的牧场(CleanAllRanch, 产便便)
         ranch_steal: true,     // 自动偷好友牧场产物(StealProduce)
         ranch_task: true,      // 自动领取牧场任务(scene_id=2, 与农场任务独立)
+        ranch_upgrade: true,   // 自动建筑升级 + 领竣工
+        ranch_unlock: true,    // 自动地块解锁 + 领竣工
         fertilizer_buy_organic: false,
         fertilizer_buy_normal: false,
         mystery_shop: false, // 神秘商店自动购买

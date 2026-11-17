@@ -18,6 +18,7 @@ async function loadProto() {
         getResourcePath('proto', 'userpb.proto'),
         getResourcePath('proto', 'plantpb.proto'),
         getResourcePath('proto', 'corepb.proto'),
+        getResourcePath('proto', 'homesteadpb.proto'),
         getResourcePath('proto', 'shoppb.proto'),
         getResourcePath('proto', 'friendpb.proto'),
         getResourcePath('proto', 'visitpb.proto'),
@@ -65,6 +66,42 @@ async function loadProto() {
     types.CleanAllRanchReply = root.lookupType('gamepb.animalpb.CleanAllRanchReply');
     types.StealProduceRequest = root.lookupType('gamepb.animalpb.StealProduceRequest');
     types.StealProduceReply = root.lookupType('gamepb.animalpb.StealProduceReply');
+    // 栏舍动物操作(2026-11-17)
+    types.PlaceAnimalRequest = root.lookupType('gamepb.animalpb.PlaceAnimalRequest');
+    types.PlaceAnimalReply = root.lookupType('gamepb.animalpb.PlaceAnimalReply');
+    types.CollectProduceRequest = root.lookupType('gamepb.animalpb.CollectProduceRequest');
+    types.CollectProduceReply = root.lookupType('gamepb.animalpb.CollectProduceReply');
+    types.HarvestAnimalRequest = root.lookupType('gamepb.animalpb.HarvestAnimalRequest');
+    types.HarvestAnimalReply = root.lookupType('gamepb.animalpb.HarvestAnimalReply');
+    types.DonateAnimalRequest = root.lookupType('gamepb.animalpb.DonateAnimalRequest');
+    types.DonateAnimalReply = root.lookupType('gamepb.animalpb.DonateAnimalReply');
+    types.CleanRanchRequest = root.lookupType('gamepb.animalpb.CleanRanchRequest');
+    types.CleanRanchReply = root.lookupType('gamepb.animalpb.CleanRanchReply');
+
+    // 牧场建筑/地块(2026-11-17)
+    types.GetBuildingListRequest = root.lookupType('gamepb.homesteadpb.GetBuildingListRequest');
+    types.GetBuildingListReply = root.lookupType('gamepb.homesteadpb.GetBuildingListReply');
+    types.BuildingItemInfo = root.lookupType('gamepb.homesteadpb.BuildingItemInfo');
+    types.UpgradeBuildingRequest = root.lookupType('gamepb.homesteadpb.UpgradeBuildingRequest');
+    types.UpgradeBuildingReply = root.lookupType('gamepb.homesteadpb.UpgradeBuildingReply');
+    types.CompleteBuildingUpgradeRequest = root.lookupType('gamepb.homesteadpb.CompleteBuildingUpgradeRequest');
+    types.CompleteBuildingUpgradeReply = root.lookupType('gamepb.homesteadpb.CompleteBuildingUpgradeReply');
+    types.SpeedUpBuildingUpgradeRequest = root.lookupType('gamepb.homesteadpb.SpeedUpBuildingUpgradeRequest');
+    types.SpeedUpBuildingUpgradeReply = root.lookupType('gamepb.homesteadpb.SpeedUpBuildingUpgradeReply');
+    types.UnlockRegionRequest = root.lookupType('gamepb.homesteadpb.UnlockRegionRequest');
+    types.UnlockRegionReply = root.lookupType('gamepb.homesteadpb.UnlockRegionReply');
+    types.CompleteRegionUnlockRequest = root.lookupType('gamepb.homesteadpb.CompleteRegionUnlockRequest');
+    types.CompleteRegionUnlockReply = root.lookupType('gamepb.homesteadpb.CompleteRegionUnlockReply');
+    types.SpeedUpRegionUnlockRequest = root.lookupType('gamepb.homesteadpb.SpeedUpRegionUnlockRequest');
+    types.SpeedUpRegionUnlockReply = root.lookupType('gamepb.homesteadpb.SpeedUpRegionUnlockReply');
+    types.AllCellsRequest = root.lookupType('gamepb.homesteadpb.AllCellsRequest');
+    types.AllCellsReply = root.lookupType('gamepb.homesteadpb.AllCellsReply');
+    types.PlaceFacilityRequest = root.lookupType('gamepb.homesteadpb.PlaceFacilityRequest');
+    types.PlaceFacilityReply = root.lookupType('gamepb.homesteadpb.PlaceFacilityReply');
+    types.MoveFacilityRequest = root.lookupType('gamepb.homesteadpb.MoveFacilityRequest');
+    types.MoveFacilityReply = root.lookupType('gamepb.homesteadpb.MoveFacilityReply');
+    types.RemoveFacilityRequest = root.lookupType('gamepb.homesteadpb.RemoveFacilityRequest');
+    types.RemoveFacilityReply = root.lookupType('gamepb.homesteadpb.RemoveFacilityReply');
 
     // 用户
     types.LoginRequest = root.lookupType('gamepb.userpb.LoginRequest');

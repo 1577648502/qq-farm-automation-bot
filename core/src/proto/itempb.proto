@@ -17,6 +17,9 @@ message BagReply {
 
 message SellRequest {
     repeated corepb.Item items = 1;  // 要出售的物品列表 (id + count)
+    // 抓包实测(20261116/17): 客户端恒发 #8 = 空字符串(42 00)。
+    // 缺失时服务端对牧场产物返回 1000020 请求参数错误。
+    string scene_tag = 8;
 }
 
 message SellReply {

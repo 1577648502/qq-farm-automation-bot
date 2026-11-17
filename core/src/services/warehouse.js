@@ -63,12 +63,24 @@ function toSellItem(item) {
     return payload;
 }
 
-async function sellItems(items) {
-    const payload = (items || []).filter(isSellableItem).map(toSellItem);
+/**
+ * @param {Array} items 待出售物品
+ * @param {{skipFarmFilter?: boolean}} opts skipFarmFilter=true 时允许非农场果实(牧场产物用)
+ */
+async function sellItems(items, opts = {}) {
+    // 默认只允许农场果实(防误卖); 牧场产物走 skipFarmFilter
+    const payload = (items || [])
+        .filter(it => opts.skipFarmFilter ? toNum(it && it.id) > 0 : isSellableItem(it))
+        .map(toSellItem);
     if (!payload.length) {
         throw new Error('没有可出售的物品');
     }
-    const body = types.SellRequest.encode(types.SellRequest.create({ items: payload })).finish();
+    const req = { items: payload };
+    // 抓包实测: #8 恒为空字符串, 缺失时牧场产物会报 1000020
+    if (types.SellRequest.fields && types.SellRequest.fields.scene_tag) {
+        req.scene_tag = opts.skipFarmFilter ? '2' : '';
+    }
+    const body = types.SellRequest.encode(types.SellRequest.create(req)).finish();
     const { body: replyBody } = await sendMsgAsync('gamepb.itempb.ItemService', 'Sell', body);
     return types.SellReply.decode(replyBody);
 }
@@ -646,6 +658,8 @@ function buildBagDetailFromItems(rawItems) {
         if (!merged.has(bagGroupKey)) {
             merged.set(bagGroupKey, {
                 id,
+                // uid 是实体道具格子标识, 牧场产物出售时必须带上(实测 1000020)
+                uid: toNum(it.uid),
                 bagGroupKey,
                 count: 0,
                 name,

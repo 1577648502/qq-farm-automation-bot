@@ -186,7 +186,7 @@ async function purchaseShopGoods(goodsId, count, price) {
         goods_id: Number(goodsId) || 0,
         num: Number(count) || 1,
         price: Number(price) || 0,
-        field4: 1,   // 20261117 抓包: 客户端恒发 1
+        auto_add: 1,   // 20261117 抓包恒 1: 购买后自动加入(幼崽入栏/饲料进牧草机)
     })).finish();
     const { body: replyBody } = await sendMsgAsync('gamepb.shoppb.ShopService', 'BuyGoods', body);
     return types.BuyGoodsReply.decode(replyBody);

@@ -61,7 +61,7 @@ message BuyGoodsRequest {
     int64 goods_id = 1;   // 商品ID (GoodsInfo.id)
     int64 num = 2;        // 购买数量
     int64 price = 3;      // 单价
-    int64 field4 = 4;     // 20261117 抓包: 客户端恒发 1(语义未确认, 透传)
+    int64 auto_add = 4;   // 20261117 抓包恒 1: 买到幼崽/饲料后自动加入窝棚/牧草机
 }
 
 message BuyGoodsReply {

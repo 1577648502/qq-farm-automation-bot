@@ -224,3 +224,58 @@ message StealProduceRequest {
 message StealProduceReply {
     RanchInfo ranch = 1;
 }
+
+// ============ 栏舍动物操作(2026-11-17 文档 + RPC 探测确认) ============
+// 官方文档见 docs/mc-ranch/栏舍动物交互界面功能文档.md
+// AnimalTarget: 指定动物(host_gid + slot); 空=全场
+
+message AnimalTarget {
+    int64 host_gid = 1;
+    int64 slot = 2;                   // 0 = 全场
+}
+
+// 幼崽入栏: 背包幼崽 → 指定栏舍空位
+message PlaceAnimalRequest {
+    AnimalTarget target = 1;
+    int64 cub_item_id = 2;            // 幼崽物品 id(60001 鸡 / 60002 兔 ...)
+    int64 count = 3;                  // 一次放几只(客户端每次 1, 拖拽连续触发)
+}
+message PlaceAnimalReply {
+    RanchInfo ranch = 1;
+}
+
+// 收取副产品(≠HarvestRanch 一键收获; 这是单槽"收走产物但动物留栏")
+message CollectProduceRequest {
+    AnimalTarget target = 1;
+    int64 count = 2;
+}
+message CollectProduceReply {
+    RanchInfo ranch = 1;
+    repeated HarvestGain gains = 5;
+}
+
+// 收获出栏(动物成熟后整只收走, 栏位空出)
+message HarvestAnimalRequest {
+    AnimalTarget target = 1;
+}
+message HarvestAnimalReply {
+    RanchInfo ranch = 1;
+    repeated HarvestGain gains = 5;
+}
+
+// 出售动物(DonateAnimal): 把栏里的动物卖掉换金券
+message DonateAnimalRequest {
+    AnimalTarget target = 1;
+}
+message DonateAnimalReply {
+    RanchInfo ranch = 1;
+    repeated corepb.Item gains = 2;
+}
+
+// 清理单个 hazard(蚊子/杂草等); CleanAllRanch 是全场版
+message CleanRanchRequest {
+    AnimalTarget target = 1;
+}
+message CleanRanchReply {
+    RanchInfo ranch = 1;
+}

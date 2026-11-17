@@ -246,6 +246,82 @@ async function stealFriendProduce(hostGid) {
     }
 }
 
+// ============ 栏舍动物操作(2026-11-17 官方文档) ============
+// 见 docs/mc-ranch/栏舍动物交互界面功能文档.md
+// 与 HarvestRanch(一键全场)区分: 这里都是单个槽位/单个动物的操作。
+
+/** 幼崽入栏: 把背包里的幼崽放进窝/棚的空位 */
+async function placeAnimal(cubItemId, count = 1, slot = 0, hostGid = 0) {
+    const gid = toNum(hostGid) || toNum(network.getUserState().gid);
+    const body = types.PlaceAnimalRequest.encode(types.PlaceAnimalRequest.create({
+        target: { host_gid: toLong(gid), slot: toLong(toNum(slot)) },
+        cub_item_id: toLong(toNum(cubItemId)),
+        count: toLong(Math.max(1, toNum(count) || 1)),
+    })).finish();
+    const { body: replyBody } = await network.sendMsgAsync('gamepb.animalpb.AnimalService', 'PlaceAnimal', body);
+    return types.PlaceAnimalReply.decode(replyBody);
+}
+
+/** 收取副产品(单槽, 动物留栏) */
+async function collectProduce(slot = 0, hostGid = 0) {
+    const gid = toNum(hostGid) || toNum(network.getUserState().gid);
+    const body = types.CollectProduceRequest.encode(types.CollectProduceRequest.create({
+        target: { host_gid: toLong(gid), slot: toLong(toNum(slot)) },
+        count: toLong(1),
+    })).finish();
+    const { body: replyBody } = await network.sendMsgAsync('gamepb.animalpb.AnimalService', 'CollectProduce', body);
+    return types.CollectProduceReply.decode(replyBody);
+}
+
+/** 收获出栏(成熟动物整只收走, 栏位空出) */
+async function harvestAnimal(slot = 0, hostGid = 0) {
+    const gid = toNum(hostGid) || toNum(network.getUserState().gid);
+    const body = types.HarvestAnimalRequest.encode(types.HarvestAnimalRequest.create({
+        target: { host_gid: toLong(gid), slot: toLong(toNum(slot)) },
+    })).finish();
+    const { body: replyBody } = await network.sendMsgAsync('gamepb.animalpb.AnimalService', 'HarvestAnimal', body);
+    return types.HarvestAnimalReply.decode(replyBody);
+}
+
+/** 出售动物(DonateAnimal): 卖栏里的动物换金券 */
+async function donateAnimal(slot, hostGid = 0) {
+    const gid = toNum(hostGid) || toNum(network.getUserState().gid);
+    const body = types.DonateAnimalRequest.encode(types.DonateAnimalRequest.create({
+        target: { host_gid: toLong(gid), slot: toLong(toNum(slot)) },
+    })).finish();
+    const { body: replyBody } = await network.sendMsgAsync('gamepb.animalpb.AnimalService', 'DonateAnimal', body);
+    return types.DonateAnimalReply.decode(replyBody);
+}
+
+/** 清理单个 hazard(蚊子等); CleanAllRanch 是全场版 */
+async function cleanRanch(slot = 0, hostGid = 0) {
+    const gid = toNum(hostGid) || toNum(network.getUserState().gid);
+    const body = types.CleanRanchRequest.encode(types.CleanRanchRequest.create({
+        target: { host_gid: toLong(gid), slot: toLong(toNum(slot)) },
+    })).finish();
+    const { body: replyBody } = await network.sendMsgAsync('gamepb.animalpb.RanchService', 'CleanRanch', body);
+    return types.CleanRanchReply.decode(replyBody);
+}
+
+/** 放蚊子(使坏好友牧场) */
+async function putHazard(hostGid, slot = 0) {
+    const gid = toNum(hostGid);
+    if (!gid) throw new Error('缺少好友 gid');
+    // PutHazard 结构与 CleanRanch 对称; 无 proto 定义, 手拼 {1:{1:gid,2:slot}}
+    const w = protobuf.Writer.create();
+    const tw = w.uint32((1 << 3) | 2).fork();
+    tw.uint32((1 << 3) | 0).int64(toLong(gid));
+    tw.uint32((2 << 3) | 0).int64(toLong(toNum(slot)));
+    tw.ldelim();
+    const { body: replyBody } = await network.sendMsgAsync('gamepb.animalpb.RanchService', 'PutHazard', w.finish());
+    return replyBody;
+}
+
+/** 用罐头桶加速(FeedAnimal) —— 与"喂食"同一接口, 语义是投喂罐头桶 */
+async function useFeedBucket(slot, count = 1, hostGid = 0) {
+    return feedAnimal(4, count, hostGid);
+}
+
 // ============ 展示层: 面板用的视图 ============
 
 const ANIMAL_NAMES = {
@@ -439,7 +515,7 @@ async function runRanchCare(opts = {}) {
     if (sceneLocked) return { skipped: true, reason: 'scene_locked' };
     const result = {
         harvested: 0, produced: 0, fed: 0, sold: 0, earned: 0,
-        boughtCubs: 0, feedMachineAdded: 0, rotationBought: 0, cleanedFriends: 0, ranchTasksClaimed: 0,
+        boughtCubs: 0, feedMachineAdded: 0, rotationBought: 0, cleanedFriends: 0, ranchTasksClaimed: 0, buildingsCompleted: 0, buildingsUpgraded: 0, regionsCompleted: 0, regionsUnlocked: 0,
         details: [],
     };
 
@@ -594,6 +670,42 @@ async function runRanchCare(opts = {}) {
             if (r.cleaned > 0) result.details.push(`偷${r.cleaned}家`);
         } catch (e) {
             logWarn('牧场', `偷好友产物失败: ${e.message}`, { module: 'ranch', event: '偷好友产物', result: 'error' });
+        }
+    }
+
+    await gap();
+
+    // 5.6 建筑升级 / 地块解锁(2026-11-17 官方文档)
+    let facility;
+    try {
+        facility = require('./ranch-facility');
+    } catch { facility = null; }
+
+    if (facility && opts.upgradeBuildings !== false && isAutomationOn('ranch_upgrade')) {
+        try {
+            const r = await facility.autoUpgradeBuildings(opts);
+            result.buildingsCompleted = r.completed;
+            result.buildingsUpgraded = r.upgraded;
+            if (r.completed > 0 || r.upgraded > 0) {
+                result.details.push(`建筑竣工${r.completed}/升级${r.upgraded}`);
+            }
+        } catch (e) {
+            logWarn('牧场', `建筑升级失败: ${e.message}`, { module: 'ranch', event: '建筑升级', result: 'error' });
+        }
+    }
+
+    await gap();
+
+    if (facility && opts.unlockRegions !== false && isAutomationOn('ranch_unlock')) {
+        try {
+            const r = await facility.autoUnlockRegions(opts);
+            result.regionsCompleted = r.completed;
+            result.regionsUnlocked = r.unlocked;
+            if (r.completed > 0 || r.unlocked > 0) {
+                result.details.push(`地块竣工${r.completed}/发起${r.unlocked}`);
+            }
+        } catch (e) {
+            logWarn('牧场', `地块解锁失败: ${e.message}`, { module: 'ranch', event: '地块解锁', result: 'error' });
         }
     }
 
@@ -1216,12 +1328,13 @@ async function autoSellRanchProducts(opts = {}) {
 
     const payload = [];
     for (const it of products) {
-        payload.push({ id: toNum(it.id), count: toNum(it.count) });
+        // ⚠ 必须带 uid: 牧场产物出售接口缺 uid 会返回 1000020 请求参数错误(实测)
+        payload.push({ id: toNum(it.id), count: toNum(it.count), uid: toNum(it.uid) });
         result.sold += toNum(it.count);
         result.details.push(`${getAnimalName(toNum(it.id)) || it.id}x${toNum(it.count)}`);
     }
     try {
-        const reply = await sellItems(payload);
+        const reply = await sellItems(payload, { skipFarmFilter: true });   // 牧场产物不走农场果实白名单
         for (const it of (reply && reply.get_items) || []) {
             if (toNum(it.id) === 1007) result.earned += toNum(it.count);
         }
@@ -1242,7 +1355,7 @@ async function operateRanch(opts = {}) {
     // 便于定位"半更新"部署下 admin/worker 版本不一致的问题
     if (typeof opts === 'string') opts = { op: opts };
     const op = String((opts && opts.op) || '').trim();
-    if (op && !['harvest', 'produce', 'feed', 'feedmachine', 'buycub', 'rotation', 'clean', 'steal'].includes(op)) {
+    if (op && !['harvest', 'produce', 'feed', 'feedmachine', 'buycub', 'rotation', 'clean', 'steal', 'place', 'collect', 'harvestanimal', 'donate', 'hazard', 'upgrade'].includes(op)) {
         logWarn('牧场', `收到未知操作: ${JSON.stringify(opts).slice(0, 200)}`, {
             module: 'ranch', event: '操作牧场', result: 'unknown_op', op,
         });
@@ -1305,6 +1418,55 @@ async function operateRanch(opts = {}) {
                 detail: r.cleaned > 0 ? '清理完成' : '没有待清理的内容',
             };
         }
+        case 'place': {
+            // 幼崽入栏(opts.cubItemId / opts.count / opts.slot)
+            const cub = toNum(opts.cubItemId);
+            if (!cub) throw new Error('缺少幼崽物品 id');
+            const r = await placeAnimal(cub, toNum(opts.count) || 1, slot);
+            const animals = (r.ranch && r.ranch.animals) || [];
+            return { ok: true, action: '幼崽入栏', detail: `当前在养 ${animals.length} 只` };
+        }
+        case 'collect': {
+            const r = await collectProduce(slot);
+            let n = 0;
+            for (const g of (r.gains || [])) for (const it of (g.items || [])) n += toNum(it.count);
+            return { ok: true, action: '收取产物', detail: `槽${slot} → ${n} 个` };
+        }
+        case 'harvestanimal': {
+            const r = await harvestAnimal(slot);
+            let n = 0;
+            for (const g of (r.gains || [])) for (const it of (g.items || [])) n += toNum(it.count);
+            return { ok: true, action: '收获出栏', detail: `槽${slot} → ${n} 个` };
+        }
+        case 'donate': {
+            if (!slot) throw new Error('需要指定槽位');
+            const r = await donateAnimal(slot);
+            const gains = (r.gains || []).map(i => `#${toNum(i.id)}x${toNum(i.count)}`).join('，');
+            return { ok: true, action: '出售动物', detail: gains || `槽${slot}` };
+        }
+        case 'hazard': {
+            // 放蚊子(使坏) —— opts.gid 指定好友
+            if (!opts.gid) throw new Error('需要指定好友 gid');
+            await putHazard(toNum(opts.gid), slot);
+            return { ok: true, action: '放蚊子', detail: `gid=${toNum(opts.gid)}` };
+        }
+        case 'upgrade': {
+            const f = require('./ranch-facility');
+            if (opts.instId) {
+                if (opts.complete) {
+                    const r = await f.completeBuildingUpgrade(toNum(opts.instId));
+                    return { ok: true, action: '领取竣工', detail: `#${toNum(opts.instId)} → Lv${r.facility ? r.facility.level : '?'}` };
+                }
+                const r = await f.upgradeBuilding(toNum(opts.instId));
+                return { ok: true, action: '建筑升级', detail: `#${toNum(opts.instId)} → Lv${r.level}` };
+            }
+            const list = await f.getBuildingList();
+            return {
+                ok: true,
+                action: '建筑列表',
+                detail: list.items.map(i => `#${i.instId} Lv${i.level}${i.status === 1 ? '(升级中)' : ''}`).join('，') || '暂无建筑',
+            };
+        }
         case 'steal': {
             // 偷好友牧场产物(opts.gid 指定单个好友; 不传则批量)
             if (opts.gid) {
@@ -1352,6 +1514,13 @@ module.exports = {
     getCubShop,
     autoBuyCubs,
     autoSellRanchProducts,
+    placeAnimal,
+    collectProduce,
+    harvestAnimal,
+    donateAnimal,
+    cleanRanch,
+    putHazard,
+    useFeedBucket,
     cleanOwnRanch,
     stealFriendProduce,
     autoStealFriendProduce,
