@@ -14,7 +14,7 @@ const { createStealthMode } = require('./stealth-mode')
 const { loadQcbyCodeConfig } = require('../services/qcby-code-config')
 const { createQcbyCodeScheduler } = require('./qcby-code-scheduler')
 
-const OPERATION_KEYS = ['harvest', 'water', 'weed', 'bug', 'fertilize', 'plant', 'steal', 'helpWater', 'helpWeed', 'helpBug', 'taskClaim', 'sell', 'upgrade']
+const OPERATION_KEYS = ['harvest', 'water', 'weed', 'bug', 'fertilize', 'plant', 'steal', 'helpWater', 'helpWeed', 'helpBug', 'taskClaim', 'sell', 'upgrade', 'ranchHarvest', 'ranchProduce', 'ranchFeed']
 
 function createRuntimeEngine(options = {}) {
   const processRef = options.processRef || process

@@ -14,10 +14,13 @@
  */
 const protobuf = require('protobufjs');
 const network = require('../utils/network');
+const { networkEvents } = network;
 const { getShopGoodsList, purchaseShopGoods } = require('./mall');
 const { types } = require('../utils/proto');
 const { toLong, toNum, log, logWarn, sleep } = require('../utils/utils');
 const { isAutomationOn } = require('../models/store');
+const { createScheduler } = require('./scheduler');
+const { recordOperation } = require('./stats');
 
 // ============ 底层 RPC ============
 
@@ -483,6 +486,144 @@ async function runRanchCare(opts = {}) {
     return result;
 }
 
+// ============ 巡牧场循环(对照农场 checkFarm/startFarmCheckLoop 架构) ============
+// 牧场节奏是分钟级的(产出间隔约 180 分钟, 每日操作有次数上限),
+// 不能像巡田那样 3 秒一轮 —— 上一版挂在 farm tick 里每轮 8~10 个 RPC,
+// 直接把连接打掉线了(面板进牧场页掉线就是这么叠加出来的)。
+
+const RANCH_CHECK_INTERVAL_MIN_MS = 5 * 60 * 1000;   // 正常轮询间隔 5~8 分钟
+const RANCH_CHECK_INTERVAL_MAX_MS = 8 * 60 * 1000;
+const RANCH_PUSH_THROTTLE_MS = 60 * 1000;            // 推送触发最少间隔(1 分钟)
+// 失败退避: 连续失败时按 2^N 拉长间隔, 上限 60 分钟
+const RANCH_BACKOFF_MAX_MS = 60 * 60 * 1000;
+
+const ranchScheduler = createScheduler('ranch');
+let isCheckingRanch = false;
+let ranchLoopRunning = false;
+let externalRanchSchedulerMode = false;
+let ranchFailStreak = 0;
+let lastRanchPushAt = 0;
+
+function randomRanchIntervalMs() {
+    const minSec = RANCH_CHECK_INTERVAL_MIN_MS / 1000;
+    const maxSec = RANCH_CHECK_INTERVAL_MAX_MS / 1000;
+    return (minSec + Math.floor(Math.random() * (maxSec - minSec + 1))) * 1000;
+}
+
+/** 下次巡牧场的延迟: 正常随机 5-8 分钟; 连续失败按 2^N 退避 */
+function nextRanchDelayMs() {
+    const base = randomRanchIntervalMs();
+    if (ranchFailStreak <= 0) return base;
+    return Math.min(RANCH_BACKOFF_MAX_MS, base * Math.min(2 ** ranchFailStreak, 64));
+}
+
+function scheduleNextRanchCheck(delayMs) {
+    if (externalRanchSchedulerMode) return;
+    if (!ranchLoopRunning) return;
+    ranchScheduler.setTimeoutTask('ranch_check_loop', Math.max(0, delayMs), async () => {
+        if (!ranchLoopRunning) return;
+        await checkRanch();
+        if (!ranchLoopRunning) return;
+        scheduleNextRanchCheck(nextRanchDelayMs());
+    });
+}
+
+/**
+ * 巡牧场一轮(自动模式入口, 对照农场 checkFarm):
+ * 防重入 + ranch_auto 开关闸门 + 汇总日志 + 统计。
+ * @returns {Promise<boolean>} 本轮有没有实际干活
+ */
+async function checkRanch() {
+    if (isCheckingRanch) return false;
+    if (!isAutomationOn('ranch_auto')) return false;
+    isCheckingRanch = true;
+    try {
+        const result = await runRanchCare({ claimTasks: false });
+
+        // 统计(对照农场 recordOperation)
+        if (result.harvested > 0) recordOperation('ranchHarvest', result.harvested);
+        if (result.produced > 0) recordOperation('ranchProduce', result.produced);
+        if (result.fed > 0) recordOperation('ranchFeed', result.fed);
+
+        // 限流算一次失败 → 退避; 否则清零
+        if (result.rateLimited) {
+            ranchFailStreak += 1;
+        } else {
+            ranchFailStreak = 0;
+        }
+
+        // 一行汇总日志(对照农场 `[收:2 草:1] → 收获15/催产2` 格式)
+        const parts = [];
+        if (result.harvested > 0) parts.push(`收:${result.harvested}`);
+        if (result.produced > 0) parts.push(`产:${result.produced}`);
+        if (result.fed > 0) parts.push(`喂:${result.fed}`);
+        if (result.feedMachineAdded > 0) parts.push(`草:${result.feedMachineAdded}`);
+        if (result.sold > 0) parts.push(`卖:${result.sold}`);
+        if (result.boughtCubs > 0) parts.push(`崽:${result.boughtCubs}`);
+        if (result.rotationBought > 0) parts.push(`商:${result.rotationBought}`);
+        if (parts.length > 0) {
+            log('牧场', `[${parts.join(' ')}] ${result.details.join('/')}`, {
+                module: 'ranch', event: '巡牧场', result: 'ok', actions: parts,
+            });
+        }
+        return parts.length > 0;
+    } catch (e) {
+        ranchFailStreak += 1;
+        logWarn('牧场', `巡牧场失败(连续第 ${ranchFailStreak} 次): ${e.message}`, {
+            module: 'ranch', event: '巡牧场', result: 'error',
+        });
+        return false;
+    } finally {
+        isCheckingRanch = false;
+    }
+}
+
+/**
+ * FacilitiesNotify 推送触发(对照农场 landsChanged → onLandsChangedPush):
+ * 动物产出/牧草机状态变化时服务端会推, 节流 1 分钟后插队巡一轮。
+ */
+function onRanchFacilitiesChanged() {
+    if (!ranchLoopRunning) return;
+    if (!isAutomationOn('ranch_auto')) return;
+    if (isCheckingRanch) return;
+    const now = Date.now();
+    if (now - lastRanchPushAt < RANCH_PUSH_THROTTLE_MS) return;
+    lastRanchPushAt = now;
+    log('牧场', '收到建筑推送, 1 分钟后巡牧场', {
+        module: 'ranch', event: '建筑推送通知', result: 'trigger_check',
+    });
+    ranchScheduler.setTimeoutTask('ranch_push_check', RANCH_PUSH_THROTTLE_MS, async () => {
+        if (!isCheckingRanch) await checkRanch();
+    });
+}
+
+function startRanchCheckLoop(options = {}) {
+    if (ranchLoopRunning) return;
+    externalRanchSchedulerMode = !!options.externalScheduler;
+    ranchLoopRunning = true;
+    ranchFailStreak = 0;
+    networkEvents.on('ranchFacilitiesChanged', onRanchFacilitiesChanged);
+    if (!externalRanchSchedulerMode) {
+        scheduleNextRanchCheck(randomRanchIntervalMs());
+    }
+}
+
+function stopRanchCheckLoop() {
+    ranchLoopRunning = false;
+    externalRanchSchedulerMode = false;
+    ranchScheduler.clearAll();
+    networkEvents.removeListener('ranchFacilitiesChanged', onRanchFacilitiesChanged);
+}
+
+/**
+ * 插队巡一轮(worker 统一调度器用): 挂到外部队列时由 worker 决定节奏,
+ * 这里只保留防重入与开关闸门。
+ */
+async function runRanchTick() {
+    if (!ranchLoopRunning) return false;
+    return checkRanch();
+}
+
 // ============ 游商(兑换集市, RotationShop 7) ============
 // 公告: 金豆豆可兑换牧场道具、松果币可兑换农场道具, 每日限时营业。
 // 抓包: RotationShopInfo(1=7) → {1:营业, 3:刷新时间戳, 5:[分组], 6:[商品]}
@@ -944,6 +1085,11 @@ module.exports = {
     getRanchOverview,
     runRanchCare,
     operateRanch,
+    checkRanch,
+    startRanchCheckLoop,
+    stopRanchCheckLoop,
+    runRanchTick,
+    getNextRanchDelayMs: nextRanchDelayMs,
     toRanchView,
     getAnimalName,
     ANIMAL_NAMES,

@@ -57,6 +57,10 @@ const operations = {
     sell: 0,
     upgrade: 0,
     levelUp: 0,
+    // 牧场
+    ranchHarvest: 0,
+    ranchProduce: 0,
+    ranchFeed: 0,
 };
 
 let currentDateKey = null;

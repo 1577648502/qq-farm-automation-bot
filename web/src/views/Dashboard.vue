@@ -378,6 +378,9 @@ const OP_META: Record<string, { label: string, icon: string, color: string }> = 
   helpBug: { label: '帮除虫', icon: 'i-carbon-warning-alt', color: 'text-red-300' },
   taskClaim: { label: '任务', icon: 'i-carbon-task-complete', color: 'text-indigo-500' },
   sell: { label: '出售', icon: 'i-carbon-shopping-cart', color: 'text-pink-500' },
+  ranchHarvest: { label: '牧场收', icon: 'i-carbon-hide', color: 'text-amber-500' },
+  ranchProduce: { label: '催产', icon: 'i-carbon-flash', color: 'text-lime-500' },
+  ranchFeed: { label: '牧场喂', icon: 'i-carbon-restaurant', color: 'text-orange-400' },
 }
 
 const filteredOperations = computed(() => {

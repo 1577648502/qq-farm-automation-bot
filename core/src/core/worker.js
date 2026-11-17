@@ -23,6 +23,7 @@ const autumnWish = require('../services/autumn-wish');
 const happyShare = require('../services/happy-share');
 const milkTea = require('../services/milk-tea');
 const ranch = require('../services/ranch');
+const { startRanchCheckLoop, stopRanchCheckLoop } = ranch;
 const adGift = require('../services/ad-gift');
 const { getActivityOverview, drawLottery, drawActivity, claimBattlePassRewards, claimActivityTasks, claimDailySignin, exchangeShopGoods, performQingniangBrew, sellQingniangBrew, shareSellQingniangBrew, getStarActivityOverview, exchangeStarShopGoods, lightUpStarRegister, checkAndLightUpStar } = require('../services/activity');
 const { performDailyMonthCardGift, getMonthCardDailyState } = require('../services/monthcard');
@@ -591,42 +592,23 @@ function resetUnifiedSchedule() {
     nextStealRunAt = now + stealMs;
 }
 
-// ============ 牧场调度(独立于巡田) ============
-// 牧场节奏是分钟级的(产出间隔 180 分钟, 每日操作有次数上限),
-// 不能跟着巡田 3 秒一轮 —— 上一版挂在 farm tick 里每轮 8~10 个 RPC,
-// 直接把连接打掉线了(面板进牧场页就掉线就是这个叠加出来的)。
-let ranchTaskRunning = false;
+// ============ 牧场调度 ============
+// 循环/防重入/退避/推送触发都在 services/ranch.js 内部(对照 farm.js 架构),
+// 这里只负责在统一调度器里按时调 runRanchTick() 并回写下次时间。
 let nextRanchRunAt = 0;
-const RANCH_TICK_INTERVAL_MIN_MS = 5 * 60 * 1000;   // 最短 5 分钟
-const RANCH_TICK_INTERVAL_MAX_MS = 8 * 60 * 1000;   // 最长 8 分钟
-// 失败退避: 连续失败时拉长间隔, 避免持续打爆
-let ranchFailStreak = 0;
 
 async function runRanchTick(auto) {
-    if (ranchTaskRunning) return;
-    if (!auto.ranch_auto) return;
-    ranchTaskRunning = true;
-    const base = randomIntervalMs(RANCH_TICK_INTERVAL_MIN_MS, RANCH_TICK_INTERVAL_MAX_MS);
+    if (!auto.ranch_auto) {
+        nextRanchRunAt = Date.now() + 60 * 1000;   // 关着时每分钟看一眼开关
+        return;
+    }
     try {
-        const r = await ranch.runRanchCare({ claimTasks: false });
-        if (r && r.rateLimited) {
-            // 服务端限流: 算一次失败, 退避后重试(避免在限流窗口里反复触发)
-            ranchFailStreak += 1;
-        } else {
-            ranchFailStreak = 0;
-        }
-    } catch (e) {
-        ranchFailStreak += 1;
-        logWarn('牧场', `巡牧场失败(连续第 ${ranchFailStreak} 次): ${e.message}`, {
-            module: 'ranch', event: '巡牧场', result: 'error',
-        });
+        await ranch.runRanchTick();
+    } catch {
+        // checkRanch 内部已记日志
     } finally {
-        // 正常 5-8 分钟; 连续失败按 2^N 退避, 上限 60 分钟
-        const nextMs = ranchFailStreak > 0
-            ? Math.min(60 * 60 * 1000, base * Math.min(2 ** ranchFailStreak, 64))
-            : base;
-        nextRanchRunAt = Date.now() + nextMs;
-        ranchTaskRunning = false;
+        // 间隔/退避策略由 ranch 服务给出(连续失败自动拉长, 上限 60 分钟)
+        nextRanchRunAt = Date.now() + ranch.getNextRanchDelayMs();
     }
 }
 
@@ -786,6 +768,7 @@ function pauseForCodeRefresh() {
     stopUnifiedScheduler();
     stopFarmCheckLoop();
     stopFriendCheckLoop();
+    stopRanchCheckLoop();
     stopDailyRoutineTimer();
     workerScheduler.clear('bad_startup_once');
     workerScheduler.clear('daily_routine_immediate');
@@ -1119,6 +1102,7 @@ async function startBot(config) {
 
             startFarmCheckLoop({ externalScheduler: true });
             startFriendCheckLoop({ externalScheduler: true });
+            startRanchCheckLoop({ externalScheduler: true });
             startUnifiedScheduler();
             // 每日礼包/任务改为跨日调度，不在农场轮询内执行
             startDailyRoutineTimer();
@@ -1128,6 +1112,7 @@ async function startBot(config) {
             log('系统', '已使用新 code 连接成功');
             startFarmCheckLoop({ externalScheduler: true });
             startFriendCheckLoop({ externalScheduler: true });
+            startRanchCheckLoop({ externalScheduler: true });
             startUnifiedScheduler();
             startDailyRoutineTimer();
             // 刷新成功后恢复正常日志输出
@@ -1171,6 +1156,7 @@ async function stopBot() {
     }
     stopFarmCheckLoop();
     stopFriendCheckLoop();
+    stopRanchCheckLoop();
     stopDailyRoutineTimer();
     cleanupTaskSystem();
     workerScheduler.clearAll();

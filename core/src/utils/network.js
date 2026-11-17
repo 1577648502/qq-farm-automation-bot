@@ -283,6 +283,13 @@ function handleNotify(msg) {
             return;
         }
 
+        // 牧场建筑状态变化(动物产出/牧草机存量等): 转成事件给牧场巡检做推送触发,
+        // 与 LandsNotify → landsChanged 同一模式
+        if (type.includes('FacilitiesNotify')) {
+            networkEvents.emit('ranchFacilitiesChanged', eventBody);
+            return;
+        }
+
         // 物品变化通知 (经验/金币等)
         if (type.includes('ItemNotify')) {
             try {
