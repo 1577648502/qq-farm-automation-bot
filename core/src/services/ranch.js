@@ -902,7 +902,7 @@ async function operateRanch(opts = {}) {
             };
         }
         default:
-            throw new Error('不支持的操作: ' + op);
+            throw new Error(`不支持的操作: ${JSON.stringify(op)} (收到参数: ${JSON.stringify(opts).slice(0, 300)})`);
     }
 }
 
