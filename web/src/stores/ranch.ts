@@ -14,6 +14,17 @@ export interface RanchFacility {
   upgrading?: boolean
   /** 建筑等级(来自 AllCells, 与 level 互为补充) */
   upgradeLevel?: number
+  buildingId?: number
+  buildingKind?: string
+}
+
+export interface RanchBuilding {
+  instId: number
+  buildingId: number
+  level: number
+  status: number
+  /** coop=窝 pen=棚 feed=喂食机 */
+  kind: string
 }
 
 export interface RanchAnimal {
@@ -78,6 +89,11 @@ export interface RanchOverview {
   ranchExp: number
   animals: RanchAnimal[]
   facilities?: RanchFacility[]
+  /** AllCells 的真实建筑清单 */
+  buildings?: RanchBuilding[]
+  coopBuildings?: RanchBuilding[]
+  penBuildings?: RanchBuilding[]
+  feedBuildings?: RanchBuilding[]
   opLimits?: Array<{ opId: number, used: number, limit: number }>
 }
 

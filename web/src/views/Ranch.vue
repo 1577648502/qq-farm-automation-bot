@@ -161,38 +161,50 @@ interface PenView {
   emptySlots: number
   /** 容量为 0 且没动物 = 该建筑还没解锁(棚需要玩家等级更高才开, 与窝不同步) */
   locked: boolean
+  /** AllCells 里的真实建筑(没有 = 该建筑还没建造/没放置) */
+  building?: { instId: number, buildingId: number, level: number, status: number, kind: string }
 }
 
 const pensView = computed<PenView[]>(() => {
   const ov = overview.value
   if (!ov)
     return []
+  // 窝/棚的建筑容量来自 AllCells 的真实建筑(coopBuildings/penBuildings),
+  // 不再用 coopCount/penCount 凑数 —— 那两个是"规划格数", 不代表已解锁。
+  const coopB = (ov.coopBuildings || [])[0]
+  const penB = (ov.penBuildings || [])[0]
   const pens = [
     {
       key: 'coop',
       title: '窝（小动物）',
       icon: 'i-carbon-home',
+      // 有真实建筑就用它的占位容量, 否则回落到牧场详情
       capacity: ov.coopCount || 0,
       facility: (ov.facilities || []).find(f => f.slot === 10001),
       animals: ov.animals.filter(a => a.animalId < 70000 && a.animalId >= 60000),
       emptySlots: 0,
       locked: false,
+      building: coopB,
     },
     {
       key: 'pen',
       title: '棚（大动物）',
       icon: 'i-carbon-home',
       capacity: ov.penCount || 0,
-      facility: (ov.facilities || []).find(f => f.slot === 10002),
+      // 棚的建筑实例不在固定槽位(10000/10001/10002)里, 用 penBuildings 判断
+      facility: undefined,
       animals: ov.animals.filter(a => a.animalId >= 70000 && a.animalId < 80000),
       emptySlots: 0,
       locked: false,
+      building: penB,
     },
   ]
   for (const p of pens) {
-    p.emptySlots = Math.max(0, (p.capacity || 0) - p.animals.length)
-    // 容量 0 且没动物: 棚比窝晚解锁(等级门槛), 显示"未解锁"而不是整组隐藏
-    p.locked = (p.capacity || 0) === 0 && p.animals.length === 0
+    // ⭐ 真实建筑缺失 = 该栏舍还没建/没解锁。
+    //   之前直接用 penCount=4 渲染 4 个空位, 但游戏内棚是"未解锁" (用户现场反馈)。
+    const hasBuilding = !!p.building
+    p.emptySlots = hasBuilding ? Math.max(0, (p.capacity || 0) - p.animals.length) : 0
+    p.locked = !hasBuilding || ((p.capacity || 0) === 0 && p.animals.length === 0)
   }
   return pens
 })
@@ -528,10 +540,11 @@ onUnmounted(() => {
                     未解锁
                   </span>
                 </h4>
-                <div v-if="pen.facility" class="flex items-center gap-1 text-[11px] text-gray-400">
-                  <span>{{ pen.facility.name || pen.title }}{{ pen.facility.level ? ` Lv${pen.facility.level}` : '' }}</span>
+                <div v-if="pen.facility || pen.building" class="flex items-center gap-1 text-[11px] text-gray-400">
+                  <span v-if="pen.facility">{{ pen.facility.name || pen.title }}{{ pen.facility.level ? ` Lv${pen.facility.level}` : '' }}</span>
+                  <span v-else-if="pen.building">{{ pen.title.slice(0, 1) }} Lv{{ pen.building.level }}</span>
                   <span
-                    v-if="pen.facility.upgrading"
+                    v-if="pen.facility?.upgrading"
                     class="rounded bg-sky-100 px-1 py-0.5 text-[10px] text-sky-700 dark:bg-sky-900/40 dark:text-sky-300"
                   >
                     升级中
@@ -546,7 +559,7 @@ onUnmounted(() => {
               >
                 <div class="i-carbon-lock text-2xl" />
                 <div class="mt-2 text-[11px] text-gray-400">
-                  该建筑尚未解锁（提升玩家等级后开放）
+                  该栏舍尚未建造或未解锁
                 </div>
               </div>
 

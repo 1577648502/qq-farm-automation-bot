@@ -375,10 +375,16 @@ function toRanchView(reply) {
         const animalId = toNum(a.animal_id);
         if (!animalId) continue; // 空槽占位
         const produceAt = toNum(a.produce_at);
+        const readyAt = toNum(a.trigger_ready_at);
         const grownFlag = toNum(a.grown_flag);
-        // ⭐ 派生状态(单一事实来源): 前端只读这里的布尔值, 不再自己用 0 秒猜"可收"。
-        //   之前 produce_at 缺失时 produceInSec 被算成 0 → 幼年动物也显示"可收" → 点了必失败。
-        const harvestInSec = produceAt > 0 ? Math.round((produceAt - nowMs) / 1000) : null;
+        // ⭐⭐ 2026-11-17 线上实测(账号1真实回包)修正语义:
+        //   produce_at(#10) = **上次产出**时刻(已过去), 不是下次!
+        //   trigger_ready_at(#25) = **下次可产出**时刻。
+        //   证据: 4 只兔子 produce_at 距今 -3141s, f25 = produce_at + 7212s = 正好 2.003 小时。
+        //   之前把 produce_at 当"下次产出"→ 永远算成已过期 → 面板一直"可收获" →
+        //   点收获服务端回 1045211「当前没有可收取的产物」。(用户现场就是这个)
+        const nextReadyMs = readyAt > 0 ? readyAt : (produceAt > 0 ? produceAt + 2 * 3600 * 1000 : 0);
+        const harvestInSec = nextReadyMs > 0 ? Math.round((nextReadyMs - nowMs) / 1000) : null;
         const harvestable = harvestInSec !== null && harvestInSec <= 0;
         const animals_entry = {
             slot: toNum(a.slot),
@@ -394,9 +400,8 @@ function toRanchView(reply) {
             harvestInSec,
             // 兼容旧字段, 语义与 harvestInSec 一致
             produceInSec: harvestInSec === null ? null : Math.max(0, harvestInSec),
-            // 催产就绪(实测: feed_state=4 且 trigger_ready_at 已到)
-            canProduce: toNum(a.feed_state) === 4
-                && (toNum(a.trigger_ready_at) === 0 || toNum(a.trigger_ready_at) <= nowMs),
+            // 催产就绪 = 确实到了下次产出时刻
+            canProduce: harvestable,
             hungry: toNum(a.feed_state) === 1,
             sellCost: a.sell_cost ? { itemId: toNum(a.sell_cost.item_id), amount: toNum(a.sell_cost.amount) } : null,
             mutant: !!(a.mutant && toNum(a.mutant.field_1) > 0),
@@ -468,7 +473,18 @@ let overviewCache = { at: 0, accountId: '', promise: null };
  * 实例槽位号固定: 10000=? 10001=窝 10002=牧草机(抓包实测 GetFacilityDetail(10002) 名称="牧草机")
  * 从 FacilitiesNotify 推送观察: 10001→实例6001001(窝), 10002→7001001(棚类), 10000→11001001
  */
+// 建筑槽: 10000=留言板(装饰) 10001=窝 10002=喂食机(牧草机)
+// ⚠ 棚不是固定槽位, 它的实例号在 AllCells 里(如 inst=3, buildingId=6002001)
 const FACILITY_SLOTS = [10000, 10001, 10002];
+// 建筑配置 → 用途(ItemInfo: 3601001=牧场窝 target 6001001, 3602001=牧场棚 target 6002001, 3702001=喂食机 target 7001001)
+const BUILDING_KINDS = {
+    6001001: 'coop', 6001002: 'coop', 6001003: 'coop',
+    6002001: 'pen',  6002002: 'pen',  6002003: 'pen',
+    7001001: 'feed', 7001002: 'feed', 7001003: 'feed',
+};
+function buildingKind(buildingId) {
+    return BUILDING_KINDS[Number(buildingId)] || '';
+}
 
 async function getFacilities() {
     const facilities = [];
@@ -524,18 +540,29 @@ async function getRanchOverview(accountId = '') {
                 const all = await facilitySvc.getAllCells();
                 view.buildings = all.buildings;
                 const byInst = new Map(all.buildings.map(b => [b.instId, b]));
-                // 建筑实例号 = 10000(装饰位) / 10001(窝) / 10002(牧草机);
-                // GetFacilityDetail 的 instanceId 字段(#4)不可靠(实测拿到的是 buildingId),
-                // 直接用请求用的 slot 号映射。
                 for (const f of view.facilities) {
                     const b = byInst.get(toNum(f.slot));
                     if (b) {
                         f.upgradeLevel = b.level;
                         f.upgrading = b.status === 1;
+                        f.buildingId = b.buildingId;
+                        f.buildingKind = buildingKind(b.buildingId);
                     } else {
                         f.upgrading = false;
                     }
                 }
+                // ⭐ 真实建筑清单(棚不在固定槽位里, 只能从 AllCells 拿):
+                //   ItemInfo: 3601001=牧场窝(target 6001001) / 3602001=牧场棚(6002001) / 3702001=喂食机(7001001)
+                view.buildings = all.buildings.map(b => ({
+                    instId: b.instId,
+                    buildingId: b.buildingId,
+                    level: b.level,
+                    status: b.status,
+                    kind: buildingKind(b.buildingId),
+                }));
+                view.coopBuildings = view.buildings.filter(b => b.kind === 'coop');
+                view.penBuildings = view.buildings.filter(b => b.kind === 'pen');
+                view.feedBuildings = view.buildings.filter(b => b.kind === 'feed');
             } catch {
                 view.buildings = [];
             }
@@ -1196,17 +1223,19 @@ function parseFeedMachineReply(bodyBytes) {
             for (const [f2, w2, v2] of walkWire(v)) {
                 if (f2 === 2 && w2 === 2) out.name = v2.toString('utf8');
                 else if (f2 === 4 && w2 === 0) out.instanceId = Number(v2);
-                else if (f2 === 5 && w2 === 0) out.level = Number(v2);
+                else if (f2 === 5 && w2 === 0) out.moduleType = Number(v2);  // 模块类型(牧草机=8), NOT 等级
                 else if (f2 === 6 && w2 === 2) {
                     const inner = walkWire(v2);
                     const id = inner.find(x => x[1] === 1);
                     const amt = inner.find(x => x[1] === 2);
                     out.upgradeCost = { itemId: id ? Number(id[3]) : 0, amount: amt ? Number(amt[3]) : 0 };
                 }
-                // ⚠ 2026-11-17 实测(GetFacilityDetail 原始字节):
-                //   #4/#8 都是 buildingId(不是 stored!), #9 建筑类型, #10 等级,
-                //   #13 在养数/占位数, #14 容量(牧草机=100, 棚=7), #21 牧草机存量{1:当前,2:-1}
-                //   原实现把 #8 当 stored, 导致面板显示 "存量11001001/11"。
+                // ⚠ 2026-11-17 线上实测 + 官方配置表(MCFacilityConfig)确认:
+                //   #4/#8 = buildingId(配置 id); **等级从它还末位推**:
+                //     牧草机 7001001=Lv1 / 7001002=Lv2 / 7001003=Lv3
+                //   #5 = module_type(FEED_MACHINE=8) —— 曾被误当等级 → 面板显示 Lv8(实际 Lv1)
+                //   #9 = 建筑类型, #10 = ?, #13 = 占位数, #14 = 容量
+                //   #21 = {4:-1,7:1,8:1} 不含存量! 牧草存量在 RanchInfo.grass(#5)
                 else if (f2 === 8 && w2 === 0) out.buildingId = Number(v2);
                 else if (f2 === 9 && w2 === 0) out.buildingType = Number(v2);
                 else if (f2 === 10 && w2 === 0) out.level2 = Number(v2);
@@ -1221,6 +1250,8 @@ function parseFeedMachineReply(bodyBytes) {
             }
         }
     }
+    // 等级 = buildingId 末位(官方配置表: 7001001=Lv1 / 7001002=Lv2 / 7001003=Lv3)
+    if (out.buildingId > 0) out.level = out.buildingId % 10;
     return out;
 }
 
