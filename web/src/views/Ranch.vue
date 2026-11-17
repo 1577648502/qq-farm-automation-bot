@@ -538,14 +538,18 @@ onUnmounted(() => {
               然后刷新本页重试（首次进入服务端可能返回空数据，已自动重试）。
             </div>
           </div>
-          <div v-else-if="overview.animals.length === 0" class="flex flex-col items-center justify-center gap-3 py-10 text-center">
+          <!-- 只有"连建筑都没有"才是真空态; 有窝/棚但没动物时仍要显示建筑视图 -->
+          <div
+            v-else-if="overview.animals.length === 0 && (overview.coopCount || 0) === 0 && (overview.penCount || 0) === 0"
+            class="flex flex-col items-center justify-center gap-3 py-10 text-center"
+          >
             <div class="i-fas-paw text-4xl text-gray-300" />
             <div class="text-base text-gray-600 font-medium dark:text-gray-300">
               牧场还没有动物
             </div>
             <div class="max-w-md text-xs text-gray-400 leading-relaxed">
               去「幼崽商城」页签逐个购买，或开启设置里的「自动买幼崽」；
-              也可以去 QQ 农场的牧场里手动摆放。
+              也可以去游戏里的牧场手动摆放。
             </div>
           </div>
 

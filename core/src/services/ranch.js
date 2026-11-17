@@ -746,7 +746,9 @@ async function runRanchCare(opts = {}) {
     // 5. 买幼崽(任务"领养鸡幼崽N个"靠它驱动; 按收益比优先)
     if (opts.buyCubs !== false && isAutomationOn('ranch_buy_cubs')) {
         try {
-            const r = await autoBuyCubs(opts);
+            let careView = null;
+            try { careView = await getRanchOverview(); } catch { careView = null; }
+            const r = await autoBuyCubs({ ...opts, view: careView });
             result.boughtCubs = r.bought;
             if (r.bought > 0) result.details.push(`买${r.details.join('/')}`);
         } catch (e) {
@@ -1395,8 +1397,10 @@ async function autoBuyCubs(opts = {}) {
     let slots = toNum(opts.slots) || 0;
     if (slots <= 0) {
         try {
-            const view = toRanchView(await getRanchDetail());
-            slots = Math.max(0, (view.coopCount + view.penCount) - view.animals.length);
+            // ⚠ 必须用带兜底的 view(AllCells 补容量), 不能用裸 getRanchDetail:
+            //   从没进过牧场的号 RanchInfo 是空的(coop/pen 全 0) → slots=0 → 永远不买幼崽。
+            const view = opts.view || await getRanchOverview();
+            slots = Math.max(0, (toNum(view.coopCount) + toNum(view.penCount)) - (view.animals || []).length);
         } catch { slots = 0; }
     }
     if (slots <= 0) {
@@ -1606,11 +1610,13 @@ async function operateRanch(opts = {}) {
                 const r = await f.upgradeBuilding(toNum(opts.instId));
                 return { ok: true, action: '建筑升级', detail: `#${toNum(opts.instId)} → Lv${r.level}` };
             }
-            const list = await f.getBuildingList();
+            // GetBuildingList 返回的是"未放置的建筑背包"(实测为空),
+            // 已放置建筑在 AllCells.buildings 里
+            const all = await f.getAllCells();
             return {
                 ok: true,
                 action: '建筑列表',
-                detail: list.items.map(i => `#${i.instId} Lv${i.level}${i.status === 1 ? '(升级中)' : ''}`).join('，') || '暂无建筑',
+                detail: all.buildings.map(b => `#${b.instId} Lv${b.level}${b.status === 1 ? '(升级中)' : ''}`).join('，') || '暂无建筑',
             };
         }
         case 'steal': {
