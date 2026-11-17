@@ -247,6 +247,10 @@ async function stealFriendProduce(hostGid) {
 }
 
 // ============ 栏舍动物操作(2026-11-17 官方文档) ============
+// ⚠ 实测(2026-11-17 对照实验): 文档里的 CollectProduce / HarvestAnimal 在服务端**不存在**
+//   —— 发空 body 返回的 1020002「网络繁忙」与编造的假方法名完全相同(方法未找到的伪装码)。
+//   同理 PutHazard 也待验证。真正可用的单只收获路径待抓包补齐。
+//   下面的函数保留定义(便于未来验证), 但 operateRanch 不再暴露这些操作。
 // 见 docs/mc-ranch/栏舍动物交互界面功能文档.md
 // 与 HarvestRanch(一键全场)区分: 这里都是单个槽位/单个动物的操作。
 
@@ -350,8 +354,13 @@ function getAnimalName(animalId) {
 }
 
 /** 动物成长阶段名(抓包 stage 1..6; 语义按"幼年→成年"近似, 后续按游戏内文案校正) */
-function getStageText(stage) {
+/**
+ * 生长阶段文案。stage 实测就是 1..6(2026-11-17 真号: 槽1=4 槽2=5 槽3=6)。
+ * 成年以 grown_flag(#18) 为准(stage 到 6 也是成年, 两个信号一致时更稳)。
+ */
+function getStageText(stage, grownFlag) {
     const s = toNum(stage);
+    if (toNum(grownFlag) === 1 && s >= 6) return '成年';
     if (s <= 1) return '幼年';
     if (s >= 6) return '成年';
     return `成长中(${s}/6)`;
@@ -366,14 +375,29 @@ function toRanchView(reply) {
         const animalId = toNum(a.animal_id);
         if (!animalId) continue; // 空槽占位
         const produceAt = toNum(a.produce_at);
+        const grownFlag = toNum(a.grown_flag);
+        // ⭐ 派生状态(单一事实来源): 前端只读这里的布尔值, 不再自己用 0 秒猜"可收"。
+        //   之前 produce_at 缺失时 produceInSec 被算成 0 → 幼年动物也显示"可收" → 点了必失败。
+        const harvestInSec = produceAt > 0 ? Math.round((produceAt - nowMs) / 1000) : null;
+        const harvestable = harvestInSec !== null && harvestInSec <= 0;
         const animals_entry = {
             slot: toNum(a.slot),
             animalId,
             name: getAnimalName(animalId),
             stage: toNum(a.stage),
-            stageText: getStageText(a.stage),
+            stageText: getStageText(a.stage, grownFlag),
             feedState: toNum(a.feed_state),
-            produceInSec: produceAt > 0 ? Math.max(0, Math.round((produceAt - nowMs) / 1000)) : 0,
+            grown: grownFlag === 1,
+            // 副产物就绪 → 可以"收获"(CollectProduce)
+            harvestable,
+            // 距下次产出秒数; null = 还没进入产出周期(幼年/未开轮)
+            harvestInSec,
+            // 兼容旧字段, 语义与 harvestInSec 一致
+            produceInSec: harvestInSec === null ? null : Math.max(0, harvestInSec),
+            // 催产就绪(实测: feed_state=4 且 trigger_ready_at 已到)
+            canProduce: toNum(a.feed_state) === 4
+                && (toNum(a.trigger_ready_at) === 0 || toNum(a.trigger_ready_at) <= nowMs),
+            hungry: toNum(a.feed_state) === 1,
             sellCost: a.sell_cost ? { itemId: toNum(a.sell_cost.item_id), amount: toNum(a.sell_cost.amount) } : null,
             mutant: !!(a.mutant && toNum(a.mutant.field_1) > 0),
         };
@@ -493,6 +517,28 @@ async function getRanchOverview(accountId = '') {
                 limit: toNum(l.limit),
             }));
             view.facilities = facilities;
+            // 建筑升级状态(窝/棚/牧草机): 数据来自 AllCells.buildings,
+            // 按实例号 10000/10001/10002 对应到 facilities 上, 面板可显示"升级中"
+            try {
+                const facilitySvc = require('./ranch-facility');
+                const all = await facilitySvc.getAllCells();
+                view.buildings = all.buildings;
+                const byInst = new Map(all.buildings.map(b => [b.instId, b]));
+                // 建筑实例号 = 10000(装饰位) / 10001(窝) / 10002(牧草机);
+                // GetFacilityDetail 的 instanceId 字段(#4)不可靠(实测拿到的是 buildingId),
+                // 直接用请求用的 slot 号映射。
+                for (const f of view.facilities) {
+                    const b = byInst.get(toNum(f.slot));
+                    if (b) {
+                        f.upgradeLevel = b.level;
+                        f.upgrading = b.status === 1;
+                    } else {
+                        f.upgrading = false;
+                    }
+                }
+            } catch {
+                view.buildings = [];
+            }
             return view;
         } catch (e) {
             logWarn('牧场', `获取牧场详情失败: ${e.message}`, {
@@ -525,7 +571,7 @@ async function runRanchCare(opts = {}) {
     const gap = () => sleep(STEP_GAP_MS);
 
     // 0. 牧草机补草(任务"给牧草机添加牧草"也靠它驱动)
-    if (opts.feedMachine !== false) {
+    if (opts.feedMachine !== false && isAutomationOn('ranch_feedmachine')) {
         try {
             const fm = await autoFeedMachine(opts);
             result.feedMachineAdded = fm.fed;
@@ -540,7 +586,7 @@ async function runRanchCare(opts = {}) {
     await gap();
 
     // 1. 收获(蛋/崽/整只; 任务"完成1次收获""收获鸡蛋N个""收获整鸡N次"靠它驱动)
-    try {
+    if (isAutomationOn('ranch_harvest')) try {
         const harvestReply = await harvestRanch(1);
         for (const gain of (harvestReply.gains || [])) {
             for (const item of (gain.items || [])) {
@@ -571,7 +617,7 @@ async function runRanchCare(opts = {}) {
     await gap();
 
     // 2. 催产(空请求 = 全部槽位; 任务"生产N次"靠它驱动)
-    try {
+    if (isAutomationOn('ranch_produce')) try {
         const produceReply = await triggerProduce(0);
         for (const r of (produceReply.receipts || [])) {
             result.produced += toNum(r.count);
@@ -726,7 +772,7 @@ async function runRanchCare(opts = {}) {
     // ⚠ 修正: 牧场任务与农场任务完全独立, 必须用 TaskInfo{scene_id:2} 拉列表
     //   (见 docs/mc-ranch/牧场任务系统功能文档.md); 之前调 checkAndClaimTasks()
     //   拉的是农场任务列表, 牧场任务从来没领过。
-    if (opts.claimTasks !== false && isAutomationOn('ranch_task')) {
+    if (isAutomationOn('ranch_task')) {   // 统一由开关决定(原来 checkRanch 传 claimTasks:false 导致永不执行)
         try {
             const { checkAndClaimRanchTasks } = require('./task');
             const r = await checkAndClaimRanchTasks();
@@ -1157,12 +1203,19 @@ function parseFeedMachineReply(bodyBytes) {
                     const amt = inner.find(x => x[1] === 2);
                     out.upgradeCost = { itemId: id ? Number(id[3]) : 0, amount: amt ? Number(amt[3]) : 0 };
                 }
-                else if (f2 === 8 && w2 === 0) out.stored = Number(v2);
-                else if (f2 === 10 && w2 === 0) out.capacity = Number(v2);
+                // ⚠ 2026-11-17 实测(GetFacilityDetail 原始字节):
+                //   #4/#8 都是 buildingId(不是 stored!), #9 建筑类型, #10 等级,
+                //   #13 在养数/占位数, #14 容量(牧草机=100, 棚=7), #21 牧草机存量{1:当前,2:-1}
+                //   原实现把 #8 当 stored, 导致面板显示 "存量11001001/11"。
+                else if (f2 === 8 && w2 === 0) out.buildingId = Number(v2);
+                else if (f2 === 9 && w2 === 0) out.buildingType = Number(v2);
+                else if (f2 === 10 && w2 === 0) out.level2 = Number(v2);
+                else if (f2 === 13 && w2 === 0) out.used = Number(v2);
                 else if (f2 === 14 && w2 === 0) out.capacity = Number(v2);
                 else if (f2 === 21 && w2 === 2) {
                     for (const [f3, w3, v3] of walkWire(v2)) {
-                        if (f3 === 2 && w3 === 0) out.stored = Number(v3);
+                        if (f3 === 1 && w3 === 0) out.stored = Number(v3);
+                        else if (f3 === 2 && w3 === 0) out.remainingSecs = Number(v3);
                     }
                 }
             }
@@ -1172,10 +1225,20 @@ function parseFeedMachineReply(bodyBytes) {
 }
 
 /** 给牧草机添加牧草(从背包把牧草 7001 加进去) */
-async function addFeedToMachine(count = 100) {
+/**
+ * 给牧草机投草(AddFeed, 20261117 抓包 + 官方文档 6.2)。
+ * 请求: {1: instance_id, 2: add_count, 3: use_gold, 4: host_gid}
+ *   use_gold = 仓库牧草不足时用金币补齐(自动补草默认 false, 不乱花钱)
+ *   host_gid = 0 表示自己; 非 0 是给好友的牧草机赠送
+ */
+async function addFeedToMachine(count = 100, opts = {}) {
+    const useGold = opts.useGold === true;
+    const hostGid = toNum(opts.hostGid) || 0;
     const w = protobuf.Writer.create();
     w.uint32((1 << 3) | 0).int64(toLong(FEED_MACHINE_ID));
     w.uint32((2 << 3) | 0).int64(toLong(count));
+    w.uint32((3 << 3) | 0).int64(toLong(useGold ? 1 : 0));
+    w.uint32((4 << 3) | 0).int64(toLong(hostGid));
     const { body: replyBody } = await network.sendMsgAsync('gamepb.homesteadpb.FeedMachineService', 'AddFeed', w.finish());
     // 响应 {1:加完后的存量, 2:剩余?}
     const top = walkWire(Buffer.from(replyBody));
@@ -1366,6 +1429,17 @@ async function operateRanch(opts = {}) {
 
     switch (op) {
         case 'harvest': {
+            // 有槽位 = 单只收获(收副产物, 动物留栏); 无槽位 = 全场一键(自动流程用)
+            if (slot > 0) {
+                // ⚠ CollectProduce / HarvestAnimal 服务端不存在(2026-11-17 对照实验证实),
+                //   单只收获暂时只能走全场 HarvestRanch。这里明确告知而不是发一个必然失败的请求。
+                return {
+                    ok: false,
+                    action: '收获',
+                    error: '单只收获接口服务端未开放，请用自动收获（设置里的「自动收获」开关）',
+                    slot,
+                };
+            }
             const r = await harvestRanch(1);
             const items = [];
             for (const gain of (r.gains || [])) {
@@ -1378,10 +1452,17 @@ async function operateRanch(opts = {}) {
             return { ok: true, action: '收获', detail: items.join('，') || '没有可收的' };
         }
         case 'produce': {
-            const r = await triggerProduce(slot);
-            let produced = 0;
-            for (const pr of (r.receipts || [])) produced += toNum(pr.count);
-            return { ok: true, action: '催产', detail: `${produced} 个产物` };
+            try {
+                const r = await triggerProduce(slot);
+                let produced = 0;
+                for (const pr of (r.receipts || [])) produced += toNum(pr.count);
+                return { ok: true, action: '催产', detail: `${produced} 个产物` };
+            } catch (e) {
+                if (isExpectedRanchError(e)) {
+                    return { ok: false, action: '催产', error: '该动物当前不能催产(产出冷却中或未开轮)' };
+                }
+                throw e;
+            }
         }
         case 'feed': {
             await feedAnimal(feedType, count);
@@ -1389,7 +1470,7 @@ async function operateRanch(opts = {}) {
         }
         case 'feedmachine': {
             // 给牧草机补草(默认拉满 100, 实际受背包存量限制)
-            const r = await addFeedToMachine(count || 100);
+            const r = await addFeedToMachine(toNum(opts.count) || 100);   // count 默认 1, 不能写 count || 100
             return { ok: true, action: '牧草机加草', detail: `存量 ${r.stored}` };
         }
         case 'buycub': {

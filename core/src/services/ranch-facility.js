@@ -236,23 +236,23 @@ async function autoUpgradeBuildings(opts = {}) {
         return result;
     }
     // 1. 先领已完成的升级
-    if (list.hasReadyUpgrade) {
-        for (const it of list.items) {
-            if (result.completed >= maxPerRound) break;
-            try {
-                const r = await completeBuildingUpgrade(it.instId);
-                if (r.facility) {
-                    result.completed += 1;
-                    result.details.push(`竣工#${it.instId}→Lv${r.facility.level}`);
-                    log('牧场', `建筑#${it.instId} 升级完成 → Lv${r.facility.level}`, {
-                        module: 'ranch', event: '建筑升级', result: 'ok', instId: it.instId, level: r.facility.level,
-                    });
-                }
-                await sleep(400);
-            } catch (e) {
-                if (!isExpectedHomeError(e)) {
-                    logWarn('牧场', `领取竣工失败 #${it.instId}: ${e.message}`, { module: 'ranch', event: '建筑升级', result: 'error' });
-                }
+    // ⚠ AllCells 不返回 has_ready_upgrade(实测), 所以不能靠标志位判断;
+    //   对每个建筑都尝试 CompleteBuildingUpgrade, 未竣工的会返回 10441122/10441121(正常错误, 静默)。
+    for (const it of list.items) {
+        if (result.completed >= maxPerRound) break;
+        try {
+            const r = await completeBuildingUpgrade(it.instId);
+            if (r.facility) {
+                result.completed += 1;
+                result.details.push(`竣工#${it.instId}→Lv${r.facility.level}`);
+                log('牧场', `建筑#${it.instId} 升级完成 → Lv${r.facility.level}`, {
+                    module: 'ranch', event: '建筑升级', result: 'ok', instId: it.instId, level: r.facility.level,
+                });
+            }
+            await sleep(400);
+        } catch (e) {
+            if (!isExpectedHomeError(e)) {
+                logWarn('牧场', `领取竣工失败 #${it.instId}: ${e.message}`, { module: 'ranch', event: '建筑升级', result: 'error' });
             }
         }
     }

@@ -733,6 +733,9 @@ function createDefaultAutomation(fertilizer: string = 'none') {
     ranch_clean: true,
     ranch_upgrade: true,
     ranch_unlock: true,
+    ranch_harvest: true,
+    ranch_produce: true,
+    ranch_feedmachine: true,
     rob_treasure: false,
     fertilizer,
     skip_own_weed_bug: false,
@@ -2450,9 +2453,13 @@ async function onBackupFileChange(ev: Event) {
                 <BaseSwitch v-model="localAutomationSettings.automation.ranch_clean" label="自动清理牧场" />
                 <BaseSwitch v-model="localAutomationSettings.automation.ranch_upgrade" label="自动建筑升级" />
                 <BaseSwitch v-model="localAutomationSettings.automation.ranch_unlock" label="自动地块解锁" />
+                <BaseSwitch v-model="localAutomationSettings.automation.ranch_harvest" label="自动收获" />
+                <BaseSwitch v-model="localAutomationSettings.automation.ranch_produce" label="自动催产" />
+                <BaseSwitch v-model="localAutomationSettings.automation.ranch_feedmachine" label="自动牧草机补草" />
                 <div class="col-span-full text-xs text-gray-400 dark:text-gray-500">
-                  自动经营包含：收获 → 催产 → 牧草机补草 → 卖产物 → 买幼崽 → 清理牧场 → 偷好友产物 → 游商兑换 → 领牧场任务，按 5~8 分钟一轮自动执行。
-                  牧场任务与农场任务相互独立（服务端按场景区分）；关闭总开关后所有牧场动作停止，子开关可单独关闭某一步。
+                  自动经营按 5~8 分钟一轮依次执行：收获 → 催产 → 牧草机补草 → 卖产物 → 买幼崽 → 清理牧场 → 偷好友产物 → 建筑升级 → 地块解锁 → 游商兑换 → 领牧场任务。
+                  每一步都有独立开关（手动在牧场页点单个操作不受这些开关影响）；关闭总开关后所有牧场动作停止。
+                  牧场任务与农场任务相互独立（服务端按场景区分）。
                 </div>
               </div>
             </section>

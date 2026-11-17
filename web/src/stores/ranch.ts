@@ -2,6 +2,20 @@ import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import api from '@/api'
 
+export interface RanchFacility {
+  slot: number
+  kind?: string
+  name: string
+  level: number
+  stored: number
+  capacity: number
+  instanceId?: number
+  /** 建筑升级中(来自 AllCells) */
+  upgrading?: boolean
+  /** 建筑等级(来自 AllCells, 与 level 互为补充) */
+  upgradeLevel?: number
+}
+
 export interface RanchAnimal {
   slot: number
   animalId: number
@@ -9,7 +23,18 @@ export interface RanchAnimal {
   stage: number
   stageText: string
   feedState: number
-  produceInSec: number
+  /** 是否成年(后端按 grown_flag 判定) */
+  grown?: boolean
+  /** 副产物就绪, 可收获(后端权威字段) */
+  harvestable?: boolean
+  /** 距下次产出秒数; null = 还没进入产出周期 */
+  harvestInSec?: number | null
+  /** 兼容字段, 语义同 harvestInSec */
+  produceInSec: number | null
+  /** 催产就绪(后端权威字段) */
+  canProduce?: boolean
+  /** 饥饿 */
+  hungry?: boolean
   sellCost: { itemId: number, amount: number } | null
   mutant: boolean
 }

@@ -3,17 +3,16 @@ import { useIntervalFn } from '@vueuse/core'
 import { storeToRefs } from 'pinia'
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 
-import ConfirmModal from '@/components/ConfirmModal.vue'
 import BaseButton from '@/components/ui/BaseButton.vue'
 import LoadingState from '@/components/ui/LoadingState.vue'
 import { useAccountStore } from '@/stores/account'
-import { useRanchStore } from '@/stores/ranch'
+import { useRanchStore, type RanchFacility } from '@/stores/ranch'
 import { useStatusStore } from '@/stores/status'
 import { useToastStore } from '@/stores/toast'
 
 /**
  * 牧场面板(11-17 新玩法)。
- * 功能对照农场面板: 总览 + 一键巡牧场(收获→催产→喂食) + 每只动物手动操作。
+ * 功能对照农场面板: 总览 + 每只动物按状态手动操作; 自动行为由设置里的牧场开关控制。
  * 喂食方式枚举(4/5/6)抓包还没确认完整语义, 界面先只提供"巡牧场"这一条经过验证的路径。
  */
 const ranchStore = useRanchStore()
@@ -103,8 +102,6 @@ async function buyCub(g: any) {
     refresh()
   }
 }
-const careVisible = ref(false)
-const careLoading = ref(false)
 const operateLoading = ref(-1)
 const opBusy = ref('')
 
@@ -117,8 +114,20 @@ watch(overview, () => {
   elapsedSec.value = 0
 })
 
-function produceInSec(a: { produceInSec: number }) {
-  return Math.max(0, a.produceInSec - elapsedSec.value)
+/** 距下次产出秒数; null = 还没进入产出周期(幼年/未开轮), 不能当成"可收" */
+function produceInSec(a: { harvestInSec?: number | null, produceInSec?: number | null }) {
+  const raw = a.harvestInSec ?? a.produceInSec
+  if (raw === null || raw === undefined)
+    return null
+  return Math.max(0, raw - elapsedSec.value)
+}
+
+/** 该动物现在能不能收 —— 以后端派生字段为准, 前端不再自己用秒数猜 */
+function isHarvestable(a: { harvestable?: boolean, harvestInSec?: number | null, produceInSec?: number | null }) {
+  if (typeof a.harvestable === 'boolean')
+    return a.harvestable
+  const sec = produceInSec(a)
+  return sec !== null && sec <= 0
 }
 
 function formatTime(sec: number) {
@@ -135,7 +144,7 @@ const careSummary = computed(() => {
   if (!ov)
     return { harvestable: 0, hungry: 0, mutant: 0 }
   return {
-    harvestable: ov.animals.filter(a => a.produceInSec === 0 && a.stage >= 1).length,
+    harvestable: ov.animals.filter(a => isHarvestable(a)).length,
     hungry: ov.animals.filter(a => a.feedState === 1).length,
     mutant: ov.animals.filter(a => a.mutant).length,
   }
@@ -147,7 +156,7 @@ interface PenView {
   title: string
   icon: string
   capacity: number
-  facility?: { slot: number, name: string, level: number, stored: number, capacity: number }
+  facility?: RanchFacility
   animals: any[]
   emptySlots: number
   /** 容量为 0 且没动物 = 该建筑还没解锁(棚需要玩家等级更高才开, 与窝不同步) */
@@ -234,41 +243,21 @@ function refresh(immediate = false) {
   }, 1500)
 }
 
-async function handleCare() {
-  const id = currentAccountId.value
-  if (!id)
-    return
-  careVisible.value = false
-  careLoading.value = true
-  try {
-    const r = await ranchStore.care(id)
-    const parts: string[] = []
-    if (r.harvested > 0)
-      parts.push(`收获 ${r.harvested}`)
-    if (r.produced > 0)
-      parts.push(`催产 ${r.produced}`)
-    if (r.fed > 0)
-      parts.push(`喂食 ${r.fed}`)
-    toast.success(`巡牧场完成${parts.length ? `：${parts.join('，')}` : '（本轮无可做操作）'}`)
-  }
-  catch (e: any) {
-    toast.error(e?.message || '巡牧场失败')
-  }
-  finally {
-    careLoading.value = false
-    refresh()
-  }
-}
-
-async function runOp(op: string, slot = 0) {
+/** 单个操作(每只动物的丰收/催产、商城单买等) */
+async function runOp(op: string, slot = 0, extra: Record<string, any> = {}) {
   const id = currentAccountId.value
   if (!id)
     return
   opBusy.value = op
   operateLoading.value = slot
   try {
-    const r = await ranchStore.operate(id, { op, slot })
-    toast.success(`${r.action}成功${r.detail ? `（${r.detail}）` : ''}`)
+    const r = await ranchStore.operate(id, { op, slot, ...extra })
+    if (r && r.ok === false) {
+      toast.error(r.error || '操作未成功')
+    }
+    else {
+      toast.success(`${r.action}成功${r.detail ? `（${r.detail}）` : ''}`)
+    }
   }
   catch (e: any) {
     toast.error(e?.message || '操作失败')
@@ -276,12 +265,8 @@ async function runOp(op: string, slot = 0) {
   finally {
     opBusy.value = ''
     operateLoading.value = -1
-    refresh()
+    void refresh()
   }
-}
-
-function confirmCare() {
-  careVisible.value = true
 }
 
 watch(currentAccountId, () => refresh(true))
@@ -447,45 +432,6 @@ onUnmounted(() => {
               <span>经验 {{ overview.ranchExp }}</span>
             </div>
           </div>
-          <!-- 整场操作(对照农场的整田操作): 有牧场数据才显示 -->
-          <div v-if="overview" class="grid grid-cols-2 gap-2 sm:flex sm:flex-wrap sm:justify-end">
-            <button
-              type="button"
-              class="col-span-2 min-h-[44px] flex items-center justify-center gap-1.5 border border-orange-600 rounded-lg bg-orange-600 px-3 py-2 text-sm text-white font-medium shadow-sm transition-colors sm:col-auto active:scale-[0.98] disabled:cursor-not-allowed hover:border-orange-700 hover:bg-orange-700 disabled:opacity-50"
-              :disabled="careLoading || opBusy !== ''"
-              @click="confirmCare"
-            >
-              <i class="i-carbon-flash shrink-0 text-base" aria-hidden="true" />
-              一键巡牧场（收获 → 催产 → 喂食）
-            </button>
-            <button
-              type="button"
-              class="min-h-[44px] flex items-center justify-center gap-1.5 border border-green-300 rounded-lg bg-green-50 px-3 py-2 text-sm text-green-700 font-medium transition-colors active:scale-[0.98] disabled:cursor-not-allowed dark:border-green-700 dark:bg-green-900/30 hover:bg-green-100 dark:text-green-300 disabled:opacity-40"
-              :disabled="careLoading || opBusy !== ''"
-              @click="runOp('buycub')"
-            >
-              <i class="i-fas-paw shrink-0 text-base" aria-hidden="true" />
-              买幼崽（收益最大）
-            </button>
-            <button
-              type="button"
-              class="min-h-[44px] flex items-center justify-center gap-1.5 border border-amber-300 rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-700 font-medium transition-colors active:scale-[0.98] disabled:cursor-not-allowed dark:border-amber-700 dark:bg-amber-900/30 hover:bg-amber-100 dark:text-amber-300 disabled:opacity-40"
-              :disabled="careLoading || opBusy !== ''"
-              @click="runOp('feedmachine')"
-            >
-              <i class="i-carbon-zap shrink-0 text-base" aria-hidden="true" />
-              牧草机补草
-            </button>
-            <button
-              type="button"
-              class="min-h-[44px] flex items-center justify-center gap-1.5 border border-lime-300 rounded-lg bg-lime-50 px-3 py-2 text-sm text-lime-700 font-medium transition-colors active:scale-[0.98] disabled:cursor-not-allowed dark:border-lime-700 dark:bg-lime-900/30 hover:bg-lime-100 dark:text-lime-300 disabled:opacity-40"
-              :disabled="careLoading || opBusy !== ''"
-              @click="runOp('rotation')"
-            >
-              <i class="i-carbon-shopping-cart shrink-0 text-base" aria-hidden="true" />
-              游商兑换
-            </button>
-          </div>
         </div>
 
         <!-- 摘要 -->
@@ -558,7 +504,7 @@ onUnmounted(() => {
               牧场还没有动物
             </div>
             <div class="max-w-md text-xs text-gray-400 leading-relaxed">
-              点击上方「买幼崽（收益最大）」自动买入收益最高的幼崽；
+              去「幼崽商城」页签逐个购买，或开启设置里的「自动买幼崽」；
               也可以去 QQ 农场的牧场里手动摆放。
             </div>
           </div>
@@ -582,8 +528,14 @@ onUnmounted(() => {
                     未解锁
                   </span>
                 </h4>
-                <div v-if="pen.facility" class="text-[11px] text-gray-400">
-                  {{ pen.facility.name || pen.title }}{{ pen.facility.level ? ` Lv${pen.facility.level}` : '' }}
+                <div v-if="pen.facility" class="flex items-center gap-1 text-[11px] text-gray-400">
+                  <span>{{ pen.facility.name || pen.title }}{{ pen.facility.level ? ` Lv${pen.facility.level}` : '' }}</span>
+                  <span
+                    v-if="pen.facility.upgrading"
+                    class="rounded bg-sky-100 px-1 py-0.5 text-[10px] text-sky-700 dark:bg-sky-900/40 dark:text-sky-300"
+                  >
+                    升级中
+                  </span>
                 </div>
               </div>
 
@@ -630,8 +582,9 @@ onUnmounted(() => {
                   </div>
 
                   <div class="mt-1 text-center text-[10px]">
-                    <span v-if="produceInSec(a) > 0" class="text-orange-500">{{ formatTime(produceInSec(a)) }} 后产出</span>
-                    <span v-else class="text-amber-600 font-medium dark:text-amber-400">待产出 / 可收</span>
+                    <span v-if="isHarvestable(a)" class="text-amber-600 font-medium dark:text-amber-400">可收获</span>
+                    <span v-else-if="produceInSec(a) !== null" class="text-orange-500">{{ formatTime(produceInSec(a) ?? 0) }} 后产出</span>
+                    <span v-else class="text-gray-400">未开始产出</span>
                   </div>
 
                   <div
@@ -642,16 +595,11 @@ onUnmounted(() => {
                     金券 {{ a.sellCost.amount }}
                   </div>
 
-                  <div class="mt-auto w-full flex gap-1 pt-2">
+                  <!-- 单只收获: 服务端未提供该接口(CollectProduce/HarvestAnimal 实测不存在),
+                       收获由设置里的「自动收获」开关统一执行, 这里只显示状态 -->
+                  <div v-if="a.canProduce" class="mt-auto w-full flex gap-1 pt-2">
                     <button
-                      type="button"
-                      class="min-h-[36px] flex-1 border border-amber-300 rounded-lg bg-amber-50 px-2 py-1.5 text-xs text-amber-700 font-medium transition dark:border-amber-700 dark:bg-amber-900/30 hover:bg-amber-100 dark:text-amber-300 disabled:opacity-40"
-                      :disabled="operateLoading === a.slot || opBusy !== ''"
-                      @click="runOp('harvest', a.slot)"
-                    >
-                      收获
-                    </button>
-                    <button
+                      v-if="a.canProduce"
                       type="button"
                       class="min-h-[36px] flex-1 border border-sky-300 rounded-lg bg-sky-50 px-2 py-1.5 text-xs text-sky-700 font-medium transition dark:border-sky-700 dark:bg-sky-900/30 hover:bg-sky-100 dark:text-sky-300 disabled:opacity-40"
                       :disabled="operateLoading === a.slot || opBusy !== ''"
@@ -686,9 +634,15 @@ onUnmounted(() => {
                 <i class="i-carbon-zap text-base text-amber-500" aria-hidden="true" />
                 <span class="text-gray-700 font-medium dark:text-gray-200">{{ f.name || '牧草机' }}</span>
                 <span v-if="f.level" class="text-gray-400">Lv{{ f.level }}</span>
+                <span
+                  v-if="f.upgrading"
+                  class="rounded bg-sky-100 px-1 py-0.5 text-[10px] text-sky-700 dark:bg-sky-900/40 dark:text-sky-300"
+                >
+                  升级中
+                </span>
               </div>
               <div class="text-gray-500 dark:text-gray-400">
-                存量 {{ f.stored }} / {{ f.capacity || '?' }}
+                {{ f.slot === 10002 ? '牧草' : '占位' }} {{ f.stored }} / {{ f.capacity || '?' }}
               </div>
             </div>
           </div>
@@ -696,14 +650,5 @@ onUnmounted(() => {
       </div>
     </div>
 
-    <ConfirmModal
-      :show="careVisible"
-      title="一键巡牧场"
-      message="依次执行：收获可收产物 → 催产 → 喂食。确定执行吗？"
-      :loading="careLoading"
-      confirm-text="开始"
-      @confirm="handleCare"
-      @cancel="careVisible = false"
-    />
   </div>
 </template>
