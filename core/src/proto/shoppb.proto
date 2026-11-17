@@ -74,3 +74,41 @@ message BuyGoodsReply {
 message GoodsUnlockNotify {
     repeated GoodsInfo goods_list = 1;
 }
+
+// --- 游商(兑换集市, slot 7; 20261117 抓包北栎号) ---
+message RotationShopInfoRequest {
+    int64 shop_id = 1;               // 抓包恒 7
+}
+message RotationShopInfoReply {
+    // 通用 wire 解析见 ranch.js parseRotationShopReply(结构未完全定 proto 化)
+    // 1=营业, 3=刷新时间戳, 5=[分组], 6=[商品]
+}
+
+// 游商购买(20261117 16:27:11 实测): {1:uid, 2:数量, 3:刷新时间戳, 4:1}
+// uid = RotationShopInfoReply 商品里的 #13(唯一序号); #3 是游商当前刷新时间(秒)
+message RotationBuyGoodsRequest {
+    int64 uid = 1;
+    int64 num = 2;
+    int64 refresh_at = 3;
+    int64 flag = 4;                  // 抓包恒 1
+}
+message RotationBuyGoodsReply {
+    RotationGoods goods = 1;         // 买到的商品信息
+    repeated corepb.Item get_items = 2;   // 获得的物品(响应 #2 {1:80011, 2:1, 6:68342, 7:1})
+}
+message RotationGoods {
+    int64 field1 = 1;
+    int64 num = 2;
+    int64 item_id = 3;               // 80011
+    int64 field4 = 4;
+    int64 currency_id = 5;           // 7002 便便
+    int64 price = 6;
+    int64 field10 = 10;
+    int64 field11 = 11;
+    LimitText limit_text = 12;       // "最低等级"
+    int64 uid = 13;
+}
+message LimitText {
+    string text = 1;
+    // 2 未解析
+}

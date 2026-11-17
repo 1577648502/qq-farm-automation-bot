@@ -215,3 +215,12 @@ message RanchOpLimit {
     // 3 未出现
     int64 limit = 4;                 // 每日上限
 }
+// --- 偷好友牧场产物(AnimalService.StealProduce, 20261117 抓包) ---
+// 请求: {1: 好友gid} (08<gid>); 仅当好友牧场 GetRanchDetail 显示有可偷产物时客户端才发
+// 响应: {1: 好友牧场 RanchInfo(偷后全量)}
+message StealProduceRequest {
+    int64 host_gid = 1;
+}
+message StealProduceReply {
+    RanchInfo ranch = 1;
+}

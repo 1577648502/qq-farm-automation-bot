@@ -184,7 +184,28 @@ async function harvestRanch(flag = 1, hostGid = 0) {
  *             → LeaveHomestead{1:gid}
  * @returns {{ok: boolean, detail: string}}
  */
-async function cleanFriendRanch(hostGid) {
+/**
+ * 清理自己的牧场(RanchService.CleanAllRanch)。
+ * ⚠ 20261117 北栎号抓包修正: 这个接口清理的是**自己**的牧场, 请求是空 body(`1200`),
+ * 服务端按当前场景推导主人 —— 之前误实现为"带 gid 清好友牧场"。
+ * 自己牧场里"待清理"(便便)积累后点清理产出便便(7002)。
+ * @returns {{ok: boolean}}
+ */
+async function cleanOwnRanch() {
+    const body = types.CleanAllRanchRequest.encode(types.CleanAllRanchRequest.create({
+        host: {},
+    })).finish();
+    await network.sendMsgAsync('gamepb.animalpb.RanchService', 'CleanAllRanch', body);
+    return { ok: true };
+}
+
+/**
+ * 偷好友牧场产物(AnimalService.StealProduce, 20261117 抓包)。
+ * 客户端流程: EnterHomestead{1:gid, 2:2} → GetRanchDetail{1:gid, 2:{}}
+ *             → [有可偷产物才发] StealProduce{1:gid} → (下家)
+ * @returns {Promise<{ok: boolean, ranch: object}>}
+ */
+async function stealFriendProduce(hostGid) {
     const gid = toNum(hostGid);
     if (!gid) throw new Error('缺少好友 gid');
     // EnterHomesteadRequest 无 proto 定义, 手拼字节(抓包: {1:gid, 2:2} 2=牧场场景)
@@ -197,10 +218,17 @@ async function cleanFriendRanch(hostGid) {
     await network.sendMsgAsync('gamepb.visitpb.VisitService', 'EnterHomestead', enterBody);
     await sleep(300);
     try {
-        const cleanBody = types.CleanAllRanchRequest.encode(types.CleanAllRanchRequest.create({
-            host_gid: toLong(gid), host: {},
+        const detail = await getRanchDetail(gid);
+        // 可偷判定(20261117 抓包对比): 动物 feed_state(#5)==4(产物就绪) 才有可偷产物
+        // 被偷的好友全部动物 f5=4/f6=2; 没得偷的 f5=3(产出中)/1(成长中)
+        const animals = (detail.ranch && detail.ranch.animals) || [];
+        const hasStealable = animals.some(a => toNum(a.feed_state) === 4);
+        if (!hasStealable) return { ok: false, reason: 'nothing_to_steal', gid };
+        const stealBody = types.StealProduceRequest.encode(types.StealProduceRequest.create({
+            host_gid: toLong(gid),
         })).finish();
-        await network.sendMsgAsync('gamepb.animalpb.RanchService', 'CleanAllRanch', cleanBody);
+        const { body: replyBody } = await network.sendMsgAsync('gamepb.animalpb.AnimalService', 'StealProduce', stealBody);
+        return { ok: true, gid, ranch: types.StealProduceReply.decode(replyBody).ranch };
     } finally {
         await sleep(300);
         const leaveBody = (() => {
@@ -210,7 +238,6 @@ async function cleanFriendRanch(hostGid) {
         })();
         await network.sendMsgAsync('gamepb.visitpb.VisitService', 'LeaveHomestead', leaveBody).catch(() => {});
     }
-    return { ok: true, gid };
 }
 
 // ============ 展示层: 面板用的视图 ============
@@ -540,14 +567,27 @@ async function runRanchCare(opts = {}) {
 
     await gap();
 
-    // 5.5 清理好友牧场(便便是游商兑换的货币, 必须在游商步骤之前清出今天的便便)
-    if (opts.cleanFriends !== false && isAutomationOn('ranch_clean_friends')) {
+    // 5.5a 清理自己的牧场(20261117 抓包: CleanAllRanch 清自己, 产便便 → 游商货币)
+    if (opts.cleanOwn !== false) {
         try {
-            const r = await autoCleanFriendRanches(opts);
-            result.cleanedFriends = r.cleaned;
-            if (r.cleaned > 0) result.details.push(`清理${r.cleaned}个牧场`);
+            const r = await autoCleanOwnRanch();
+            result.cleanedFriends += r.cleaned;   // 沿用统计字段
+            if (r.cleaned > 0) result.details.push('清理牧场');
         } catch (e) {
-            logWarn('牧场', `清理好友牧场失败: ${e.message}`, { module: 'ranch', event: '清理好友牧场', result: 'error' });
+            logWarn('牧场', `清理牧场失败: ${e.message}`, { module: 'ranch', event: '清理牧场', result: 'error' });
+        }
+    }
+
+    await gap();
+
+    // 5.5b 偷好友牧场产物(20261117 抓包: StealProduce{gid}, feed_state==4 才偷)
+    if (opts.stealFriends !== false && isAutomationOn('ranch_steal')) {
+        try {
+            const r = await autoStealFriendProduce(opts);
+            result.stolenFriends = r.cleaned;
+            if (r.cleaned > 0) result.details.push(`偷${r.cleaned}家`);
+        } catch (e) {
+            logWarn('牧场', `偷好友产物失败: ${e.message}`, { module: 'ranch', event: '偷好友产物', result: 'error' });
         }
     }
 
@@ -726,6 +766,27 @@ const ROTATION_SHOP_ID = 7;
 const ROTATION_MALL_SLOT = 7;
 
 /** 查询游商(兑换集市)状态与商品 */
+/**
+ * 游商购买(ShopService.RotationBuyGoods, 20261117 北栎号抓包 byte-exact):
+ * 请求 {1:uid, 2:数量, 3:刷新时间戳(秒), 4:1}。
+ * @returns {{ok: boolean, items: Array<{id:number,count:number}>}}
+ */
+async function purchaseRotationGoods(uid, count = 1, refreshAtSec = 0) {
+    const body = types.RotationBuyGoodsRequest.encode(types.RotationBuyGoodsRequest.create({
+        uid: toLong(toNum(uid)),
+        num: toLong(count),
+        refresh_at: toLong(Math.floor(refreshAtSec / 1000) || 0),
+        flag: 1,
+    })).finish();
+    const { body: replyBody } = await network.sendMsgAsync('gamepb.shoppb.ShopService', 'RotationBuyGoods', body);
+    const reply = types.RotationBuyGoodsReply.decode(replyBody);
+    const items = (reply.get_items || []).map(it => ({ id: toNum(it.id), count: toNum(it.count) }));
+    log('游商', `购买成功: ${items.map(i => `#${i.id}x${i.count}`).join('，') || '(无物品回执)'}`, {
+        module: 'ranch', event: '游商购买', result: 'ok', uid: toNum(uid), count,
+    });
+    return { ok: true, items };
+}
+
 async function getRotationShop() {
     const body = types.GetRanchDetailRequest.encode(types.GetRanchDetailRequest.create({})).finish();
     void body; // RotationShopInfo 的请求体就是 {1:7}, 不依赖 ranch proto
@@ -827,14 +888,30 @@ function walkWire(buf) {
  * @returns {{bought: number, details: string[]}}
  */
 /**
- * 自动清理好友牧场(20261117 抓包的 CleanAllRanch 链路)。
- * 节流: 每个好友每天只清一次(内存记录, 重启重置无妨 —— 服务端有自己的每日上限)。
- * @returns {{cleaned: number, details: string[]}}
+ * 自动清理自己的牧场(产出便便 → 游商货币)。
+ * 每轮巡牧场发一次 CleanAllRanch(空 body); 没东西可清时服务端拒绝, 静默跳过。
+ * ⚠ 20261117 抓包修正: CleanAllRanch 清的是自己的牧场, 不是好友的。
  */
-const _cleanedToday = new Map();   // gid -> dateKey
-async function autoCleanFriendRanches(opts = {}) {
+async function autoCleanOwnRanch() {
+    try {
+        await cleanOwnRanch();
+        return { cleaned: 1, details: ['清理完成'] };
+    } catch (e) {
+        // 没有待清理内容 = 正常状态, 静默
+        return { cleaned: 0, details: [] };
+    }
+}
+
+/**
+ * 自动偷好友牧场产物(AnimalService.StealProduce, 20261117 抓包)。
+ * 流程: EnterHomestead{gid,2} → GetRanchDetail{gid,2:{}} → feed_state==4 才发 StealProduce{gid}。
+ * 节流: 每个好友每天偷一次(内存记录; 偷过的产物有冷却, 服务端也有每日上限)。
+ * @returns {{cleaned: number, details: string[]}} cleaned = 偷到的次数(沿用字段名)
+ */
+const _stealToday = new Map();   // gid -> dateKey
+async function autoStealFriendProduce(opts = {}) {
     const result = { cleaned: 0, details: [] };
-    const maxPerRound = Math.max(1, toNum(opts.maxCleanPerRound) || 10);
+    const maxPerRound = Math.max(1, toNum(opts.maxStealPerRound) || 10);
     const todayKey = new Date().toDateString();
 
     const { getFriendsList } = require('./friend');
@@ -845,22 +922,24 @@ async function autoCleanFriendRanches(opts = {}) {
         if (result.cleaned >= maxPerRound) break;
         const gid = toNum(f && f.gid);
         if (!gid) continue;
-        if (_cleanedToday.get(gid) === todayKey) continue;
+        if (_stealToday.get(gid) === todayKey) continue;
         try {
-            await cleanFriendRanch(gid);
-            _cleanedToday.set(gid, todayKey);
-            result.cleaned += 1;
-            result.details.push(f.name || gid);
+            const r = await stealFriendProduce(gid);
+            _stealToday.set(gid, todayKey);
+            if (r.ok) {
+                result.cleaned += 1;
+                result.details.push(f.name || gid);
+            }
             await sleep(800);
         } catch (e) {
-            // 清理失败(没得清/权限不足)也标记今天, 别每轮都撞
-            _cleanedToday.set(gid, todayKey);
+            // 偷失败(没得偷/权限不足)也标记今天, 别每轮都撞
+            _stealToday.set(gid, todayKey);
             await sleep(500);
         }
     }
     if (result.cleaned > 0) {
-        log('牧场', `清理好友牧场 x${result.cleaned}: ${result.details.slice(0, 6).join('，')}`, {
-            module: 'ranch', event: '清理好友牧场', result: 'ok', count: result.cleaned,
+        log('牧场', `偷好友产物 x${result.cleaned}: ${result.details.slice(0, 6).join('，')}`, {
+            module: 'ranch', event: '偷好友产物', result: 'ok', count: result.cleaned,
         });
     }
     return result;
@@ -895,8 +974,9 @@ async function autoBuyRotationShop(opts = {}) {
         const count = Math.min(maxByLimit, affordable);
         if (count <= 0) continue;
         try {
-            // 游商商品挂在 mall slot 7; 用 Purchase(商品唯一序号 uid 走 goodsId 通道)
-            const r = await purchaseCatalogGoods(g.uid, count, ROTATION_MALL_SLOT, 'mall');
+            // ⚠ 20261117 抓包修正: 游商购买的真实接口是 RotationBuyGoods,
+            //   请求 {1:uid, 2:数量, 3:刷新时间戳, 4:1} —— 不是 MallService.Purchase
+            const r = await purchaseRotationGoods(g.uid, count, shop.refreshAt);
             if (r && (r.ok !== false)) {
                 poopCount -= g.price * count;
                 result.bought += count;
@@ -1149,7 +1229,7 @@ async function operateRanch(opts = {}) {
     // 便于定位"半更新"部署下 admin/worker 版本不一致的问题
     if (typeof opts === 'string') opts = { op: opts };
     const op = String((opts && opts.op) || '').trim();
-    if (op && !['harvest', 'produce', 'feed', 'feedmachine', 'buycub', 'rotation', 'clean'].includes(op)) {
+    if (op && !['harvest', 'produce', 'feed', 'feedmachine', 'buycub', 'rotation', 'clean', 'steal'].includes(op)) {
         logWarn('牧场', `收到未知操作: ${JSON.stringify(opts).slice(0, 200)}`, {
             module: 'ranch', event: '操作牧场', result: 'unknown_op', op,
         });
@@ -1204,16 +1284,29 @@ async function operateRanch(opts = {}) {
             };
         }
         case 'clean': {
-            // 清理好友牧场(opts.gid 指定单个好友; 不传则批量)
-            if (opts.gid) {
-                await cleanFriendRanch(toNum(opts.gid));
-                return { ok: true, action: '清理牧场', detail: `gid=${toNum(opts.gid)}` };
-            }
-            const r = await autoCleanFriendRanches(opts);
+            // 清理自己的牧场(20261117 抓包修正: CleanAllRanch 只清自己)
+            const r = await autoCleanOwnRanch();
             return {
                 ok: true,
-                action: '清理好友牧场',
-                detail: r.cleaned > 0 ? `清理${r.cleaned}个: ${r.details.slice(0, 6).join('，')}` : '今天没有可清理的好友牧场',
+                action: '清理牧场',
+                detail: r.cleaned > 0 ? '清理完成' : '没有待清理的内容',
+            };
+        }
+        case 'steal': {
+            // 偷好友牧场产物(opts.gid 指定单个好友; 不传则批量)
+            if (opts.gid) {
+                const r = await stealFriendProduce(toNum(opts.gid));
+                return {
+                    ok: r.ok,
+                    action: '偷产物',
+                    detail: r.ok ? '偷取成功' : '该好友没有可偷的产物',
+                };
+            }
+            const r = await autoStealFriendProduce(opts);
+            return {
+                ok: true,
+                action: '偷好友产物',
+                detail: r.cleaned > 0 ? `偷了${r.cleaned}家: ${r.details.slice(0, 6).join('，')}` : '今天没有可偷的好友',
             };
         }
         default:
@@ -1246,8 +1339,10 @@ module.exports = {
     getCubShop,
     autoBuyCubs,
     autoSellRanchProducts,
-    cleanFriendRanch,
-    autoCleanFriendRanches,
+    cleanOwnRanch,
+    stealFriendProduce,
+    autoStealFriendProduce,
+    purchaseRotationGoods,
     getRanchWeightScore,
     __privateRanchFns: { parseRotationShopReply, parseFeedMachineReply, walkWire, isEmptyRanchView },
 };

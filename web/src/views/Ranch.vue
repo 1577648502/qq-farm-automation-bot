@@ -150,7 +150,7 @@ interface PenView {
   facility?: { slot: number, name: string, level: number, stored: number, capacity: number }
   animals: any[]
   emptySlots: number
-  /** 容量为 0 且没动物 = 该建筑还没解锁(如棚要牧场等级更高才开) */
+  /** 容量为 0 且没动物 = 该建筑还没解锁(棚需要玩家等级更高才开, 与窝不同步) */
   locked: boolean
 }
 
@@ -594,7 +594,7 @@ onUnmounted(() => {
               >
                 <div class="i-carbon-lock text-2xl" />
                 <div class="mt-2 text-[11px] text-gray-400">
-                  该建筑尚未解锁(提升牧场等级后开放)
+                  该建筑尚未解锁（提升玩家等级后开放）
                 </div>
               </div>
 

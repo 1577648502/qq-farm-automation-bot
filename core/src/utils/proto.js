@@ -63,6 +63,8 @@ async function loadProto() {
     types.GetRanchOpTimesReply = root.lookupType('gamepb.animalpb.GetRanchOpTimesReply');
     types.CleanAllRanchRequest = root.lookupType('gamepb.animalpb.CleanAllRanchRequest');
     types.CleanAllRanchReply = root.lookupType('gamepb.animalpb.CleanAllRanchReply');
+    types.StealProduceRequest = root.lookupType('gamepb.animalpb.StealProduceRequest');
+    types.StealProduceReply = root.lookupType('gamepb.animalpb.StealProduceReply');
 
     // 用户
     types.LoginRequest = root.lookupType('gamepb.userpb.LoginRequest');
@@ -114,6 +116,8 @@ async function loadProto() {
     types.ShopProfilesRequest = root.lookupType('gamepb.shoppb.ShopProfilesRequest');
     types.ShopProfilesReply = root.lookupType('gamepb.shoppb.ShopProfilesReply');
     types.ShopInfoRequest = root.lookupType('gamepb.shoppb.ShopInfoRequest');
+    types.RotationBuyGoodsRequest = root.lookupType('gamepb.shoppb.RotationBuyGoodsRequest');
+    types.RotationBuyGoodsReply = root.lookupType('gamepb.shoppb.RotationBuyGoodsReply');
     types.ShopInfoReply = root.lookupType('gamepb.shoppb.ShopInfoReply');
     types.BuyGoodsRequest = root.lookupType('gamepb.shoppb.BuyGoodsRequest');
     types.BuyGoodsReply = root.lookupType('gamepb.shoppb.BuyGoodsReply');
