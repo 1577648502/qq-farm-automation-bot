@@ -1544,6 +1544,9 @@ app.use('/api', (req, res, next) => {
         return { open: shop.open, refreshAt: shop.refreshAt, groups: shop.groups, goods: shop.goods };
     }));
 
+    // 饲养重量档位(兴牧庆典奖励表)
+    app.get('/api/ranch/weight-score', withAccount(accountId => provider.getRanchWeightScore(accountId)));
+
     // API: 领取每日免费稀有种子礼包
     app.post('/api/mengchong/claim-free-gift', async (req, res) => {
         const id = getAccId(req);

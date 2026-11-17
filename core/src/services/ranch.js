@@ -17,6 +17,7 @@ const network = require('../utils/network');
 const { getShopGoodsList, purchaseShopGoods } = require('./mall');
 const { types } = require('../utils/proto');
 const { toLong, toNum, log, logWarn, sleep } = require('../utils/utils');
+const { isAutomationOn } = require('../models/store');
 
 // ============ 底层 RPC ============
 
@@ -188,6 +189,37 @@ function isEmptyRanchView(view) {
             && (view.animals || []).length === 0);
 }
 
+// ============ 饲养重量档位(GetRanchWeightScoreV2) ============
+// 抓包: 响应 #3=当前状态?, #4=[{1:档位, 2:所需重量, 3:[{物品ID,数量}]}]
+// 档位 1~N 需要全服饲养重量达标(公告"兴牧庆典"), 奖励 1002 点券/80023 罐头等
+async function getRanchWeightScore() {
+    const { body: replyBody } = await network.sendMsgAsync(
+        'gamepb.illustratedpb.IllustratedService', 'GetRanchWeightScoreV2', Buffer.alloc(0));
+    const buf = Buffer.isBuffer(replyBody) ? replyBody : Buffer.from(replyBody || []);
+    const out = { tiers: [] };
+    for (const [f, w, v] of walkWire(buf)) {
+        if (f === 4 && w === 2) {
+            const tier = {};
+            const rewards = [];
+            for (const [f2, w2, v2] of walkWire(v)) {
+                if (f2 === 1 && w2 === 0) tier.level = Number(v2);
+                else if (f2 === 2 && w2 === 0) tier.requiredWeight = Number(v2);
+                else if (f2 === 3 && w2 === 2) {
+                    const r = {};
+                    for (const [f3, , v3] of walkWire(v2)) {
+                        if (f3 === 1) r.itemId = Number(v3);
+                        else if (f3 === 2) r.count = Number(v3);
+                    }
+                    if (r.itemId) rewards.push(r);
+                }
+            }
+            tier.rewards = rewards;
+            out.tiers.push(tier);
+        }
+    }
+    return out;
+}
+
 // ============ 面板 API ============
 
 // 面板 overview 节流: 同一账号 10s 内的重复请求直接复用上一次结果。
@@ -211,7 +243,8 @@ async function getFacilities() {
             const { body: replyBody } = await network.sendMsgAsync('gamepb.homesteadpb.HomesteadService', 'GetFacilityDetail', w.finish());
             const f = parseFeedMachineReply(replyBody);
             if (!f.name && !f.capacity && !f.level) continue;
-            facilities.push({ slot, ...f });
+            // 建筑类型: 10001=窝(小动物), 10002=棚/牧草机(大动物/饲料), 10000=装饰位
+            facilities.push({ slot, kind: slot === 10001 ? 'coop' : (slot === 10002 ? 'pen' : 'decor'), ...f });
         } catch (e) {
             // 1045115 建筑不存在 = 该槽位没建筑, 正常跳过
             if (parseRanchErrorCode(e) !== RANCH_ERR.BUILDING_MISSING) {
@@ -371,7 +404,7 @@ async function runRanchCare(opts = {}) {
     await gap();
 
     // 4. 出售产物(任务"出售鸡蛋"靠它驱动; type=107 的蛋/崽)
-    if (opts.sell !== false) {
+    if (opts.sell !== false && isAutomationOn('ranch_sell')) {
         try {
             const r = await autoSellRanchProducts(opts);
             result.sold = r.sold;
@@ -385,7 +418,7 @@ async function runRanchCare(opts = {}) {
     await gap();
 
     // 5. 买幼崽(任务"领养鸡幼崽N个"靠它驱动; 按收益比优先)
-    if (opts.buyCubs !== false) {
+    if (opts.buyCubs !== false && isAutomationOn('ranch_buy_cubs')) {
         try {
             const r = await autoBuyCubs(opts);
             result.boughtCubs = r.bought;
@@ -398,7 +431,7 @@ async function runRanchCare(opts = {}) {
     await gap();
 
     // 6. 游商兑换(便便换有机化肥, 纯赚)
-    if (opts.rotationShop !== false) {
+    if (opts.rotationShop !== false && isAutomationOn('ranch_rotation')) {
         try {
             const r = await autoBuyRotationShop(opts);
             result.rotationBought = r.bought;
@@ -595,19 +628,34 @@ async function getFeedMachine() {
     return parseFeedMachineReply(replyBody);
 }
 
+/**
+ * 解析建筑详情(GetFacilityDetail 回包 #1)。
+ * 抓包实测(牧草机 10002): #2 名称 #4 实例ID #5 等级 #6 升级价 #9 数量?
+ * #10 容量(窝=10/棚=7) #12/#13 未知 #14 容量(牧草机=100) #21 {2:当前量,7,8}
+ * 字段 #8/#10 与 #14 谁是容量随建筑类型而异, 都带出来由前端按类型展示。
+ */
 function parseFeedMachineReply(bodyBytes) {
     const buf = Buffer.isBuffer(bodyBytes) ? bodyBytes : Buffer.from(bodyBytes || []);
-    const out = { name: '', level: 0, stored: 0, capacity: 0 };
+    const out = { name: '', level: 0, stored: 0, capacity: 0, instanceId: 0, upgradeCost: null };
     const top = walkWire(buf);
     for (const [f, w, v] of top) {
         if (f === 1 && w === 2) {
             for (const [f2, w2, v2] of walkWire(v)) {
                 if (f2 === 2 && w2 === 2) out.name = v2.toString('utf8');
+                else if (f2 === 4 && w2 === 0) out.instanceId = Number(v2);
                 else if (f2 === 5 && w2 === 0) out.level = Number(v2);
+                else if (f2 === 6 && w2 === 2) {
+                    const inner = walkWire(v2);
+                    const id = inner.find(x => x[1] === 1);
+                    const amt = inner.find(x => x[1] === 2);
+                    out.upgradeCost = { itemId: id ? Number(id[3]) : 0, amount: amt ? Number(amt[3]) : 0 };
+                }
+                else if (f2 === 8 && w2 === 0) out.stored = Number(v2);
+                else if (f2 === 10 && w2 === 0) out.capacity = Number(v2);
                 else if (f2 === 14 && w2 === 0) out.capacity = Number(v2);
                 else if (f2 === 21 && w2 === 2) {
-                    for (const [f3, , v3] of walkWire(v2)) {
-                        if (f3 === 1) out.stored = Number(v3);
+                    for (const [f3, w3, v3] of walkWire(v2)) {
+                        if (f3 === 2 && w3 === 0) out.stored = Number(v3);
                     }
                 }
             }
@@ -870,5 +918,6 @@ module.exports = {
     getCubShop,
     autoBuyCubs,
     autoSellRanchProducts,
+    getRanchWeightScore,
     __privateRanchFns: { parseRotationShopReply, parseFeedMachineReply, walkWire, isEmptyRanchView },
 };

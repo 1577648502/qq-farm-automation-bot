@@ -1337,6 +1337,9 @@ async function handleApiCall(msg) {
             case 'getRotationShop':
                 result = await require('../services/ranch').getRotationShop();
                 break;
+            case 'getRanchWeightScore':
+                result = await require('../services/ranch').getRanchWeightScore();
+                break;
             case 'claimMengchongFreeGift':
                 result = await require('../services/mengchong').claimFreeSeedGift();
                 break;

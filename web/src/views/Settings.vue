@@ -725,6 +725,9 @@ function createDefaultAutomation(fertilizer: string = 'none') {
     mengchong_hunt: false,
     auto_use_items: true,
     ranch_auto: true,
+    ranch_sell: true,
+    ranch_buy_cubs: true,
+    ranch_rotation: true,
     rob_treasure: false,
     fertilizer,
     skip_own_weed_bug: false,
@@ -2427,6 +2430,25 @@ async function onBackupFileChange(ev: Event) {
 
             <section class="border border-gray-200 rounded-lg bg-white p-4 dark:border-gray-700 dark:bg-gray-800">
               <div class="mb-3 flex items-center gap-2">
+                <div class="i-fas-paw text-amber-600 dark:text-amber-400" />
+                <h4 class="text-sm text-gray-900 font-semibold dark:text-gray-100">
+                  牧场策略
+                </h4>
+              </div>
+              <div class="grid gap-3 2xl:grid-cols-2 sm:grid-cols-2 xl:grid-cols-1">
+                <BaseSwitch v-model="localAutomationSettings.automation.ranch_auto" label="自动经营牧场" />
+                <BaseSwitch v-model="localAutomationSettings.automation.ranch_sell" label="自动出售牧场产物" />
+                <BaseSwitch v-model="localAutomationSettings.automation.ranch_buy_cubs" label="自动买幼崽（收益最大）" />
+                <BaseSwitch v-model="localAutomationSettings.automation.ranch_rotation" label="自动游商兑换" />
+                <div class="col-span-full text-xs text-gray-400 dark:text-gray-500">
+                  自动经营包含：收获 → 催产 → 喂食 → 卖产物 → 买幼崽 → 游商兑换 → 牧草机补草，按 5~8 分钟一轮自动执行。
+                  关闭总开关后所有牧场动作停止；子开关可单独关闭某一步。
+                </div>
+              </div>
+            </section>
+
+            <section class="border border-gray-200 rounded-lg bg-white p-4 dark:border-gray-700 dark:bg-gray-800">
+              <div class="mb-3 flex items-center gap-2">
                 <div class="i-carbon-shopping-cart text-amber-600 dark:text-amber-400" />
                 <h4 class="text-sm text-gray-900 font-semibold dark:text-gray-100">
                   物资与好友
@@ -2435,8 +2457,6 @@ async function onBackupFileChange(ev: Event) {
               <div class="grid gap-3 2xl:grid-cols-2 sm:grid-cols-2 xl:grid-cols-1">
                 <BaseSwitch v-model="localAutomationSettings.automation.fertilizer_gift" label="自动填充化肥" />
                 <BaseSwitch v-model="localAutomationSettings.automation.auto_use_items" label="自动使用背包道具" />
-                <BaseSwitch v-model="localAutomationSettings.automation.ranch_auto" label="自动经营牧场" />
-                <span class="col-span-full text-xs text-gray-400 dark:text-gray-500">收获/催产/喂食/卖产物/按收益买幼崽/游商兑换/牧草机补草，跟随巡田节奏自动执行。</span>
                 <span class="col-span-full text-xs text-gray-400 dark:text-gray-500">宝箱、各类礼包等可直接使用的道具会自动用掉；化肥/罐头容器、种子解锁卡、狗粮、活动道具、红包与兑换券不会自动用。</span>
                 <BaseSwitch v-model="localAutomationSettings.automation.fertilizer_buy_organic" label="自动购买有机化肥" />
                 <BaseSwitch v-model="localAutomationSettings.automation.fertilizer_buy_normal" label="自动购买无机化肥" />

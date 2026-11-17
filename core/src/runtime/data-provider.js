@@ -148,6 +148,7 @@ function createDataProvider(options) {
         operateRanch: (accountRef, opts) => callWorkerApi(resolveAccountRefId(accountRef), 'operateRanch', [opts || {}]),
         getCubShop: (accountRef) => callWorkerApi(resolveAccountRefId(accountRef), 'getCubShop'),
         getRotationShop: (accountRef) => callWorkerApi(resolveAccountRefId(accountRef), 'getRotationShop'),
+        getRanchWeightScore: (accountRef) => callWorkerApi(resolveAccountRefId(accountRef), 'getRanchWeightScore'),
         claimMengchongFreeGift: (accountRef) => callWorkerApi(resolveAccountRefId(accountRef), 'claimMengchongFreeGift'),
         feedMengchongPet: (accountRef) => callWorkerApi(resolveAccountRefId(accountRef), 'feedMengchongPet'),
         autoFeedMengchongPet: (accountRef, opts) => callWorkerApi(resolveAccountRefId(accountRef), 'autoFeedMengchongPet', [opts || {}]),

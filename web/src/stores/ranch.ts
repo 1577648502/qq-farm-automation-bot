@@ -97,6 +97,15 @@ export const useRanchStore = defineStore('ranch', () => {
     return data.data as { shop: CubShopItem[], best: CubShopItem | null }
   }
 
+  async function fetchWeightScore(accountId: string) {
+    const { data } = await api.get('/api/ranch/weight-score', {
+      headers: { 'x-account-id': accountId },
+    })
+    if (!data?.ok)
+      throw new Error(data?.error || '获取饲养档位失败')
+    return data.data as { tiers: Array<{ level: number, requiredWeight: number, rewards: Array<{ itemId: number, count: number }> }> }
+  }
+
   async function fetchRotationShop(accountId: string) {
     const { data } = await api.get('/api/ranch/rotation-shop', {
       headers: { 'x-account-id': accountId },
@@ -106,7 +115,7 @@ export const useRanchStore = defineStore('ranch', () => {
     return data.data as { open: boolean, refreshAt: number, goods: RotationShopGoods[] }
   }
 
-  async function operate(accountId: string, opts: { op: string, slot?: number, feedType?: number, count?: number }) {
+  async function operate(accountId: string, opts: { op: string, slot?: number, feedType?: number, count?: number, maxSpend?: number }) {
     const { data } = await api.post('/api/ranch/operate', opts, {
       headers: { 'x-account-id': accountId },
     })
@@ -115,5 +124,5 @@ export const useRanchStore = defineStore('ranch', () => {
     return data.data
   }
 
-  return { overview, loading, operating, fetchOverview, fetchCubShop, fetchRotationShop, care, operate }
+  return { overview, loading, operating, fetchOverview, fetchCubShop, fetchRotationShop, fetchWeightScore, care, operate }
 })
