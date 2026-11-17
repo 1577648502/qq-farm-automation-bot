@@ -46,6 +46,20 @@ function isExpectedRanchError(e) {
         || code === RANCH_ERR.RATE_LIMITED;
 }
 
+// 场景类型(抓包 20261116: PlayerSceneLogin 请求体 {1:1}=农场(0801), {1:2}=牧场(0802))
+const RANCH_SCENE_TYPE = 2;
+
+/**
+ * 切换到牧场场景(globalscenepb.GlobalSceneService.PlayerSceneLogin {1:2})。
+ * 必须在调用任何牧场 RPC 之前执行, 否则服务端返回空数据并限流。
+ */
+async function enterRanchScene() {
+    const w = protobuf.Writer.create();
+    w.uint32((1 << 3) | 0).int64(toLong(RANCH_SCENE_TYPE));
+    await network.sendMsgAsync(
+        'gamepb.globalscenepb.GlobalSceneService', 'PlayerSceneLogin', w.finish());
+}
+
 async function getRanchDetail(hostGid = 0) {
     // ⭐ 抓包实测(20261116 21:57): 必须先 PlayerSceneLogin {1:2} 切到牧场场景,
     //    之后的 GetRanchDetail 才返回真实数据; 不切场景 → 返回"空 ranch"
