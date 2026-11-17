@@ -287,6 +287,21 @@ const ACTIVITY_OPERATE = {
     QINGMEI_BREW: 15,
     QINGMEI_SELL: 16,
     STAR_LIGHT_UP: 21,   // 观星礼录 点亮/领取当日星宿
+    // 「牧歌初启」(2026-11-17 抓包实测 cmd 号)
+    MUGE_TASK_CLAIM: 82,      // 2026111704 活动任务奖励
+    MUGE_INVITE_CLAIM: 84,    // 2026111703 邀请好友助力奖励
+    MUGE_TIER_CLAIM: 85,      // 2026111702 全服饲养重量档位奖励
+    MUGE_SHARE_CLAIM: 86,     // 2026111705 分享任务逐个领
+    MUGE_SHARE_BEFORE: 87,    // 2026111705 分享前置
+    MUGE_SHARE_AFTER: 89,     // 2026111705 分享完成后领取
+};
+// 「牧歌初启」活动 ID(2026-11-17 上线, 结束 1796054399 ≈ 2026-12-31)
+const MUGE_ACTIVITY_GROUP = 2026111700;
+const MUGE_SUB_IDS = {
+    TIERS: 2026111702,     // 全服饲养重量档位
+    INVITE: 2026111703,    // 邀请好友助力
+    TASKS: 2026111704,     // 活动任务
+    SHARE: 2026111705,     // 分享任务
 };
 const OTHER_EVENT_NAME_TERMS = [
     '南瓜乐翻天',
@@ -1322,6 +1337,115 @@ function taskLooksActivityRelated(task, activityItemIds, terms) {
     return includesAny(String(task && task.desc || ''), terms);
 }
 
+/**
+ * 「牧歌初启」一键领取 (2026-11-17 新活动, group 2026111700)。
+ * 协议来源: wx-code-grabber/captures/20261117-144729_牧场流程验证.decoded.jsonl
+ *
+ * 四个子活动:
+ *   2026111702 全服饲养重量档位(cmd=85): 响应 muge_tiers {1:全服总重量, 2:[{1:档位,2:所需,3:奖励,4:状态}]}
+ *   2026111703 邀请好友助力(cmd=84):     响应 muge_invite {1:[{1:档位,2:需人数,3:奖励,4:状态}]}
+ *   2026111704 活动任务(cmd=82):         响应 muge_tasks {1:[{1:序号,2:进度,3:目标,4:状态,5:奖励,6:描述}]}
+ *   2026111705 分享任务(cmd=86/87/89):   响应 muge_share {1:[{1:序号,2:次数}]}
+ *
+ * 领取策略: 对 02/03/04 发一次 {1:0}=领全部可领; 分享任务需要逐个领(每档一次 cmd=86),
+ * 分享本体(87/89)依赖真实分享回执, 不自动做 —— 只领已完成的。
+ */
+async function claimMugeActivity(options = {}) {
+    const result = { tiers: 0, invites: 0, tasks: 0, shares: 0, details: [], skipped: [] };
+    if (options.enabled === false) return result;
+
+    const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+
+    // ---- 1702 全服饲养重量档位 (cmd=85) ----
+    try {
+        const reply = await operateActivity(MUGE_SUB_IDS.TIERS, ACTIVITY_OPERATE.MUGE_TIER_CLAIM, {
+            muge_tier_claim: { claim_all: 0 },
+        });
+        const body = reply && reply.activity && reply.activity.muge_tiers;
+        const tiers = (body && body.tiers) || [];
+        const claimed = tiers.filter(t => toNum(t.status) === 3);
+        // 第一次调用后 status=3 的都算本次或之前领过的; 用 details 报告进度
+        const claimableBefore = tiers.filter(t => toNum(t.status) !== 1);
+        result.tiers = claimed.length;
+        if (tiers.length > 0) {
+            const total = toNum(body.totalWeight);
+            const nextTier = tiers.find(t => toNum(t.status) === 1);
+            result.details.push(`档位${claimed.length}/${tiers.length}档(全服重量${total}${nextTier ? `, 下一档需${toNum(nextTier.requiredWeight)}` : ''})`);
+        }
+    } catch (e) {
+        result.skipped.push(`档位奖励: ${e.message}`);
+    }
+    await sleep(500);
+
+    // ---- 1703 邀请好友助力 (cmd=84) ----
+    try {
+        const reply = await operateActivity(MUGE_SUB_IDS.INVITE, ACTIVITY_OPERATE.MUGE_INVITE_CLAIM, {
+            muge_invite_claim: { claim_all: 0 },
+        });
+        const body = reply && reply.activity && reply.activity.muge_invite;
+        const tiers = (body && body.tiers) || [];
+        const claimed = tiers.filter(t => toNum(t.status) === 3);
+        result.invites = claimed.length;
+        if (tiers.length > 0) result.details.push(`助力${claimed.length}/${tiers.length}档`);
+    } catch (e) {
+        result.skipped.push(`助力奖励: ${e.message}`);
+    }
+    await sleep(500);
+
+    // ---- 1704 活动任务 (cmd=82) ----
+    try {
+        const reply = await operateActivity(MUGE_SUB_IDS.TASKS, ACTIVITY_OPERATE.MUGE_TASK_CLAIM, {
+            muge_task_claim: { claim_all: 0 },
+        });
+        const body = reply && reply.activity && reply.activity.muge_tasks;
+        const tasks = (body && body.tasks) || [];
+        const done = tasks.filter(t => toNum(t.status) === 3);
+        result.tasks = done.length;
+        if (tasks.length > 0) result.details.push(`任务${done.length}/${tasks.length}个`);
+    } catch (e) {
+        result.skipped.push(`活动任务: ${e.message}`);
+    }
+    await sleep(500);
+
+    // ---- 1705 分享任务 (cmd=86 逐个领; 分享本体不做) ----
+    try {
+        const probe = await operateActivity(MUGE_SUB_IDS.SHARE, ACTIVITY_OPERATE.MUGE_SHARE_BEFORE, {
+            muge_share_empty: {},
+        });
+        const shareBody = probe && probe.activity && probe.activity.muge_share;
+        const shareTasks = (shareBody && shareBody.tasks) || [];
+        for (const t of shareTasks) {
+            const seq = toNum(t.seq);
+            if (!seq) continue;
+            try {
+                await operateActivity(MUGE_SUB_IDS.SHARE, ACTIVITY_OPERATE.MUGE_SHARE_CLAIM, {
+                    muge_share_claim: { task: { seq: toLong(seq), flag: 1 }, field2: 0 },
+                });
+                result.shares += 1;
+                await sleep(400);
+            } catch (e) {
+                // 单个失败不中断(未完成的分享任务服务端会拒绝)
+            }
+        }
+        if (shareTasks.length > 0) result.details.push(`分享奖励${result.shares}/${shareTasks.length}个`);
+    } catch (e) {
+        result.skipped.push(`分享任务: ${e.message}`);
+    }
+
+    const summary = result.details.join(', ');
+    if (summary) {
+        log('活动', `牧歌初启: ${summary}`, {
+            module: 'activity', event: '牧歌初启', result: 'ok',
+            tiers: result.tiers, invites: result.invites, tasks: result.tasks, shares: result.shares,
+        });
+    } else if (result.skipped.length > 0 && options.verbose) {
+        logWarn('活动', `牧歌初启跳过: ${result.skipped.join('; ')}`, {
+            module: 'activity', event: '牧歌初启', result: 'skip',
+        });
+    }
+    return result;
+}
+
 async function claimActivityTasks(options = {}) {
     const activityName = String(options.activityName || DEFAULT_ACTIVITY_NAME).trim() || DEFAULT_ACTIVITY_NAME;
     const catalog = await getActivityOverview({ activityName, includeLive: false });
@@ -1392,6 +1516,7 @@ module.exports = {
     DEFAULT_ACTIVITY_NAME,
     buildActivityCatalog,
     claimActivityTasks,
+    claimMugeActivity,
     claimBattlePassRewards,
     claimDailySignin,
     drawActivity,

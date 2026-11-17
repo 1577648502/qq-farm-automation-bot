@@ -212,6 +212,8 @@ async function runDailyRoutines(force = false) {
         await runAutumnWish('daily_routine');
         // 快乐不独享: 每日快乐值 + 档位奖励
         await runHappyShare('daily_routine');
+        // 牧歌初启(11-17 新活动): 档位/助力/任务/分享奖励一键领取
+        await require('../services/activity').claimMugeActivity({ verbose: false }).catch(() => null);
         // 奶茶热销中: 领收银台收益 + 加工 + 喇叭
         await runMilkTea('daily_routine');
         // 看广告礼包(跳过广告直接领)
@@ -531,6 +533,10 @@ function startDailyRoutineTimer() {
     // 看广告礼包: 每 20 分钟自查一次(商城接口说已领就不再请求广告接口)
     workerScheduler.setIntervalTask('ad_gift_interval', 20 * 60 * 1000, () => {
         runAdGift('interval').catch(() => null);
+    }, { preventOverlap: true });
+    // 牧歌初启(11-17 新活动): 每 20 分钟自查一次(档位/任务是进度驱动, 中途达标要及时领)
+    workerScheduler.setIntervalTask('muge_interval', 20 * 60 * 1000, () => {
+        require('../services/activity').claimMugeActivity({ verbose: false }).catch(() => null);
     }, { preventOverlap: true });
     // 奶茶热销中: 每 15 分钟自查一次(收银台满载会停业, 这是最关键的一步)
     workerScheduler.setIntervalTask('milk_tea_interval', 15 * 60 * 1000, () => {

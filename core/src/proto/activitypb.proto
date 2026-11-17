@@ -57,6 +57,70 @@ message ActivityData {
     ActivityBodyCampCheer camp_cheer = 107;
     ActivityBodyQingmei qingmei = 108;
     ActivityBodyStarRegister star_register = 110;
+
+    // ---- 「牧歌初启」(2026-11-17 抓包实测) ----
+    ActivityBodyMugeTasks muge_tasks = 124;           // 2026111704 活动任务
+    ActivityBodyMugeInvite muge_invite = 125;         // 2026111703 邀请好友助力
+    ActivityBodyMugeTiers muge_tiers = 126;           // 2026111702 全服饲养重量档位
+    ActivityBodyMugeShare muge_share = 127;           // 2026111705 分享任务
+}
+
+// 1704 活动任务: 任务 {1:序号, 2:当前进度, 3:目标, 4:状态(1=未达标,2=可领?,3=已领), 5:奖励, 6:描述, 7:类型}
+message ActivityBodyMugeTasks {
+    repeated MugeTask tasks = 1;
+    // 2,3 未确认
+}
+message MugeTask {
+    int64 seq = 1;
+    int64 progress = 2;          // 当前进度(部分任务缺省)
+    int64 target = 3;            // 目标次数
+    int64 status = 4;            // 观察值 3=已领
+    corepb.Item reward = 5;
+    string desc = 6;             // 如 "累计饲养动物5只"
+    int64 kind = 7;
+}
+
+// 1703 邀请好友: {1:助力档位, 2:已助力好友列表}
+message ActivityBodyMugeInvite {
+    repeated MugeInviteTier tiers = 1;
+    repeated MugeInviteFriend friends = 2;   // 字段语义未完全确认
+}
+message MugeInviteTier {
+    int64 seq = 1;               // 档位
+    int64 required = 2;          // 需要助力人数(1/2/3/5/7/10)
+    corepb.Item reward = 3;
+    int64 status = 4;            // 3=已领, 1=可领未领
+}
+message MugeInviteFriend {
+    int64 gid = 1;               // 好友 gid
+    // 2 头像等未解析
+    string name = 3;
+    int64 field4 = 4;
+    // 5 助力记录(未解析)
+}
+
+// 1702 全服饲养重量档位: {1:总重量, 2:档位列表}
+message ActivityBodyMugeTiers {
+    int64 totalWeight = 1;       // 全服饲养总重量(如 102235258)
+    repeated MugeTier tiers = 2;
+}
+message MugeTier {
+    int64 seq = 1;               // 档位 1..N
+    int64 requiredWeight = 2;    // 所需重量(2000000/5000000/.../500000000)
+    corepb.Item reward = 3;
+    int64 status = 4;            // 1=未达标, 2=可领, 3=已领
+}
+
+// 1705 分享任务: {1:[{1:序号, 2:次数}], 2/3/4: 标志}
+message ActivityBodyMugeShare {
+    repeated MugeShareTask tasks = 1;
+    int64 field2 = 2;
+    int64 field3 = 3;
+    int64 field4 = 4;
+}
+message MugeShareTask {
+    int64 seq = 1;               // 1..10
+    int64 count = 2;             // 完成次数(1=已领)
 }
 
 // ============ 观星礼录 (星宿活动, head.type=13) ============
@@ -300,7 +364,30 @@ message OperateRequest {
     TreasureHuntSettleReq treasure_hunt_settle = 145;      // 实测 cmd=45 (领取护送结算奖励, 09-18)
     TreasureHuntChallengeReq treasure_hunt_challenge = 143; // 实测 cmd=43 (夺宝: 发起挑战/使用挑战书)
     TreasureHuntMiscReq treasure_hunt_misc = 150;          // 实测 cmd=50 (夺宝: 查我的夺宝状态)
+
+    // ---- 「牧歌初启」(2026-11-17, group 2026111700, 抓包 20261117-144729) ----
+    // 各子活动的 Operate 参数字段 = 响应 ActivityData 里对应 body 的字段号 - 1
+    MugeTierClaimReq muge_tier_claim = 185;          // cmd=85 (2026111702 全服饲养重量档位奖励, {1:0}=领全部可领)
+    MugeInviteClaimReq muge_invite_claim = 184;      // cmd=84 (2026111703 邀请好友助力奖励, {1:0}=领全部可领)
+    MugeTaskClaimReq muge_task_claim = 182;          // cmd=82 (2026111704 活动任务奖励, {1:0}=领全部可领)
+    MugeShareClaimReq muge_share_claim = 186;        // cmd=86 (2026111705 分享任务逐个领, {1:{1:序号,2:1},2:0})
+    MugeShareEmptyReq muge_share_empty = 187;        // cmd=87 (2026111705 分享前置, 空 msg)
+    MugeShareEmptyReq muge_share_after = 189;        // cmd=89 (2026111705 分享完成后, 空 msg)
 }
+
+// 「牧歌初启」奖励领取请求(都是 {1:0} = 领全部可领; 通用空壳)
+message MugeTierClaimReq   { int64 claim_all = 1; }
+message MugeInviteClaimReq { int64 claim_all = 1; }
+message MugeTaskClaimReq   { int64 claim_all = 1; }
+message MugeShareClaimReq  {
+    MugeShareTaskRef task = 1;
+    int64 field2 = 2;          // 抓包恒 0
+}
+message MugeShareTaskRef {
+    int64 seq = 1;             // 分享任务序号 1..10
+    int64 flag = 2;            // 抓包恒 1
+}
+message MugeShareEmptyReq {}
 
 message OperateReply {
     int64 id = 1;
@@ -327,6 +414,9 @@ message OperateReply {
     TreasureHuntChallengeRsp treasure_hunt_challenge = 143; // 实测 cmd=43 响应(战报: 胜负 + 奖励)
     TreasureHuntSettleRsp treasure_hunt_settle = 145;      // 实测 cmd=45 响应(护送结算奖励)
     TreasureHuntMiscRsp treasure_hunt_misc = 150;          // 实测 cmd=50 响应(回显)
+
+    // 「牧歌初启」cmd=89(分享完成) 的奖励发放记录
+    repeated corepb.Item muge_share_rewards = 189;
 }
 
 // 观星礼录 点亮/领取 (实测: 小程序打开活动页即发 cmd=21 + 本空请求体,
