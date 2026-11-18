@@ -1496,7 +1496,8 @@ onUnmounted(() => {
                     <span v-else-if="a.produceUnknownReason === 'hungry'" class="text-red-500" title="动物没吃上牧草，停止产出。牧草断了会自动去牧场商店购买，也可在「牧场商城 → 道具」手动买">饥饿·缺牧草</span>
                     <span v-else-if="a.produceUnknownReason === 'cooling'" class="text-gray-500" title="产出冷却中，到点后自动可收">产出冷却</span>
                     <span v-else-if="a.produceUnknownReason === 'justHarvested'" class="text-gray-400" title="刚收获过，吃草后会进入下一轮产出">已收获·待下一轮</span>
-                    <span v-else-if="!a.grown" class="text-sky-600 dark:text-sky-400" title="幼年动物正在成长，长成后才开始产出">成长中</span>
+                    <span v-else-if="!a.grown && produceInSec(a) !== null" class="text-sky-600 dark:text-sky-400" title="幼年成长倒计时（长成后自动开始产出）">{{ formatTime(produceInSec(a) ?? 0) }} 后长大</span>
+                    <span v-else-if="!a.grown" class="text-sky-600 dark:text-sky-400" title="幼年动物正在成长（服务端未下发成长结束时刻）">成长中</span>
                     <span v-else class="text-gray-400" title="服务端本次未下发下次产出时刻">产出待定</span>
                   </div>
 
