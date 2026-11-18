@@ -56,6 +56,9 @@ const ranchSummary = computed(() => {
     coop: ov.coopCount || 0,
     pen: ov.penCount || 0,
     grass: ov.grassCount || 0,
+    level: ov.ranchLevel || 0,
+    levelExp: ov.ranchLevelExp || 0,
+    levelNeeded: ov.ranchLevelNeeded || 0,
   }
 })
 
@@ -698,6 +701,21 @@ useIntervalFn(() => void fetchRanchOverview(), 60000)
           <div class="mb-2 flex items-baseline gap-1.5">
             <span class="text-2xl text-amber-600 font-bold tabular-nums">{{ ranchSummary.total }}</span>
             <span class="text-xs text-gray-400">只在养</span>
+            <span v-if="ranchSummary.level" class="ml-auto rounded bg-amber-100 px-1.5 py-0.5 text-[11px] text-amber-700 dark:bg-amber-900/30 dark:text-amber-300">
+              牧场 Lv{{ ranchSummary.level }}
+            </span>
+          </div>
+          <div v-if="ranchSummary.levelNeeded" class="mb-2">
+            <div class="mb-0.5 flex justify-between text-[10px] text-gray-400">
+              <span>经验</span>
+              <span class="tabular-nums">{{ ranchSummary.levelExp }} / {{ ranchSummary.levelNeeded }}</span>
+            </div>
+            <div class="h-1 w-full overflow-hidden rounded-full bg-gray-100 dark:bg-gray-700">
+              <div
+                class="h-full rounded-full bg-amber-500 transition-all"
+                :style="{ width: `${Math.min(100, Math.round((ranchSummary.levelExp / ranchSummary.levelNeeded) * 100))}%` }"
+              />
+            </div>
           </div>
           <div class="mb-2 flex flex-wrap gap-1.5 text-[11px]">
             <span class="rounded-full bg-amber-100 px-2 py-0.5 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400">可收 {{ ranchSummary.harvestable }}</span>

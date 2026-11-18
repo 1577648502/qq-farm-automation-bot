@@ -737,6 +737,18 @@ async function getRanchBag() {
     return types.GetBagReply.decode(replyBody);
 }
 
+/**
+ * 牧场经验(物品 1102 累计值) —— 注意它和农场经验(1101)是两个独立计数器。
+ * 实测(20261118 抓包): 1102 = 17396, 游戏内牧场界面显示 Lv9 / 7396/1.3万,
+ * 即 17396 - 7396 = 10000 = Lv9 的累计起点。所以 1102 是牧场经验累计总值。
+ */
+async function getRanchExp() {
+    const reply = await getRanchBag();
+    const list = [...(reply.items || []), ...(reply.virtual_items || [])];
+    const it = list.find(x => toNum(x.id) === 1102);
+    return it ? toNum(it.count) : 0;
+}
+
 /** 牧场背包物品列表 [{id, count, itemType?}] */
 async function getRanchBagItems() {
     const reply = await getRanchBag();
@@ -1033,6 +1045,7 @@ module.exports = {
     getBagDetail,
     sellItems,
     getRanchBag,
+    getRanchExp,
     getRanchBagItems,
     getRanchBagDetail,
     getRanchBagTabs,
