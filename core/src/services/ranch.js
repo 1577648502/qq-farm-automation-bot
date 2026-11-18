@@ -2736,11 +2736,16 @@ async function operateRanch(opts = {}) {
             return { ok: true, action: '幼崽入栏', detail: `已放 ${placedN} 只，当前在养 ${lastAnimals} 只` };
         }
         case 'collect': {
-            // ⚠ CollectProduce 服务端不存在(对照实验证实), 不要发请求
-            return { ok: false, action: '收取产物', error: '该接口服务端未开放，请用「收获」批量收取' };
-            let n = 0;
-            for (const g of (r.gains || [])) for (const it of (g.items || [])) n += toNum(it.count);
-            return { ok: true, action: '收取产物', detail: `槽${slot} → ${n} 个` };
+            // 收取副产品(官方文档 RPC 一览明确存在; 旧对照实验的"不存在"是参数错误)
+            // 一次一只, 指定槽; 客户端语义: 收走架上产物, 动物留栏
+            try {
+                const cr = await collectProduce(slot);
+                const got = ((cr.items || cr.get_items || [])).map(it => `${toNum(it.id)}x${toNum(it.count)}`).join(',');
+                return { ok: true, action: '收取产物', detail: `槽${slot} ${got || '(成功)'}`, raw: got };
+            } catch (e) {
+                const code = parseRanchErrorCode(e);
+                return { ok: false, action: '收取产物', error: `槽${slot} code=${code}: ${String(e.message).slice(0, 80)}` };
+            }
         }
         case 'harvestanimal': {
             // ⚠ HarvestAnimal 服务端不存在(对照实验证实), 不要发请求
