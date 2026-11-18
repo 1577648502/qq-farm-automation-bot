@@ -293,9 +293,8 @@ async function harvestAnimal(slot = 0, hostGid = 0) {
  */
 const RANCH_CUB_STRATEGY_LABELS = {
     max_profit: '收益比最高(整只回收 ÷ 幼崽成本)',
-    max_level: '等级最高(优先解锁高级动物)',
-    preferred: '指定幼崽优先',
-    bag_priority: '背包幼崽优先(有就不买)',
+    max_level: '等级最高(优先高级动物)',
+    bag_priority: '按优先列表(背包幼崽顺序)',
 };
 
 /**
@@ -309,7 +308,7 @@ const RANCH_CUB_STRATEGY_LABELS = {
  */
 function applyCubStrategy(cubs, opts = {}) {
     let strategy = String(opts.strategy || '').trim();
-    let preferredId = toNum(opts.preferredCubId) || 0;
+    let priority = Array.isArray(opts.priority) ? opts.priority : null;
     if (!strategy) {
         try {
             const store = require('../models/store');
@@ -318,32 +317,29 @@ function applyCubStrategy(cubs, opts = {}) {
                 : null;
             if (cfg) {
                 strategy = String(cfg.ranchCubStrategy || '');
-                preferredId = toNum(cfg.ranchPreferredCubId) || 0;
+                if (!priority) priority = Array.isArray(cfg.ranchCubPriority) ? cfg.ranchCubPriority : [];
             }
         } catch { /* 读不到配置就用默认 */ }
     }
     if (!RANCH_CUB_STRATEGY_LABELS[strategy]) strategy = 'max_profit';
 
     const list = [...cubs];
-    switch (strategy) {
-        case 'bag_priority':
-            // 该策略下"买"这件事本身就该让位给入栏, 由调用方(autoPlaceCubs)处理
-            return [];
-        case 'preferred': {
-            const hit = list.filter(g => g.animalId === preferredId || g.goodsId === preferredId);
-            if (hit.length > 0) return hit;
-            // 指定项不在售: 退回收益比, 而不是什么都不买
-            break;
-        }
-        case 'max_level':
-            // 高等级动物(animalId 大的通常更高级)优先, 同级再看收益比
-            list.sort((a, b) => (b.animalId - a.animalId) || (b.valueRatio - a.valueRatio));
-            return list;
-        case 'max_profit':
-        default:
-            break;
+    if (strategy === 'max_level') {
+        // 高等级动物优先, 同级比收益比
+        list.sort((a, b) => (b.animalId - a.animalId) || (b.valueRatio - a.valueRatio));
+        return list;
     }
-    // max_profit / preferred 回退: 收益比从高到低
+    if (strategy === 'bag_priority' && Array.isArray(priority) && priority.length) {
+        // 按用户设定的顺序挑: 列表靠前的优先, 不在列表里的排后面(仍按收益比)
+        const indexMap = new Map(priority.map((id, i) => [Number(id), i]));
+        list.sort((a, b) => {
+            const ai = indexMap.has(a.animalId) ? indexMap.get(a.animalId) : Number.MAX_SAFE_INTEGER;
+            const bi = indexMap.has(b.animalId) ? indexMap.get(b.animalId) : Number.MAX_SAFE_INTEGER;
+            return (ai - bi) || (b.valueRatio - a.valueRatio);
+        });
+        return list;
+    }
+    // max_profit / bag_priority 未配置列表: 收益比从高到低
     list.sort((a, b) => b.valueRatio - a.valueRatio);
     return list;
 }
@@ -1726,24 +1722,36 @@ const GROWN_VALUE = {
 /** 幼崽商店列表(带收益比) */
 async function getCubShop() {
     const goods = await getShopGoodsList(CUB_SHOP_ID);
-    return goods.map(g => ({
-        goodsId: toNum(g.id),
-        animalId: toNum(g.item_id),
-        name: getAnimalName(toNum(g.item_id)),
-        price: toNum(g.price),
-        limit: toNum(g.limit_count),
-        bought: toNum(g.bought_num),
-        // 剩余可买: 0 = 已售罄; null = 不限购(前端按 99 封顶)
-        remaining: toNum(g.limit_count) > 0
-            ? Math.max(0, toNum(g.limit_count) - toNum(g.bought_num))
-            : null,
-        unlocked: !!g.unlocked,
-        currencyId: toNum(g.price_id) || 1007,
-        // 收益比 = 整只回收 / 幼崽成本
-        valueRatio: GROWN_VALUE[toNum(g.item_id)]
-            ? GROWN_VALUE[toNum(g.item_id)] / Math.max(1, toNum(g.price))
-            : 0,
-    })).sort((a, b) => b.valueRatio - a.valueRatio);
+    // 统一用 ranch-analytics 的推导(从 ItemInfo 的成品动物价算),
+    // 不再依赖下面这张手工维护的 GROWN_VALUE 表 —— 两者曾经对不上。
+    let grownValueOf = null;
+    try {
+        grownValueOf = require('./ranch-analytics').getGrownValue;
+    } catch { /* 拿不到就回退到静态表 */ }
+
+    return goods.map(g => {
+        const animalId = toNum(g.item_id);
+        const price = Math.max(1, toNum(g.price));
+        const grown = grownValueOf ? grownValueOf(animalId) : (GROWN_VALUE[animalId] || 0);
+        return {
+            goodsId: toNum(g.id),
+            animalId,
+            name: getAnimalName(animalId),
+            price: toNum(g.price),
+            limit: toNum(g.limit_count),
+            bought: toNum(g.bought_num),
+            // 剩余可买: 0 = 已售罄; null = 不限购(前端按 99 封顶)
+            remaining: toNum(g.limit_count) > 0
+                ? Math.max(0, toNum(g.limit_count) - toNum(g.bought_num))
+                : null,
+            unlocked: !!g.unlocked,
+            currencyId: toNum(g.price_id) || 1007,
+            // 整只回收价 + 收益比 + 单只净赚(前端排序/展示都用)
+            grownValue: grown,
+            valueRatio: grown > 0 ? grown / price : 0,
+            profit: grown > 0 ? grown - toNum(g.price) : null,
+        };
+    }).sort((a, b) => b.valueRatio - a.valueRatio);
 }
 
 /**
@@ -2039,8 +2047,38 @@ async function operateRanch(opts = {}) {
             }
         }
         case 'feed': {
-            await feedAnimal(feedType, count);
-            return { ok: true, action: '喂食', detail: `方式${feedType}x${count}` };
+            // ⚠ 1045202「网络繁忙」是服务端限流: 自动化巡检刚打完一轮请求时点"喂罐头"
+            //   很容易撞上。这不是故障, 应该退避后重试一次, 而不是直接把错误抛给用户。
+            const attempt = async () => feedAnimal(feedType, count);
+            try {
+                await attempt();
+                return { ok: true, action: '喂食', detail: `方式${feedType}x${count}` };
+            } catch (e) {
+                const code = parseRanchErrorCode(e);
+                if (code === RANCH_ERR.RATE_LIMITED) {
+                    // 退避 1.2 秒后重试一次(限流通常是瞬时的)
+                    await sleep(1200);
+                    try {
+                        await attempt();
+                        return { ok: true, action: '喂食', detail: `方式${feedType}x${count}(限流后重试成功)` };
+                    } catch (e2) {
+                        if (parseRanchErrorCode(e2) === RANCH_ERR.RATE_LIMITED) {
+                            return {
+                                ok: false, action: '喂食',
+                                error: '服务端限流(网络繁忙)，请稍等几秒再试。自动巡检刚跑完一轮时最容易撞上',
+                            };
+                        }
+                        throw e2;
+                    }
+                }
+                if (code === RANCH_ERR.CANS_EMPTY) {
+                    return { ok: false, action: '喂食', error: '罐头桶已用完，请先补充罐头' };
+                }
+                if (isExpectedRanchError(e)) {
+                    return { ok: false, action: '喂食', error: `当前无法喂食(code=${code})` };
+                }
+                throw e;
+            }
         }
         case 'feedmachine': {
             // 给牧草机补草(默认拉满 100, 实际受背包存量限制)
@@ -2260,7 +2298,7 @@ module.exports = {
     __privateRanchFns: {
         calcRanchLevel, parseRotationShopReply, parseFeedMachineReply, walkWire, isEmptyRanchView,
         // 幼崽: 供测试验证"背包已有幼崽就不再买 + 单轮上限"
-        autoBuyCubs, autoPlaceCubs,
+        autoBuyCubs, autoPlaceCubs, applyCubStrategy,
         // 游商: 供测试验证"等级不够就不发购买请求 + 不刷 error 日志"
         autoBuyRotationShop, isRotationNotPurchasable, rotationErrorHint,
     },

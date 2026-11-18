@@ -37,6 +37,47 @@ const currentTab = ref<'overview' | 'cubShop' | 'tiers' | 'tasks' | 'buildings'>
 const cubShopLoading = ref(false)
 const cubShopError = ref('')
 const cubShopList = ref<any[]>([])
+// 幼崽商城筛选/排序(对照种子商城的 FILTERS)
+const cubFilter = ref<'all' | 'available' | 'locked' | 'soldout'>('all')
+const cubSort = ref<'ratio' | 'price' | 'profit'>('ratio')
+
+/** 筛选后的幼崽列表 */
+const cubShopFiltered = computed(() => {
+  const list = cubShopList.value.filter((g: any) => {
+    switch (cubFilter.value) {
+      case 'available': return g.unlocked && (g.remaining === null || g.remaining === undefined || g.remaining > 0)
+      case 'locked': return !g.unlocked
+      case 'soldout': return g.unlocked && g.remaining !== null && g.remaining !== undefined && g.remaining <= 0
+      default: return true
+    }
+  })
+  const copy = [...list]
+  if (cubSort.value === 'price')
+    copy.sort((a: any, b: any) => a.price - b.price)
+  else if (cubSort.value === 'profit')
+    copy.sort((a: any, b: any) => (b.profit ?? -1) - (a.profit ?? -1))
+  else
+    copy.sort((a: any, b: any) => b.valueRatio - a.valueRatio)
+  return copy
+})
+
+const cubCounts = computed(() => {
+  const all = cubShopList.value
+  return {
+    all: all.length,
+    available: all.filter((g: any) => g.unlocked && (g.remaining === null || g.remaining === undefined || g.remaining > 0)).length,
+    locked: all.filter((g: any) => !g.unlocked).length,
+    soldout: all.filter((g: any) => g.unlocked && g.remaining !== null && g.remaining !== undefined && g.remaining <= 0).length,
+  }
+})
+
+/** 筛选按钮配置(模板里只引用, 不在表达式里构造对象) */
+const CUB_FILTERS = [
+  { key: 'all', label: '全部' },
+  { key: 'available', label: '可购买' },
+  { key: 'locked', label: '未解锁' },
+  { key: 'soldout', label: '已售罄' },
+] as const
 const cubBuyBusy = ref(0)
 // 幼崽商城加购(对齐农场商城「道具商城」的交互架构):
 //   quantities: goodsId -> 数量;  selectedCub: 待确认下单的商品;  确认弹窗
@@ -895,18 +936,45 @@ onUnmounted(() => {
             </BaseButton>
           </div>
         </div>
+        <!-- 筛选 + 排序(对照种子商城的 FILTERS) -->
+        <div class="mt-2 flex flex-wrap items-center gap-2">
+          <button
+            v-for="f in CUB_FILTERS"
+            :key="f.key"
+            type="button"
+            class="rounded-lg px-2.5 py-1 text-xs font-medium transition"
+            :class="cubFilter === f.key
+              ? 'bg-amber-500 text-white'
+              : 'bg-gray-100 text-gray-600 hover:bg-gray-200 dark:bg-gray-700 dark:text-gray-300'"
+            @click="cubFilter = f.key"
+          >
+            {{ f.label }} <span class="opacity-70">{{ cubCounts[f.key] }}</span>
+          </button>
+          <div class="flex-1"></div>
+          <select
+            v-model="cubSort"
+            class="h-8 border border-gray-300 rounded-lg bg-white px-2 text-xs dark:border-gray-600 dark:bg-gray-800"
+          >
+            <option value="ratio">按收益比</option>
+            <option value="profit">按单只净赚</option>
+            <option value="price">按价格</option>
+          </select>
+        </div>
       </div>
+
       <div class="p-3 sm:p-4">
-        <LoadingState v-if="cubShopLoading && !cubShopList.length" />
-        <div v-else-if="cubShopError" class="py-8 text-center text-sm text-gray-500">
+        <LoadingState v-if="cubShopLoading && !cubShopList.length" />        <div v-else-if="cubShopError" class="py-8 text-center text-sm text-gray-500">
           {{ cubShopError }}
         </div>
         <div v-else-if="!cubShopList.length" class="py-8 text-center text-sm text-gray-500">
           商店暂无在售幼崽
         </div>
+        <div v-else-if="!cubShopFiltered.length" class="py-8 text-center text-sm text-gray-500">
+          该筛选条件下没有幼崽
+        </div>
         <div v-else class="grid grid-cols-1 gap-3 md:grid-cols-3 lg:grid-cols-4 sm:grid-cols-2">
           <div
-            v-for="g in cubShopList"
+            v-for="g in cubShopFiltered"
             :key="g.goodsId"
             class="flex flex-col border rounded-lg p-3 text-center transition"
             :class="g.valueRatio >= 2.4
@@ -943,6 +1011,10 @@ onUnmounted(() => {
             </div>
             <div class="mt-0.5 text-[10px] text-gray-400">
               回收比 {{ (g.valueRatio || 0).toFixed(2) }}
+            </div>
+            <div v-if="g.profit !== null && g.profit !== undefined" class="text-[10px] text-emerald-600 dark:text-emerald-400">
+              单只净赚 {{ formatNumber(g.profit) }} 金券
+            </div>
             </div>
 
             <!-- 加购区: 数量步进 + 合计 + 购买(对齐农场商城) -->
@@ -1004,9 +1076,8 @@ onUnmounted(() => {
           </div>
         </div>
       </div>
-    </div>
 
-    <div v-else class="space-y-4">
+    <div v-if="currentTab === 'overview'" class="space-y-4">
       <div class="rounded-lg bg-white shadow dark:bg-gray-800">
         <!-- 头部 -->
         <div class="border-b border-gray-100 p-3 dark:border-gray-700 sm:p-4">

@@ -205,6 +205,10 @@ function createDataProvider(options) {
             const snapshot = {
                 plantingStrategy,
                 preferredSeedId,
+                // 牧场幼崽策略(独立于农场种植策略)
+                ranchCubStrategy: body.ranchCubStrategy,
+                ranchCubPriority: body.ranchCubPriority,
+                ranchBagCubPriority: body.ranchBagCubPriority,
                 intervals: body.intervals,
                 friendQuietHours: body.friendQuietHours,
                 stealDelaySeconds: body.stealDelaySeconds,

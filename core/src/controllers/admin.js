@@ -1560,6 +1560,14 @@ app.use('/api', (req, res, next) => {
     // 单项操作: {op: harvest|produce|feed, slot?, feedType?, count?}
     app.post('/api/ranch/operate', withAccount((accountId, req) => provider.operateRanch(accountId, req.body || {})));
 
+    // 幼崽收益排行(对照农场的 /api/analytics) —— 需要账号, 因为要拉实时商城价
+    app.get('/api/ranch/analytics', withAccount(async (accountId, req) => {
+        const sortBy = String(req.query.sort || 'ratio');
+        const shop = await provider.getCubShop(accountId);
+        const { getCubRankings } = require('../services/ranch-analytics');
+        return { rows: getCubRankings(shop, sortBy), sort: sortBy };
+    }, { softErrors: true }));
+
     // 幼崽商店(带收益比, 供"利益最大"展示) + 金券余额(面板加购要校验)
     app.get('/api/ranch/cub-shop', withAccount(async (accountId) => {
         const shop = await provider.getCubShop(accountId);
@@ -2181,6 +2189,10 @@ app.use('/api', (req, res, next) => {
             const fertilizerBuyCheckIntervalMinutes = id && (typeof store.getFertilizerBuyCheckIntervalMinutes === 'function') ? store.getFertilizerBuyCheckIntervalMinutes(id) : 30;
             const bagSeedPriority = id && (typeof store.getBagSeedPriority === 'function') ? store.getBagSeedPriority(id) : [];
             const bagSeedFallbackStrategy = id && (typeof store.getBagSeedFallbackStrategy === 'function') ? store.getBagSeedFallbackStrategy(id) : 'level';
+            // 牧场幼崽策略(独立于农场种植策略)
+            const ranchCubStrategy = id && (typeof store.getRanchCubStrategy === 'function') ? store.getRanchCubStrategy(id) : 'max_profit';
+            const ranchCubPriority = id && (typeof store.getRanchCubPriority === 'function') ? store.getRanchCubPriority(id) : [];
+            const ranchBagCubPriority = id && (typeof store.getRanchBagCubPriority === 'function') ? store.getRanchBagCubPriority(id) : true;
             const plantSeedExclude = id && (typeof store.getPlantSeedExclude === 'function') ? store.getPlantSeedExclude(id) : [];
             // 防封号(低调)模式(按账号)
             const stealth = id && (typeof store.getStealthConfig === 'function')
@@ -2235,6 +2247,9 @@ app.use('/api', (req, res, next) => {
                     fertilizerBuyCheckIntervalMinutes,
                     bagSeedPriority,
                     bagSeedFallbackStrategy,
+                    ranchCubStrategy,
+                    ranchCubPriority,
+                    ranchBagCubPriority,
                     plantSeedExclude,
                     // 防封号(低调)模式
                     stealthEnabled: !!stealth.enabled,
