@@ -65,7 +65,8 @@ function describeItem(item) {
 
 async function getTodayClaimStatus() {
     const body = types.GetTodayClaimStatusRequest.encode(types.GetTodayClaimStatusRequest.create({})).finish();
-    const { body: replyBody } = await sendMsgAsync(SERVICE, 'GetTodayClaimStatus', body);
+    // 收紧超时: 这个请求挂在每日任务串行链上, 默认 20s 一旦卡住会把后面所有任务拖死
+    const { body: replyBody } = await sendMsgAsync(SERVICE, 'GetTodayClaimStatus', body, 8000);
     return types.GetTodayClaimStatusReply.decode(replyBody);
 }
 
@@ -73,7 +74,7 @@ async function claimRedPacket(id) {
     const body = types.ClaimRedPacketRequest.encode(types.ClaimRedPacketRequest.create({
         id: toNum(id),
     })).finish();
-    const { body: replyBody } = await sendMsgAsync(SERVICE, 'ClaimRedPacket', body);
+    const { body: replyBody } = await sendMsgAsync(SERVICE, 'ClaimRedPacket', body, 8000);
     return types.ClaimRedPacketReply.decode(replyBody);
 }
 

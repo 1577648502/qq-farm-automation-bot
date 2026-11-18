@@ -488,6 +488,33 @@ async function confirmSell() {
   }
 }
 
+// ============ 偷好友牧场产物(会遍历所有好友, 先确认) ============
+const stealConfirming = ref(false)
+const stealLoading = ref(false)
+
+const stealMessage = computed(() => {
+  const account = currentAccount.value?.name || currentAccount.value?.nick || currentAccountId.value
+  return [
+    `账号：${account}`,
+    '将对**所有好友**的牧场逐个尝试偷取产物。',
+    '',
+    '这会在一段时间内连续访问每位好友的牧场。确认执行？',
+  ].join('\n')
+})
+
+async function confirmSteal() {
+  if (!currentAccountId.value || stealLoading.value)
+    return
+  stealLoading.value = true
+  try {
+    await runOp('steal')
+    stealConfirming.value = false
+  }
+  finally {
+    stealLoading.value = false
+  }
+}
+
 onMounted(() => refresh(true))
 
 onUnmounted(() => {
@@ -832,7 +859,7 @@ onUnmounted(() => {
                 type="button"
                 class="min-h-[38px] inline-flex items-center gap-1.5 border rounded-lg px-3 py-1.5 text-xs font-medium transition disabled:opacity-50 border-pink-300 bg-pink-50 text-pink-700 hover:bg-pink-100 dark:border-pink-700 dark:bg-pink-900/30 dark:text-pink-300"
                 :disabled="opBusy !== ''"
-                @click="runOp('steal')"
+                @click="stealConfirming = true"
               >
                 <div class="i-carbon-arrow-down-left" />
                 偷好友牧场
@@ -1050,6 +1077,17 @@ onUnmounted(() => {
       type="danger"
       @cancel="sellTarget = null"
       @confirm="confirmSell"
+    />
+
+    <ConfirmModal
+      :show="stealConfirming"
+      :loading="stealLoading"
+      title="确认偷取好友牧场产物"
+      :message="stealMessage"
+      confirm-text="确认偷取"
+      type="primary"
+      @cancel="stealConfirming = false"
+      @confirm="confirmSteal"
     />
 
   </div>

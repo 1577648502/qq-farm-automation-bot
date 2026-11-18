@@ -196,8 +196,9 @@ async function runDailyRoutines(force = false) {
         await performDailyMonthCardGift(force);
         await buyFreeGifts(force);
         await performDailyVipGift(force);
-        // 红包: 协议早就有了但一直没调用, 等于每天白丢一次
-        await performDailyRedPacket(force);
+        // 红包: 协议早就有了但一直没调用, 等于每天白丢一次。
+        // 单独 catch: 红包出问题不该连累后面的每日任务(外层 catch 会把整轮都中断)。
+        await performDailyRedPacket(force).catch(() => null);
         await checkAndBuyMysteryShop();
         await checkAndLightUpStar();
         await checkAndClaimSolarTerms();

@@ -51,6 +51,33 @@ function loadFrames() {
 }
 
 proto.loadProto().then(async () => {
+    section('0. 观察器绝不能打断 WS 收发(热路径上的安全底线)');
+    {
+        // observe() 直接被 network.encodeMsg / handleMessage 调用。它一旦抛异常,
+        // 登录、心跳、所有业务请求都会一起断 —— 这是比"漏采一帧"严重得多的事故。
+        observer.setEnabled(true);
+        observer.start();
+        let threw = false;
+        try {
+            // 各种畸形输入都不能逃逸出异常
+            observer.observe('C->S', 'gamepb.testpb.TestService.Bad', Buffer.from([0xFF, 0xFF, 0xFF]));
+            observer.observe('S->C', 'gamepb.testpb.TestService.Bad', Buffer.alloc(0));
+            observer.observe('S->C', '', Buffer.from('x'));
+            observer.observe('S->C', 'gamepb.testpb.TestService.Null', null);
+            observer.observe('S->C', 'gamepb.testpb.TestService.Undef', undefined);
+            observer.observe('C->S', '[Notify] x', Buffer.from([0x08, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x01]));
+        } catch (e) {
+            threw = true;
+            console.log('  observe 抛出了异常:', e.message);
+        }
+        check('畸形帧不抛异常', !threw);
+        // 采坏数据之后仍然正常工作
+        observer.observe('S->C', 'gamepb.testpb.TestService.Ok', Buffer.from([0x08, 0x01]));
+        const snap = observer.snapshot();
+        check('坏帧之后仍能正常采集', snap.interfaces.some(i => i.key === 'gamepb.testpb.TestService.Ok'),
+            snap.interfaces.map(i => i.key).slice(0, 3));
+    }
+
     section('1. 裸 wire 解析');
     {
         // 手工构造: #1 varint=150, #2 string="hi", #3 内嵌 {#1 varint=7}
@@ -172,6 +199,34 @@ proto.loadProto().then(async () => {
         }
         const base = path.join(DATA_DIR || '', 'protocol', 'baseline.json');
         check('baseline 文件已写出', fs.existsSync(base), base);
+    }
+
+    section('6. 脱敏: 登录/支付类请求不落盘样本(明文凭据不能留在磁盘)');
+    {
+        // 观察器记的是解密后明文; 登录请求 body 里有 openID/device_id, 不能存。
+        observer.observe('C->S', 'gamepb.userpb.UserService.Login', Buffer.from([0x08, 0x01, 0x12, 0x02, 0x41, 0x42]));
+        observer.observe('C->S', 'gamepb.userpb.UserService.PlayerLogin', Buffer.from([0x08, 0x02]));
+        observer.observe('C->S', 'gamepb.paypb.PayService.GetRechargeInfo', Buffer.from([0x08, 0x03]));
+        // 普通业务接口要保留样本(否则排查新玩法就没数据了)
+        observer.observe('S->C', 'gamepb.activitypb.ActivityService.GetGroup', Buffer.from([0x08, 0x04]));
+        observer.flush();
+
+        const file = path.join(DATA_DIR || '', 'protocol', 'catalog-proto-observer-test.json');
+        const data = JSON.parse(fs.readFileSync(file, 'utf8'));
+        const byKey = new Map((data.interfaces || []).map(i => [i.key, i]));
+
+        const login = byKey.get('gamepb.userpb.UserService.Login');
+        check('Login 仍被统计(指纹照采)', !!login && login.count >= 1, login && login.count);
+        check('Login 不保留样本', !!login && (!login.samples || login.samples.length === 0),
+            login && login.samples && login.samples.length);
+
+        const pay = byKey.get('gamepb.paypb.PayService.GetRechargeInfo');
+        check('支付类不保留样本', !!pay && (!pay.samples || pay.samples.length === 0),
+            pay && pay.samples && pay.samples.length);
+
+        const group = byKey.get('gamepb.activitypb.ActivityService.GetGroup');
+        check('普通业务接口保留样本', !!group && group.samples && group.samples.length > 0,
+            group && group.samples && group.samples.length);
     }
 
     observer.stop();

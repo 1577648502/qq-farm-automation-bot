@@ -135,8 +135,55 @@ function getEntry(key) {
  * @param {Buffer} body 明文业务 body(请求为加密前明文)
  * @param {{errorCode?:number, errorMessage?:string}} [meta]
  */
+/**
+ * 这个接口的 body 能不能落盘存样本。
+ *
+ * 为什么不能全存: 观察器记的是**解密后的明文**。登录/账号/支付类请求里带
+ * openID、device_id、订单号这类标识, 存进 data/protocol/ 等于把凭据明文留在磁盘。
+ * 这些接口仍然参与指纹统计(能发现结构变化), 只是不保留原始字节。
+ *
+ * 排查这类接口时用 FARM_PROTO_LOG=1 看实时日志, 或临时把环境变量
+ * FARM_PROTOCOL_SAMPLE_ALL=1 打开(自担风险, 仅调试用)。
+ */
+const SENSITIVE_KEY_PATTERNS = [
+    /UserService\.Login/i,
+    /UserService\.PlayerLogin/i,
+    /UserService\.DecryptOpenData/i,
+    /paypb\./i,
+    /recharge/i,
+    /\.Auth/i,
+    /Token/i,
+    /Verify/i,
+];
+
+function shouldKeepSample(key) {
+    if (process.env.FARM_PROTOCOL_SAMPLE_ALL === '1') return true;
+    return !SENSITIVE_KEY_PATTERNS.some(re => re.test(String(key || '')));
+}
+
+/**
+ * 记录一帧
+ *
+ * ⚠ 这个函数在 WS 收发的热路径上(network.encodeMsg / handleMessage 直接调用)。
+ *   它**绝对不能抛异常** —— 一旦抛出去就会打断登录/心跳/所有业务请求。
+ *   所以整段包在 try/catch 里, 采集失败只丢这一帧, 不影响游戏。
+ *
+ * @param {'C->S'|'S->C'} dir 方向
+ * @param {string} key service.method 或 [Notify] xxx
+ * @param {Buffer} body 明文业务 body(请求为加密前明文)
+ * @param {{errorCode?:number, errorMessage?:string}} [meta] 错误信息(仅统计用)
+ */
 function observe(dir, key, body, meta = {}) {
     if (!enabled || !key) return;
+    try {
+        observeUnsafe(dir, key, body, meta);
+    } catch {
+        // 故意静默: 观察器是附加能力, 任何情况下都不该让它影响游戏网络
+    }
+}
+
+/** 真正的采集逻辑; 调用方 observe() 已兜住异常 */
+function observeUnsafe(dir, key, body, meta = {}) {
     const buf = Buffer.isBuffer(body) ? body : Buffer.from(body || []);
     const entry = getEntry(key);
     if (!entry) return;
@@ -166,8 +213,12 @@ function observe(dir, key, body, meta = {}) {
                 grew = true;
             }
         }
-        // 采样本: 结构有增长时必存; 否则按数量采样
-        if (entry.samples.length < MAX_SAMPLES_PER_KEY && (grew || entry.count % 40 === 0)) {
+        // 采样本: 结构有增长时必存; 否则按数量采样。
+        // ⚠ 只存**结构安全**的接口: 登录/鉴权类请求体里有 openID、device_id 等设备标识,
+        //   落盘就是明文写在 data/protocol/ 里。这类一律不存样本(指纹照样采, 不影响发现结构变化)。
+        if (shouldKeepSample(key)
+            && entry.samples.length < MAX_SAMPLES_PER_KEY
+            && (grew || entry.count % 40 === 0)) {
             entry.samples.push({
                 at: Date.now(),
                 dir,

@@ -1751,10 +1751,11 @@ async function operateRanch(opts = {}) {
                 const r = await f.upgradeBuilding(toNum(opts.instId));
                 return { ok: true, action: '建筑升级', detail: `#${toNum(opts.instId)} → Lv${r.level}` };
             }
-            // 不带 instId = 一键: 先领竣工再升级(与自动流程同一套逻辑, 只是手动触发)
-            // 面板上"建筑升级"按钮走这里, 用户不必逐个点。
+            // 不带 instId 有两种意图, 用 opts.list 区分(不要悄悄改掉旧行为):
+            //   opts.list=true  → 只读: 返回建筑清单(排查用, 原来就是这个行为)
+            //   其他            → 一键: 先领竣工再升级(面板「建筑升级」按钮走这里)
             // ⚠ autoUpgradeBuildings 只认 maxPerRound, 领竣工是它内部的第一步, 没有别的开关。
-            if (opts.auto !== false) {
+            if (!opts.list) {
                 const r = await f.autoUpgradeBuildings({ maxPerRound: toNum(opts.maxPerRound) || 3 });
                 return {
                     ok: true,
