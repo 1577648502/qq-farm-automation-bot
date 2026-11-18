@@ -15,6 +15,59 @@ import { formatCompactNumber, formatSignedCompactNumber } from '@/utils/number-f
 
 const statusStore = useStatusStore()
 const accountStore = useAccountStore()
+// ===== 牧场状态卡片 =====
+const ranchOverview = ref<any>(null)
+const ranchLoading = ref(false)
+const ranchTick = ref(0)   // 每秒触发重建倒计时
+
+async function fetchRanchOverview() {
+  const id = accountStore.currentAccountId
+  if (!id) return
+  ranchLoading.value = true
+  try {
+    const res = await api.get('/api/ranch/overview', { headers: { 'x-account-id': id } })
+    if (res.data?.ok) { ranchOverview.value = res.data.data; ranchFetchedAt.value = Date.now() }
+    else ranchOverview.value = null
+  } catch { ranchOverview.value = null }
+  finally { ranchLoading.value = false }
+}
+
+/** 最近一只动物的可收获倒计时 */
+// 记录拿到数据的时间点, 倒计时按经过秒数递减
+const ranchFetchedAt = ref(0)
+const ranchNextReady = computed(() => {
+  const elapsed = ranchFetchedAt.value ? Math.floor((Date.now() - ranchFetchedAt.value) / 1000) : 0
+  const list = ranchOverview.value?.animals || []
+  const secs = list
+    .map((a: any) => (typeof a.harvestInSec === 'number' ? a.harvestInSec - elapsed : null))
+    .filter((v: any) => typeof v === 'number' && v > 0)
+  if (!secs.length) return null
+  return Math.min(...secs)
+})
+
+const ranchSummary = computed(() => {
+  const ov = ranchOverview.value
+  if (!ov) return null
+  const animals = ov.animals || []
+  return {
+    total: animals.length,
+    harvestable: animals.filter((a: any) => a.harvestable).length,
+    hungry: animals.filter((a: any) => a.hungry).length,
+    coop: ov.coopCount || 0,
+    pen: ov.penCount || 0,
+    grass: ov.grassCount || 0,
+  }
+})
+
+function fmtCountdown(sec: number | null) {
+  if (sec === null || sec === undefined) return '—'
+  if (sec <= 0) return '可收获'
+  const h = Math.floor(sec / 3600)
+  const m = Math.floor((sec % 3600) / 60)
+  const s2 = sec % 60
+  return h > 0 ? `${h}时${m}分` : `${m}分${s2}秒`
+}
+
 const bagStore = useBagStore()
 const toastStore = useToastStore()
 const {
@@ -573,13 +626,20 @@ function scrollToBottom() {
 onMounted(async () => {
   statusStore.setRealtimeLogsEnabled(!hasActiveLogFilter.value)
   await refresh()
+  void fetchRanchOverview()
   scrollToBottom()
 })
+
+// 牧场状态: 切账号时重拉
+watch(() => accountStore.currentAccountId, () => void fetchRanchOverview())
 
 // Auto refresh fallback every 10s (WS 断开或筛选条件启用时会回退 HTTP)
 useIntervalFn(refresh, 10000)
 // Countdown timer (every 1s)
 useIntervalFn(updateCountdowns, 1000)
+// 牧场倒计时 + 定时刷新(60s)
+useIntervalFn(() => { ranchTick.value++ }, 1000)
+useIntervalFn(() => void fetchRanchOverview(), 60000)
 </script>
 
 <template>
@@ -620,6 +680,43 @@ useIntervalFn(updateCountdowns, 1000)
             <span class="shrink-0">效率: {{ expRate }}</span>
             <span class="min-w-0 break-words text-right">{{ timeToLevel }}</span>
           </div>
+        </div>
+      </div>
+
+      <!-- 牧场状态 -->
+      <div class="min-w-0 flex flex-col rounded-lg bg-white p-4 shadow dark:bg-gray-800">
+        <div class="mb-2 flex items-start justify-between">
+          <div class="flex items-center gap-1.5 text-sm text-gray-500">
+            <div class="i-fas-paw text-amber-500" />
+            牧场
+          </div>
+          <button type="button" class="rounded px-1.5 py-0.5 text-xs text-gray-400 transition disabled:opacity-50 hover:bg-gray-100 dark:hover:bg-gray-700" :disabled="ranchLoading" @click="fetchRanchOverview">
+            <div class="i-carbon-renew" :class="{ 'animate-spin': ranchLoading }" />
+          </button>
+        </div>
+        <template v-if="ranchSummary">
+          <div class="mb-2 flex items-baseline gap-1.5">
+            <span class="text-2xl text-amber-600 font-bold tabular-nums">{{ ranchSummary.total }}</span>
+            <span class="text-xs text-gray-400">只在养</span>
+          </div>
+          <div class="mb-2 flex flex-wrap gap-1.5 text-[11px]">
+            <span class="rounded-full bg-amber-100 px-2 py-0.5 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400">可收 {{ ranchSummary.harvestable }}</span>
+            <span class="rounded-full bg-green-100 px-2 py-0.5 text-green-700 dark:bg-green-900/30 dark:text-green-400">饥饿 {{ ranchSummary.hungry }}</span>
+            <span class="rounded-full bg-gray-100 px-2 py-0.5 text-gray-600 dark:bg-gray-700 dark:text-gray-300">窝{{ ranchSummary.coop }} 棚{{ ranchSummary.pen }}</span>
+          </div>
+          <div class="mt-auto space-y-1 text-xs">
+            <div class="flex justify-between">
+              <span class="text-gray-400">下次产出</span>
+              <span class="font-medium tabular-nums" :class="ranchNextReady === null ? 'text-gray-400' : 'text-orange-500'">{{ fmtCountdown(ranchNextReady) }}</span>
+            </div>
+            <div class="flex justify-between">
+              <span class="text-gray-400">牧草</span>
+              <span class="tabular-nums">{{ ranchSummary.grass }}</span>
+            </div>
+          </div>
+        </template>
+        <div v-else class="py-4 text-center text-xs text-gray-400">
+          {{ ranchLoading ? '加载中…' : '暂无牧场数据（点右上角刷新）' }}
         </div>
       </div>
 
