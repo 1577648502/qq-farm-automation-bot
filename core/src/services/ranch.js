@@ -141,9 +141,52 @@ async function getRanchOpTimes() {
 
 /**
  * 喂食。
- * @param feedType 喂食方式(抓包出现 4/5/6; 具体枚举待更多抓包, 原样透传)
- * @param count    喂食数量(抓包见 1/2)
+/**
+ * 喂食/投喂罐头(AnimalService.FeedAnimal)。
+ *
+ * feed_type 语义(2026-11-18 用抓包 20261116-215723 实测确认):
+ *   4 = 普通罐头(无机罐头容器 7003)
+ *       · 每只动物**只能用一次**
+ *       · 效果: 把 produce_at(#10) 推进 3600 秒
+ *   5 = 有机罐头-短档 / 6 = 有机罐头-长档(有机罐头容器 7004)
+ *       · **不限次数**
+ *       · 效果: 追加罐头加成截止时刻 can_to_market_at(#11) ≈ +7206 秒
+ *
+ * 抓包里的请求序列也印证了这一点: 4 → 6 → 5 → 6 → 5 交替,
+ * 4 只出现一次, 5/6 反复出现。
+ *
+ * count 不是倍率: ft=4 count=2 与 count=1 都是 +3600s 量级,
+ * 它只是"一次喂几只动物"。
+ *
+ * @param feedType 4(普通) / 5,6(有机)
+ * @param count    本次作用于几只
  */
+const FEED_TYPE = {
+    NORMAL_CAN: 4,       // 普通罐头: 每只一次
+    ORGANIC_A: 5,        // 有机罐头: 不限次数
+    ORGANIC_B: 6,
+};
+const FEED_TYPE_LABEL = {
+    4: '普通罐头(每只一次)',
+    5: '有机罐头',
+    6: '有机罐头',
+};
+
+/**
+ * 喂食失败时给人看的提示。
+ * 两种罐头的失败原因完全不同, 混在一起说"当前无法喂食"会让人以为功能坏了。
+ */
+function feedFailureHint(feedType, e) {
+    const code = parseRanchErrorCode(e);
+    if (code === RANCH_ERR.CANS_EMPTY) {
+        return '罐头桶已用完，请先用「罐头」道具补充对应容器(普通罐头→无机容器，有机罐头→有机容器)';
+    }
+    if (Number(feedType) === FEED_TYPE.NORMAL_CAN) {
+        return `普通罐头每只动物只能用一次，请改用有机罐头(可重复使用)。code=${code}`;
+    }
+    return `当前无法喂食(code=${code})`;
+}
+
 async function feedAnimal(feedType, count = 1, hostGid = 0) {
     const state = network.getUserState();
     const gid = toNum(hostGid) || toNum(state.gid);
@@ -291,56 +334,86 @@ async function harvestAnimal(slot = 0, hostGid = 0) {
  * 牧场幼崽购买策略标签(供面板展示)。
  * 与农场的 PLANTING_STRATEGY_LABELS 是两套, 互不影响。
  */
+/**
+ * 牧场幼崽策略标签。
+ * 与农场 PLANTING_STRATEGY_LABELS 一一对应(只是把"作物"换成"幼崽"):
+ *   max_profit  ↔ max_profit   最大净利润
+ *   max_level   ↔ level        最高等级
+ *   bag_priority↔ bag_priority 背包优先
+ */
 const RANCH_CUB_STRATEGY_LABELS = {
     max_profit: '收益比最高(整只回收 ÷ 幼崽成本)',
     max_level: '等级最高(优先高级动物)',
-    bag_priority: '按优先列表(背包幼崽顺序)',
+    bag_priority: '背包幼崽优先',
+};
+
+/** 第二优先策略的标签(不含 bag_priority —— 它没有"回退"语义) */
+const RANCH_CUB_FALLBACK_LABELS = {
+    max_profit: '收益比最高',
+    max_level: '等级最高',
 };
 
 /**
- * 按用户配置的策略给候选幼崽排序/过滤。
+ * 按"主策略 + 第二策略"给候选幼崽排序 —— 结构对齐农场的 applyPlantingStrategy:
+ *   1) 先按主策略(max_profit / max_level / bag_priority)排出优先顺序
+ *   2) 主策略选不出来的(比如 bag_priority 列表里没有的), 用第二策略排
  *
- * 策略来源优先级: opts.strategy(测试/手动) > 账号配置 ranchCubStrategy > 默认 max_profit
+ * 农场的实现里, bag_priority 的"第二优先策略"就是靠 bagSeedFallbackStrategy 完成的;
+ * 这里保持一致, 不自己发明"背包优先开关"那种另一套东西。
  *
  * @param {Array<object>} cubs 已过滤过(解锁/有价/收益比>0)的候选
- * @param {object} [opts]
- * @returns {Array<object>} 排序后的候选; 空数组表示"按此策略不该买"
+ * @param {object} [opts] strategy / priority / fallback(测试或手动覆盖)
+ * @returns {Array<object>} 排序后的候选
  */
 function applyCubStrategy(cubs, opts = {}) {
     let strategy = String(opts.strategy || '').trim();
     let priority = Array.isArray(opts.priority) ? opts.priority : null;
-    if (!strategy) {
+    let fallback = String(opts.fallback || '').trim();
+
+    if (!strategy || !priority || !fallback) {
         try {
             const store = require('../models/store');
-            const cfg = store.getAccountConfigSnapshot
-                ? store.getAccountConfigSnapshot(process.env.FARM_ACCOUNT_ID || '')
-                : null;
-            if (cfg) {
-                strategy = String(cfg.ranchCubStrategy || '');
-                if (!priority) priority = Array.isArray(cfg.ranchCubPriority) ? cfg.ranchCubPriority : [];
+            const accountId = process.env.FARM_ACCOUNT_ID || '';
+            if (!strategy && typeof store.getRanchCubStrategy === 'function') {
+                strategy = store.getRanchCubStrategy(accountId);
+            }
+            if (!priority && typeof store.getRanchCubPriority === 'function') {
+                priority = store.getRanchCubPriority(accountId) || [];
+            }
+            if (!fallback && typeof store.getRanchCubFallbackStrategy === 'function') {
+                fallback = store.getRanchCubFallbackStrategy(accountId);
             }
         } catch { /* 读不到配置就用默认 */ }
     }
     if (!RANCH_CUB_STRATEGY_LABELS[strategy]) strategy = 'max_profit';
+    if (!RANCH_CUB_FALLBACK_LABELS[fallback]) fallback = 'max_level';
+
+    // 各策略的排序函数(数值小的优先)
+    const byProfit = (a, b) => (b.valueRatio - a.valueRatio) || (a.cost - b.cost);
+    const byLevel = (a, b) => (b.animalId - a.animalId) || (b.valueRatio - a.valueRatio);
 
     const list = [...cubs];
-    if (strategy === 'max_level') {
-        // 高等级动物优先, 同级比收益比
-        list.sort((a, b) => (b.animalId - a.animalId) || (b.valueRatio - a.valueRatio));
-        return list;
-    }
+
+    // 主策略是 bag_priority: 列表内的按顺序在前, 列表外的用第二策略排
     if (strategy === 'bag_priority' && Array.isArray(priority) && priority.length) {
-        // 按用户设定的顺序挑: 列表靠前的优先, 不在列表里的排后面(仍按收益比)
         const indexMap = new Map(priority.map((id, i) => [Number(id), i]));
         list.sort((a, b) => {
             const ai = indexMap.has(a.animalId) ? indexMap.get(a.animalId) : Number.MAX_SAFE_INTEGER;
             const bi = indexMap.has(b.animalId) ? indexMap.get(b.animalId) : Number.MAX_SAFE_INTEGER;
-            return (ai - bi) || (b.valueRatio - a.valueRatio);
+            if (ai !== bi) return ai - bi;
+            // 都不在列表里 → 第二策略
+            return fallback === 'max_profit' ? byProfit(a, b) : byLevel(a, b);
         });
         return list;
     }
-    // max_profit / bag_priority 未配置列表: 收益比从高到低
-    list.sort((a, b) => b.valueRatio - a.valueRatio);
+
+    // 主策略是 bag_priority 但列表为空 → 直接走第二策略(农场也是这个行为)
+    const mainSort = strategy === 'max_level' ? byLevel : byProfit;
+    if (strategy === 'bag_priority') {
+        list.sort(fallback === 'max_profit' ? byProfit : byLevel);
+        return list;
+    }
+    list.sort(mainSort);
     return list;
 }
 
@@ -389,7 +462,33 @@ async function autoPlaceCubs(opts = {}) {
     const animals = view.animals || [];
     const capacity = (toNum(view.coopCount) || 0) + (toNum(view.penCount) || 0);
     let free = Math.max(0, capacity - animals.length);
-    if (free <= 0) return result;
+    // 没有空槽时不直接放弃: 背包里堆着幼崽却进不来, 通常是因为**成熟的动物还没收**。
+    // 先收获一次(全场 HarvestRanch)腾位置, 再重新算空槽。
+    if (free <= 0 && opts.harvestFirst !== false) {
+        try {
+            await harvestRanch(1);
+            const fresh = await getRanchOverview();
+            const freshAnimals = fresh.animals || [];
+            const freshCap = (toNum(fresh.coopCount) || 0) + (toNum(fresh.penCount) || 0);
+            free = Math.max(0, freshCap - freshAnimals.length);
+            if (free > 0) {
+                log('牧场', `收获后腾出 ${free} 个空栏位, 准备入栏背包里的幼崽`, {
+                    module: 'ranch', event: '幼崽入栏', result: 'ok', free,
+                });
+                // 用最新视图继续往下走
+                view = fresh;
+                animals.length = 0;
+                animals.push(...freshAnimals);
+            }
+        } catch { /* 收获失败就按原来的 free=0 返回 */ }
+    }
+    if (free <= 0) {
+        // 明确说明是"没空位", 而不是默默不动
+        log('牧场', `栏位已满(${animals.length}/${capacity}), 背包里 ${cubs.reduce((n, c) => n + c.count, 0)} 只幼崽暂无法入栏`, {
+            module: 'ranch', event: '幼崽入栏', result: 'skip', used: animals.length, capacity,
+        });
+        return result;
+    }
 
     const maxPerRound = Math.max(1, toNum(opts.maxPerRound) || 8);
     free = Math.min(free, maxPerRound);
@@ -548,12 +647,25 @@ function getAnimalName(animalId) {
  * 生长阶段文案。stage 实测就是 1..6(2026-11-17 真号: 槽1=4 槽2=5 槽3=6)。
  * 成年以 grown_flag(#18) 为准(stage 到 6 也是成年, 两个信号一致时更稳)。
  */
+/**
+ * 生长阶段文案。
+ *
+ * ⭐ 2026-11-18 用全部抓包实证(158 条 grown=1 的样本):
+ *     grown_flag(#18) = 1        → 已成熟
+ *     grown_flag(#18) = undefined→ 未成熟
+ *   这 158 条里 stage 从 1 到 400 都有 —— **stage 不是生长阶段**,
+ *   它更像实例序号/uid 尾数, 数值完全不可靠(见过 397/995/998)。
+ *
+ * 所以旧实现 `grownFlag===1 && s>=6` 是错的: stage=3 的成熟鸡会被判成"成长中(3/6)"。
+ * 现在只看 grown_flag, stage 仅用于未成熟时给个粗略文案。
+ */
 function getStageText(stage, grownFlag) {
     const s = toNum(stage);
-    if (toNum(grownFlag) === 1 && s >= 6) return '成年';
+    // grown_flag 是唯一的权威成熟标志
+    if (toNum(grownFlag) === 1) return '成年';
+    // 未成熟: stage 数值不可靠, 只能说"未成熟"
     if (s <= 1) return '幼年';
-    if (s >= 6) return '成年';
-    return `成长中(${s}/6)`;
+    return '成长中';
 }
 
 /** 把 proto 的 RanchInfo 转成面板直接可渲染的对象 */
@@ -1904,20 +2016,20 @@ async function autoBuyCubs(opts = {}) {
         }
     } catch { /* 读不到背包就不做这个保护, 交给上限兜底 */ }
 
-    // 背包优先(默认开): 背包里有幼崽就先入栏, 不再买。
-    // 关掉它 = 允许"边买边堆", 一般不需要, 留给特殊玩法。
-    let bagPriority = true;
-    try {
-        const store = require('../models/store');
-        const cfg = store.getAccountConfigSnapshot
-            ? store.getAccountConfigSnapshot(process.env.FARM_ACCOUNT_ID || '')
-            : null;
-        if (cfg && cfg.ranchBagCubPriority !== undefined) bagPriority = !!cfg.ranchBagCubPriority;
-    } catch { /* 读不到就按默认开 */ }
+    // 背包优先 = 主策略里的 bag_priority(与农场一致), 不是另设一个开关。
+    // 该策略下"买"让位给入栏, 由 autoPlaceCubs 负责。
+    const strategyNow = (() => {
+        try {
+            const store = require('../models/store');
+            return typeof store.getRanchCubStrategy === 'function'
+                ? store.getRanchCubStrategy(process.env.FARM_ACCOUNT_ID || '')
+                : 'max_profit';
+        } catch { return 'max_profit'; }
+    })();
 
-    if (bagPriority && bagCubs > 0) {
+    if (bagCubs > 0 && (strategyNow === 'bag_priority' || bagCubs >= buyBudget)) {
         log('牧场', `背包里已有 ${bagCubs} 只幼崽未入栏, 暂停买幼崽(应先入栏, 不是继续买)`, {
-            module: 'ranch', event: '买幼崽', result: 'skip', bagCubs,
+            module: 'ranch', event: '买幼崽', result: 'skip', bagCubs, strategy: strategyNow,
         });
         return result;
     }
@@ -2049,10 +2161,15 @@ async function operateRanch(opts = {}) {
         case 'feed': {
             // ⚠ 1045202「网络繁忙」是服务端限流: 自动化巡检刚打完一轮请求时点"喂罐头"
             //   很容易撞上。这不是故障, 应该退避后重试一次, 而不是直接把错误抛给用户。
+            //
+            // 两种罐头的限制不同(抓包实测):
+            //   4 普通罐头 —— 每只动物只能用一次, 重复喂会被服务端拒绝
+            //   5/6 有机罐头 —— 不限次数
+            const feedLabel = FEED_TYPE_LABEL[feedType] || `方式${feedType}`;
             const attempt = async () => feedAnimal(feedType, count);
             try {
                 await attempt();
-                return { ok: true, action: '喂食', detail: `方式${feedType}x${count}` };
+                return { ok: true, action: '喂食', detail: `${feedLabel} x${count}` };
             } catch (e) {
                 const code = parseRanchErrorCode(e);
                 if (code === RANCH_ERR.RATE_LIMITED) {
@@ -2060,7 +2177,7 @@ async function operateRanch(opts = {}) {
                     await sleep(1200);
                     try {
                         await attempt();
-                        return { ok: true, action: '喂食', detail: `方式${feedType}x${count}(限流后重试成功)` };
+                        return { ok: true, action: '喂食', detail: `${feedLabel} x${count}(限流后重试成功)` };
                     } catch (e2) {
                         if (parseRanchErrorCode(e2) === RANCH_ERR.RATE_LIMITED) {
                             return {
@@ -2068,14 +2185,11 @@ async function operateRanch(opts = {}) {
                                 error: '服务端限流(网络繁忙)，请稍等几秒再试。自动巡检刚跑完一轮时最容易撞上',
                             };
                         }
-                        throw e2;
+                        return { ok: false, action: '喂食', error: feedFailureHint(feedType, e2) };
                     }
                 }
-                if (code === RANCH_ERR.CANS_EMPTY) {
-                    return { ok: false, action: '喂食', error: '罐头桶已用完，请先补充罐头' };
-                }
                 if (isExpectedRanchError(e)) {
-                    return { ok: false, action: '喂食', error: `当前无法喂食(code=${code})` };
+                    return { ok: false, action: '喂食', error: feedFailureHint(feedType, e) };
                 }
                 throw e;
             }
@@ -2188,8 +2302,24 @@ async function operateRanch(opts = {}) {
                 return { ok: true, action: '全场清理', detail: r.cleaned > 0 ? '清理完成' : '没有待清理的' };
             }
             if (sub === 'feed') {
-                const r = await feedAnimal(4, toNum(opts.count) || 1);
-                return { ok: true, action: '全场喂罐头', detail: '已投喂' };
+                // feedType: 4=普通罐头(每只一次) / 5,6=有机罐头(不限次数)。
+                // 批量默认用有机罐头(5): 普通罐头对多数动物已用过, 全喂必然大面积失败。
+                const ft = toNum(opts.feedType) || FEED_TYPE.ORGANIC_A;
+                try {
+                    await feedAnimal(ft, toNum(opts.count) || 1);
+                    return { ok: true, action: '全场喂罐头', detail: FEED_TYPE_LABEL[ft] || `方式${ft}` };
+                } catch (e) {
+                    if (parseRanchErrorCode(e) === RANCH_ERR.RATE_LIMITED) {
+                        await sleep(1200);
+                        try {
+                            await feedAnimal(ft, toNum(opts.count) || 1);
+                            return { ok: true, action: '全场喂罐头', detail: `${FEED_TYPE_LABEL[ft] || ft}(限流后重试成功)` };
+                        } catch (e2) {
+                            return { ok: false, action: '全场喂罐头', error: feedFailureHint(ft, e2) };
+                        }
+                    }
+                    return { ok: false, action: '全场喂罐头', error: feedFailureHint(ft, e) };
+                }
             }
             throw new Error(`不支持的批量操作: ${sub}`);
         }
@@ -2301,5 +2431,7 @@ module.exports = {
         autoBuyCubs, autoPlaceCubs, applyCubStrategy,
         // 游商: 供测试验证"等级不够就不发购买请求 + 不刷 error 日志"
         autoBuyRotationShop, isRotationNotPurchasable, rotationErrorHint,
+        // 喂食: 供测试验证两种罐头的 feed_type 与失败提示
+        feedAnimal, feedFailureHint, FEED_TYPE,
     },
 };

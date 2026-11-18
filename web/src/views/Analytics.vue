@@ -25,6 +25,41 @@ const batchLoading = ref(false)
 
 const activeTab = ref('crops')
 
+// ===== 牧场幼崽分析(对照上面的作物分析) =====
+const cubRows = ref<any[]>([])
+const cubLoading = ref(false)
+const cubError = ref('')
+const cubSort = ref<'ratio' | 'profit' | 'price'>('ratio')
+
+async function loadCubAnalytics() {
+  const id = currentAccountId.value
+  if (!id)
+    return
+  cubLoading.value = true
+  cubError.value = ''
+  try {
+    const res = await api.get('/api/ranch/analytics', {
+      headers: { 'x-account-id': id },
+      params: { sort: cubSort.value },
+    })
+    const d = res.data
+    if (!d?.ok)
+      throw new Error(d?.error || '获取失败')
+    cubRows.value = d.data?.rows || []
+  }
+  catch (e: any) {
+    cubError.value = e?.response?.data?.error || e?.message || '获取失败'
+  }
+  finally {
+    cubLoading.value = false
+  }
+}
+
+watch(cubSort, () => {
+  if (activeTab.value === 'ranch')
+    void loadCubAnalytics()
+})
+
 const strategyLevel = ref(1)
 
 watch(() => status.value?.status?.level, (newLevel) => {
@@ -352,6 +387,22 @@ function formatGrowTime(seconds: any) {
           <span>种植策略</span>
         </div>
       </button>
+      <!-- 牧场幼崽分析 -->
+      <button
+        class="border-b-2 px-4 py-2 text-sm font-medium transition-colors"
+        :class="activeTab === 'ranch'
+          ? 'border-amber-500 text-amber-600 dark:border-amber-400 dark:text-amber-400'
+          : 'border-transparent text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-300'"
+        @click="activeTab = 'ranch'; loadCubAnalytics()"
+      >
+        <div class="flex items-center space-x-2">
+          <div class="i-fas-paw h-6 w-6 flex items-center justify-center text-lg" />
+          <span>牧场幼崽</span>
+          <span v-if="cubRows.length" class="ml-1 rounded-full bg-amber-100 px-2 py-0.5 text-xs text-amber-700 dark:bg-amber-900/50 dark:text-amber-300">
+            {{ cubRows.length }}
+          </span>
+        </div>
+      </button>
     </div>
 
     <div>
@@ -648,6 +699,72 @@ function formatGrowTime(seconds: any) {
               </button>
             </div>
           </div>
+        </div>
+      </div>
+
+      <!-- ===== 牧场幼崽分析 ===== -->
+      <div v-if="activeTab === 'ranch'" class="space-y-3">
+        <div class="flex flex-wrap items-center gap-3">
+          <BaseSelect
+            v-model="cubSort"
+            class="w-40"
+            :options="[
+              { label: '按收益比', value: 'ratio' },
+              { label: '按单只净赚', value: 'profit' },
+              { label: '按价格', value: 'price' },
+            ]"
+          />
+          <span class="text-xs text-gray-400">
+            收益比 = 整只回收价 ÷ 幼崽成本；净赚 = 整只回收 − 幼崽成本
+          </span>
+        </div>
+
+        <div v-if="cubLoading" class="rounded-lg bg-white p-8 text-center text-gray-500 shadow dark:bg-gray-800">
+          加载中…
+        </div>
+        <div v-else-if="cubError" class="rounded-lg bg-white p-8 text-center text-red-500 shadow dark:bg-gray-800">
+          {{ cubError }}
+        </div>
+        <div v-else-if="!cubRows.length" class="rounded-lg bg-white p-8 text-center text-gray-500 shadow dark:bg-gray-800">
+          暂无幼崽数据（账号需运行且牧场已解锁）
+        </div>
+        <div v-else class="overflow-hidden border border-gray-200 rounded-lg bg-white shadow dark:border-gray-700 dark:bg-gray-800">
+          <table class="w-full text-left text-sm">
+            <thead class="bg-gray-50 text-xs text-gray-500 dark:bg-gray-700/50 dark:text-gray-400">
+              <tr>
+                <th class="px-3 py-2 font-medium">幼崽</th>
+                <th class="px-3 py-2 text-right font-medium">成本</th>
+                <th class="px-3 py-2 text-right font-medium">整只回收</th>
+                <th class="px-3 py-2 text-right font-medium">收益比</th>
+                <th class="px-3 py-2 text-right font-medium">单只净赚</th>
+                <th class="px-3 py-2 text-right font-medium">限购</th>
+                <th class="px-3 py-2 text-center font-medium">状态</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr
+                v-for="r in cubRows"
+                :key="r.goodsId"
+                class="border-t border-gray-100 dark:border-gray-700"
+              >
+                <td class="px-3 py-2 font-medium">{{ r.name }}</td>
+                <td class="px-3 py-2 text-right tabular-nums">{{ r.cost }}</td>
+                <td class="px-3 py-2 text-right tabular-nums">{{ r.grownValue || '-' }}</td>
+                <td class="px-3 py-2 text-right tabular-nums" :class="r.ratio >= 2 ? 'text-emerald-600 dark:text-emerald-400 font-medium' : ''">
+                  {{ r.ratio ? r.ratio.toFixed(2) : '-' }}
+                </td>
+                <td class="px-3 py-2 text-right tabular-nums">{{ r.profit ?? '-' }}</td>
+                <td class="px-3 py-2 text-right text-gray-500">
+                  {{ r.limit > 0 ? `${r.bought}/${r.limit}` : '不限' }}
+                </td>
+                <td class="px-3 py-2 text-center text-xs">
+                  <span v-if="!r.unlocked" class="text-gray-400">未解锁</span>
+                  <span v-else-if="r.remaining !== null && r.remaining <= 0" class="text-red-500">已售罄</span>
+                  <span v-else class="text-emerald-600 dark:text-emerald-400">可购买</span>
+                </td>
+              </tr>
+            </tbody>
+          </table>
         </div>
       </div>
 

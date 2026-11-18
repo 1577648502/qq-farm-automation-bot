@@ -53,7 +53,11 @@ function writeKnownFriendGidsCache(accountId, gids) {
 const ALLOWED_PLANTING_STRATEGIES = ['preferred', 'level', 'max_exp', 'max_fert_exp', 'max_profit', 'max_fert_profit', 'bag_priority'];
 const ALLOWED_BAG_SEED_FALLBACK_STRATEGIES = ALLOWED_PLANTING_STRATEGIES.filter(s => s !== 'bag_priority');
 // 牧场幼崽购买策略(独立于农场的种植策略)
+// 牧场幼崽主策略(对应农场 ALLOWED_PLANTING_STRATEGIES 的牧场版)
 const ALLOWED_RANCH_CUB_STRATEGIES = ['max_profit', 'max_level', 'bag_priority'];
+// 第二优先策略: 不能是 bag_priority(背包优先本身没有"回退"语义),
+// 与农场 ALLOWED_BAG_SEED_FALLBACK_STRATEGIES 同一思路
+const ALLOWED_RANCH_CUB_FALLBACK_STRATEGIES = ALLOWED_RANCH_CUB_STRATEGIES.filter(s => s !== 'bag_priority');
 const DEFAULT_RANCH_CUB_STRATEGY = 'max_profit';
 function normalizeRanchCubStrategy(v) {
     const s = String(v || '');
@@ -200,15 +204,18 @@ const DEFAULT_ACCOUNT_CONFIG = {
     },
     plantingStrategy: 'max_exp',
     preferredSeedId: 0,
-    // ---- 牧场幼崽策略(对照农场 plantingStrategy + bagSeedPriority, 但完全独立) ----
-    //   max_profit  : 整只回收/幼崽成本 收益比最高(默认, 即原有行为)
-    //   max_level   : 优先等级最高的动物
-    //   bag_priority: 按 ranchCubPriority 列表顺序挑背包里的幼崽(对齐农场 bagSeedPriority)
+    // ---- 牧场幼崽策略: 完全对照农场的三段结构 ----
+    //   农场: plantingStrategy(主策略) + bagSeedPriority(背包顺序) + bagSeedFallbackStrategy(第二策略)
+    //   牧场: ranchCubStrategy(主策略) + ranchCubPriority(顺序) + ranchCubFallbackStrategy(第二策略)
+    // 主策略取值与农场同构:
+    //   max_profit  收益比最高      (对应农场 max_profit)
+    //   max_level   等级最高        (对应农场 level)
+    //   bag_priority 背包幼崽优先   (对应农场 bag_priority)
     ranchCubStrategy: 'max_profit',
-    // 优先购买的幼崽顺序(animalId 列表), 对齐农场 bagSeedPriority
+    // 背包优先顺序(animalId 列表), 对应农场 bagSeedPriority
     ranchCubPriority: [],
-    // 背包优先: 背包里有幼崽时先入栏, 不再购买
-    ranchBagCubPriority: true,
+    // 第二优先策略: 背包用完/主策略选不出时的回退, 对应农场 bagSeedFallbackStrategy
+    ranchCubFallbackStrategy: 'max_level',
     intervals: {
         farm: 2,
         farmMin: 20,
@@ -441,7 +448,8 @@ function cloneAccountConfig(base = DEFAULT_ACCOUNT_CONFIG) {
         ranchCubStrategy: normalizeRanchCubStrategy(base.ranchCubStrategy),
         ranchCubPriority: (Array.isArray(base.ranchCubPriority) ? base.ranchCubPriority : [])
             .map(Number).filter(n => Number.isFinite(n) && n > 0),
-        ranchBagCubPriority: base.ranchBagCubPriority === undefined ? true : !!(base.ranchBagCubPriority),
+        ranchCubFallbackStrategy: ALLOWED_RANCH_CUB_FALLBACK_STRATEGIES.includes(String(base.ranchCubFallbackStrategy || ''))
+            ? String(base.ranchCubFallbackStrategy) : 'max_level',
         plantBlacklist: rawPlantBlacklist.map(Number).filter(n => Number.isFinite(n) && n > 0),
         plantSeedExclude: rawPlantSeedExclude.map(Number).filter(n => Number.isFinite(n) && n > 0),
         stealthEnabled: !!(base.stealthEnabled),
@@ -506,8 +514,10 @@ function normalizeAccountConfig(input, fallback = accountFallbackConfig) {
         cfg.ranchCubPriority = (Array.isArray(src.ranchCubPriority) ? src.ranchCubPriority : [])
             .map(Number).filter(n => Number.isFinite(n) && n > 0);
     }
-    if (src.ranchBagCubPriority !== undefined && src.ranchBagCubPriority !== null) {
-        cfg.ranchBagCubPriority = !!src.ranchBagCubPriority;
+    if (src.ranchCubFallbackStrategy !== undefined && src.ranchCubFallbackStrategy !== null) {
+        if (ALLOWED_RANCH_CUB_FALLBACK_STRATEGIES.includes(String(src.ranchCubFallbackStrategy))) {
+            cfg.ranchCubFallbackStrategy = String(src.ranchCubFallbackStrategy);
+        }
     }
 
     if (src.intervals && typeof src.intervals === 'object') {
@@ -902,7 +912,7 @@ function getConfigSnapshot(accountId) {
         // 牧场幼崽策略(独立于农场)
         ranchCubStrategy: cfg.ranchCubStrategy,
         ranchCubPriority: [...(cfg.ranchCubPriority || [])],
-        ranchBagCubPriority: cfg.ranchBagCubPriority,
+        ranchCubFallbackStrategy: cfg.ranchCubFallbackStrategy,
         intervals: { ...cfg.intervals },
         friendQuietHours: { ...cfg.friendQuietHours },
         knownFriendGids: [...(cfg.knownFriendGids || [])],
@@ -1167,9 +1177,9 @@ function getRanchCubStrategy(accountId) {
 function getRanchCubPriority(accountId) {
     return [...(getAccountConfigSnapshot(accountId).ranchCubPriority || [])];
 }
-function getRanchBagCubPriority(accountId) {
-    const v = getAccountConfigSnapshot(accountId).ranchBagCubPriority;
-    return v === undefined ? true : !!v;
+function getRanchCubFallbackStrategy(accountId) {
+    const v = String(getAccountConfigSnapshot(accountId).ranchCubFallbackStrategy || '');
+    return ALLOWED_RANCH_CUB_FALLBACK_STRATEGIES.includes(v) ? v : 'max_level';
 }
 
 function getIntervals(accountId) {
@@ -1738,7 +1748,7 @@ module.exports = {
     getBagSeedFallbackStrategy,
     getRanchCubStrategy,
     getRanchCubPriority,
-    getRanchBagCubPriority,
+    getRanchCubFallbackStrategy,
     getIntervals,
     getFriendQuietHours,
     getKnownFriendGids,

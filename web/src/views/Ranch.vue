@@ -43,41 +43,54 @@ const cubSort = ref<'ratio' | 'price' | 'profit'>('ratio')
 
 /** 筛选后的幼崽列表 */
 const cubShopFiltered = computed(() => {
-  const list = cubShopList.value.filter((g: any) => {
+  const all = Array.isArray(cubShopList.value) ? cubShopList.value : []
+  const list = all.filter((g: any) => {
+    if (!g) return false
+    // 后端老版本可能没有 remaining / profit 字段, 一律做空值保护
+    const remain = g.remaining
+    const noLimit = remain === null || remain === undefined
     switch (cubFilter.value) {
-      case 'available': return g.unlocked && (g.remaining === null || g.remaining === undefined || g.remaining > 0)
+      case 'available': return !!g.unlocked && (noLimit || Number(remain) > 0)
       case 'locked': return !g.unlocked
-      case 'soldout': return g.unlocked && g.remaining !== null && g.remaining !== undefined && g.remaining <= 0
+      case 'soldout': return !!g.unlocked && !noLimit && Number(remain) <= 0
       default: return true
     }
   })
   const copy = [...list]
   if (cubSort.value === 'price')
-    copy.sort((a: any, b: any) => a.price - b.price)
+    copy.sort((a: any, b: any) => (Number(a?.price) || 0) - (Number(b?.price) || 0))
   else if (cubSort.value === 'profit')
-    copy.sort((a: any, b: any) => (b.profit ?? -1) - (a.profit ?? -1))
+    copy.sort((a: any, b: any) => (Number(b?.profit ?? -1) || -1) - (Number(a?.profit ?? -1) || -1))
   else
-    copy.sort((a: any, b: any) => b.valueRatio - a.valueRatio)
+    copy.sort((a: any, b: any) => (Number(b?.valueRatio) || 0) - (Number(a?.valueRatio) || 0))
   return copy
 })
 
 const cubCounts = computed(() => {
-  const all = cubShopList.value
+  const all = Array.isArray(cubShopList.value) ? cubShopList.value : []
+  const isAvail = (g: any) => {
+    const remain = g?.remaining
+    const noLimit = remain === null || remain === undefined
+    return !!g?.unlocked && (noLimit || Number(remain) > 0)
+  }
   return {
     all: all.length,
-    available: all.filter((g: any) => g.unlocked && (g.remaining === null || g.remaining === undefined || g.remaining > 0)).length,
-    locked: all.filter((g: any) => !g.unlocked).length,
-    soldout: all.filter((g: any) => g.unlocked && g.remaining !== null && g.remaining !== undefined && g.remaining <= 0).length,
+    available: all.filter(isAvail).length,
+    locked: all.filter((g: any) => g && !g.unlocked).length,
+    soldout: all.filter((g: any) => {
+      const remain = g?.remaining
+      return !!g?.unlocked && remain !== null && remain !== undefined && Number(remain) <= 0
+    }).length,
   }
 })
 
 /** 筛选按钮配置(模板里只引用, 不在表达式里构造对象) */
-const CUB_FILTERS = [
+const CUB_FILTERS: Array<{ key: 'all' | 'available' | 'locked' | 'soldout', label: string }> = [
   { key: 'all', label: '全部' },
   { key: 'available', label: '可购买' },
   { key: 'locked', label: '未解锁' },
   { key: 'soldout', label: '已售罄' },
-] as const
+]
 const cubBuyBusy = ref(0)
 // 幼崽商城加购(对齐农场商城「道具商城」的交互架构):
 //   quantities: goodsId -> 数量;  selectedCub: 待确认下单的商品;  确认弹窗
@@ -300,14 +313,14 @@ const BATCH_OPS = [
   { key: 'harvest', label: '全部收获', icon: 'i-carbon-wheat', tone: 'border-amber-300 bg-amber-50 text-amber-700 hover:bg-amber-100 dark:border-amber-700 dark:bg-amber-900/30 dark:text-amber-300' },
   { key: 'produce', label: '全部催产', icon: 'i-carbon-flash', tone: 'border-sky-300 bg-sky-50 text-sky-700 hover:bg-sky-100 dark:border-sky-700 dark:bg-sky-900/30 dark:text-sky-300' },
   { key: 'clean', label: '清理牧场', icon: 'i-carbon-clean', tone: 'border-teal-300 bg-teal-50 text-teal-700 hover:bg-teal-100 dark:border-teal-700 dark:bg-teal-900/30 dark:text-teal-300' },
-  { key: 'feed', label: '全部喂罐头', icon: 'i-carbon-restaurant', tone: 'border-orange-300 bg-orange-50 text-orange-700 hover:bg-orange-100 dark:border-orange-700 dark:bg-orange-900/30 dark:text-orange-300' },
+  { key: 'feed', label: '全场喂有机罐头', icon: 'i-carbon-restaurant', tone: 'border-orange-300 bg-orange-50 text-orange-700 hover:bg-orange-100 dark:border-orange-700 dark:bg-orange-900/30 dark:text-orange-300' },
 ]
-async function runBatch(batch: string) {
+async function runBatch(batch: string, extra: Record<string, any> = {}) {
   const id = currentAccountId.value
   if (!id) return
   opBusy.value = 'batch'
   try {
-    const r = await ranchStore.operate(id, { op: 'batch', batch })
+    const r = await ranchStore.operate(id, { op: 'batch', batch, ...extra })
     if (r && r.ok === false) toast.error(r.error || '操作未成功')
     else toast.success(`${r.action}：${r.detail || '完成'}`)
   }
@@ -1187,7 +1200,7 @@ onUnmounted(() => {
                 class="min-h-[38px] inline-flex items-center gap-1.5 border rounded-lg px-3 py-1.5 text-xs font-medium transition disabled:opacity-50"
                 :class="op.tone"
                 :disabled="opBusy !== ''"
-                @click="runBatch(op.key)"
+                @click="op.key === 'feed' ? runBatch('feed', { feedType: 5 }) : runBatch(op.key)"
               >
                 <div :class="op.icon" />
                 {{ op.label }}
@@ -1331,15 +1344,27 @@ onUnmounted(() => {
                     >
                       催产
                     </button>
-                    <!-- 喂罐头(FeedAnimal, 单只实测可用) -->
+                    <!-- 喂罐头(FeedAnimal, 单只实测可用)
+                         两种罐头限制不同(抓包实测):
+                           4 = 普通罐头, 每只动物只能用一次
+                           5/6 = 有机罐头, 不限次数 -->
                     <button
                       type="button"
                       class="min-h-[36px] flex-1 border border-orange-300 rounded-lg bg-orange-50 px-2 py-1.5 text-xs text-orange-700 font-medium transition dark:border-orange-700 dark:bg-orange-900/30 hover:bg-orange-100 dark:text-orange-300 disabled:opacity-40"
                       :disabled="operateLoading === a.slot || opBusy !== ''"
-                      title="投喂罐头桶加速产出"
+                      title="普通罐头：每只动物只能用一次（推快本次产出 1 小时）"
                       @click="runOp('feed', a.slot, { feedType: 4 })"
                     >
-                      喂罐头
+                      普通罐头
+                    </button>
+                    <button
+                      type="button"
+                      class="min-h-[36px] flex-1 border border-amber-300 rounded-lg bg-amber-50 px-2 py-1.5 text-xs text-amber-700 font-medium transition dark:border-amber-700 dark:bg-amber-900/30 hover:bg-amber-100 dark:text-amber-300 disabled:opacity-40"
+                      :disabled="operateLoading === a.slot || opBusy !== ''"
+                      title="有机罐头：不限次数（累积罐头加成时长）"
+                      @click="runOp('feed', a.slot, { feedType: 5 })"
+                    >
+                      有机罐头
                     </button>
                     <!-- 出售动物(donate): 卖栏里的这只换金券。按农场"整块操作"的习惯放在卡片内联 -->
                     <button

@@ -338,7 +338,7 @@ const localStrategySettings = ref({
   // 牧场幼崽策略(独立于农场种植策略)
   ranchCubStrategy: 'max_profit',
   ranchCubPriority: [] as number[],
-  ranchBagCubPriority: true,
+  ranchCubFallbackStrategy: 'max_level',
   stealDelaySeconds: 0,
   plantOrderRandom: false,
   plantDelaySeconds: 0,
@@ -357,10 +357,16 @@ const plantingStrategyOptions = [
 ]
 
 // 牧场幼崽购买策略(独立于农场种植策略)
+// 牧场幼崽策略选项 —— 与农场 plantingStrategyOptions 同构
 const ranchCubStrategyOptions = [
-  { label: '收益比最高(整只回收 ÷ 成本)', value: 'max_profit' },
-  { label: '等级最高(优先高级动物)', value: 'max_level' },
-  { label: '按优先列表挑', value: 'bag_priority' },
+  { label: '收益比最高', value: 'max_profit' },
+  { label: '最高等级动物', value: 'max_level' },
+  { label: '背包幼崽优先', value: 'bag_priority' },
+]
+// 第二优先策略 —— 与农场 BAG_FALLBACK_STRATEGY_OPTIONS 同构
+const ranchCubFallbackStrategyOptions = [
+  { label: '收益比最高', value: 'max_profit' },
+  { label: '最高等级动物', value: 'max_level' },
 ]
 
 const BAG_FALLBACK_STRATEGY_OPTIONS = [
@@ -711,14 +717,14 @@ function syncLocalStrategySettings(submitted?: any) {
     // 牧场幼崽策略
     ranchCubStrategy: settings.value.ranchCubStrategy ?? 'max_profit',
     ranchCubPriority: settings.value.ranchCubPriority ?? [],
-    ranchBagCubPriority: settings.value.ranchBagCubPriority !== false,
+    ranchCubFallbackStrategy: settings.value.ranchCubFallbackStrategy ?? 'max_level',
     stealDelaySeconds: settings.value.stealDelaySeconds ?? 0,
     plantOrderRandom: !!settings.value.plantOrderRandom,
     plantDelaySeconds: settings.value.plantDelaySeconds ?? 0,
     // 牧场幼崽策略
     ranchCubStrategy: settings.value.ranchCubStrategy ?? 'max_profit',
     ranchCubPriority: settings.value.ranchCubPriority ?? [],
-    ranchBagCubPriority: settings.value.ranchBagCubPriority !== false,
+    ranchCubFallbackStrategy: settings.value.ranchCubFallbackStrategy ?? 'max_level',
     intervals: {
       farmMin: settings.value.intervals?.farmMin ?? 2,
       farmMax: settings.value.intervals?.farmMax ?? 5,
@@ -2337,26 +2343,18 @@ async function onBackupFileChange(ev: Event) {
               </div>
             </div>
 
-            <div class="grid grid-cols-1 gap-3 md:grid-cols-2 sm:grid-cols-2">
-              <BaseSelect
-                v-model="localStrategySettings.ranchCubStrategy"
-                label="幼崽策略"
-                :options="ranchCubStrategyOptions"
-              />
-              <div class="flex flex-col justify-end">
-                <label class="mb-1 text-sm text-gray-600 dark:text-gray-300">背包优先</label>
-                <button
-                  type="button"
-                  class="h-10 flex items-center justify-between border border-gray-300 rounded-lg bg-white px-3 text-sm transition dark:border-gray-600 dark:bg-gray-800"
-                  @click="localStrategySettings.ranchBagCubPriority = !localStrategySettings.ranchBagCubPriority"
-                >
-                  <span :class="localStrategySettings.ranchBagCubPriority ? 'text-emerald-600 dark:text-emerald-400' : 'text-gray-400'">
-                    {{ localStrategySettings.ranchBagCubPriority ? '已开启：背包有幼崽就先入栏，不再买' : '已关闭：允许边买边堆' }}
-                  </span>
-                  <div :class="localStrategySettings.ranchBagCubPriority ? 'i-carbon-toggle-on text-2xl text-emerald-500' : 'i-carbon-toggle-off text-2xl text-gray-400'" />
-                </button>
-              </div>
-            </div>
+            <!-- 与农场"种植策略 + 第二优先策略"一一对应 -->
+            <BaseSelect
+              v-model="localStrategySettings.ranchCubStrategy"
+              label="幼崽策略"
+              :options="ranchCubStrategyOptions"
+            />
+            <BaseSelect
+              v-if="localStrategySettings.ranchCubStrategy === 'bag_priority'"
+              v-model="localStrategySettings.ranchCubFallbackStrategy"
+              label="第二优先策略"
+              :options="ranchCubFallbackStrategyOptions"
+            />
 
             <!-- 优先列表: 仅 bag_priority 时生效 -->
             <div v-if="localStrategySettings.ranchCubStrategy === 'bag_priority'" class="space-y-2">

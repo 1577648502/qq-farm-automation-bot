@@ -196,6 +196,58 @@ proto.loadProto().then(async () => {
         check('不修改传入的数组', cubs[0].name === '鸡', cubs.map(c => c.name));
     }
 
+    section('7. 两种罐头: 普通(4)每只一次 / 有机(5,6)不限次数');
+    {
+        // 抓包 20261116-215723 实测: 请求序列 4 → 6 → 5 → 6 → 5
+        // 4 只出现一次(普通罐头), 5/6 反复出现(有机罐头)
+        const calls = installStub({
+            FeedAnimal: () => types.FeedAnimalReply.encode(types.FeedAnimalReply.create({})).finish(),
+        });
+        const ranch = freshRanch();
+        // 普通罐头
+        await ranch.__privateRanchFns.feedAnimal(4, 1);
+        // 有机罐头可以连着喂
+        await ranch.__privateRanchFns.feedAnimal(5, 1);
+        await ranch.__privateRanchFns.feedAnimal(6, 1);
+        await ranch.__privateRanchFns.feedAnimal(5, 1);
+        check('发了 4 次 FeedAnimal', calls.filter(c => c.method === 'FeedAnimal').length === 4,
+            calls.map(c => c.method));
+        // 校验 feed_type 原样透传(不擅自改写)
+        const types2 = calls.filter(c => c.method === 'FeedAnimal').map(c => {
+            const req = types.FeedAnimalRequest.decode(c.body);
+            return Number(req.target.feed_type);
+        });
+        check('feed_type 依次为 4,5,6,5', JSON.stringify(types2) === JSON.stringify([4, 5, 6, 5]), types2);
+    }
+
+    section('8. 喂食失败给可读提示(区分两种罐头)');
+    {
+        const ranch = freshRanch();
+        const { feedFailureHint } = ranch.__privateRanchFns;
+        // 普通罐头失败 → 提示每只一次, 建议改用有机
+        const normal = feedFailureHint(4, new Error('FeedAnimal 错误: code=1045234 罐头桶已用完'));
+        check('普通罐头失败提示可用完后补充', /罐头桶已用完/.test(normal), normal);
+
+        // 有机罐头失败 → 不该提"每只一次"
+        const organic = feedFailureHint(5, new Error('FeedAnimal 错误: code=1045234 罐头桶已用完'));
+        check('有机罐头失败不误导', !/每只动物只能用一次/.test(organic), organic);
+    }
+
+    section('9. 成熟判定只看 grown_flag(#18), 不看 stage(抓包实证)');
+    {
+        // 158 条 grown_flag=1 的样本里 stage 从 1 到 400 都有
+        // → stage 不是生长阶段, 是实例序号之类的值, 完全不可靠
+        const ranch = require(`${SB}/src/services/ranch`);
+        const mk = (stage, grown) => ranch.toRanchView({
+            ranch: { animals: [{ slot: 1, animal_id: 60001, stage, feed_state: 2, grown_flag: grown, produce_at: Date.now() + 3000 }] },
+        }).animals[0].stageText;
+
+        check('grown=1 + stage=3 → 成年(旧实现会误判成"成长中(3/6)")', mk(3, 1) === '成年', mk(3, 1));
+        check('grown=1 + stage=1 → 成年', mk(1, 1) === '成年', mk(1, 1));
+        check('grown=1 + stage=397 → 成年', mk(397, 1) === '成年', mk(397, 1));
+        check('grown=undefined → 不是成年', mk(3, undefined) !== '成年', mk(3, undefined));
+    }
+
     finish();
 }).catch((e) => {
     console.error('测试异常:', e);
