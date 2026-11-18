@@ -3,6 +3,7 @@ const { Buffer } = require('node:buffer');
 const { sendMsgAsync } = require('../utils/network');
 const { types } = require('../utils/proto');
 const { toLong, toNum, log } = require('../utils/utils');
+const { getItemById } = require('../config/gameConfig');
 const { readJsonFile, writeJsonFileAtomic } = require('./json-db');
 const path = require('node:path');
 const CAPITAL_MODE_FILE = path.join(__dirname, '..', 'data', 'capital-mode.json');
@@ -461,12 +462,26 @@ async function getGuardLogs(page = 1, pageSize = 10) {
 }
 
 // ============ 护主奖励 ============
+/**
+ * 看家奖励(护主奖励)状态。
+ *
+ * 页面要显示"金豆豆x5"而不是"#80011x5", 所以顺手把物品名一起解析好。
+ * 名称解析复用 task.js 的 getRewardSummary(它已经处理了货币 + ItemInfo 兜底)。
+ *
+ * @returns {Promise<{has_huzhu_dog:boolean, can_claim:boolean, rewards:Array<{id:number,count:number,name:string}>}>}
+ */
 async function getGuardReward() {
   try {
     const body = types.GetGuardRewardRequest.encode(types.GetGuardRewardRequest.create({})).finish();
     const { body: replyBody } = await sendMsgAsync('gamepb.dogpb.DogService', 'GetGuardReward', body, 10000);
     if (replyBody && replyBody.length > 0) {
-      return types.GetGuardRewardReply.decode(replyBody);
+      const reply = types.GetGuardRewardReply.decode(replyBody);
+      const rewards = (reply.rewards || []).map(it => ({
+        id: toNum(it.id),
+        count: toNum(it.count),
+        name: itemNameOf(toNum(it.id)),
+      }));
+      return { ...reply, rewards };
     }
   } catch (e) {
     log('宠物', 'GetGuardReward 失败: ' + (e.message || e));
@@ -474,12 +489,38 @@ async function getGuardReward() {
   return { has_huzhu_dog: false, can_claim: false, rewards: [] };
 }
 
+/** 物品 id → 展示名(货币固定叫法, 其余查 ItemInfo; 查不到退回 #id) */
+function itemNameOf(id) {
+  const n = Number(id) || 0;
+  if (n === 1 || n === 1001) return '金币';
+  if (n === 2 || n === 1101) return '经验';
+  if (n === 1002) return '点券';
+  if (n === 1005) return '金豆豆';
+  if (n === 1007) return '金券';
+  try {
+    const info = getItemById(n);
+    if (info && info.name) return String(info.name);
+  } catch { /* 配置没加载就退回 id */ }
+  return `#${n}`;
+}
+
 async function claimGuardReward() {
   try {
     const body = types.ClaimGuardRewardRequest.encode(types.ClaimGuardRewardRequest.create({})).finish();
     const { body: replyBody } = await sendMsgAsync('gamepb.dogpb.DogService', 'ClaimGuardReward', body, 10000);
     if (replyBody && replyBody.length > 0) {
-      return types.ClaimGuardRewardReply.decode(replyBody);
+      const reply = types.ClaimGuardRewardReply.decode(replyBody);
+      // 带上名字, 面板才能显示"金豆豆x5"而不是"#80011x5"
+      const withName = list => (list || []).map(it => ({
+        id: toNum(it.id),
+        count: toNum(it.count),
+        name: itemNameOf(toNum(it.id)),
+      }));
+      return {
+        ...reply,
+        items: withName(reply.items),
+        bonus_items: withName(reply.bonus_items),
+      };
     }
   } catch (e) {
     log('宠物', 'ClaimGuardReward 失败: ' + (e.message || e));

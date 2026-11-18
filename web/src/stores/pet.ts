@@ -153,6 +153,11 @@ export const usePetStore = defineStore('pet', () => {
   const dogs = ref<DogItem[]>([])
   const guardLogs = ref<GuardLogEntry[]>([])
   const guardLogTotal = ref(0)
+  // 看家奖励(护主奖励): 后端早就有, 页面一直没暴露
+  const guardReward = ref<{ hasHuzhuDog: boolean, canClaim: boolean, rewards: Array<{ id: number, count: number, name: string }> } | null>(null)
+  const guardRewardLoading = ref(false)
+  const guardRewardClaiming = ref(false)
+  const guardRewardError = ref('')
   const capitalMode = ref<CapitalModeConfig>({ enabled: false, secondsBeforeMature: 10, selectedDogId: null })
 
   const hasActiveDog = computed(() => !!(dogStatus.value && dogStatus.value.fed))
@@ -384,6 +389,68 @@ export const usePetStore = defineStore('pet', () => {
     finally { loading.value = false }
   }
 
+  /**
+   * 看家奖励(护主奖励)状态。
+   *
+   * 后端 GameGuardReward 一直有, 但页面上从没暴露过 —— 用户不知道有没有可领的奖励。
+   * 返回 { has_huzhu_dog, can_claim, rewards[] }:
+   *   has_huzhu_dog = 是否买了"护主"狗(没买就不会有奖励)
+   *   can_claim     = 现在能不能领
+   */
+  async function fetchGuardReward(accountId: string) {
+    guardRewardLoading.value = true
+    try {
+      const res = await api.get('/api/pet/rewards', { headers: { 'x-account-id': accountId } })
+      if (res.data?.ok) {
+        const d = res.data.data || {}
+        guardReward.value = {
+          hasHuzhuDog: !!d.has_huzhu_dog,
+          canClaim: !!d.can_claim,
+          // 后端已把物品名解析好(name), 直接透传
+          rewards: (d.rewards || []).map((r: any) => ({
+            id: Number(r.id) || 0,
+            count: Number(r.count) || 0,
+            name: String(r.name || `#${r.id}`),
+          })),
+        }
+      }
+      else {
+        guardRewardError.value = res.data?.error || '获取奖励失败'
+      }
+    }
+    catch (e: any) {
+      guardRewardError.value = e?.response?.data?.error || e?.message || '获取奖励失败'
+    }
+    finally {
+      guardRewardLoading.value = false
+    }
+  }
+
+  /** 领取看家奖励; 返回 { ok, items, bonusItems } 供页面提示 */
+  async function claimGuardReward(accountId: string) {
+    guardRewardClaiming.value = true
+    try {
+      const res = await api.post('/api/pet/rewards/claim', {}, { headers: { 'x-account-id': accountId } })
+      if (!res.data?.ok) {
+        return { ok: false, error: res.data?.error || '领取失败' }
+      }
+      const d = res.data.data || {}
+      // 服务端把奖励分两段: items(常规) + bonus_items(额外奖励)
+      const norm = (list: any[]) => (list || []).map(r => ({
+        id: Number(r.id) || 0,
+        count: Number(r.count) || 0,
+        name: String(r.name || `#${r.id}`),
+      }))
+      return { ok: true, items: norm(d.items), bonusItems: norm(d.bonus_items) }
+    }
+    catch (e: any) {
+      return { ok: false, error: e?.response?.data?.error || e?.message || '领取失败' }
+    }
+    finally {
+      guardRewardClaiming.value = false
+    }
+  }
+
   async function fetchCapitalMode(accountId: string) {
     try {
       const res = await api.get('/api/pet/capital-mode', { headers: { 'x-account-id': accountId } })
@@ -428,7 +495,8 @@ export const usePetStore = defineStore('pet', () => {
 
   async function refreshCurrentTab(accountId: string) {
     switch (currentTab.value) {
-      case 'overview': await fetchOverview(accountId); break
+      // 总览同时拉奖励状态: 奖励卡片就显示在总览顶部
+      case 'overview': await Promise.all([fetchOverview(accountId), fetchGuardReward(accountId)]); break
       case 'food': await Promise.all([fetchFoodItems(accountId), fetchPetStatus(accountId)]); break
       case 'logs': await fetchGuardLogs(accountId); break
       case 'capital': await Promise.all([fetchCapitalMode(accountId), fetchOverview(accountId)]); break
@@ -438,10 +506,12 @@ export const usePetStore = defineStore('pet', () => {
   return {
     currentTab, loading, dogStatus, dogFoods, feedLoading,
     overview, dogs, guardLogs, guardLogTotal, capitalMode,
+    guardReward, guardRewardLoading, guardRewardClaiming, guardRewardError,
     hasActiveDog, availableDogFoods,
     fetchPetStatus, fetchOverview,
     activateDog, deployDog, withdrawDog, fetchFoodItems,
-    fetchGuardLogs, fetchCapitalMode, saveCapitalMode,
+    fetchGuardLogs, fetchGuardReward, claimGuardReward,
+    fetchCapitalMode, saveCapitalMode,
     feedDog, syncFromBag,
     refreshCurrentTab, clear,
     getQualityName, getQualityColor, getGuardRate,

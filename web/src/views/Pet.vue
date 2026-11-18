@@ -9,7 +9,8 @@ const accountStore = useAccountStore()
 const petStore = usePetStore()
 const toast = useToastStore()
 const { currentAccountId, currentAccount } = storeToRefs(accountStore)
-const { overview, dogs, dogFoods, guardLogs, capitalMode, loading, currentTab, feedLoading } = storeToRefs(petStore)
+const { overview, dogs, dogFoods, guardLogs, capitalMode, loading, currentTab, feedLoading,
+  guardReward, guardRewardLoading, guardRewardClaiming, guardRewardError } = storeToRefs(petStore)
 void dogFoods
 
 const error = ref("")
@@ -61,8 +62,23 @@ async function handleWithdraw() {
   else toast.error(result?.error || "操作失败")
 }
 
-async function handleFeed(foodId: number) {
+/** 领取看家奖励(护主奖励) */
+const claimGuardReward = async () => {
   const id = currentAccountId.value
+  if (!id) return
+  const result = await petStore.claimGuardReward(id)
+  if (result?.ok) {
+    const all = [...(result.items || []), ...(result.bonusItems || [])]
+    const text = all.map((x: any) => `${x.name}x${x.count}`).join('，')
+    toast.success(text ? `领取成功：${text}` : '领取成功')
+    await petStore.fetchGuardReward(id)
+  }
+  else {
+    toast.error(result?.error || '领取失败')
+  }
+}
+
+async function handleFeed(foodId: number) {  const id = currentAccountId.value
   if (!id) return
   try {
     await petStore.feedDog(id, foodId, 1)
@@ -142,6 +158,51 @@ onMounted(() => { if (currentAccountId.value) refreshCurrentTab() })
 
       <!-- ===== 狗狗总览 ===== -->
       <template v-if="currentTab === 'overview'">
+        <!-- 看家奖励(护主奖励): 后端一直有, 页面原先没入口 -->
+        <div
+          v-if="guardReward && guardReward.hasHuzhuDog"
+          class="mb-4 rounded-xl border p-4 shadow-sm"
+          :class="guardReward.canClaim
+            ? 'border-amber-300 bg-amber-50 dark:border-amber-700 dark:bg-amber-900/20'
+            : 'border-gray-200 bg-white dark:border-gray-700 dark:bg-gray-800'"
+        >
+          <div class="flex flex-wrap items-center justify-between gap-3">
+            <div class="min-w-0">
+              <h3 class="flex items-center gap-2 text-base font-bold">
+                <div class="i-carbon-gift text-lg text-amber-500" />
+                看家奖励
+                <span
+                  v-if="guardReward.canClaim"
+                  class="rounded-full bg-amber-500 px-2 py-0.5 text-xs text-white"
+                >可领取</span>
+                <span v-else class="text-xs text-gray-400 font-normal">暂无待领取</span>
+              </h3>
+              <div v-if="guardReward.rewards.length" class="mt-1.5 flex flex-wrap gap-1.5">
+                <span
+                  v-for="r in guardReward.rewards"
+                  :key="r.id"
+                  class="rounded bg-white px-2 py-0.5 text-xs text-gray-600 dark:bg-gray-700 dark:text-gray-300"
+                >{{ r.name }} ×{{ r.count }}</span>
+              </div>
+              <p v-else class="mt-1 text-xs text-gray-400">
+                狗粮充足、有好友来偷时才可能产生守护奖励
+              </p>
+            </div>
+            <button
+              type="button"
+              class="min-h-[40px] shrink-0 rounded-lg px-4 py-2 text-sm font-medium transition"
+              :class="guardReward.canClaim && !guardRewardClaiming
+                ? 'bg-amber-500 text-white hover:bg-amber-600'
+                : 'cursor-not-allowed bg-gray-200 text-gray-400 dark:bg-gray-700'"
+              :disabled="!guardReward.canClaim || guardRewardClaiming"
+              @click="claimGuardReward"
+            >
+              {{ guardRewardClaiming ? '领取中…' : '领取奖励' }}
+            </button>
+          </div>
+          <p v-if="guardRewardError" class="mt-2 text-xs text-red-500">{{ guardRewardError }}</p>
+        </div>
+
         <!-- 顶部概要卡片 -->
         <div v-if="dogs.length > 0" class="mb-4 rounded-xl bg-white p-4 shadow-sm dark:bg-gray-800">
           <div class="flex items-start gap-4">
