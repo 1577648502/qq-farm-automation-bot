@@ -158,13 +158,9 @@ export const menuRoutes: MenuItem[] = [
     icon: 'i-fas-paw',
     component: () => import('@/views/Pet.vue'),
   },
-  {
-    path: 'ranch',
-    name: 'ranch',
-    label: '牧场',
-    icon: 'i-fas-horse-head',
-    component: () => import('@/views/Ranch.vue'),
-  },
+  // 牧场入口已移到「个人 → 我的牧场」, 菜单不再单独列一项。
+  // 路由本身保留(Personal.vue 里以 embedded 模式复用 Ranch.vue,
+  // 直接访问 /ranch 仍可用, 方便排查)。
   {
 
     path: 'friends',

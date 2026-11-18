@@ -628,12 +628,19 @@ onUnmounted(() => {
 
 <template>
   <div class="space-y-4">
-    <!-- 嵌入模式(被「个人 → 我的牧场」页签使用): 隐藏本页自己的页签栏,
-         避免"页签套页签"。独立路由访问时保持原样。 -->
-    <div v-if="!embedded" class="mb-1 flex flex-wrap gap-2">
+    <!-- 牧场内部页签栏。
+         嵌入模式(个人 → 我的牧场)下**保留**这排页签 —— 牧场的全部功能
+         (总览/幼崽商城/兴牧档位/牧场任务/建筑与地块)都通过它切换,
+         这样个人页只需要一个"我的牧场"入口就够, 不用再摊成 5 个顶级页签。
+         嵌入时做成小一号, 与个人页的顶级页签形成视觉层级区分。 -->
+    <div
+      class="mb-1 flex flex-wrap gap-2"
+      :class="embedded ? 'rounded-lg bg-white p-1.5 dark:bg-gray-800' : ''"
+    >
       <button
-        class="min-h-[44px] flex items-center rounded-lg px-4 py-2 font-medium transition-colors space-x-2"
-        :class="currentTab === 'overview' ? 'text-white shadow-md' : 'bg-white text-gray-600 hover:bg-gray-100 dark:bg-gray-800 dark:text-gray-300 dark:hover:bg-gray-700'"
+        class="flex items-center rounded-lg font-medium transition-colors space-x-2"
+        :class="[embedded ? 'min-h-[36px] px-3 py-1.5 text-sm' : 'min-h-[44px] px-4 py-2',
+          currentTab === 'overview' ? 'text-white shadow-md' : 'bg-white text-gray-600 hover:bg-gray-100 dark:bg-gray-800 dark:text-gray-300 dark:hover:bg-gray-700']"
         :style="currentTab === 'overview' ? { backgroundColor: 'var(--theme-primary)' } : {}"
         @click="currentTab = 'overview'"
       >
@@ -641,8 +648,9 @@ onUnmounted(() => {
         <span>牧场总览</span>
       </button>
       <button
-        class="min-h-[44px] flex items-center rounded-lg px-4 py-2 font-medium transition-colors space-x-2"
-        :class="currentTab === 'cubShop' ? 'text-white shadow-md' : 'bg-white text-gray-600 hover:bg-gray-100 dark:bg-gray-800 dark:text-gray-300 dark:hover:bg-gray-700'"
+        class="flex items-center rounded-lg font-medium transition-colors space-x-2"
+        :class="[embedded ? 'min-h-[36px] px-3 py-1.5 text-sm' : 'min-h-[44px] px-4 py-2',
+          currentTab === 'cubShop' ? 'text-white shadow-md' : 'bg-white text-gray-600 hover:bg-gray-100 dark:bg-gray-800 dark:text-gray-300 dark:hover:bg-gray-700']"
         :style="currentTab === 'cubShop' ? { backgroundColor: 'var(--theme-primary)' } : {}"
         @click="openCubShop"
       >
@@ -650,8 +658,9 @@ onUnmounted(() => {
         <span>幼崽商城</span>
       </button>
       <button
-        class="min-h-[44px] flex items-center rounded-lg px-4 py-2 font-medium transition-colors space-x-2"
-        :class="currentTab === 'tiers' ? 'text-white shadow-md' : 'bg-white text-gray-600 hover:bg-gray-100 dark:bg-gray-800 dark:text-gray-300 dark:hover:bg-gray-700'"
+        class="flex items-center rounded-lg font-medium transition-colors space-x-2"
+        :class="[embedded ? 'min-h-[36px] px-3 py-1.5 text-sm' : 'min-h-[44px] px-4 py-2',
+          currentTab === 'tiers' ? 'text-white shadow-md' : 'bg-white text-gray-600 hover:bg-gray-100 dark:bg-gray-800 dark:text-gray-300 dark:hover:bg-gray-700']"
         :style="currentTab === 'tiers' ? { backgroundColor: 'var(--theme-primary)' } : {}"
         @click="openTiers"
       >
@@ -659,8 +668,9 @@ onUnmounted(() => {
         <span>兴牧档位</span>
       </button>
       <button
-        class="min-h-[44px] flex items-center rounded-lg px-4 py-2 font-medium transition-colors space-x-2"
-        :class="currentTab === 'tasks' ? 'text-white shadow-md' : 'bg-white text-gray-600 hover:bg-gray-100 dark:bg-gray-800 dark:text-gray-300 dark:hover:bg-gray-700'"
+        class="flex items-center rounded-lg font-medium transition-colors space-x-2"
+        :class="[embedded ? 'min-h-[36px] px-3 py-1.5 text-sm' : 'min-h-[44px] px-4 py-2',
+          currentTab === 'tasks' ? 'text-white shadow-md' : 'bg-white text-gray-600 hover:bg-gray-100 dark:bg-gray-800 dark:text-gray-300 dark:hover:bg-gray-700']"
         :style="currentTab === 'tasks' ? { backgroundColor: 'var(--theme-primary)' } : {}"
         @click="openRanchTasks"
       >
@@ -672,8 +682,9 @@ onUnmounted(() => {
         >{{ ranchClaimableCount }}</span>
       </button>
       <button
-        class="min-h-[44px] flex items-center rounded-lg px-4 py-2 font-medium transition-colors space-x-2"
-        :class="currentTab === 'buildings' ? 'text-white shadow-md' : 'bg-white text-gray-600 hover:bg-gray-100 dark:bg-gray-800 dark:text-gray-300 dark:hover:bg-gray-700'"
+        class="flex items-center rounded-lg font-medium transition-colors space-x-2"
+        :class="[embedded ? 'min-h-[36px] px-3 py-1.5 text-sm' : 'min-h-[44px] px-4 py-2',
+          currentTab === 'buildings' ? 'text-white shadow-md' : 'bg-white text-gray-600 hover:bg-gray-100 dark:bg-gray-800 dark:text-gray-300 dark:hover:bg-gray-700']"
         :style="currentTab === 'buildings' ? { backgroundColor: 'var(--theme-primary)' } : {}"
         @click="openBuildings"
       >

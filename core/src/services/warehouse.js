@@ -765,12 +765,44 @@ async function getRanchBagDetail() {
 }
 
 /** 牧场背包页签 */
+/**
+ * 牧场背包页签。
+ *
+ * ⚠ 必须把 protobuf Long 转成数字再返回: 直接回 Long 对象会让前端拿到
+ *   {"low":5,"high":0,"unsigned":false}, 页签点击/过滤全部失效(线上实测)。
+ *
+ * 页签 id 与物品 itemType 的对应(2026-11-18 线上实测):
+ *   5 牧场产物 ← itemType 107(蛋类)
+ *   6 牧场幼崽 ← itemType 105
+ *   7 牧场饲料 ← itemType 109(罐头)
+ *   8 牧场道具 ← itemType 108(便便) / 106(成品动物)
+ * 这里一并把 itemType 算好给前端, 免得前端自己猜。
+ */
+const RANCH_TAB_ITEM_TYPES = {
+    5: [107],
+    6: [105],
+    7: [109],
+    8: [108, 106],
+};
+
 async function getRanchBagTabs() {
     const body = types.GetBagTabRequest.encode(types.GetBagTabRequest.create({
         global_scene_id: toLong(RANCH_SCENE_ID),
     })).finish();
     const { body: replyBody } = await sendMsgAsync('gamepb.itempb.ItemService', 'GetBagTab', body);
-    return types.GetBagTabReply.decode(replyBody);
+    const reply = types.GetBagTabReply.decode(replyBody);
+    const tabs = (reply && reply.tabs ? reply.tabs : []).map((t) => {
+        const id = toNum(t.id);
+        return {
+            id,
+            name: t.name || '',
+            capacity: toNum(t.capacity),
+            field4: toNum(t.field4),
+            // 该页签对应的物品类型(前端据此过滤, 不再自行推断)
+            itemTypes: RANCH_TAB_ITEM_TYPES[id] || [],
+        };
+    });
+    return { tabs };
 }
 
 // ============ 出售逻辑 ============

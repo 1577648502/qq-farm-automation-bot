@@ -29,15 +29,24 @@ const TAB_NAMES: Record<number, string> = {
 
 const filtered = computed(() => {
   let list = items.value
-  // tab 过滤: itemType 与页签 id 对应(实测 产物=2 / 幼崽=1 / 饲料=0 / 道具=6)
+  // 页签过滤: 用后端给的 itemTypes(页签 id 与物品 itemType 不是同一个数字, 不能直接比)
   if (activeTab.value !== -1) {
-    const tab = tabs.value.find(t => t.id === activeTab.value)
-    if (tab) list = list.filter(it => Number(it.itemType) === activeTab.value)
+    const tab = tabs.value.find(t => toNumId(t.id) === activeTab.value)
+    if (tab) {
+      const types = Array.isArray(tab.itemTypes) ? tab.itemTypes.map(Number) : []
+      list = types.length ? list.filter(it => types.includes(Number(it.itemType))) : list
+    }
   }
   const kw = keyword.value.trim()
   if (kw) list = list.filter(it => String(it.name || '').includes(kw) || String(it.id).includes(kw))
   return list
 })
+
+/** 兼容后端可能返回的 Long 对象 {low, high} 或数字 */
+function toNumId(v: any) {
+  if (v && typeof v === 'object') return Number(v.low) || 0
+  return Number(v) || 0
+}
 
 const totalCount = computed(() => items.value.reduce((n, it) => n + Number(it.count || 0), 0))
 
@@ -111,13 +120,13 @@ watch(currentAccountId, () => refresh())
       </button>
       <button
         v-for="t in tabs"
-        :key="t.id"
+        :key="toNumId(t.id)"
         type="button"
         class="rounded-full px-3 py-1 text-xs transition"
-        :class="activeTab === t.id ? 'bg-amber-600 text-white' : 'bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-300'"
-        @click="activeTab = t.id"
+        :class="activeTab === toNumId(t.id) ? 'bg-amber-600 text-white' : 'bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-300'"
+        @click="activeTab = toNumId(t.id)"
       >
-        {{ tabLabel(t.id) }}
+        {{ tabLabel(toNumId(t.id)) }}
       </button>
     </div>
 

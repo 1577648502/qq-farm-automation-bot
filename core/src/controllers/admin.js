@@ -604,9 +604,34 @@ app.use('/api', (req, res, next) => {
         return accounts.map(a => a.id);
     };
 
+    /**
+     * 判断一个错误是否属于"业务上可预期"的失败 —— 这类应该回 200 + {ok:false,error},
+     * 而不是 500。
+     *
+     * 为什么必须区分:
+     *   原先只认 "账号未运行" / "API Timeout" 两种, 于是所有其他失败都变成 500:
+     *     · 牧场场景未解锁(1045002) → 500
+     *     · 游戏服务端返回业务错误码(code=xxxx) → 500
+     *     · 请求队列已满 / 连接未打开 → 500
+     *     · 操作条件不满足(等级不足、已售罄、次数用完) → 500
+     *   结果就是面板上"好多按钮点一下就报 500", 但它们其实都是正常业务反馈。
+     *
+     * 500 应该留给**真故障**: 代码 bug、未捕获异常、依赖不可用。
+     */
     const isSoftRuntimeError = (err) => {
         const msg = String((err && err.message) || '');
-        return msg === '账号未运行' || msg === 'API Timeout';
+        if (!msg) return false;
+        // 1) 账号/连接状态类
+        if (msg === '账号未运行' || msg === 'API Timeout') return true;
+        if (/连接未打开|请求队列已满|请求超时|连接已断开|未登录/.test(msg)) return true;
+        // 2) 游戏服务端返回的业务错误码(形如 "... 错误: code=1045002 xxx")
+        if (/code=\d+/.test(msg)) return true;
+        // 3) 明确的业务条件不满足(各服务里手写的错误文案)
+        if (/未解锁|等级不足|已达限购|已售罄|次数已用完|未开放|不存在|已过期|无可|没有可/.test(msg)) return true;
+        // 4) 参数校验类(用户/前端传参不全, 属 400 语义, 不该是 500)
+        //    例: ranch.js 的 "缺少幼崽物品 id" / "需要指定槽位" / "需要指定好友 gid"
+        if (/^缺少|^需要指定|^参数错误|参数不合法|^无效的/.test(msg)) return true;
+        return false;
     };
 
     /**
