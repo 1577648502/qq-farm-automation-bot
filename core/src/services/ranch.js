@@ -31,7 +31,11 @@ const RANCH_ERR = {
     BUILDING_MISSING: 1045115,   // 牧草机等建筑还没建(牧场刚开, 没摆放)
     NOTHING_TO_PRODUCE: 1045232, // 没有可生产的动物
     CANS_EMPTY: 1045234,         // 罐头桶耗尽
-    RATE_LIMITED: 1045202,       // 网络繁忙(服务端限流) → 要退避
+    // ⚠ 1045202 的语义**没有实证**: 抓包/文档里都没有。
+    //   之前注释写成"网络繁忙(服务端限流)"是凭字面猜的, 结果喂食 100% 报这个码时
+    //   被误当成限流去"退避重试", 真正的原因被掩盖了。
+    //   现在单独命名, 对外只转达服务端原文, 不再自己编解释。
+    FEED_REJECTED: 1045202,      // 喂食被拒(具体原因未知, 见服务端 message)
     SCENE_LOCKED: 1045002,       // 牧场场景未解锁(等级不到 25 级) → 停自动化直到重登
     NOTHING_TO_HARVEST: 1045211, // 当前没有可收取的产物(正常状态)
 };
@@ -48,7 +52,7 @@ function isExpectedRanchError(e) {
     return code === RANCH_ERR.BUILDING_MISSING
         || code === RANCH_ERR.NOTHING_TO_PRODUCE
         || code === RANCH_ERR.CANS_EMPTY
-        || code === RANCH_ERR.RATE_LIMITED
+        || code === RANCH_ERR.FEED_REJECTED
         || code === RANCH_ERR.NOTHING_TO_HARVEST;
 }
 
@@ -178,13 +182,97 @@ const FEED_TYPE_LABEL = {
  */
 function feedFailureHint(feedType, e) {
     const code = parseRanchErrorCode(e);
+    const raw = String(e && e.message || '').replace(/^[^:]*:\s*/, '').trim();
     if (code === RANCH_ERR.CANS_EMPTY) {
         return '罐头桶已用完，请先用「罐头」道具补充对应容器(普通罐头→无机容器，有机罐头→有机容器)';
     }
-    if (Number(feedType) === FEED_TYPE.NORMAL_CAN) {
-        return `普通罐头每只动物只能用一次，请改用有机罐头(可重复使用)。code=${code}`;
+    if (code === RANCH_ERR.FEED_REJECTED) {
+        // 语义未证实: 不编原因, 只转达服务端原文
+        return `喂食被服务端拒绝(code=1045202)${raw ? `：${raw}` : ''}`;
     }
-    return `当前无法喂食(code=${code})`;
+    if (Number(feedType) === FEED_TYPE.NORMAL_CAN) {
+        return `普通罐头每只动物只能用一次，请改用有机罐头(可重复使用)。code=${code}${raw ? `：${raw}` : ''}`;
+    }
+    return `喂食失败(code=${code})${raw ? `：${raw}` : ''}`;
+}
+
+/**
+ * 把背包里的「罐头」灌进罐头桶。
+ *
+ * ⭐ 这是喂食的前置步骤, 之前完全没实现:
+ *   80021~80024(普通罐头) / 80031~80034(有机罐头) 是**道具**(itemType=109),
+ *   必须先 Use 灌进对应容器(7003 无机桶 / 7004 有机桶), 桶里有时长才能喂。
+ *   线上表现就是背包里明明有 72 个罐头, 喂食却一直回「罐头桶已用完(1045234)」。
+ *
+ * 抓包(20261103-194153)证实 Use 的真实编码是嵌套形态:
+ *   {1: {1: item_id, 2: count, 6: uid}}   ← 必须带 uid
+ *
+ * @param {'normal'|'organic'} kind
+ * @param {{maxItems?:number}} [opts]
+ * @returns {Promise<{used:number, details:string[]}>}
+ */
+async function fillCanBuckets(kind = 'normal', opts = {}) {
+    const result = { used: 0, details: [] };
+    // 普通罐头 80021~80024 / 有机罐头 80031~80034
+    const isNormal = kind !== 'organic';
+    const ids = isNormal ? [80021, 80022, 80023, 80024] : [80031, 80032, 80033, 80034];
+
+    let bag;
+    try {
+        bag = await require('./warehouse').getRanchBagItems();
+    } catch {
+        return result;
+    }
+    // 按"大的先灌"排序(12h → 8h → 4h → 1h): 少的次数灌进更多时长
+    const cans = bag
+        .filter(it => ids.includes(toNum(it.id)) && toNum(it.count) > 0 && toNum(it.uid) > 0)
+        .sort((a, b) => ids.indexOf(toNum(a.id)) - ids.indexOf(toNum(b.id)));
+
+    if (!cans.length) {
+        return result;
+    }
+
+    const maxItems = Math.max(1, toNum(opts.maxItems) || cans.length);
+    for (const can of cans.slice(0, maxItems)) {
+        try {
+            await useItemWithUid(toNum(can.id), toNum(can.count), toNum(can.uid));
+            result.used += toNum(can.count);
+            result.details.push(`#${toNum(can.id)}x${toNum(can.count)}`);
+            await sleep(300);
+        } catch (e) {
+            const code = parseRanchErrorCode(e);
+            // 仓库满/超出容器上限 → 停止(继续灌也是失败)
+            log('牧场', `灌罐头失败 #${toNum(can.id)}: code=${code || '?'} ${String(e.message || '').slice(0, 60)}`, {
+                module: 'ranch', event: '灌罐头', result: 'error', itemId: toNum(can.id), code,
+            });
+            break;
+        }
+    }
+    if (result.used > 0) {
+        log('牧场', `已灌罐头 ${result.used} 个进${isNormal ? '普通' : '有机'}罐头桶: ${result.details.join('，')}`, {
+            module: 'ranch', event: '灌罐头', result: 'ok', kind, count: result.used,
+        });
+    }
+    return result;
+}
+
+/**
+ * 用 uid 精确使用一个道具(抓包实测的嵌套形态)。
+ * warehouse.useItem 用的是旧编码(item_id/count/land_ids), 对罐头不吃, 所以单独实现。
+ * @param {number} itemId
+ * @param {number} count
+ * @param {number} uid
+ */
+async function useItemWithUid(itemId, count, uid) {
+    const writer = protobuf.Writer.create();
+    const itemWriter = writer.uint32(10).fork();          // #1: item (嵌套)
+    itemWriter.uint32(8).int64(toLong(toNum(itemId)));    // item.id
+    itemWriter.uint32(16).int64(toLong(Math.max(1, toNum(count) || 1))); // item.count
+    itemWriter.uint32(48).int64(toLong(toNum(uid)));      // item.uid (#6)
+    itemWriter.ldelim();
+    const body = writer.finish();
+    const { body: replyBody } = await network.sendMsgAsync('gamepb.itempb.ItemService', 'Use', body);
+    return replyBody;
 }
 
 async function feedAnimal(feedType, count = 1, hostGid = 0) {
@@ -1024,11 +1112,11 @@ async function runRanchCare(opts = {}) {
             });
         }
     } catch (e) {
-        // 1045202 = 服务端限流("网络繁忙"): 本轮直接放弃, 别再打后续请求火上浇油
-        if (parseRanchErrorCode(e) === RANCH_ERR.RATE_LIMITED) {
+        // 1045202 语义未证实(见 RANCH_ERR 注释): 遇到就中止本轮, 别连着打请求
+        if (parseRanchErrorCode(e) === RANCH_ERR.FEED_REJECTED) {
             result.rateLimited = true;
-            log('牧场', '收获被服务端限流(网络繁忙), 本轮巡牧场提前结束', {
-                module: 'ranch', event: '收获牧场', result: 'rate_limited',
+            log('牧场', `收获被服务端拒绝(code=1045202), 本轮巡牧场提前结束`, {
+                module: 'ranch', event: '收获牧场', result: 'rejected',
             });
             return result;
         }
@@ -1051,10 +1139,10 @@ async function runRanchCare(opts = {}) {
         }
     } catch (e) {
         // 1045232 没有可生产的动物 = 正常状态(产出冷却中), 不算故障
-        if (parseRanchErrorCode(e) === RANCH_ERR.RATE_LIMITED) {
+        if (parseRanchErrorCode(e) === RANCH_ERR.FEED_REJECTED) {
             result.rateLimited = true;
-            log('牧场', '催产被服务端限流, 本轮巡牧场提前结束', {
-                module: 'ranch', event: '催产', result: 'rate_limited',
+            log('牧场', '催产被服务端拒绝(code=1045202), 本轮巡牧场提前结束', {
+                module: 'ranch', event: '催产', result: 'rejected',
             });
             return result;
         }
@@ -1075,10 +1163,10 @@ async function runRanchCare(opts = {}) {
             result.fed += 1;
         } catch (e) {
             // 1045234 罐头耗尽 = 正常状态(等用户买罐头/加牧草)
-            if (parseRanchErrorCode(e) === RANCH_ERR.RATE_LIMITED) {
+            if (parseRanchErrorCode(e) === RANCH_ERR.FEED_REJECTED) {
                 result.rateLimited = true;
-                log('牧场', '喂食被服务端限流, 本轮巡牧场提前结束', {
-                    module: 'ranch', event: '喂食', result: 'rate_limited',
+                log('牧场', '喂食被服务端拒绝(code=1045202), 本轮巡牧场提前结束', {
+                    module: 'ranch', event: '喂食', result: 'rejected',
                 });
                 return result;
             }
@@ -2166,29 +2254,47 @@ async function operateRanch(opts = {}) {
             //   4 普通罐头 —— 每只动物只能用一次, 重复喂会被服务端拒绝
             //   5/6 有机罐头 —— 不限次数
             const feedLabel = FEED_TYPE_LABEL[feedType] || `方式${feedType}`;
-            const attempt = async () => feedAnimal(feedType, count);
+            // 桶空时先自动灌罐头(80021+ → 容器 7003/7004), 再重试一次。
+            // 之前缺这一步: 背包有 72 个罐头, 喂食却一直回 1045234「罐头桶已用完」。
+            const doFeed = async () => feedAnimal(feedType, count);
             try {
-                await attempt();
+                await doFeed();
                 return { ok: true, action: '喂食', detail: `${feedLabel} x${count}` };
             } catch (e) {
                 const code = parseRanchErrorCode(e);
-                if (code === RANCH_ERR.RATE_LIMITED) {
-                    // 退避 1.2 秒后重试一次(限流通常是瞬时的)
-                    await sleep(1200);
-                    try {
-                        await attempt();
-                        return { ok: true, action: '喂食', detail: `${feedLabel} x${count}(限流后重试成功)` };
-                    } catch (e2) {
-                        if (parseRanchErrorCode(e2) === RANCH_ERR.RATE_LIMITED) {
+                if (code === RANCH_ERR.CANS_EMPTY && opts.autoFillCans !== false) {
+                    const kind = Number(feedType) === FEED_TYPE.NORMAL_CAN ? 'normal' : 'organic';
+                    const filled = await fillCanBuckets(kind, { maxItems: 4 });
+                    if (filled.used > 0) {
+                        try {
+                            await doFeed();
                             return {
-                                ok: false, action: '喂食',
-                                error: '服务端限流(网络繁忙)，请稍等几秒再试。自动巡检刚跑完一轮时最容易撞上',
+                                ok: true, action: '喂食',
+                                detail: `${feedLabel} x${count}(自动灌入 ${filled.used} 个罐头)`,
                             };
+                        } catch (e2) {
+                            return { ok: false, action: '喂食', error: feedFailureHint(feedType, e2) };
                         }
-                        return { ok: false, action: '喂食', error: feedFailureHint(feedType, e2) };
                     }
+                    return {
+                        ok: false, action: '喂食',
+                        error: `罐头桶已空，且背包里没有${kind === 'normal' ? '普通' : '有机'}罐头可灌。请在商城购买罐头(80021~80034)`,
+                    };
                 }
-                if (isExpectedRanchError(e)) {
+                if (code === RANCH_ERR.FEED_REJECTED) {
+                    // 1045202 实测 100% 稳定复现(不是偶发), 不做"退避重试" ——
+                    // 重试只会再失败一次, 还把真实原因藏起来。服务端 message 原样带出。
+                    const raw = String(e.message || '').replace(/^[^:]*:\s*/, '').trim();
+                    logWarn('牧场', `喂食被拒(code=1045202): ${raw || '(服务端无额外说明)'}`, {
+                        module: 'ranch', event: '喂食', result: 'rejected',
+                        feedType, count, raw,
+                    });
+                    return {
+                        ok: false, action: '喂食',
+                        error: `喂食被服务端拒绝(code=1045202)${raw ? `：${raw}` : ''}`,
+                    };
+                }
+                if (isExpectedRanchError(e) || code > 0) {
                     return { ok: false, action: '喂食', error: feedFailureHint(feedType, e) };
                 }
                 throw e;
@@ -2309,14 +2415,34 @@ async function operateRanch(opts = {}) {
                     await feedAnimal(ft, toNum(opts.count) || 1);
                     return { ok: true, action: '全场喂罐头', detail: FEED_TYPE_LABEL[ft] || `方式${ft}` };
                 } catch (e) {
-                    if (parseRanchErrorCode(e) === RANCH_ERR.RATE_LIMITED) {
-                        await sleep(1200);
-                        try {
-                            await feedAnimal(ft, toNum(opts.count) || 1);
-                            return { ok: true, action: '全场喂罐头', detail: `${FEED_TYPE_LABEL[ft] || ft}(限流后重试成功)` };
-                        } catch (e2) {
-                            return { ok: false, action: '全场喂罐头', error: feedFailureHint(ft, e2) };
+                    const code = parseRanchErrorCode(e);
+                    // 桶空 → 先灌罐头再重试(与单只路径一致)
+                    if (code === RANCH_ERR.CANS_EMPTY && opts.autoFillCans !== false) {
+                        const kind = ft === FEED_TYPE.NORMAL_CAN ? 'normal' : 'organic';
+                        const filled = await fillCanBuckets(kind, { maxItems: 6 });
+                        if (filled.used > 0) {
+                            try {
+                                await feedAnimal(ft, toNum(opts.count) || 1);
+                                return { ok: true, action: '全场喂罐头', detail: `自动灌入 ${filled.used} 个罐头后喂食成功` };
+                            } catch (e2) {
+                                return { ok: false, action: '全场喂罐头', error: feedFailureHint(ft, e2) };
+                            }
                         }
+                        return {
+                            ok: false, action: '全场喂罐头',
+                            error: `罐头桶已空，且背包里没有${kind === 'normal' ? '普通' : '有机'}罐头可灌`,
+                        };
+                    }
+                    // 1045202 不再当"限流"重试(实测 100% 复现, 重试必失败)
+                    if (code === RANCH_ERR.FEED_REJECTED) {
+                        const raw = String(e.message || '').replace(/^[^:]*:\s*/, '').trim();
+                        logWarn('牧场', `全场喂罐头被拒(code=1045202): ${raw || '(无额外说明)'}`, {
+                            module: 'ranch', event: '全场喂罐头', result: 'rejected', feedType: ft, raw,
+                        });
+                        return {
+                            ok: false, action: '全场喂罐头',
+                            error: `喂食被服务端拒绝(code=1045202)${raw ? `：${raw}` : ''}`,
+                        };
                     }
                     return { ok: false, action: '全场喂罐头', error: feedFailureHint(ft, e) };
                 }
@@ -2424,6 +2550,8 @@ module.exports = {
     stealFriendProduce,
     autoStealFriendProduce,
     purchaseRotationGoods,
+    fillCanBuckets,
+    useItemWithUid,
     getRanchWeightScore,
     __privateRanchFns: {
         calcRanchLevel, parseRotationShopReply, parseFeedMachineReply, walkWire, isEmptyRanchView,

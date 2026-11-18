@@ -29,10 +29,24 @@ message SellReply {
 
 // ============ 使用物品 ============
 
+// ⚠ 两种编码并存, 以抓包为准:
+//   礼包类(2026-11-03 实测):  {1: {1: item_id, 2: count, 6: uid}}   ← #1 是嵌套消息
+//   旧实现(田地类):            {1: item_id, 2: count, 3: land_ids[]}
+// 服务端对"罐头灌桶"这类必须带 uid, 所以真正要用的是 UseItemRequest 这种嵌套形态。
 message UseRequest {
     int64 item_id = 1;
     int64 count = 2;
     repeated int64 land_ids = 3;
+}
+
+// 嵌套形态(抓包实测): Use{ item: {id, count, uid} }
+message UseItemRequest {
+    ItemUseRef item = 1;
+}
+message ItemUseRef {
+    int64 id = 1;
+    int64 count = 2;
+    int64 uid = 6;
 }
 
 message UseReply {

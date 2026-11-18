@@ -248,6 +248,34 @@ proto.loadProto().then(async () => {
         check('grown=undefined → 不是成年', mk(3, undefined) !== '成年', mk(3, undefined));
     }
 
+    section('10. Use(灌罐头) 编码必须与抓包一致');
+    {
+        const protobuf = require('protobufjs');
+        const { toLong } = require(`${SB}/src/utils/utils`);
+        // 抓包 20261103-194153: {1:{1:101622,2:10,6:60616}} → 0a0a08f69906100a30c8d903
+        const w = protobuf.Writer.create();
+        const iw = w.uint32(10).fork();          // #1: item (嵌套)
+        iw.uint32(8).int64(toLong(101622));      // item.id
+        iw.uint32(16).int64(toLong(10));         // item.count
+        iw.uint32(48).int64(toLong(60616));      // item.uid (#6)
+        iw.ldelim();
+        const hex = w.finish().toString('hex');
+        check('Use 嵌套编码与抓包一致', hex === '0a0a08f69906100a30c8d903', hex);
+        check('必须带 uid(#6)', hex.includes('30c8d903'), hex);
+    }
+
+    section('11. 罐头 id 与容器对应');
+    {
+        const ranch = require(`${SB}/src/services/ranch`);
+        check('fillCanBuckets 已导出', typeof ranch.fillCanBuckets === 'function');
+        // 普通 80021~80024 / 有机 80031~80034 —— 用 ItemInfo 校验类型都是 109(罐头)
+        const { getItemById } = require(`${SB}/src/config/gameConfig`);
+        for (const id of [80021, 80022, 80023, 80024, 80031, 80032, 80033, 80034]) {
+            const info = getItemById(id);
+            check(`${id} 是罐头(type=109)`, info && Number(info.type) === 109, info && info.type);
+        }
+    }
+
     finish();
 }).catch((e) => {
     console.error('测试异常:', e);
