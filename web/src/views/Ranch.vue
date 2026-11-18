@@ -1491,13 +1491,15 @@ onUnmounted(() => {
                   </div>
 
                   <div class="mt-1 text-center text-[10px]">
-                    <!-- 四阶段(照农场倒计时思想: #10 = 当前阶段结束时刻, 倒计时=未来值-当前) -->
+                    <!-- 四阶段终案:
+                         feed=1 吃草成长期(幼年=长身体/成年=上一轮结束吃草) → #10 倒计时
+                         feed=3 生产期(催产后) → #25 倒计时
+                         feed=4 产物就绪 → 可收获 -->
                     <span v-if="isHarvestable(a)" class="text-amber-600 font-medium dark:text-amber-400">可收获</span>
-                    <span v-else-if="a.grown && a.feedState === 3 && (a.deliverInSec ?? 0) > 0" class="text-orange-500" title="生产期：蛋/崽产出中(#25 下次产出时刻)，到点可收">生产期 {{ formatTime(a.deliverInSec) }}</span>
-                    <span v-else-if="!a.grown && (a.stageEndInSec ?? 0) > 0" class="text-sky-600 dark:text-sky-400" title="成长期倒计时（长成后自动开始生产期）">成长期 {{ formatTime(a.stageEndInSec) }}</span>
-                    <span v-else-if="!a.grown" class="text-sky-600 dark:text-sky-400" title="幼年动物正在成长（服务端未下发成长结束时刻）">成长中</span>
-                    <span v-else-if="a.produceUnknownReason === 'justHarvested'" class="text-gray-400" title="刚收获过，吃草后会进入下一轮产出">已收获·待下一轮</span>
-                    <span v-else-if="a.produceUnknownReason === 'hungry'" class="text-red-500" title="动物没吃上牧草，停止产出。牧草断了会自动购买">饥饿·缺牧草</span>
+                    <span v-else-if="a.feedState === 3 && (a.deliverInSec ?? 0) > 0" class="text-orange-500" title="生产期：蛋/崽产出中(#25 下次产出时刻)，到点可收">生产期 {{ formatTime(a.deliverInSec) }}</span>
+                    <span v-else-if="a.feedState === 1 && (a.stageEndInSec ?? 0) > 0" class="text-sky-600 dark:text-sky-400" :title="a.grown ? '吃草成长期（上一轮已收，攒体力进入下一轮生产）' : '成长期（长成后自动开始生产期）'">成长期 {{ formatTime(a.stageEndInSec) }}</span>
+                    <span v-else-if="a.feedState === 5" class="text-gray-400" title="刚收获过，等服务端重置状态">已收获·待下一轮</span>
+                    <span v-else-if="a.feedState === 1" class="text-red-500" title="动物没吃上牧草，停止成长。牧草断了会自动购买">饥饿·缺牧草</span>
                     <span v-else class="text-gray-400" title="等待服务端刷新状态">产出待定</span>
                   </div>
 
