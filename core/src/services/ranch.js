@@ -260,7 +260,6 @@ async function autoUseRanchBagItems(opts = {}) {
     }
 
     const targets = [];
-    const cans = [];
     for (const it of bag) {
         const id = toNum(it.id);
         const count = toNum(it.count);
@@ -272,12 +271,11 @@ async function autoUseRanchBagItems(opts = {}) {
         if (!info || Number(info.can_use) !== 1) continue;
         const type = Number(info.type) || 0;
         if (RANCH_AUTO_USE_EXCLUDED_TYPES.has(type)) continue;
-        // 罐头(type=109)不走"直接 Use" —— 它的语义是灌进罐头桶,
-        // 由 fillCanBuckets 统一处理(按大档优先、量入为出), 避免两条路径抢着用。
-        if (type === 109) { cans.push({ id, count }); continue; }
+        // 罐头(type=109)不在这里用: 桶空了时由 feed 分支按需灌(避免一次性灌光背包)
+        if (type === 109) continue;
         targets.push({ id, count, uid, name: info.name || `#${id}` });
     }
-    if (!targets.length && !cans.length) return finish({ used: 0, details: [] });
+    if (!targets.length) return finish({ used: 0, details: [] });
 
     let used = 0;
     const details = [];
@@ -295,20 +293,10 @@ async function autoUseRanchBagItems(opts = {}) {
             });
         }
     }
-    // 罐头单独交给 fillCanBuckets(按大档优先灌进桶, 桶有时长才能喂动物)
-    if (cans.length) {
-        for (const kind of ['normal', 'organic']) {
-            const wantIds = kind === 'normal' ? [80021, 80022, 80023, 80024] : [80031, 80032, 80033, 80034];
-            if (!cans.some(c => wantIds.includes(c.id))) continue;
-            try {
-                const r = await fillCanBuckets(kind, { maxItems: 4 });
-                if (r.used > 0) {
-                    used += r.used;
-                    details.push(`${kind === 'normal' ? '普通' : '有机'}罐头x${r.used}`);
-                }
-            } catch { /* 灌桶失败不影响其他道具 */ }
-        }
-    }
+    // 罐头不自动灌桶。
+    // ⚠ 之前这里会自动把背包里所有罐头(72 个)灌进桶, 属于破坏性操作:
+    //    桶有容量上限, 灌多了是浪费; 而且用户可能想自己决定用哪种。
+    //    现在只在**喂食时桶空了**才按需灌一个(见 feed 分支的 autoFillCans)。
 
     if (used > 0) {
         log('牧场', `已自动使用牧场背包道具: ${details.join('，')}`, {
@@ -344,16 +332,22 @@ async function fillCanBuckets(kind = 'normal', opts = {}) {
         return result;
     }
 
-    const maxItems = Math.max(1, toNum(opts.maxItems) || cans.length);
-    for (const can of cans.slice(0, maxItems)) {
+    // ⚠ 一次只灌**一个**罐头(不是把该 uid 的全部 count 灌进去)。
+    //   桶有容量上限, 灌多了是浪费; 而且 useItemWithUid 的 count 是"用几个",
+    //   传 can.count=27 会一口气把 27 个全用掉 —— 线上实测就是这么把 72 个罐头灌光的。
+    //   maxItems 表示"最多灌几个", 由调用方按需给(喂食一次给 1~2 个就够了)。
+    const maxItems = Math.max(1, toNum(opts.maxItems) || 1);
+    let filled = 0;
+    for (const can of cans) {
+        if (filled >= maxItems) break;
         try {
-            await useItemWithUid(toNum(can.id), toNum(can.count), toNum(can.uid));
-            result.used += toNum(can.count);
-            result.details.push(`#${toNum(can.id)}x${toNum(can.count)}`);
+            await useItemWithUid(toNum(can.id), 1, toNum(can.uid));
+            result.used += 1;
+            filled += 1;
+            result.details.push(`#${toNum(can.id)}`);
             await sleep(300);
         } catch (e) {
             const code = parseRanchErrorCode(e);
-            // 仓库满/超出容器上限 → 停止(继续灌也是失败)
             log('牧场', `灌罐头失败 #${toNum(can.id)}: code=${code || '?'} ${String(e.message || '').slice(0, 60)}`, {
                 module: 'ranch', event: '灌罐头', result: 'error', itemId: toNum(can.id), code,
             });
@@ -387,9 +381,28 @@ async function useItemWithUid(itemId, count, uid) {
     return replyBody;
 }
 
+/**
+ * 牧场动物接口里的 host_gid 到底该填什么。
+ *
+ * ⭐ 2026-11-18 定案(两份抓包 + 线上实测):
+ *   RanchInfo.host_gid 恒为 **10001** —— 这是**牧场实例 ID, 不是玩家 QQ 号**。
+ *   而 feedAnimal 等接口之前用的是 userState.gid(账号3 实测 = 1244632861),
+ *   拿 QQ 号去当 host_gid → 服务端一律回 1045202(文案"网络繁忙", 其实是"找不到这个牧场")。
+ *
+ * 抓包实证: FeedAnimal 请求 target = {1: 10001, 2: feedType}
+ * 所以这里默认取牧场实例 ID; 访问好友牧场时才传好友的对应值。
+ */
+const RANCH_SELF_HOST_GID = 10001;
+
+/** 解析本次要用的 host_gid: 显式传入优先, 否则用牧场实例 ID(不是 QQ 号) */
+function resolveRanchHostGid(hostGid) {
+    const explicit = toNum(hostGid);
+    if (explicit > 0) return explicit;
+    return RANCH_SELF_HOST_GID;
+}
+
 async function feedAnimal(feedType, count = 1, hostGid = 0) {
-    const state = network.getUserState();
-    const gid = toNum(hostGid) || toNum(state.gid);
+    const gid = resolveRanchHostGid(hostGid);
     const body = types.FeedAnimalRequest.encode(types.FeedAnimalRequest.create({
         target: { host_gid: toLong(gid), feed_type: toLong(feedType) },
         count: toLong(count),
@@ -402,8 +415,7 @@ async function feedAnimal(feedType, count = 1, hostGid = 0) {
  * 催产。slot 传 0 表示全部(抓包里空请求也返回产出)。
  */
 async function triggerProduce(slot = 0, hostGid = 0) {
-    const state = network.getUserState();
-    const gid = toNum(hostGid) || toNum(state.gid);
+    const gid = resolveRanchHostGid(hostGid);
     const payload = {};
     if (slot > 0) payload.target = { host_gid: toLong(gid), slot: toLong(slot) };
     const body = types.TriggerProduceRequest.encode(types.TriggerProduceRequest.create(payload)).finish();
@@ -499,7 +511,7 @@ async function stealFriendProduce(hostGid) {
 
 /** 幼崽入栏: 把背包里的幼崽放进窝/棚的空位 */
 async function placeAnimal(cubItemId, count = 1, slot = 0, hostGid = 0) {
-    const gid = toNum(hostGid) || toNum(network.getUserState().gid);
+    const gid = resolveRanchHostGid(hostGid);
     const body = types.PlaceAnimalRequest.encode(types.PlaceAnimalRequest.create({
         target: { host_gid: toLong(gid), slot: toLong(toNum(slot)) },
         cub_item_id: toLong(toNum(cubItemId)),
@@ -511,7 +523,7 @@ async function placeAnimal(cubItemId, count = 1, slot = 0, hostGid = 0) {
 
 /** 收取副产品(单槽, 动物留栏) */
 async function collectProduce(slot = 0, hostGid = 0) {
-    const gid = toNum(hostGid) || toNum(network.getUserState().gid);
+    const gid = resolveRanchHostGid(hostGid);
     const body = types.CollectProduceRequest.encode(types.CollectProduceRequest.create({
         target: { host_gid: toLong(gid), slot: toLong(toNum(slot)) },
         count: toLong(1),
@@ -522,7 +534,7 @@ async function collectProduce(slot = 0, hostGid = 0) {
 
 /** 收获出栏(成熟动物整只收走, 栏位空出) */
 async function harvestAnimal(slot = 0, hostGid = 0) {
-    const gid = toNum(hostGid) || toNum(network.getUserState().gid);
+    const gid = resolveRanchHostGid(hostGid);
     const body = types.HarvestAnimalRequest.encode(types.HarvestAnimalRequest.create({
         target: { host_gid: toLong(gid), slot: toLong(toNum(slot)) },
     })).finish();
@@ -734,7 +746,7 @@ async function autoPlaceCubs(opts = {}) {
 
 /** 出售动物(DonateAnimal): 卖栏里的动物换金券 */
 async function donateAnimal(slot, hostGid = 0) {
-    const gid = toNum(hostGid) || toNum(network.getUserState().gid);
+    const gid = resolveRanchHostGid(hostGid);
     const body = types.DonateAnimalRequest.encode(types.DonateAnimalRequest.create({
         target: { host_gid: toLong(gid), slot: toLong(toNum(slot)) },
     })).finish();
@@ -744,7 +756,7 @@ async function donateAnimal(slot, hostGid = 0) {
 
 /** 清理单个 hazard(蚊子等); CleanAllRanch 是全场版 */
 async function cleanRanch(slot = 0, hostGid = 0) {
-    const gid = toNum(hostGid) || toNum(network.getUserState().gid);
+    const gid = resolveRanchHostGid(hostGid);
     const body = types.CleanRanchRequest.encode(types.CleanRanchRequest.create({
         target: { host_gid: toLong(gid), slot: toLong(toNum(slot)) },
     })).finish();
@@ -2391,7 +2403,7 @@ async function operateRanch(opts = {}) {
                 const code = parseRanchErrorCode(e);
                 if (code === RANCH_ERR.CANS_EMPTY && opts.autoFillCans !== false) {
                     const kind = Number(feedType) === FEED_TYPE.NORMAL_CAN ? 'normal' : 'organic';
-                    const filled = await fillCanBuckets(kind, { maxItems: 4 });
+                    const filled = await fillCanBuckets(kind, { maxItems: 2 });
                     if (filled.used > 0) {
                         try {
                             await doFeed();
@@ -2546,7 +2558,7 @@ async function operateRanch(opts = {}) {
                     // 桶空 → 先灌罐头再重试(与单只路径一致)
                     if (code === RANCH_ERR.CANS_EMPTY && opts.autoFillCans !== false) {
                         const kind = ft === FEED_TYPE.NORMAL_CAN ? 'normal' : 'organic';
-                        const filled = await fillCanBuckets(kind, { maxItems: 6 });
+                        const filled = await fillCanBuckets(kind, { maxItems: 2 });
                         if (filled.used > 0) {
                             try {
                                 await feedAnimal(ft, toNum(opts.count) || 1);
@@ -2688,6 +2700,6 @@ module.exports = {
         // 游商: 供测试验证"等级不够就不发购买请求 + 不刷 error 日志"
         autoBuyRotationShop, isRotationNotPurchasable, rotationErrorHint,
         // 喂食: 供测试验证两种罐头的 feed_type 与失败提示
-        feedAnimal, feedFailureHint, FEED_TYPE,
+        feedAnimal, feedFailureHint, FEED_TYPE, resolveRanchHostGid, RANCH_SELF_HOST_GID,
     },
 };

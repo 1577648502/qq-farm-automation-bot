@@ -291,10 +291,11 @@ proto.loadProto().then(async () => {
             { id: 80021, count: 5, uid: 13831 },  // 罐头 type=109 → 排除
         ]);
         const r = await ranch.autoUseRanchBagItems({ onlyIds: [80021] });
-        // 罐头走 fillCanBuckets 灌进桶(仍会发 Use, 但语义是"灌桶"不是"直接使用")
-        check('罐头通过灌桶路径处理(发了 Use)', calls.filter(c => c.method === 'Use').length > 0,
+        // 罐头(type=109)不在这里自动灌 —— 桶空了由 feed 分支按需灌 1~2 个,
+        // 避免"一次性把背包里 72 个罐头全灌光"(线上踩过)
+        check('罐头不被自动使用', calls.filter(c => c.method === 'Use').length === 0,
             calls.map(c => c.method));
-        check('记为已用', r.used > 0, r);
+        check('used = 0', r.used === 0, r);
     }
 
     section('13. 农场背包的排除表仍保留 109(避免与牧场抢)');
@@ -307,6 +308,27 @@ proto.loadProto().then(async () => {
             const ids = m[1].split(',').map(x => Number(x.trim())).filter(n => n > 0);
             check('农场排除表包含 109', ids.includes(109), ids);
         }
+    }
+
+    section('14. 牧场动物接口的 host_gid 必须是牧场实例ID(10001), 不是QQ号');
+    {
+        // 两份抓包实证: RanchInfo.host_gid 恒为 10001; FeedAnimal 请求 target={1:10001,2:ft}
+        // 线上事故: 用 userState.gid(1244632861) 去喂食 → 服务端一律回 1045202
+        const ranch = require(`${SB}/src/services/ranch`);
+        const { resolveRanchHostGid, RANCH_SELF_HOST_GID } = ranch.__privateRanchFns;
+        check('自己牧场 = 10001', RANCH_SELF_HOST_GID === 10001, RANCH_SELF_HOST_GID);
+        check('不传 → 10001', resolveRanchHostGid() === 10001, resolveRanchHostGid());
+        check('传 0 → 10001', resolveRanchHostGid(0) === 10001, resolveRanchHostGid(0));
+        check('传好友 id → 用好友的', resolveRanchHostGid(20002) === 20002, resolveRanchHostGid(20002));
+
+        // 校验 feedAnimal 实际编码里 host_gid 是 10001
+        const calls = installStub({
+            FeedAnimal: () => types.FeedAnimalReply.encode(types.FeedAnimalReply.create({})).finish(),
+        });
+        const fresh = freshRanch();
+        await fresh.__privateRanchFns.feedAnimal(4, 1);
+        const req = types.FeedAnimalRequest.decode(calls[0].body);
+        check('请求 target.host_gid = 10001', Number(req.target.host_gid) === 10001, Number(req.target.host_gid));
     }
 
     finish();
