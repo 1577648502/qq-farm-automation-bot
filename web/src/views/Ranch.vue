@@ -6,6 +6,7 @@ import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import BaseButton from '@/components/ui/BaseButton.vue'
 import LoadingState from '@/components/ui/LoadingState.vue'
 import ConfirmModal from '@/components/ConfirmModal.vue'
+import api from '@/api'
 import { useAccountStore } from '@/stores/account'
 import { useRanchStore, type RanchFacility } from '@/stores/ranch'
 import { useStatusStore } from '@/stores/status'
@@ -25,7 +26,7 @@ const { currentAccountId, currentAccount } = storeToRefs(accountStore)
 const { status, loading: statusLoading, realtimeConnected } = storeToRefs(statusStore)
 void currentAccount
 
-const currentTab = ref<'overview' | 'cubShop' | 'tiers'>('overview')
+const currentTab = ref<'overview' | 'cubShop' | 'tiers' | 'tasks' | 'buildings'>('overview')
 const cubShopLoading = ref(false)
 const cubShopError = ref('')
 const cubShopList = ref<any[]>([])
@@ -515,6 +516,99 @@ async function confirmSteal() {
   }
 }
 
+// ============ 牧场任务(独立于农场任务, scene_id=2) ============
+const ranchTasksLoading = ref(false)
+const ranchTasksError = ref('')
+const ranchTasks = ref<any[]>([])
+const ranchTaskClaiming = ref(false)
+
+async function openRanchTasks() {
+  currentTab.value = 'tasks'
+  await reloadRanchTasks()
+}
+
+async function reloadRanchTasks() {
+  const id = currentAccountId.value
+  if (!id)
+    return
+  ranchTasksLoading.value = true
+  ranchTasksError.value = ''
+  try {
+    const res = await api.get('/api/ranch/tasks', { headers: { 'x-account-id': id } })
+    const d = res.data
+    if (!d?.ok)
+      throw new Error(d?.error || '获取牧场任务失败')
+    ranchTasks.value = d.data?.tasks || []
+  }
+  catch (e: any) {
+    ranchTasksError.value = e?.response?.data?.error || e?.message || '获取牧场任务失败'
+  }
+  finally {
+    ranchTasksLoading.value = false
+  }
+}
+
+async function claimRanchTasks() {
+  const id = currentAccountId.value
+  if (!id || ranchTaskClaiming.value)
+    return
+  ranchTaskClaiming.value = true
+  try {
+    const res = await api.post('/api/ranch/tasks/claim', {}, { headers: { 'x-account-id': id } })
+    const d = res.data
+    if (!d?.ok)
+      throw new Error(d?.error || '领取失败')
+    const r = d.data || {}
+    if (r.claimed > 0)
+      toast.success(`已领取 ${r.claimed} 个牧场任务`)
+    else
+      toast.info(r.claimable > 0 ? '可领任务正在处理，请稍后刷新' : '当前没有可领取的牧场任务')
+    await reloadRanchTasks()
+  }
+  catch (e: any) {
+    toast.error(e?.response?.data?.error || e?.message || '领取失败')
+  }
+  finally {
+    ranchTaskClaiming.value = false
+  }
+}
+
+const ranchClaimableCount = computed(() => ranchTasks.value.filter(t => t.canClaim).length)
+
+// ============ 牧场建筑 & 地块 ============
+// 数据就在 overview 里(toRanchView 已经带 buildings/cells/regionQuota), 不再单独拉一次
+const buildingsLoading = ref(false)
+const buildingsError = ref('')
+
+async function openBuildings() {
+  currentTab.value = 'buildings'
+  buildingsLoading.value = true
+  buildingsError.value = ''
+  try {
+    const id = currentAccountId.value
+    if (!id)
+      return
+    await ranchStore.fetchOverview(id)
+  }
+  catch (e: any) {
+    buildingsError.value = e?.message || '获取建筑数据失败'
+  }
+  finally {
+    buildingsLoading.value = false
+  }
+}
+
+const ranchBuildings = computed(() => (overview.value as any)?.buildings || [])
+const ranchCells = computed(() => (overview.value as any)?.cells || [])
+const unlockedCells = computed(() => ranchCells.value.filter((c: any) => c.unlocked).length)
+const totalCells = computed(() => ranchCells.value.length)
+
+const BUILDING_KIND_LABEL: Record<string, string> = {
+  coop: '窝',
+  pen: '棚',
+  feed: '牧草机',
+}
+
 onMounted(() => refresh(true))
 
 onUnmounted(() => {
@@ -554,6 +648,28 @@ onUnmounted(() => {
       >
         <div class="i-carbon-chart-bar text-lg" />
         <span>兴牧档位</span>
+      </button>
+      <button
+        class="min-h-[44px] flex items-center rounded-lg px-4 py-2 font-medium transition-colors space-x-2"
+        :class="currentTab === 'tasks' ? 'text-white shadow-md' : 'bg-white text-gray-600 hover:bg-gray-100 dark:bg-gray-800 dark:text-gray-300 dark:hover:bg-gray-700'"
+        :style="currentTab === 'tasks' ? { backgroundColor: 'var(--theme-primary)' } : {}"
+        @click="openRanchTasks"
+      >
+        <div class="i-carbon-task text-lg" />
+        <span>牧场任务</span>
+        <span
+          v-if="ranchClaimableCount > 0"
+          class="rounded-full bg-amber-500 px-1.5 text-xs text-white"
+        >{{ ranchClaimableCount }}</span>
+      </button>
+      <button
+        class="min-h-[44px] flex items-center rounded-lg px-4 py-2 font-medium transition-colors space-x-2"
+        :class="currentTab === 'buildings' ? 'text-white shadow-md' : 'bg-white text-gray-600 hover:bg-gray-100 dark:bg-gray-800 dark:text-gray-300 dark:hover:bg-gray-700'"
+        :style="currentTab === 'buildings' ? { backgroundColor: 'var(--theme-primary)' } : {}"
+        @click="openBuildings"
+      >
+        <div class="i-carbon-building text-lg" />
+        <span>建筑与地块</span>
       </button>
     </div>
 
@@ -595,6 +711,145 @@ onUnmounted(() => {
             </div>
           </div>
         </div>
+      </div>
+    </div>
+
+    <!-- ===== 牧场任务(scene_id=2, 独立于农场任务) ===== -->
+    <div v-if="currentTab === 'tasks'" class="rounded-lg bg-white shadow dark:bg-gray-800">
+      <div class="border-b border-gray-100 p-3 dark:border-gray-700 sm:p-4">
+        <div class="flex flex-wrap items-center justify-between gap-2">
+          <h3 class="flex items-center gap-2 text-lg font-bold">
+            <div class="i-carbon-task text-xl text-sky-500" />
+            牧场任务
+            <span v-if="ranchTasks.length" class="text-xs text-gray-400 font-normal">
+              可领 {{ ranchClaimableCount }} / 共 {{ ranchTasks.length }}
+            </span>
+          </h3>
+          <div class="flex gap-2">
+            <BaseButton variant="secondary" size="sm" :loading="ranchTasksLoading" @click="reloadRanchTasks">
+              <span class="i-carbon-renew mr-1" />刷新
+            </BaseButton>
+            <BaseButton size="sm" :disabled="ranchTaskClaiming || ranchClaimableCount === 0" @click="claimRanchTasks">
+              <span class="i-carbon-gift mr-1" />
+              {{ ranchTaskClaiming ? '领取中…' : '一键领取' }}
+            </BaseButton>
+          </div>
+        </div>
+        <p class="mt-1 text-xs text-gray-400">
+          牧场任务与农场任务完全独立（服务端按 scene_id=2 拉取）。日常自动流程已包含领取，这里是手动补领。
+        </p>
+      </div>
+      <div class="p-3 sm:p-4">
+        <LoadingState v-if="ranchTasksLoading && !ranchTasks.length" />
+        <div v-else-if="ranchTasksError" class="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-600 dark:border-red-800 dark:bg-red-900/20">
+          {{ ranchTasksError }}
+        </div>
+        <div v-else-if="!ranchTasks.length" class="py-10 text-center text-sm text-gray-400">
+          暂无牧场任务（可能等级不足，或服务端未下发）
+        </div>
+        <div v-else class="space-y-1.5">
+          <div
+            v-for="t in ranchTasks"
+            :key="t.id"
+            class="flex flex-wrap items-center gap-2 rounded border px-2.5 py-2 text-xs"
+            :class="t.canClaim
+              ? 'border-amber-300 bg-amber-50 dark:border-amber-700 dark:bg-amber-900/20'
+              : 'border-gray-100 dark:border-gray-700'"
+          >
+            <span class="shrink-0 rounded bg-gray-100 px-1.5 py-0.5 text-[10px] text-gray-500 dark:bg-gray-700 dark:text-gray-300">
+              {{ t.typeLabel }}
+            </span>
+            <span class="min-w-0 flex-1 text-gray-700 dark:text-gray-200">{{ t.desc }}</span>
+            <span class="text-gray-400">{{ t.progress }}/{{ t.totalProgress }}</span>
+            <span v-if="t.rewardText" class="text-emerald-600 dark:text-emerald-400">{{ t.rewardText }}</span>
+            <span
+              class="shrink-0"
+              :class="t.isClaimed
+                ? 'text-green-600 dark:text-green-400'
+                : (t.canClaim ? 'text-amber-600 font-medium dark:text-amber-400' : 'text-gray-400')"
+            >
+              {{ t.isClaimed ? '已领取' : (t.canClaim ? '可领取' : '进行中') }}
+            </span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===== 牧场建筑 & 地块 ===== -->
+    <div v-if="currentTab === 'buildings'" class="rounded-lg bg-white shadow dark:bg-gray-800">
+      <div class="border-b border-gray-100 p-3 dark:border-gray-700 sm:p-4">
+        <div class="flex flex-wrap items-center justify-between gap-2">
+          <h3 class="flex items-center gap-2 text-lg font-bold">
+            <div class="i-carbon-building text-xl text-indigo-500" />
+            建筑与地块
+          </h3>
+          <div class="flex flex-wrap items-center gap-2">
+            <span v-if="totalCells" class="text-xs text-gray-500">
+              地块已解锁 {{ unlockedCells }}/{{ totalCells }}
+            </span>
+            <span v-if="(overview as any)?.regionQuota" class="text-xs text-gray-500">
+              占用 {{ (overview as any).regionOccupied }}/{{ (overview as any).regionQuota }}
+            </span>
+            <BaseButton variant="secondary" size="sm" :loading="buildingsLoading" @click="openBuildings">
+              <span class="i-carbon-renew mr-1" />刷新
+            </BaseButton>
+          </div>
+        </div>
+        <p class="mt-1 text-xs text-gray-400">
+          AllCells 只返回状态不返回倒计时，所以这里不显示剩余时间；升级/解锁请用总览页的操作按钮。
+        </p>
+      </div>
+      <div class="p-3 sm:p-4 space-y-4">
+        <LoadingState v-if="buildingsLoading && !ranchBuildings.length" />
+        <div v-else-if="buildingsError" class="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-600 dark:border-red-800 dark:bg-red-900/20">
+          {{ buildingsError }}
+        </div>
+
+        <section>
+          <h4 class="mb-2 text-sm font-semibold">建筑</h4>
+          <div v-if="!ranchBuildings.length" class="py-6 text-center text-xs text-gray-400">
+            暂无建筑数据
+          </div>
+          <div v-else class="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+            <div
+              v-for="b in ranchBuildings"
+              :key="b.instId"
+              class="flex items-center justify-between rounded border border-gray-100 px-2.5 py-2 text-xs dark:border-gray-700"
+            >
+              <div class="flex items-center gap-2">
+                <span class="rounded bg-indigo-50 px-1.5 py-0.5 text-[10px] text-indigo-600 dark:bg-indigo-900/30 dark:text-indigo-300">
+                  {{ BUILDING_KIND_LABEL[b.kind] || '建筑' }}
+                </span>
+                <span class="text-gray-500">#{{ b.instId }}</span>
+              </div>
+              <div class="flex items-center gap-2">
+                <span class="text-gray-700 font-medium dark:text-gray-200">Lv{{ b.level }}</span>
+                <span v-if="b.status === 1" class="text-sky-600 dark:text-sky-400">升级中</span>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section>
+          <h4 class="mb-2 text-sm font-semibold">地块</h4>
+          <div v-if="!ranchCells.length" class="py-6 text-center text-xs text-gray-400">
+            暂无地块数据
+          </div>
+          <div v-else class="grid grid-cols-3 gap-1.5 sm:grid-cols-5 lg:grid-cols-8">
+            <div
+              v-for="c in ranchCells"
+              :key="c.regionId + '-' + c.seq"
+              class="rounded border px-1 py-1.5 text-center text-[10px]"
+              :class="c.unlocked
+                ? 'border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-800 dark:bg-emerald-900/20 dark:text-emerald-300'
+                : 'border-gray-200 bg-gray-50 text-gray-400 dark:border-gray-700 dark:bg-gray-900/30'"
+              :title="`region ${c.regionId} · seq ${c.seq}${c.capacity ? ` · 容量 ${c.capacity}` : ''}`"
+            >
+              <div class="font-mono">{{ c.seq }}</div>
+              <div>{{ c.unlocked ? '已解锁' : '未解锁' }}</div>
+            </div>
+          </div>
+        </section>
       </div>
     </div>
 
