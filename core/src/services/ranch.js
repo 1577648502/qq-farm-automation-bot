@@ -727,7 +727,14 @@ async function autoPlaceCubs(opts = {}) {
             cub.count -= 1;
             await sleep(300);
         } catch (e) {
-            if (!isExpectedRanchError(e)) {
+            const code = parseRanchErrorCode(e);
+            // 1045205 = 服务端拒绝(栏满/动物状态不允许)。栏满时反复尝试只会刷这个错,
+            // 所以记一条 skip 而不是 error —— 等收获腾出位置后下一轮自然成功。
+            if (code === 1045205) {
+                log('牧场', `入栏被拒(栏位满或动物状态不允许): 背包还有 ${cubs.reduce((n, c) => n + c.count, 0)} 只未入栏`, {
+                    module: 'ranch', event: '幼崽入栏', result: 'skip', code,
+                });
+            } else if (!isExpectedRanchError(e)) {
                 logWarn('牧场', `幼崽入栏失败 ${cub.name}: ${e.message}`, {
                     module: 'ranch', event: '幼崽入栏', result: 'error', itemId: cub.id,
                 });
@@ -907,10 +914,17 @@ function toRanchView(reply) {
         const nextReadyMs = toNum(a.produce_at);
         const grownFlag = toNum(a.grown_flag);
         const harvestInSec = nextReadyMs > 0 ? Math.round((nextReadyMs - nowMs) / 1000) : null;
-        // 已到点(或刚过)即视为可收。鸡这类秒级产出的动物, #10 常常只比当前早几秒,
-        // 用 <=0 判断正好覆盖; 若 #10 缺失则不判可收, 避免点了服务端回
-        // 1045211「当前没有可收取的产物」。
-        const harvestable = harvestInSec !== null && harvestInSec <= 0;
+        // ⭐ 2026-11-18 线上实测(账号3)推翻"#10 过期=可收":
+//     幼年鸡(grown=0, feed_state=3)的 #10 = -159s(已过), 但 HarvestRanch 回
+//     1045211「当前没有可收取的产物」。
+//   对照抓包: 成年动物(grown=1)的 #10 都是**未来**时刻(+3s~+7191s)。
+//   → #10 的语义分两种:
+//       grown=0: 当前**成长阶段**结束时刻(过了该长大, 不是有产物)
+//       grown=1: **下次产出**时刻
+//   → 可收判定必须同时满足: grown=1 且 #10 已过。
+//   幼年动物 #10 过期显示"待成长", 不显示"可收获"。
+const isGrown = grownFlag === 1;
+const harvestable = isGrown && harvestInSec !== null && harvestInSec <= 0;
         const animals_entry = {
             slot: toNum(a.slot),
             animalId,
@@ -933,7 +947,8 @@ function toRanchView(reply) {
             // 兼容旧字段, 语义与 harvestInSec 一致
             produceInSec: harvestInSec === null ? null : Math.max(0, harvestInSec),
             // 催产就绪 = 确实到了下次产出时刻
-            canProduce: harvestable,
+            // 催产只对成年动物有效(幼年的是"成长", 不是"产出")
+            canProduce: isGrown && harvestable,
             hungry: toNum(a.feed_state) === 1,
             sellCost: a.sell_cost ? { itemId: toNum(a.sell_cost.item_id), amount: toNum(a.sell_cost.amount) } : null,
             mutant: !!(a.mutant && toNum(a.mutant.field_1) > 0),

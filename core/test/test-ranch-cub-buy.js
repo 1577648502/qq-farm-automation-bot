@@ -331,6 +331,33 @@ proto.loadProto().then(async () => {
         check('请求 target.host_gid = 10001', Number(req.target.host_gid) === 10001, Number(req.target.host_gid));
     }
 
+    section('15. 可收判定必须 grown=1(线上实测推翻旧判定)');
+    {
+        // 线上事故(账号3): 幼年鸡(grown=0, feed=3)的 #10=-159s, 旧判定把它当成"可收",
+        // 点收获服务端回 1045211「当前没有可收取的产物」。
+        const ranch = require(`${SB}/src/services/ranch`);
+        const mk = (grown, produceAt) => ranch.toRanchView({
+            ranch: { animals: [{ slot: 1, animal_id: 60001, stage: 1, feed_state: 3, grown_flag: grown, produce_at: produceAt }] },
+        }).animals[0];
+        const now = Date.now();
+
+        // 幼年 + #10 已过 → 不是可收(它在等长大, 不是等收获)
+        const juv = mk(0, now - 159 * 1000);
+        check('幼年 #10 过期 → 不可收', juv.harvestable === false, juv.harvestable);
+        check('幼年 #10 过期 → 不能催产', juv.canProduce === false, juv.canProduce);
+        check('幼年显示 grown=false', juv.grown === false, juv.grown);
+
+        // 成年 + #10 已过 → 可收
+        const adult = mk(1, now - 5000);
+        check('成年 #10 过期 → 可收', adult.harvestable === true, adult.harvestable);
+        check('成年 #10 过期 → 可催产', adult.canProduce === true, adult.canProduce);
+
+        // 成年 + #10 未到 → 不可收, 但有倒计时
+        const waiting = mk(1, now + 60 * 1000);
+        check('成年 #10 未来 → 不可收', waiting.harvestable === false, waiting.harvestable);
+        check('有倒计时', Math.abs(waiting.harvestInSec - 60) <= 2, waiting.harvestInSec);
+    }
+
     finish();
 }).catch((e) => {
     console.error('测试异常:', e);

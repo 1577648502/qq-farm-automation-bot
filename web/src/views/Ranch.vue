@@ -1493,8 +1493,8 @@ onUnmounted(() => {
                   <div class="mt-1 text-center text-[10px]">
                     <span v-if="isHarvestable(a)" class="text-amber-600 font-medium dark:text-amber-400">可收获</span>
                     <span v-else-if="produceInSec(a) !== null" class="text-orange-500">{{ formatTime(produceInSec(a) ?? 0) }} 后产出</span>
-                    <span v-else-if="a.produceUnknownReason === 'hungry'" class="text-red-500" title="动物没吃上牧草，停止产出。去农场种「牧草种子」，收获后牧草会自动补进牧草机">饥饿·缺牧草</span>
-                    <span v-else-if="a.produceUnknownReason === 'juvenile'" class="text-gray-400">未成熟</span>
+                    <span v-else-if="a.produceUnknownReason === 'hungry'" class="text-red-500" title="动物没吃上牧草，停止产出。牧草断了会自动去牧场商店购买，也可在「牧场商城 → 道具」手动买">饥饿·缺牧草</span>
+                    <span v-else-if="!a.grown" class="text-sky-600 dark:text-sky-400" title="幼年动物正在成长，长成后才开始产出">成长中</span>
                     <span v-else class="text-gray-400" title="服务端本次未下发下次产出时刻">产出待定</span>
                   </div>
 
