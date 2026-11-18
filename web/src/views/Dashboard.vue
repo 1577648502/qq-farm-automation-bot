@@ -648,8 +648,8 @@ useIntervalFn(() => void fetchRanchOverview(), 60000)
 <template>
   <div class="flex flex-col gap-6 pt-6">
     <!-- Status Cards -->
-    <!-- 牧场不再单独占一张卡(已并入左侧账号卡的 EXP 下方), 所以从 3 列收成 2 列 -->
-    <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
+    <!-- 牧场已并入左侧账号卡的 EXP 下方, 但保持三列布局(第三列留给后续卡片) -->
+    <div class="grid grid-cols-1 gap-4 lg:grid-cols-3 sm:grid-cols-2">
       <!-- Account & Exp -->
       <div class="min-w-0 flex flex-col rounded-lg bg-white p-4 shadow dark:bg-gray-800">
         <div class="mb-2 flex items-start justify-between">
