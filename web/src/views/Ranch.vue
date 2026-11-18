@@ -844,7 +844,9 @@ onUnmounted(() => {
               </div>
               <div class="flex items-center gap-2">
                 <span class="text-gray-700 font-medium dark:text-gray-200">Lv{{ b.level }}</span>
-                <span v-if="b.status === 1" class="text-sky-600 dark:text-sky-400">升级中</span>
+                <!-- 建筑 status 实测是 9/10/11(不是地块的 1/2), 且语义无权威定义:
+                     不翻译成"升级中", 直接显示状态码, 避免误导 -->
+                <span class="text-gray-400 text-[10px]">状态{{ b.status }}</span>
               </div>
             </div>
           </div>

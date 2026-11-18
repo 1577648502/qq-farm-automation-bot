@@ -516,13 +516,32 @@ async function getFacilityDetailByInstance(instId) {
     return parseFeedMachineReply(replyBody);
 }
 // 建筑配置 → 用途(ItemInfo: 3601001=牧场窝 target 6001001, 3602001=牧场棚 target 6002001, 3702001=喂食机 target 7001001)
+// 建筑 kind 映射。
+// 11001001 是槽位 10000 上的装饰建筑(留言板), 线上三个账号实测都出现, 归为 decor。
 const BUILDING_KINDS = {
     6001001: 'coop', 6001002: 'coop', 6001003: 'coop',
     6002001: 'pen',  6002002: 'pen',  6002003: 'pen',
     7001001: 'feed', 7001002: 'feed', 7001003: 'feed',
+    11001001: 'decor',
 };
 function buildingKind(buildingId) {
     return BUILDING_KINDS[Number(buildingId)] || '';
+}
+
+/**
+ * 建筑 status 语义(2026-11-18 线上三账号实测)。
+ *
+ * ⚠ 已知事实:
+ *   · 实测取值是 9 / 10 / 11, **不是** 1(地块的"锁定"标志)
+ *   · 三个账号同一 instId 的取值完全一致且稳定:
+ *       10000(装饰/留言板)→9, 10001(窝)→11, 10002(牧草机)→10, 3(棚)→11
+ *   · 因此它更像"建筑类型/槽位标记"而不是"升级状态", 但**没有权威来源**证实
+ *
+ * 所以这里不做语义翻译(不编"升级中"), 只原样透传 —— 页面显示原始状态码,
+ * 需要时再根据真实抓包补定义。强行起中文名反而会误导排查。
+ */
+function buildingStatusText(status) {
+    return `状态${Number(status) || 0}`;
 }
 
 async function getFacilities() {
@@ -592,7 +611,12 @@ async function getRanchOverview(accountId = '') {
                     const b = byInst.get(toNum(f.slot));
                     if (b) {
                         f.upgradeLevel = b.level;
-                        f.upgrading = b.status === 1;
+                        // ⚠ 不能写 b.status === 1: 建筑 status 实测是 9/10/11(不是地块的 1/2),
+                        //   那样判断永远为 false, "升级中"从来不会显示。
+                        //   目前没有可靠字段能判断升级中, 所以如实置 false 并保留原始状态码,
+                        //   由页面显示 status, 不做臆断。
+                        f.upgrading = false;
+                        f.status = b.status;
                         f.buildingId = b.buildingId;
                         f.buildingKind = buildingKind(b.buildingId);
                     } else {
@@ -1904,7 +1928,7 @@ async function operateRanch(opts = {}) {
             return {
                 ok: true,
                 action: '建筑列表',
-                detail: all.buildings.map(b => `#${b.instId} Lv${b.level}${b.status === 1 ? '(升级中)' : ''}`).join('，') || '暂无建筑',
+                detail: all.buildings.map(b => `#${b.instId} Lv${b.level} ${buildingStatusText(b.status)}`).join('，') || '暂无建筑',
             };
         }
         case 'unlock': {
