@@ -1583,7 +1583,7 @@ async function operateRanch(opts = {}) {
     // 便于定位"半更新"部署下 admin/worker 版本不一致的问题
     if (typeof opts === 'string') opts = { op: opts };
     const op = String((opts && opts.op) || '').trim();
-    if (op && !['harvest', 'produce', 'feed', 'feedmachine', 'buycub', 'rotation', 'clean', 'steal', 'place', 'collect', 'harvestanimal', 'donate', 'hazard', 'upgrade', 'batch'].includes(op)) {
+    if (op && !['harvest', 'produce', 'feed', 'feedmachine', 'buycub', 'rotation', 'clean', 'steal', 'place', 'collect', 'harvestanimal', 'donate', 'hazard', 'upgrade', 'unlock', 'batch'].includes(op)) {
         logWarn('牧场', `收到未知操作: ${JSON.stringify(opts).slice(0, 200)}`, {
             module: 'ranch', event: '操作牧场', result: 'unknown_op', op,
         });
@@ -1751,6 +1751,17 @@ async function operateRanch(opts = {}) {
                 const r = await f.upgradeBuilding(toNum(opts.instId));
                 return { ok: true, action: '建筑升级', detail: `#${toNum(opts.instId)} → Lv${r.level}` };
             }
+            // 不带 instId = 一键: 先领竣工再升级(与自动流程同一套逻辑, 只是手动触发)
+            // 面板上"建筑升级"按钮走这里, 用户不必逐个点。
+            // ⚠ autoUpgradeBuildings 只认 maxPerRound, 领竣工是它内部的第一步, 没有别的开关。
+            if (opts.auto !== false) {
+                const r = await f.autoUpgradeBuildings({ maxPerRound: toNum(opts.maxPerRound) || 3 });
+                return {
+                    ok: true,
+                    action: '建筑升级',
+                    detail: (r.details && r.details.length) ? r.details.join('，') : '没有可升级/可领取的建筑',
+                };
+            }
             // GetBuildingList 返回的是"未放置的建筑背包"(实测为空),
             // 已放置建筑在 AllCells.buildings 里
             const all = await f.getAllCells();
@@ -1758,6 +1769,16 @@ async function operateRanch(opts = {}) {
                 ok: true,
                 action: '建筑列表',
                 detail: all.buildings.map(b => `#${b.instId} Lv${b.level}${b.status === 1 ? '(升级中)' : ''}`).join('，') || '暂无建筑',
+            };
+        }
+        case 'unlock': {
+            // 地块解锁: 一键解到底(自动流程里由 ranch_unlock 开关控制, 这里是手动入口)
+            const f = require('./ranch-facility');
+            const r = await f.autoUnlockRegions({});
+            return {
+                ok: true,
+                action: '地块解锁',
+                detail: (r.details && r.details.length) ? r.details.join('，') : '没有可解锁的地块',
             };
         }
         case 'steal': {

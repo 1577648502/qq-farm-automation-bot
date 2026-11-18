@@ -827,6 +827,35 @@ onUnmounted(() => {
                 <div class="i-carbon-store" />
                 游商兑换
               </button>
+              <!-- 偷好友牧场产物: 自动流程由 ranch_steal 开关控制, 这里给手动补跑一次 -->
+              <button
+                type="button"
+                class="min-h-[38px] inline-flex items-center gap-1.5 border rounded-lg px-3 py-1.5 text-xs font-medium transition disabled:opacity-50 border-pink-300 bg-pink-50 text-pink-700 hover:bg-pink-100 dark:border-pink-700 dark:bg-pink-900/30 dark:text-pink-300"
+                :disabled="opBusy !== ''"
+                @click="runOp('steal')"
+              >
+                <div class="i-carbon-arrow-down-left" />
+                偷好友牧场
+              </button>
+              <!-- 建筑升级 / 地块解锁: 后端是一键(先领竣工再升级), 不传 instId 即整场 -->
+              <button
+                type="button"
+                class="min-h-[38px] inline-flex items-center gap-1.5 border rounded-lg px-3 py-1.5 text-xs font-medium transition disabled:opacity-50 border-indigo-300 bg-indigo-50 text-indigo-700 hover:bg-indigo-100 dark:border-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-300"
+                :disabled="opBusy !== ''"
+                @click="runOp('upgrade')"
+              >
+                <div class="i-carbon-upgrade" />
+                建筑升级
+              </button>
+              <button
+                type="button"
+                class="min-h-[38px] inline-flex items-center gap-1.5 border rounded-lg px-3 py-1.5 text-xs font-medium transition disabled:opacity-50 border-cyan-300 bg-cyan-50 text-cyan-700 hover:bg-cyan-100 dark:border-cyan-700 dark:bg-cyan-900/30 dark:text-cyan-300"
+                :disabled="opBusy !== ''"
+                @click="runOp('unlock')"
+              >
+                <div class="i-carbon-unlocked" />
+                解锁地块
+              </button>
             </div>
 
             <div

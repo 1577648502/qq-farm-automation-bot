@@ -119,6 +119,48 @@ async function freeze() {
   }
 }
 
+// ============ 接口字段树查看(对应 /api/protocol/inspect) ============
+// 采集到的样本是原始 hex, 面板按裸 wire 现场解析 —— 新玩法没写 .proto 时也能看结构。
+const inspectKey = ref('')
+const inspectMode = ref<'tree' | 'strings'>('tree')
+const inspectLoading = ref(false)
+const inspectError = ref('')
+const inspectResult = ref<any>(null)
+
+async function inspect(key?: string, mode?: 'tree' | 'strings') {
+  const target = String(key || inspectKey.value || '').trim()
+  if (!target)
+    return
+  if (key)
+    inspectKey.value = key
+  if (mode)
+    inspectMode.value = mode
+  inspectLoading.value = true
+  inspectError.value = ''
+  inspectResult.value = null
+  try {
+    const res = await api.get('/api/protocol/inspect', {
+      params: { key: target, mode: inspectMode.value, depth: 5 },
+      headers: { 'x-account-id': currentAccountId.value },
+    })
+    const d = res.data
+    if (!d?.ok)
+      throw new Error(d?.error || '获取失败')
+    inspectResult.value = d.data
+  }
+  catch (e: any) {
+    inspectError.value = e?.response?.data?.error || e?.message || '获取失败'
+  }
+  finally {
+    inspectLoading.value = false
+  }
+}
+
+function closeInspect() {
+  inspectResult.value = null
+  inspectError.value = ''
+}
+
 onMounted(refresh)
 watch(currentAccountId, () => refresh())
 </script>
@@ -322,13 +364,16 @@ watch(currentAccountId, () => refresh())
                 <th class="px-2 py-1.5 font-medium">
                   最后出现
                 </th>
+                <th class="px-2 py-1.5 font-medium">
+                  字段树
+                </th>
               </tr>
             </thead>
             <tbody>
               <tr
                 v-for="r in rows"
                 :key="r.key"
-                class="border-t border-gray-100 dark:border-gray-700"
+                class="border-t border-gray-100 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-700/40"
               >
                 <td class="px-2 py-1.5 font-mono">
                   <span v-if="r.isNew" class="mr-1 rounded bg-amber-100 px-1 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300">新</span>
@@ -344,9 +389,82 @@ watch(currentAccountId, () => refresh())
                 <td class="px-2 py-1.5 whitespace-nowrap text-gray-400">
                   {{ fmtTime(r.lastSeenAt) }}
                 </td>
+                <td class="px-2 py-1.5">
+                  <button
+                    type="button"
+                    class="rounded border border-sky-300 px-1.5 py-0.5 text-sky-600 transition hover:bg-sky-50 dark:border-sky-700 dark:text-sky-300 dark:hover:bg-sky-900/30"
+                    @click="inspect(r.key)"
+                  >
+                    查看
+                  </button>
+                </td>
               </tr>
             </tbody>
           </table>
+        </div>
+      </div>
+
+      <!-- 字段树弹层: 用采集到的原始 hex 按裸 wire 现场解, 不依赖 .proto -->
+      <div
+        v-if="inspectResult || inspectError || inspectLoading"
+        class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 backdrop-blur-sm"
+        @click="closeInspect"
+      >
+        <div class="max-h-[85vh] max-w-4xl w-full flex flex-col overflow-hidden rounded-xl bg-white shadow-2xl dark:bg-gray-800" @click.stop>
+          <div class="flex flex-wrap items-center justify-between gap-2 border-b border-gray-200 p-3 dark:border-gray-700">
+            <h3 class="text-sm font-bold">
+              字段树 · <span class="font-mono text-sky-600 dark:text-sky-300">{{ inspectKey }}</span>
+            </h3>
+            <div class="flex items-center gap-2">
+              <button
+                type="button"
+                class="rounded border px-2 py-1 text-xs"
+                :class="inspectMode === 'tree' ? 'border-sky-400 bg-sky-50 text-sky-700 dark:bg-sky-900/30' : 'border-gray-300 text-gray-500'"
+                @click="inspect(inspectKey, 'tree')"
+              >
+                结构
+              </button>
+              <button
+                type="button"
+                class="rounded border px-2 py-1 text-xs"
+                :class="inspectMode === 'strings' ? 'border-sky-400 bg-sky-50 text-sky-700 dark:bg-sky-900/30' : 'border-gray-300 text-gray-500'"
+                @click="inspect(inspectKey, 'strings')"
+              >
+                文案
+              </button>
+              <button type="button" class="rounded border border-gray-300 px-2 py-1 text-xs text-gray-600" @click="closeInspect">
+                关闭
+              </button>
+            </div>
+          </div>
+          <div class="flex-1 overflow-auto p-3">
+            <div v-if="inspectLoading" class="py-10 text-center text-sm text-gray-400">
+              解析中…
+            </div>
+            <div v-else-if="inspectError" class="py-10 text-center text-sm text-red-500">
+              {{ inspectError }}
+            </div>
+            <div v-else-if="inspectResult" class="space-y-3">
+              <div v-if="!inspectResult.decoded?.length" class="py-8 text-center text-sm text-gray-400">
+                没有可用样本（该接口可能是空请求且未收到响应）
+              </div>
+              <div v-for="(d, i) in inspectResult.decoded" :key="d.key" class="space-y-1">
+                <div class="text-xs text-gray-500">
+                  {{ d.key }} · 采集 {{ d.count }} 次 · 样本 {{ d.sampleCount }} 条
+                </div>
+                <div
+                  v-for="(s, j) in d.samples"
+                  :key="j"
+                  class="rounded border border-gray-200 p-2 dark:border-gray-700"
+                >
+                  <div class="mb-1 text-[11px] text-gray-400">
+                    样本 {{ j + 1 }} · {{ s.accountId }} · {{ s.dir }} · {{ s.bytes }}B{{ s.truncated ? ' (截断)' : '' }}
+                  </div>
+                  <pre class="whitespace-pre-wrap break-all text-[11px] text-gray-700 leading-relaxed dark:text-gray-300">{{ (s.lines || []).join('\n') }}</pre>
+                </div>
+              </div>
+            </div>
+          </div>
         </div>
       </div>
     </div>

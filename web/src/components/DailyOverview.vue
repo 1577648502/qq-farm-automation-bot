@@ -93,6 +93,9 @@ function formatGiftSubText(gift: any) {
     return '未开通QQ会员或无每日礼包'
   if (gift.key === 'month_card_gift' && gift.hasCard === false)
     return '未购买月卡或已过期'
+  // 红包特有: 上次检测到几个可领, 让用户知道"现在点有没有用"
+  if (gift.key === 'red_packet_daily' && !gift.doneToday && Number(gift.claimableCount) > 0)
+    return `${gift.claimableCount} 个待领取`
   const ts = Number(gift.lastAt || 0)
   if (!ts)
     return ''
