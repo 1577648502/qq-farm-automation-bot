@@ -333,25 +333,43 @@ proto.loadProto().then(async () => {
         check('请求 target.host_gid = 10001', Number(req.target.host_gid) === 10001, Number(req.target.host_gid));
     }
 
-    section('15. feed_state 终版模型(你的截图+入栏抓包对照)');
+    section('15. 四阶段模型(你三张截图+线上实证定案)');
     {
-        // 客户端真实流程(抓包): TriggerProduce(t+24s) → HarvestRanch(t+30s, 成功)
-        //   收获成功时动物 feed=4, 响应首次出现 #25(trigger_ready_at)
-        //   → feed=4 是"催产就绪"; 只发 HarvestRanch 会报 1045211(缺催产那一步)
+        // 游戏界面四阶段: 幼崽期 → 成长期 → 生产期 → 成熟期
+        // 线上实证: 鹅 grown=1/feed=3 持续 3.4 小时 = 生产期(长周期产蛋)
+        //           兔 grown=1/feed=2 的 #10 ≈ 剩余1小时 = 生产期(短周期)
+        //           鸡 grown=0/feed=5 #10 过期 = 成长期已过等服务端刷新
+        // 可收获唯一状态: feed=4(官方气泡 CanHarvest)
         const ranch = require(`${SB}/src/services/ranch`);
-        const mk = (grown, feedState) => ranch.toRanchView({
-            ranch: { animals: [{ slot: 1, animal_id: 60001, stage: 1, feed_state: feedState, grown_flag: grown, produce_at: Date.now() - 3000 }] },
+        const mk = (grown, feedState, produceAt) => ranch.toRanchView({
+            ranch: { animals: [{ slot: 1, animal_id: 60001, stage: 1, feed_state: feedState, grown_flag: grown, produce_at: produceAt }] },
         }).animals[0];
+        const now = Date.now();
 
-        check('feed=4 + 成年 → 可收获(面板按钮走催产→收获两步)', mk(1, 4).harvestable === true, mk(1, 4).harvestable);
-        check('feed=4 → 可催产', mk(1, 4).canProduce === true, mk(1, 4).canProduce);
-        check('feed=3(冷却) → 不可收但可催产', mk(1, 3).harvestable === false && mk(1, 3).canProduce === true,
-            { h: mk(1, 3).harvestable, p: mk(1, 3).canProduce });
-        check('feed=2(产出中, 截图鹅"生产期") → 不可收', mk(1, 2).harvestable === false, mk(1, 2).harvestable);
-        check('feed=5(刚收完) → 不可收', mk(1, 5).harvestable === false, mk(1, 5).harvestable);
-        check('幼年 → 不可收不可催产', mk(0, 4).harvestable === false && mk(0, 4).canProduce === false,
-            { h: mk(0, 4).harvestable, p: mk(0, 4).canProduce });
-        check('feed=3 有 cooling reason', mk(1, 3).produceUnknownReason === 'cooling', mk(1, 3).produceUnknownReason);
+        // 成熟期: feed=4 → 可收获
+        const mature = mk(1, 4, now - 3000);
+        check('成熟期 feed=4 → 可收获', mature.harvestable === true, mature.harvestable);
+        check('成熟期 → 可催产', mature.canProduce === true, mature.canProduce);
+
+        // 生产期: feed=2/3 + grown=1 → 有生产期倒计时, 不可收
+        const laying2 = mk(1, 2, now + 3600 * 1000);
+        check('生产期 feed=2 → 不可收', laying2.harvestable === false, laying2.harvestable);
+        check('生产期 feed=2 → 倒计时约1小时', Math.abs((laying2.deliverInSec || 0) - 3600) <= 3, laying2.deliverInSec);
+        const laying3 = mk(1, 3, now + 12000 * 1000);
+        check('生产期 feed=3(鹅长周期) → 不可收', laying3.harvestable === false, laying3.harvestable);
+        check('生产期 feed=3 → 倒计时约3.3小时', Math.abs((laying3.deliverInSec || 0) - 12000) <= 5, laying3.deliverInSec);
+
+        // 成长期: grown=0 → 成长倒计时(用 #10), 不可收不可催产
+        const growing = mk(0, 5, now + 200 * 1000);
+        check('成长期 grown=0 → 不可收', growing.harvestable === false, growing.harvestable);
+        check('成长期 → 不可催产', growing.canProduce === false, growing.canProduce);
+        check('成长期 → 倒计时约200秒', Math.abs((growing.produceInSec || 0) - 200) <= 3, growing.produceInSec);
+        check('成长期 reason = growing', growing.produceUnknownReason === 'growing', growing.produceUnknownReason);
+
+        // 幼崽/饥饿: feed=1 + grown=0
+        // 幼崽期(grown=0, feed=1)与成长期同属幼年, reason 都是 growing(页面按 grown 区分文案)
+        check('幼崽期 grown=0 → reason = growing', mk(0, 1, now).produceUnknownReason === 'growing',
+            mk(0, 1, now).produceUnknownReason);
     }
 
     section('16. PlaceAnimal 编码与抓包一致(幼崽id放target#2, 无count)');

@@ -154,7 +154,7 @@ proto.loadProto().then(async () => {
         // 这份抓包里的动物 feed_state=3(冷却), 所以即使 #10 已过也不判可收。
         check('倒计时由 #10 算出(可能是负数=已到点)', Number.isInteger(a.produceInSec), a.produceInSec);
         check('feed=3(冷却) → 不可收(即使 #10 已过)', a.harvestable === false, a.harvestable);
-        check('冷却状态有可读 reason', a.produceUnknownReason === 'cooling', a.produceUnknownReason);
+        check('grown=1/feed=3 → idle reason(现在归入生产期, 倒计时另算)', a.produceUnknownReason === 'idle', a.produceUnknownReason);
         check('牧场经验在视图顶层', Number.isInteger(view.ranchExp), view.ranchExp);
     }
 

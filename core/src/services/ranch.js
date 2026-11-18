@@ -943,7 +943,9 @@ const feedStateNum = toNum(a.feed_state);
 const harvestable = isGrown && feedStateNum === 4;
 const canProduceNow = isGrown && (feedStateNum === 3 || feedStateNum === 4);
 // ⭐ #25(trigger_ready_at) 只在 feed=3/4/5 出现; feed=2(生产期)的倒计时用 #10。
-const deliverInSec = feedStateNum === 2 && nextReadyMs > 0
+// 生产期 = feed 2 和 3(线上实证: 鹅 feed=3 持续 3.4 小时是长周期产蛋;
+//   兔 feed=2 是 1 小时短周期)。两者都有 #10 生产结束时刻。
+const deliverInSec = isGrown && (feedStateNum === 2 || feedStateNum === 3) && nextReadyMs > 0
     ? Math.max(0, Math.round((nextReadyMs - nowMs) / 1000))
     : null;
         const animals_entry = {
@@ -963,14 +965,13 @@ const deliverInSec = feedStateNum === 2 && nextReadyMs > 0
             //   · 饥饿(feed_state=1): 动物没草吃, 不产出 → 服务端不下发 produce_at
             //   · 幼年/未开轮
             harvestInSec,
-            // 不可收时的可读原因(feedState 权威):
-            //   3=产出冷却 / 5=刚收获完 / hungry=缺草 / 幼年
+            // 不可收时的可读原因(按四阶段):
+            //   grown=0 → growing / feed=5 → justHarvested / feed=1 → hungry / 其余 idle
             produceUnknownReason: harvestable
                 ? ''
-                : (!isGrown ? 'juvenile'
-                    : (feedStateNum === 3 ? 'cooling'
-                        : (feedStateNum === 5 ? 'justHarvested'
-                            : (feedStateNum === 1 ? 'hungry' : 'idle')))),
+                : (!isGrown ? 'growing'
+                    : (feedStateNum === 5 ? 'justHarvested'
+                        : (feedStateNum === 1 ? 'hungry' : 'idle'))),
             // 兼容旧字段, 语义与 harvestInSec 一致
             produceInSec: harvestInSec === null ? null : Math.max(0, harvestInSec),
             // 催产就绪 = 确实到了下次产出时刻
