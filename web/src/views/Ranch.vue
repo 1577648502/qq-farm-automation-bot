@@ -1237,7 +1237,7 @@ onUnmounted(() => {
                   <div class="mt-1 text-center text-[10px]">
                     <span v-if="isHarvestable(a)" class="text-amber-600 font-medium dark:text-amber-400">可收获</span>
                     <span v-else-if="produceInSec(a) !== null" class="text-orange-500">{{ formatTime(produceInSec(a) ?? 0) }} 后产出</span>
-                    <span v-else class="text-gray-400">未开始产出</span>
+                    <span v-else class="text-gray-400" title="服务端本次未下发下次产出时刻，无法推算倒计时">产出时间未知</span>
                   </div>
 
                   <div

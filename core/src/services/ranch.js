@@ -287,6 +287,95 @@ async function harvestAnimal(slot = 0, hostGid = 0) {
     return types.HarvestAnimalReply.decode(replyBody);
 }
 
+/**
+ * 自动把背包里的幼崽放进空栏位。
+ *
+ * 为什么必须单独做这一步:
+ *   线上事故(2026-11-18): BuyGoods 的 auto_add 只把幼崽放进**背包**, 不会入栏。
+ *   机器人以为"买了 = 养上了", 但 slots 数字没变, 于是每轮巡检都再买 4 只,
+ *   实测背包堆了 1242 只鸡幼崽 / 1195 只成品鸡。
+ *   抓包证实客户端买完会调 AnimalService.PlaceAnimal 逐个入栏(10001 槽 + 60001 幼崽)。
+ *
+ * @param {{maxPerRound?:number, view?:object}} [opts]
+ * @returns {Promise<{placed:number, details:string[]}>}
+ */
+async function autoPlaceCubs(opts = {}) {
+    const result = { placed: 0, details: [] };
+    // 场景被锁(1045002)时不要再发请求, 否则只会刷错误
+    if (sceneLocked && Date.now() - sceneLockedAt < SCENE_LOCK_RETRY_MS) return result;
+
+    // 1. 找出背包里的幼崽(itemType=105)与它们的数量
+    let bag;
+    try {
+        bag = await require('./warehouse').getRanchBagItems();
+    } catch {
+        return result;
+    }
+    const cubs = [];
+    let getItemById = null;
+    try { getItemById = require('../config/gameConfig').getItemById; } catch { /* 没配置就跳过类型判断 */ }
+    for (const it of bag) {
+        const info = getItemById ? getItemById(toNum(it.id)) : null;
+        if (info && Number(info.type) === 105 && toNum(it.count) > 0) {
+            cubs.push({ id: toNum(it.id), count: toNum(it.count), name: info.name || `#${it.id}` });
+        }
+    }
+    if (!cubs.length) return result;
+
+    // 2. 找空栏位(窝/棚的容量 - 在养数)
+    let view;
+    try {
+        view = opts.view || await getRanchOverview();
+    } catch {
+        return result;
+    }
+    const animals = view.animals || [];
+    const capacity = (toNum(view.coopCount) || 0) + (toNum(view.penCount) || 0);
+    let free = Math.max(0, capacity - animals.length);
+    if (free <= 0) return result;
+
+    const maxPerRound = Math.max(1, toNum(opts.maxPerRound) || 8);
+    free = Math.min(free, maxPerRound);
+
+    // 3. 逐个放进空槽位
+    // ⚠ PlaceAnimal 的 target.slot 必须是一个**真实空槽**的 slot 号。
+    //   已占用的 slot 集合从 view.animals 拿; 不在里面的按容量从 1 开始补。
+    const usedSlots = new Set(animals.map(a => toNum(a.slot)).filter(s => s > 0));
+    const emptySlots = [];
+    for (let s = 1; s <= capacity && emptySlots.length < free; s++) {
+        if (!usedSlots.has(s)) emptySlots.push(s);
+    }
+    // 拿不到具体 slot 号时, 用 slot=0 让服务端自己挑空位(实测可用)
+    const slotsToUse = emptySlots.length ? emptySlots : Array.from({ length: free }, () => 0);
+
+    for (let i = 0; i < free && i < slotsToUse.length; i++) {
+        // 轮转使用背包里的幼崽(优先用完数量最多的那种)
+        const cub = cubs[i % cubs.length];
+        if (!cub || cub.count <= 0) continue;
+        try {
+            await placeAnimal(cub.id, 1, slotsToUse[i]);
+            result.placed += 1;
+            result.details.push(`${cub.name}#${slotsToUse[i]}`);
+            cub.count -= 1;
+            await sleep(300);
+        } catch (e) {
+            if (!isExpectedRanchError(e)) {
+                logWarn('牧场', `幼崽入栏失败 ${cub.name}: ${e.message}`, {
+                    module: 'ranch', event: '幼崽入栏', result: 'error', itemId: cub.id,
+                });
+            }
+            break;
+        }
+    }
+
+    if (result.placed > 0) {
+        log('牧场', `幼崽入栏 ${result.placed} 只: ${result.details.join('，')}`, {
+            module: 'ranch', event: '幼崽入栏', result: 'ok', count: result.placed,
+        });
+    }
+    return result;
+}
+
 /** 出售动物(DonateAnimal): 卖栏里的动物换金券 */
 async function donateAnimal(slot, hostGid = 0) {
     const gid = toNum(hostGid) || toNum(network.getUserState().gid);
@@ -340,20 +429,34 @@ const RANCH_LEVEL_BASE_LEVEL = 9;   // 实测起点等级
 
 /**
  * 由牧场经验累计值算等级与进度。
+ *
+ * ⚠ 只有 Lv9 这一段的真实刻度是实测的(起点 10000, 跨度 13000)。
+ *   低于 10000 时按"每级 -13000"向下外推, 但外推出的等级起点可能是**负数**
+ *   (例如 exp=0 → lv=8, start=-3000), 那样 current = 0-(-3000) = 3000,
+ *   会显示"本级已获得 3000 经验", 而账号实际总经验只有 0 —— 自相矛盾。
+ *   所以这里把 current 夹到 [0, needed], 保证"本级进度"永远不超过总经验。
+ *
  * @param {number} totalExp 物品 1102 的值
- * @returns {{level:number, current:number, needed:number}}
+ * @returns {{level:number, current:number, needed:number}} 等级 / 本级已得 / 本级所需
  */
 function calcRanchLevel(totalExp) {
-    const exp = Math.max(0, toNum(totalExp));
+    // ⚠ toNum('abc') 会原样返回字符串(它只处理 Long/数字), 直接进 Math.max 得到 NaN。
+    //   这里显式转数字, 非数字一律当 0。
+    const n = Number(toNum(totalExp));
+    const exp = Math.max(0, Number.isFinite(n) ? n : 0);
+    let level;
+    let start;
     if (exp < RANCH_LEVEL_BASE) {
-        // 低于实测起点: 保守按每级 3000 向下推
-        const lv = Math.max(1, RANCH_LEVEL_BASE_LEVEL - Math.ceil((RANCH_LEVEL_BASE - exp) / RANCH_LEVEL_STEP));
-        const start = RANCH_LEVEL_BASE - (RANCH_LEVEL_BASE_LEVEL - lv) * RANCH_LEVEL_STEP;
-        return { level: lv, current: exp - start, needed: RANCH_LEVEL_STEP };
+        // 低于实测起点: 按"每级 -13000"向下外推
+        level = Math.max(1, RANCH_LEVEL_BASE_LEVEL - Math.ceil((RANCH_LEVEL_BASE - exp) / RANCH_LEVEL_STEP));
+        start = RANCH_LEVEL_BASE - (RANCH_LEVEL_BASE_LEVEL - level) * RANCH_LEVEL_STEP;
+    } else {
+        level = RANCH_LEVEL_BASE_LEVEL + Math.floor((exp - RANCH_LEVEL_BASE) / RANCH_LEVEL_STEP);
+        start = RANCH_LEVEL_BASE + (level - RANCH_LEVEL_BASE_LEVEL) * RANCH_LEVEL_STEP;
     }
-    const lv = RANCH_LEVEL_BASE_LEVEL + Math.floor((exp - RANCH_LEVEL_BASE) / RANCH_LEVEL_STEP);
-    const start = RANCH_LEVEL_BASE + (lv - RANCH_LEVEL_BASE_LEVEL) * RANCH_LEVEL_STEP;
-    return { level: lv, current: exp - start, needed: RANCH_LEVEL_STEP };
+    // 夹紧: 外推出的 start 可能是负数, 不能让 current 超过总经验
+    const current = Math.max(0, Math.min(RANCH_LEVEL_STEP, exp - Math.max(0, start)));
+    return { level, current, needed: RANCH_LEVEL_STEP };
 }
 
 // ============ 展示层: 面板用的视图 ============
@@ -404,17 +507,24 @@ function toRanchView(reply) {
     for (const a of (ranch.animals || [])) {
         const animalId = toNum(a.animal_id);
         if (!animalId) continue; // 空槽占位
-        const produceAt = toNum(a.produce_at);
+        // produce_at(#10) 是"上次产出"时刻, 已过去, 不能拿来算倒计时(见下方说明)
         const readyAt = toNum(a.trigger_ready_at);
         const grownFlag = toNum(a.grown_flag);
         // ⭐⭐ 2026-11-17 线上实测(账号1真实回包)修正语义:
         //   produce_at(#10) = **上次产出**时刻(已过去), 不是下次!
         //   trigger_ready_at(#25) = **下次可产出**时刻。
         //   证据: 4 只兔子 produce_at 距今 -3141s, f25 = produce_at + 7212s = 正好 2.003 小时。
-        //   之前把 produce_at 当"下次产出"→ 永远算成已过期 → 面板一直"可收获" →
-        //   点收获服务端回 1045211「当前没有可收取的产物」。(用户现场就是这个)
-        const nextReadyMs = readyAt > 0 ? readyAt : (produceAt > 0 ? produceAt + 2 * 3600 * 1000 : 0);
+        //
+        // ⚠ 2026-11-18 修正另一处错误:
+        //   原来 #25 缺失时硬编码 "#10 + 2 小时" 当倒计时 —— 但 2 小时是**兔子**的间隔,
+        //   鸡的间隔短得多(抓包里 #10 与 #14 只差 4 秒), 于是"鸡的成熟倒计时"完全不对。
+        //   不同动物间隔不同, 且协议里没有稳定字段给出它(#23 produce_interval 本次抓包缺失),
+        //   所以**算不出来就不算**: harvestInSec = null, 页面显示"未知",
+        //   让服务端在真正可收时通过 harvestable 告诉我们, 而不是凭一个假间隔误导用户。
+        const nextReadyMs = readyAt > 0 ? readyAt : 0;
         const harvestInSec = nextReadyMs > 0 ? Math.round((nextReadyMs - nowMs) / 1000) : null;
+        // 没有 #25 时不判"可收获": 用假间隔算出来的"已过期"会导致面板一直显示可收,
+        // 点了服务端回 1045211「当前没有可收取的产物」(用户现场就是这个)。
         const harvestable = harvestInSec !== null && harvestInSec <= 0;
         const animals_entry = {
             slot: toNum(a.slot),
@@ -700,7 +810,7 @@ async function runRanchCare(opts = {}) {
     if (sceneLocked) return { skipped: true, reason: 'scene_locked' };
     const result = {
         harvested: 0, produced: 0, fed: 0, sold: 0, earned: 0,
-        boughtCubs: 0, feedMachineAdded: 0, rotationBought: 0, cleanedFriends: 0, ranchTasksClaimed: 0, buildingsCompleted: 0, buildingsUpgraded: 0, regionsCompleted: 0, regionsUnlocked: 0,
+        boughtCubs: 0, cubsPlaced: 0, illustratedClaimed: 0, feedMachineAdded: 0, rotationBought: 0, cleanedFriends: 0, ranchTasksClaimed: 0, buildingsCompleted: 0, buildingsUpgraded: 0, regionsCompleted: 0, regionsUnlocked: 0,
         details: [],
     };
 
@@ -821,7 +931,26 @@ async function runRanchCare(opts = {}) {
 
     await gap();
 
-    // 5. 买幼崽(任务"领养鸡幼崽N个"靠它驱动; 按收益比优先)
+    // 5. 幼崽入栏(必须在买幼崽之前!)
+    // ⚠ 线上事故(2026-11-18): BuyGoods 的 auto_add **不会**把幼崽放进栏舍,
+    //   幼崽只是进了背包(itemType=105)。不补这一步, 槽位永远算作"空",
+    //   于是每轮巡检都再买 4 只 → 实测背包里堆了 1242 只鸡。
+    //   抓包证实: 客户端买完后会调 AnimalService.PlaceAnimal 入栏。
+    if (opts.placeCubs !== false) {
+        try {
+            const placed = await autoPlaceCubs(opts);
+            result.cubsPlaced = placed.placed;
+            if (placed.placed > 0) result.details.push(`入栏${placed.placed}只`);
+        } catch (e) {
+            if (!isExpectedRanchError(e)) {
+                logWarn('牧场', `幼崽入栏失败: ${e.message}`, { module: 'ranch', event: '幼崽入栏', result: 'error' });
+            }
+        }
+    }
+
+    await gap();
+
+    // 6. 买幼崽(任务"领养鸡幼崽N个"靠它驱动; 按收益比优先)
     if (opts.buyCubs !== false && isAutomationOn('ranch_buy_cubs')) {
         try {
             let careView = null;
@@ -921,6 +1050,21 @@ async function runRanchCare(opts = {}) {
             if (r.claimed > 0) result.details.push(`任务${r.claimed}`);
         } catch (e) {
             logWarn('牧场', `牧场任务领取失败: ${e.message}`, { module: 'ranch', event: '牧场任务', result: 'error' });
+        }
+    }
+
+    await gap();
+
+    // 手册(图鉴)领奖: 之前只在手动 API 里有, 巡检从不调用 → "手册的领奖没加"
+    if (opts.illustrated !== false && isAutomationOn('ranch_task')) {
+        try {
+            const ill = require('./illustrated');
+            const r = await ill.claimIllustratedRewards();
+            const claimed = toNum(r && r.claimed) || 0;
+            result.illustratedClaimed = claimed;
+            if (claimed > 0) result.details.push(`手册${claimed}`);
+        } catch (e) {
+            logWarn('牧场', `手册领奖失败: ${e.message}`, { module: 'ranch', event: '手册领奖', result: 'error' });
         }
     }
 
@@ -1659,14 +1803,42 @@ async function autoBuyCubs(opts = {}) {
     }
 
     const maxSpend = Math.max(0, toNum(opts.maxSpend) || 5000);
+    // ⚠ 单轮购买上限: 线上事故(2026-11-18)里机器人每轮都买 4 只,
+    //   因为 buyGoods 的 auto_add 没把幼崽放进栏舍, 幼崽堆在背包里(实测 1242 只鸡),
+    //   下一轮 slots 仍然是 4 → 又买 4 只 → 无限购买。
+    //   加硬上限: 每轮最多买 slots 只, 且不超过 MAX_CUBS_PER_ROUND。
+    const MAX_CUBS_PER_ROUND = 4;
+    const buyBudget = Math.min(slots, MAX_CUBS_PER_ROUND);
+
+    // 背包里已有的幼崽: 如果买来没入栏, 先别买了 —— 应该去"放置", 不是继续买
+    // (幼崽 itemType=105, 每只 uid 不同, 这里只统计数量)
+    let bagCubs = 0;
+    try {
+        const warehouse = require('./warehouse');
+        const bag = await warehouse.getRanchBagItems();
+        for (const it of bag) {
+            const info = (() => {
+                try { return require('../config/gameConfig').getItemById(toNum(it.id)); } catch { return null; }
+            })();
+            if (info && Number(info.type) === 105) bagCubs += toNum(it.count);
+        }
+    } catch { /* 读不到背包就不做这个保护, 交给上限兜底 */ }
+
+    if (bagCubs >= buyBudget) {
+        log('牧场', `背包里已有 ${bagCubs} 只幼崽未入栏, 暂停买幼崽(应先入栏, 不是继续买)`, {
+            module: 'ranch', event: '买幼崽', result: 'skip', bagCubs,
+        });
+        return result;
+    }
+
     let spend = 0;
     for (const g of usable) {
-        if (result.bought >= slots || spend >= maxSpend) break;
+        if (result.bought >= buyBudget || spend >= maxSpend) break;
         // 限购余量
         const remain = g.limit > 0 ? Math.max(0, g.limit - g.bought) : 99;
         if (remain <= 0) continue;
         const affordable = Math.floor((maxSpend - spend) / g.price);
-        const count = Math.min(slots - result.bought, remain, affordable);
+        const count = Math.min(buyBudget - result.bought, remain, affordable);
         if (count <= 0) continue;
         try {
             const reply = await purchaseShopGoods(g.goodsId, count, g.price);
@@ -2004,6 +2176,8 @@ module.exports = {
     getRanchWeightScore,
     __privateRanchFns: {
         calcRanchLevel, parseRotationShopReply, parseFeedMachineReply, walkWire, isEmptyRanchView,
+        // 幼崽: 供测试验证"背包已有幼崽就不再买 + 单轮上限"
+        autoBuyCubs, autoPlaceCubs,
         // 游商: 供测试验证"等级不够就不发购买请求 + 不刷 error 日志"
         autoBuyRotationShop, isRotationNotPurchasable, rotationErrorHint,
     },

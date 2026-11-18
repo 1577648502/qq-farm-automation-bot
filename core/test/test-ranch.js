@@ -143,8 +143,13 @@ proto.loadProto().then(async () => {
         check('有动物列表', Array.isArray(view.animals) && view.animals.length > 0, view.animals && view.animals.length);
         const a = view.animals[0];
         check('动物带名字', !!a.name && a.name !== `动物#${a.animalId}`, a.name);
-        check('动物带槽位/阶段/产出倒计时',
-            Number.isInteger(a.slot) && Number.isInteger(a.stage) && Number.isInteger(a.produceInSec), a);
+        check('动物带槽位/阶段', Number.isInteger(a.slot) && Number.isInteger(a.stage), a);
+        // 2026-11-18 修正: 这份抓包没有 trigger_ready_at(#25), 无法推算下次产出时刻。
+        // 旧实现用 "#10(上次产出) + 2小时" 硬编码 — 那是兔子的间隔, 鸡完全不同,
+        // 算出来的倒计时是错的(会把鸡显示成"22 小时后产出")。
+        // 现在算不出来就返回 null, 页面显示"产出时间未知", 而不是编一个假倒计时。
+        check('缺少 #25 时倒计时为 null(不编造)', a.produceInSec === null, a.produceInSec);
+        check('缺少 #25 时不判为可收获', a.harvestable === false, a.harvestable);
         check('牧场经验在视图顶层', Number.isInteger(view.ranchExp), view.ranchExp);
     }
 
