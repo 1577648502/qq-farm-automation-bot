@@ -104,63 +104,42 @@ proto.loadProto().then(async () => {
             calls.filter(c => c.method === 'BuyGoods').length);
     }
 
-    section('3. produce_at(#10) 就是"下次产出时刻"(5 份抓包实测确认)');
+    section('3. #10 语义定案: 本轮计时起点, 不是倒计时终点');
     {
-        // 实测依据: 同一只鸡在三份不同时间的抓包里,
-        //   #10 - 抓包时刻 = +2.6s / -51.0s / -2.6s  —— 都在秒级
-        // 若 #10 是"上次产出"(几小时前), 差值会是几千秒。所以它就是下次产出时刻。
+        // 入栏抓包时间线: 动作(入栏/催产/收获)后 #10 立即重置为当前时刻附近(+8s/-3s/-8s/-14s)
+        // → #10 是"本轮计时起点"。真正的产出倒计时是 #25(trigger_ready_at)。
+        const ranch = require(`${SB}/src/services/ranch`);
         const now = Date.now();
-        const mk = (produceAt) => require(`${SB}/src/services/ranch`).toRanchView({
-            ranch: {
-                animals: [{
-                    slot: 1, animal_id: 60001, stage: 6, feed_state: 2,
-                    produce_at: produceAt, grown_flag: 1,
-                }],
-            },
+        const v = ranch.toRanchView({
+            ranch: { animals: [{ slot: 1, animal_id: 60001, stage: 1, feed_state: 3,
+                produce_at: now - 3000, trigger_ready_at: now + 9000, grown_flag: 0 }] },
         }).animals[0];
-
-        // 未来 2.6 秒(与实测同量级) → 还没到点
-        const soon = mk(now + 2600);
-        check('未来 2.6 秒 → harvestInSec ≈ 3', Math.abs(soon.harvestInSec - 3) <= 2, soon.harvestInSec);
-        // feed=2(产出中)不可收 —— 截图鹅"生产期 02:49:09"就是这时, 收获报 1045211
-        check('feed=2 → 不可收', soon.harvestable === false, soon.harvestable);
-
-        // 已过 5 秒 → 可收
-        const passed = mk(now - 5000);
-        check('已过 5 秒 → harvestInSec ≈ -5', Math.abs(passed.harvestInSec + 5) <= 2, passed.harvestInSec);
-        check('已过 → 仍不可收(feed=2)', passed.harvestable === false, passed.harvestable);
-        check('canProduce: feed=2 不可催产(还在产出中)', passed.canProduce === false, passed.canProduce);
+        check('feed=3 倒计时用 #25(约9秒)', Math.abs((v.deliverInSec || 0) - 9) <= 2, v.deliverInSec);
+        check('#10 过期不影响倒计时', v.harvestable === false, v.harvestable);
     }
 
-    section('4. #10 缺失 → 不编倒计时, 也不判可收');
+    section('4. #25 缺失(feed=3) → 无倒计时(不编造)');
     {
-        const view = require(`${SB}/src/services/ranch`).toRanchView({
-            ranch: {
-                animals: [{ slot: 1, animal_id: 60001, stage: 6, feed_state: 2, grown_flag: 1 }],
-            },
-        });
-        const a = view.animals[0];
-        check('无 #10 → harvestInSec = null', a.harvestInSec === null, a.harvestInSec);
-        // feed=2 不可收; #10 只决定倒计时有没有
-        check('无 #10 → feed=2 不可收', a.harvestable === false, a.harvestable);
+        const ranch = require(`${SB}/src/services/ranch`);
+        const v = ranch.toRanchView({
+            ranch: { animals: [{ slot: 1, animal_id: 60001, stage: 6, feed_state: 3, grown_flag: 1 }] },
+        }).animals[0];
+        check('无 #25 → deliverInSec = null', v.deliverInSec === null, v.deliverInSec);
+        check('无 #25 → 不可收', v.harvestable === false, v.harvestable);
     }
 
-    section('5. 不再使用 #25(它在 5 份抓包里从未出现过)');
+    section('5. #25 是生产期倒计时的权威来源(催产后出现)');
     {
-        // 即使某天真下发了 #25, 也不该再影响倒计时 —— 语义已确定用 #10
         const now = Date.now();
-        const view = require(`${SB}/src/services/ranch`).toRanchView({
-            ranch: {
-                animals: [{
-                    slot: 1, animal_id: 60002, stage: 6, feed_state: 3,
-                    produce_at: now + 30 * 1000,      // 30 秒后
-                    trigger_ready_at: now + 999 * 1000, // 干扰项
-                    grown_flag: 1,
-                }],
-            },
-        });
-        const a = view.animals[0];
-        check('#25 被忽略, 只看 #10(约 30 秒)', Math.abs(a.harvestInSec - 30) <= 2, a.harvestInSec);
+        const ranch = require(`${SB}/src/services/ranch`);
+        const v = ranch.toRanchView({
+            ranch: { animals: [{ slot: 1, animal_id: 60002, stage: 6, feed_state: 3,
+                produce_at: now - 60 * 1000,
+                trigger_ready_at: now + 30 * 1000,   // 30 秒后可产出
+                grown_flag: 1 }] },
+        }).animals[0];
+        check('生产期倒计时 = #25(约30秒)', Math.abs((v.deliverInSec || 0) - 30) <= 2, v.deliverInSec);
+        check('#10 过期不影响', v.harvestable === false, v.harvestable);
     }
 
     section('6. 幼崽策略: 收益比 / 等级 / 优先列表');
@@ -333,43 +312,38 @@ proto.loadProto().then(async () => {
         check('请求 target.host_gid = 10001', Number(req.target.host_gid) === 10001, Number(req.target.host_gid));
     }
 
-    section('15. 四阶段模型(你三张截图+线上实证定案)');
+    section('15. 倒计时终案(入栏抓包完整时间线定案)');
     {
-        // 游戏界面四阶段: 幼崽期 → 成长期 → 生产期 → 成熟期
-        // 线上实证: 鹅 grown=1/feed=3 持续 3.4 小时 = 生产期(长周期产蛋)
-        //           兔 grown=1/feed=2 的 #10 ≈ 剩余1小时 = 生产期(短周期)
-        //           鸡 grown=0/feed=5 #10 过期 = 成长期已过等服务端刷新
-        // 可收获唯一状态: feed=4(官方气泡 CanHarvest)
+        // 时间线(t=秒): 入栏后 feed=1 #10=+8 #25=- → 催产 feed=3 #10=-3 #25=+9
+        //   → 收获 feed=4 → 再查 feed=5
+        // 定案: #10=本轮计时起点(动作即重置), #25=下次产出时刻(催产后出现)
+        //   成长期倒计时 = #10(feed=1 时是成长完成点)
+        //   生产期倒计时 = #25(feed=3, 官方 trigger_ready_at)
         const ranch = require(`${SB}/src/services/ranch`);
-        const mk = (grown, feedState, produceAt) => ranch.toRanchView({
-            ranch: { animals: [{ slot: 1, animal_id: 60001, stage: 1, feed_state: feedState, grown_flag: grown, produce_at: produceAt }] },
-        }).animals[0];
         const now = Date.now();
+        const mk = (grown, feed, produceAt, triggerReadyAt) => ranch.toRanchView({
+            ranch: { animals: [{ slot: 1, animal_id: 60001, stage: 1, feed_state: feed, grown_flag: grown,
+                produce_at: produceAt, trigger_ready_at: triggerReadyAt }] },
+        }).animals[0];
 
-        // 成熟期: feed=4 → 可收获
-        const mature = mk(1, 4, now - 3000);
-        check('成熟期 feed=4 → 可收获', mature.harvestable === true, mature.harvestable);
-        check('成熟期 → 可催产', mature.canProduce === true, mature.canProduce);
+        // 成长期(入栏后): feed=1, #10=+8s → 成长倒计时约 8s
+        const growing = mk(1, 1, now + 8000, 0);
+        check('成长期 feed=1 → 不可收', growing.harvestable === false, growing.harvestable);
+        check('成长期倒计时 = #10(约8秒)', Math.abs((growing.stageEndInSec || 0) - 8) <= 2, growing.stageEndInSec);
 
-        // 生产期: feed=2/3 + grown=1 → 有生产期倒计时, 不可收
-        const laying2 = mk(1, 2, now + 3600 * 1000);
-        check('生产期 feed=2 → 不可收', laying2.harvestable === false, laying2.harvestable);
-        check('生产期 feed=2 → 倒计时约1小时', Math.abs((laying2.deliverInSec || 0) - 3600) <= 3, laying2.deliverInSec);
-        const laying3 = mk(1, 3, now + 12000 * 1000);
-        check('生产期 feed=3(鹅长周期) → 不可收', laying3.harvestable === false, laying3.harvestable);
-        check('生产期 feed=3 → 倒计时约3.3小时', Math.abs((laying3.deliverInSec || 0) - 12000) <= 5, laying3.deliverInSec);
+        // 生产期(催产后): feed=3, #25=+9s → 生产期倒计时约 9s
+        const laying = mk(0, 3, now - 3000, now + 9000);
+        check('生产期 feed=3 → 不可收', laying.harvestable === false, laying.harvestable);
+        check('生产期倒计时 = #25(约9秒)', Math.abs((laying.deliverInSec || 0) - 9) <= 2, laying.deliverInSec);
 
-        // 成长期: grown=0 → 成长倒计时(用 #10), 不可收不可催产
-        const growing = mk(0, 5, now + 200 * 1000);
-        check('成长期 grown=0 → 不可收', growing.harvestable === false, growing.harvestable);
-        check('成长期 → 不可催产', growing.canProduce === false, growing.canProduce);
-        check('成长期 → 倒计时约200秒', Math.abs((growing.produceInSec || 0) - 200) <= 3, growing.produceInSec);
-        check('成长期 reason = growing', growing.produceUnknownReason === 'growing', growing.produceUnknownReason);
+        // 成熟期(收获时机): feed=4 → 可收
+        const mature = mk(1, 4, now - 8000, now + 3000);
+        check('成熟期 feed=4 → 可收', mature.harvestable === true, mature.harvestable);
 
-        // 幼崽/饥饿: feed=1 + grown=0
-        // 幼崽期(grown=0, feed=1)与成长期同属幼年, reason 都是 growing(页面按 grown 区分文案)
-        check('幼崽期 grown=0 → reason = growing', mk(0, 1, now).produceUnknownReason === 'growing',
-            mk(0, 1, now).produceUnknownReason);
+        // 刚收完: feed=5
+        const done = mk(0, 5, now - 14000, now - 2000);
+        check('刚收完 feed=5 → 不可收', done.harvestable === false, done.harvestable);
+        check('刚收完无倒计时', done.deliverInSec === null, done.deliverInSec);
     }
 
     section('16. PlaceAnimal 编码与抓包一致(幼崽id放target#2, 无count)');

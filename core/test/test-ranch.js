@@ -148,11 +148,10 @@ proto.loadProto().then(async () => {
         // 旧实现用 "#10(上次产出) + 2小时" 硬编码 — 那是兔子的间隔, 鸡完全不同,
         // 算出来的倒计时是错的(会把鸡显示成"22 小时后产出")。
         // 现在算不出来就返回 null, 页面显示"产出时间未知", 而不是编一个假倒计时。
-        // 2026-11-18 线上实测最终定案: 可收的权威标志是 **feed_state**(不是 #10):
-        //   feed=1/2/4 可收; feed=3 冷却中、feed=5 刚收完 —— #10 过期也不可收
-        //   (账号1 鹅 feed=3、#10 过期 3388s, 收获仍回 1045211)。
-        // 这份抓包里的动物 feed_state=3(冷却), 所以即使 #10 已过也不判可收。
-        check('倒计时由 #10 算出(可能是负数=已到点)', Number.isInteger(a.produceInSec), a.produceInSec);
+        // 2026-11-18 入栏抓包终案: #10=本轮计时起点, #25=下次产出时刻。
+        //   这份抓包的动物 feed=5(刚收完)、无 #25 → 无倒计时(null)。
+        //   之前用 #10 直接算倒计时的做法(夹0/不夹0都不对)已废弃。
+        check('feed=5 无 #25 → 无倒计时', a.produceInSec === null, a.produceInSec);
         check('feed=3(冷却) → 不可收(即使 #10 已过)', a.harvestable === false, a.harvestable);
         check('grown=1/feed=3 → idle reason(现在归入生产期, 倒计时另算)', a.produceUnknownReason === 'idle', a.produceUnknownReason);
         check('牧场经验在视图顶层', Number.isInteger(view.ranchExp), view.ranchExp);

@@ -914,34 +914,43 @@ function toRanchView(reply) {
         //   ② 后来改成"#10 + 2 小时"兜底 → 2 小时只是**兔子**的间隔(#23=180 分钟),
         //      鸡的间隔是秒级, 于是鸡全部算成 "2 小时后产出"。
         //
-        // 现在: 直接用 #10。它缺失时才算不出来(返回 null), 不再编任何间隔。
-        const nextReadyMs = toNum(a.produce_at);
+        // ⭐⭐⭐⭐ 2026-11-18 终案 —— 入栏抓包(20261118-165223)完整时间线定案:
+        //
+        //   t+13s 入栏后   feed=1  #10=+8s   #25=-     grown=1
+        //   t+24s 催产后   feed=3  #10=-3s   #25=+9s   grown=0   ← 催产触发 1→3
+        //   t+30s 收获后   feed=4  #10=-8s   #25=+3s   grown=1
+        //   t+35s 再查     feed=5  #10=-14s  #25=-2s   grown=0
+        //
+        //   ① feed=1→3 由催产(TriggerProduce)触发
+        //   ② #10 = 本轮计时起点(每次动作重置为当前), 不是任何倒计时终点
+        //   ③ #25(trigger_ready_at) = **下一次产出时刻**(催产后出现, = #10+12s)
+        //      之前判它死刑("从未出现")是因为旧抓包里没有催产操作的帧
+        //
+        //   倒计时正确来源:
+        //     成长期(feed=1): #10(成长完成点) — #10 过期=该进生产期, 面板显示"待催产"
+        //     生产期(feed=3): #25(下次产出时刻) — 官方 trigger_ready_at 就是为这个生的
+        //     成熟期(feed=4): #25 已过 → 可收蛋(CollectProduce) + 可再催产
+        //     刚收完(feed=5): 等服务端重置回 1
+        //
+        //   harvestable: feed=4(官方气泡 CanHarvest); 收蛋按 #25 已过 + CollectProduce
+        const nextReadyMs = toNum(a.produce_at);           // #10 本轮计时起点
+        const triggerReadyMs = toNum(a.trigger_ready_at);  // #25 下次产出时刻
         const grownFlag = toNum(a.grown_flag);
-
-        // ⭐⭐⭐ 2026-11-18 终版 —— 参照农场 getNextRipeness 的同款思想:
-        //   农场: 服务端给每个阶段 begin_time, 倒计时 = 成熟阶段时刻 - now, 无任何状态推导。
-        //   牧场: #10(produce_at) 就是"当前阶段结束时刻", 倒计时 = #10 - now。
-        //
-        //   四阶段(你三张截图定名)与 feed_state 对照(全部抓包枚举):
-        //     成长期 grown=0, feed=1/5   #10 未来=成长期倒计时; 过期=该进生产期(等刷新)
-        //     生产期 grown=1, feed=2/3   #10 未来=生产期倒计时; 过期=蛋已上架(#6≥1)待收
-        //     成熟期 grown=1, feed=4     可收获(收副产物+出栏)
-        //     刚收完 grown=1, feed=5     等吃草进下一轮
-        //
-        //   harvestable = feed===4 (官方气泡 CanHarvest; 收蛋走 CollectProduce 按 #6>0)
-        //   倒计时一律 = #10 - now(未来值), 过期显示"待服务端刷新", 不夹 0 不编造。
 const isGrown = grownFlag === 1;
 const feedStateNum = toNum(a.feed_state);
+const nowMs2 = Date.now();
+// 下次产出倒计时(秒): feed=3 用 #25; 其它阶段没有可靠终点 → null
+const produceInSecLive = feedStateNum === 3 && triggerReadyMs > 0
+    ? Math.round((triggerReadyMs - nowMs2) / 1000)
+    : null;
+// 成长期倒计时: feed=1 且 #10 未来(=成长完成点)
+const growInSec = feedStateNum === 1 && nextReadyMs > 0
+    ? Math.round((nextReadyMs - nowMs2) / 1000)
+    : null;
 const harvestable = isGrown && feedStateNum === 4;
 const canProduceNow = isGrown && (feedStateNum === 3 || feedStateNum === 4);
-// 阶段倒计时(成长期/生产期通用, 农场同款: 未来时刻-当前):
-//   未来值 → 显示 MM:SS; 过期/缺失 → null(面板显示对应阶段文案)
-const stageEndInSec = nextReadyMs > 0
-    ? Math.round((nextReadyMs - nowMs) / 1000)
-    : null;
-const deliverInSec = isGrown && (feedStateNum === 2 || feedStateNum === 3)
-    ? stageEndInSec
-    : null;
+const deliverInSec = produceInSecLive;
+const stageEndInSec = feedStateNum === 1 ? growInSec : deliverInSec;
         const animals_entry = {
             slot: toNum(a.slot),
             animalId,
@@ -952,16 +961,10 @@ const deliverInSec = isGrown && (feedStateNum === 2 || feedStateNum === 3)
             grown: grownFlag === 1,
             // 副产物就绪 → 可以"收获"(CollectProduce)
             harvestable,
-            // 生产期倒计时(feed=2/3, 农场同款未来时刻-当前)
-            deliverInSec,
-            // 成长期倒计时(grown=0 时 #10 = 成长结束时刻)
-            stageEndInSec,
-            // 距下次产出秒数。
-            // null 有两种情况, 要能区分(否则页面只能显示"未知", 用户以为坏了):
-            //   · 饥饿(feed_state=1): 动物没草吃, 不产出 → 服务端不下发 produce_at
-            //   · 幼年/未开轮
-            // 兼容旧字段: 与 stageEndInSec 同值(前端旧引用)
-            harvestInSec: stageEndInSec,
+            // 生产期倒计时(feed=3, #25 trigger_ready_at 定案)
+            deliverInSec: produceInSecLive,
+            // 成长期倒计时(feed=1, #10 为成长完成点)
+            stageEndInSec: growInSec,
             // 不可收时的可读原因(按四阶段):
             //   grown=0 → growing / feed=5 → justHarvested / feed=1 → hungry / 其余 idle
             produceUnknownReason: harvestable
@@ -969,7 +972,7 @@ const deliverInSec = isGrown && (feedStateNum === 2 || feedStateNum === 3)
                 : (!isGrown ? 'growing'
                     : (feedStateNum === 5 ? 'justHarvested'
                         : (feedStateNum === 1 ? 'hungry' : 'idle'))),
-            // 兼容旧字段: 与 stageEndInSec 同源(不夹 0, 前端按阶段区分文案)
+            // 兼容旧字段: 按阶段取对应倒计时
             produceInSec: stageEndInSec,
             // 催产就绪 = 确实到了下次产出时刻
             // 催产只对成年动物有效(幼年的是"成长", 不是"产出")

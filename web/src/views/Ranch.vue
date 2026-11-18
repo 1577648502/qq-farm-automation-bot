@@ -1493,8 +1493,7 @@ onUnmounted(() => {
                   <div class="mt-1 text-center text-[10px]">
                     <!-- 四阶段(照农场倒计时思想: #10 = 当前阶段结束时刻, 倒计时=未来值-当前) -->
                     <span v-if="isHarvestable(a)" class="text-amber-600 font-medium dark:text-amber-400">可收获</span>
-                    <span v-else-if="a.grown && [2,3].includes(a.feedState) && (a.deliverInSec ?? 0) > 0" class="text-orange-500" title="生产期：蛋/崽产出中，倒计时结束可收获">生产期 {{ formatTime(a.deliverInSec) }}</span>
-                    <span v-else-if="a.grown && a.feedState === 3" class="text-orange-500" title="生产期(蛋已上架待收)">生产期·待收取</span>
+                    <span v-else-if="a.grown && a.feedState === 3 && (a.deliverInSec ?? 0) > 0" class="text-orange-500" title="生产期：蛋/崽产出中(#25 下次产出时刻)，到点可收">生产期 {{ formatTime(a.deliverInSec) }}</span>
                     <span v-else-if="!a.grown && (a.stageEndInSec ?? 0) > 0" class="text-sky-600 dark:text-sky-400" title="成长期倒计时（长成后自动开始生产期）">成长期 {{ formatTime(a.stageEndInSec) }}</span>
                     <span v-else-if="!a.grown" class="text-sky-600 dark:text-sky-400" title="幼年动物正在成长（服务端未下发成长结束时刻）">成长中</span>
                     <span v-else-if="a.produceUnknownReason === 'justHarvested'" class="text-gray-400" title="刚收获过，吃草后会进入下一轮产出">已收获·待下一轮</span>
