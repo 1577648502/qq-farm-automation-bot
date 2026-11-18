@@ -1529,6 +1529,8 @@ const RANCH_PUSH_THROTTLE_MS = 60 * 1000;            // 推送触发最少间隔
 const RANCH_BACKOFF_MAX_MS = 60 * 60 * 1000;
 
 const ranchScheduler = createScheduler('ranch');
+// 下次巡检时刻(ms), 供面板显示"下次巡查倒计时"(对照农场的 nextFarmRunAt)
+let nextRanchCheckAt = 0;
 let isCheckingRanch = false;
 let ranchLoopRunning = false;
 let externalRanchSchedulerMode = false;
@@ -1536,8 +1538,7 @@ let ranchFailStreak = 0;
 let lastRanchPushAt = 0;
 
 function randomRanchIntervalMs() {
-    const minSec = RANCH_CHECK_INTERVAL_MIN_MS / 1000;
-    const maxSec = RANCH_CHECK_INTERVAL_MAX_MS / 1000;
+    const { minSec, maxSec } = ranchIntervalRangeSec();
     return (minSec + Math.floor(Math.random() * (maxSec - minSec + 1))) * 1000;
 }
 
@@ -1548,9 +1549,34 @@ function nextRanchDelayMs() {
     return Math.min(RANCH_BACKOFF_MAX_MS, base * Math.min(2 ** ranchFailStreak, 64));
 }
 
+/**
+ * 读取用户配置的牧场巡检间隔(秒), 默认 300~480。
+ * 对照农场的 farmMin/farmMax —— 用户要求"巡查按农场的来, 单独一份牧场的"。
+ */
+function ranchIntervalRangeSec() {
+    let minSec = RANCH_CHECK_INTERVAL_MIN_MS / 1000;
+    let maxSec = RANCH_CHECK_INTERVAL_MAX_MS / 1000;
+    try {
+        const store = require('../models/store');
+        const cfg = typeof store.getAccountConfigSnapshot === 'function'
+            ? store.getAccountConfigSnapshot(process.env.FARM_ACCOUNT_ID || '')
+            : null;
+        const iv = cfg && cfg.intervals ? cfg.intervals : null;
+        let lo = Number(iv && iv.ranchMin) || 0;
+        let hi = Number(iv && iv.ranchMax) || 0;
+        if (lo > 0 && hi > 0) {
+            if (lo > hi) [lo, hi] = [hi, lo];
+            minSec = Math.max(60, lo);      // 下限 60s: 更频繁会限流(1045202)
+            maxSec = Math.max(minSec, hi);
+        }
+    } catch { /* 读不到就用默认 */ }
+    return { minSec, maxSec };
+}
+
 function scheduleNextRanchCheck(delayMs) {
     if (externalRanchSchedulerMode) return;
     if (!ranchLoopRunning) return;
+    nextRanchCheckAt = Date.now() + Math.max(0, delayMs);
     ranchScheduler.setTimeoutTask('ranch_check_loop', Math.max(0, delayMs), async () => {
         if (!ranchLoopRunning) return;
         await checkRanch();
@@ -2850,6 +2876,8 @@ module.exports = {
     stopRanchCheckLoop,
     runRanchTick,
     getNextRanchDelayMs: nextRanchDelayMs,
+    getNextRanchCheckAt: () => nextRanchCheckAt,
+    ranchIntervalRangeSec,
     toRanchView,
     getAnimalName,
     ANIMAL_NAMES,

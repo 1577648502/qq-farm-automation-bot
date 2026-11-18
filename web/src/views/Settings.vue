@@ -2453,6 +2453,20 @@ async function onBackupFileChange(ev: Event) {
                   <BaseInput v-model.number="localStrategySettings.intervals.stealMax" label="最大 (秒)" type="number" min="1" />
                 </div>
               </div>
+              <!-- 牧场巡查: 独立一份(用户要求与农场分开) -->
+              <div class="rounded-lg bg-amber-50 p-3 dark:bg-amber-900/20">
+                <div class="mb-2 flex items-center gap-2 text-sm text-amber-700 font-medium dark:text-amber-300">
+                  <div class="i-fas-paw text-base" />
+                  牧场巡查
+                </div>
+                <div class="grid grid-cols-2 gap-2">
+                  <BaseInput v-model.number="localStrategySettings.intervals.ranchMin" label="最小 (秒)" type="number" min="60" />
+                  <BaseInput v-model.number="localStrategySettings.intervals.ranchMax" label="最大 (秒)" type="number" min="60" />
+                </div>
+                <p class="mt-1.5 text-[10px] text-amber-600/80 dark:text-amber-400/80">
+                  动物周期长，默认 300~480 秒；下限 60 秒（更频繁会被服务端限流）。有状态推送时 1 分钟内响应，不受此间隔限制。
+                </p>
+              </div>
             </div>
 
             <div class="border-t pt-4 dark:border-gray-700">

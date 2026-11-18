@@ -263,10 +263,12 @@ function formatBucketTime(item: any) {
 const nextFarmCheck = ref('--:--:--')
 const nextHelpCheck = ref('--:--:--')
 const nextStealCheck = ref('--:--:--')
+const nextRanchCheck = ref('--:--:--')
 const localUptime = ref(0)
 let localNextFarmRemainSec = 0
 let localNextHelpRemainSec = 0
 let localNextStealRemainSec = 0
+let localNextRanchRemainSec = 0
 
 function updateCountdowns() {
   // Update uptime
@@ -274,6 +276,7 @@ function updateCountdowns() {
     nextFarmCheck.value = '账号未登录'
     nextHelpCheck.value = '账号未登录'
     nextStealCheck.value = '账号未登录'
+    nextRanchCheck.value = '账号未登录'
   }
   else {
     localUptime.value++
@@ -300,6 +303,14 @@ function updateCountdowns() {
     else {
       nextStealCheck.value = '巡查中...'
     }
+
+    if (localNextRanchRemainSec > 0) {
+      localNextRanchRemainSec--
+      nextRanchCheck.value = formatDuration(localNextRanchRemainSec)
+    }
+    else {
+      nextRanchCheck.value = '巡查中...'
+    }
   }
 }
 
@@ -311,6 +322,7 @@ watch(status, (newVal) => {
     localNextFarmRemainSec = newVal.nextChecks.farmRemainSec || 0
     localNextHelpRemainSec = newVal.nextChecks.helpRemainSec || 0
     localNextStealRemainSec = newVal.nextChecks.stealRemainSec || 0
+    localNextRanchRemainSec = newVal.nextChecks.ranchRemainSec || 0
     updateCountdowns() // Update immediately
   }
   if (newVal?.uptime !== undefined) {
@@ -982,6 +994,15 @@ useIntervalFn(() => void fetchRanchOverview(), 60000)
               </div>
               <div class="shrink-0 whitespace-nowrap text-lg font-bold font-mono tabular-nums">
                 {{ nextStealCheck }}
+              </div>
+            </div>
+            <div class="min-w-0 flex items-center justify-between gap-2">
+              <div class="flex shrink-0 items-center gap-2 text-gray-700 dark:text-gray-300">
+                <div class="i-fas-paw text-lg text-amber-500" />
+                <span>牧场</span>
+              </div>
+              <div class="shrink-0 whitespace-nowrap text-lg font-bold font-mono tabular-nums">
+                {{ nextRanchCheck }}
               </div>
             </div>
           </div>

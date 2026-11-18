@@ -1975,10 +1975,17 @@ function syncStatus() {
     const farmRemainSec = Math.max(0, Math.ceil((Number(nextFarmRunAt || 0) - nowMs) / 1000));
     const helpRemainSec = Math.max(0, Math.ceil((Number(nextHelpRunAt || 0) - nowMs) / 1000));
     const stealRemainSec = Math.max(0, Math.ceil((Number(nextStealRunAt || 0) - nowMs) / 1000));
+    // 牧场下次巡检倒计时(对照农场; ranch 模块自己记录 nextRanchCheckAt)
+    let ranchRemainSec = 0;
+    try {
+        const { getNextRanchCheckAt } = require('../services/ranch');
+        ranchRemainSec = Math.max(0, Math.ceil((Number(getNextRanchCheckAt() || 0) - nowMs) / 1000));
+    } catch { /* 牧场模块没起来就没有倒计时 */ }
     fullStats.nextChecks = {
         farmRemainSec,
         helpRemainSec,
         stealRemainSec,
+        ranchRemainSec,
         friendRemainSec: Math.max(helpRemainSec, stealRemainSec),
     };
 
