@@ -28,6 +28,7 @@ const adGift = require('../services/ad-gift');
 const { getActivityOverview, drawLottery, drawActivity, claimBattlePassRewards, claimActivityTasks, claimDailySignin, exchangeShopGoods, performQingniangBrew, sellQingniangBrew, shareSellQingniangBrew, getStarActivityOverview, exchangeStarShopGoods, lightUpStarRegister, checkAndLightUpStar } = require('../services/activity');
 const { performDailyMonthCardGift, getMonthCardDailyState } = require('../services/monthcard');
 const { performDailyVipGift, getVipDailyState } = require('../services/qqvip');
+const { performDailyRedPacket, getRedPacketDailyState } = require('../services/redpacket');
 const { createScheduler, getSchedulerRegistrySnapshot } = require('../services/scheduler');
 const { performDailyShare, getShareDailyState } = require('../services/share');
 const { setInitialValues, resetSessionGains, recordOperation, initStatsWithPersistence, saveStats } = require('../services/stats');
@@ -195,6 +196,8 @@ async function runDailyRoutines(force = false) {
         await performDailyMonthCardGift(force);
         await buyFreeGifts(force);
         await performDailyVipGift(force);
+        // 红包: 协议早就有了但一直没调用, 等于每天白丢一次
+        await performDailyRedPacket(force);
         await checkAndBuyMysteryShop();
         await checkAndLightUpStar();
         await checkAndClaimSolarTerms();
@@ -537,6 +540,10 @@ function startDailyRoutineTimer() {
     // 牧歌初启(11-17 新活动): 每 20 分钟自查一次(档位/任务是进度驱动, 中途达标要及时领)
     workerScheduler.setIntervalTask('muge_interval', 20 * 60 * 1000, () => {
         require('../services/activity').claimMugeActivity({ verbose: false }).catch(() => null);
+    }, { preventOverlap: true });
+    // 红包: 每 20 分钟自查(可领状态可能中途变化, 领完当天就不再请求)
+    workerScheduler.setIntervalTask('red_packet_interval', 20 * 60 * 1000, () => {
+        performDailyRedPacket().catch(() => null);
     }, { preventOverlap: true });
     // 奶茶热销中: 每 15 分钟自查一次(收银台满载会停业, 这是最关键的一步)
     workerScheduler.setIntervalTask('milk_tea_interval', 15 * 60 * 1000, () => {
@@ -966,6 +973,8 @@ async function startBot(config) {
     // 注意：间隔配置由 applyIntervalsToRuntime 统一处理，不要在这里覆盖
 
     await loadProto();
+    // 协议观察器: 登录握手开始就采集, 才能覆盖登录后立刻拉的活动列表
+    require('../utils/protocol-observer').start();
 
     log('系统', suppressRefreshLogs ? '正在获取新 Code...' : '正在连接服务器...');
 
@@ -1327,6 +1336,9 @@ async function handleApiCall(msg) {
             case 'getCubShop':
                 result = await require('../services/ranch').getCubShop();
                 break;
+            case 'getVoucherBalance':
+                result = await require('../services/ranch').getVoucherBalance();
+                break;
             case 'getRotationShop':
                 result = await require('../services/ranch').getRotationShop();
                 break;
@@ -1483,6 +1495,18 @@ async function handleApiCall(msg) {
             }
             case 'claimMugeActivity':
                 result = await require('../services/activity').claimMugeActivity(args[0] || {});
+                break;
+            case 'claimDailyRedPacket':
+                result = { claimed: await performDailyRedPacket(true) };
+                break;
+            case 'getRedPacketState':
+                result = getRedPacketDailyState();
+                break;
+            case 'getRanchBag':
+                result = await require('../services/warehouse').getRanchBagDetail();
+                break;
+            case 'getRanchBagTabs':
+                result = await require('../services/warehouse').getRanchBagTabs();
                 break;
             case 'getMugeOverview':
                 result = await require('../services/activity').getMugeOverview();
@@ -1856,6 +1880,7 @@ async function getDailyGiftOverview() {
     const share = getShareDailyState ? getShareDailyState() : { doneToday: false, lastClaimAt: 0 };
     const vip = getVipDailyState ? getVipDailyState() : { doneToday: false, lastClaimAt: 0 };
     const month = getMonthCardDailyState ? getMonthCardDailyState() : { doneToday: false, lastClaimAt: 0 };
+    const redPacket = getRedPacketDailyState ? getRedPacketDailyState() : { doneToday: false, lastClaimAt: 0 };
 
     return {
         date: new Date().toISOString().slice(0, 10),
@@ -1900,6 +1925,15 @@ async function getDailyGiftOverview() {
                 hasCard: Object.prototype.hasOwnProperty.call(month, 'hasCard') ? !!month.hasCard : undefined,
                 hasClaimable: Object.prototype.hasOwnProperty.call(month, 'hasClaimable') ? !!month.hasClaimable : undefined,
                 result: month.result || '',
+            },
+            {
+                key: 'red_packet_daily',
+                label: '红包',
+                enabled: true,
+                doneToday: !!redPacket.doneToday,
+                lastAt: Number(redPacket.lastClaimAt || redPacket.lastCheckAt || 0),
+                claimableCount: Number(redPacket.claimableCount || 0),
+                result: redPacket.result || '',
             },
         ],
     };

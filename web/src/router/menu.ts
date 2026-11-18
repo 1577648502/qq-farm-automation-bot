@@ -195,6 +195,20 @@ export const menuRoutes: MenuItem[] = [
 
   {
 
+    path: 'protocol',
+
+    name: 'protocol',
+
+    label: '协议观察',
+
+    icon: 'i-carbon-catalog',
+
+    component: () => import('@/views/ProtocolObserver.vue'),
+
+  },
+
+  {
+
     path: 'settings',
 
     name: 'Settings',

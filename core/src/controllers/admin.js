@@ -17,6 +17,7 @@ const { getLevelExpProgress } = require('../config/gameConfig');
 const { getResourcePath, getDataDir } = require('../config/runtime-paths');
 const store = require('../models/store');
 const backup = require('../services/backup');
+const protocolCatalog = require('../runtime/protocol-catalog');
 const { addOrUpdateAccount, deleteAccount } = store;
 const { findAccountByRef, normalizeAccountRef, resolveAccountId } = require('../services/account-resolver');
 const { createModuleLogger } = require('../services/logger');
@@ -1531,11 +1532,13 @@ app.use('/api', (req, res, next) => {
     // 单项操作: {op: harvest|produce|feed, slot?, feedType?, count?}
     app.post('/api/ranch/operate', withAccount((accountId, req) => provider.operateRanch(accountId, req.body || {})));
 
-    // 幼崽商店(带收益比, 供"利益最大"展示)
+    // 幼崽商店(带收益比, 供"利益最大"展示) + 金券余额(面板加购要校验)
     app.get('/api/ranch/cub-shop', withAccount(async (accountId) => {
         const shop = await provider.getCubShop(accountId);
         const best = shop.find(g => g.unlocked && g.valueRatio > 0) || null;
-        return { shop, best };
+        // 余额读不到不报错, 返回 null 让前端不做余额拦截
+        const voucher = await provider.getVoucherBalance(accountId).catch(() => null);
+        return { shop, best, voucher };
     }));
 
     // 游商(兑换集市)
@@ -1829,6 +1832,10 @@ app.use('/api', (req, res, next) => {
     });
 
     // API: 获取背包种子列表
+    // ===== 牧场背包(独立于农场仓库) =====
+    app.get('/api/ranch/bag', withAccount(accountId => provider.getRanchBag(accountId), { softErrors: true }));
+    app.get('/api/ranch/bag/tabs', withAccount(accountId => provider.getRanchBagTabs(accountId), { softErrors: true }));
+
     app.get('/api/bag/seeds', async (req, res) => {
         const id = getAccId(req);
         if (!id) return res.status(400).json({ ok: false, error: 'Missing x-account-id' });
@@ -3149,6 +3156,9 @@ app.use('/api', (req, res, next) => {
     app.get('/api/activity/muge', withAccount(accountId => provider.getMugeOverview(accountId), { softErrors: true }));
     // 「牧歌初启」手动领取
     app.post('/api/activity/muge/claim', withAccount((accountId, req) => provider.claimMugeActivity(req.body || {}), { softErrors: true }));
+    // 红包: 每日福利, 自动任务里已默认领; 这里给面板一个手动补领/查看入口
+    app.get('/api/red-packet/state', withAccount(accountId => provider.getRedPacketState(accountId), { softErrors: true }));
+    app.post('/api/red-packet/claim', withAccount(accountId => provider.claimDailyRedPacket(accountId), { softErrors: true }));
 
     app.post('/api/activity/draw', withAccount((accountId, req) => provider.drawActivityLottery(req.body || {}), { softErrors: false }));
 
@@ -3566,6 +3576,81 @@ app.use('/api', (req, res, next) => {
     });
 
     app.post('/api/activity/star/light-up', withAccount((accountId, req) => provider.lightUpStar(accountId, req.body || {}), { softErrors: false }));
+
+    // ============ 协议观察 (自动发现游戏更新) ============
+    // 机器人跑着就在采集: data/protocol/catalog-<账号>.json
+    // 这里是"合并所有账号 + 对比基线"的只读视图, 以及把当前结果冻结成基线的操作。
+    app.get('/api/protocol/overview', (req, res) => {
+        try {
+            const overview = protocolCatalog.getOverview();
+            // 默认不回传样本 hex(体积大), 除非显式要
+            if (req.query.samples !== '1') {
+                overview.interfaces = overview.interfaces.map(({ samples, ...rest }) => rest);
+            }
+            res.json({ ok: true, data: overview });
+        } catch (e) {
+            res.status(500).json({ ok: false, error: e.message });
+        }
+    });
+
+    // 看某个接口的字段树/字符串(用采集到的样本现场解, 不依赖 .proto)
+    app.get('/api/protocol/inspect', (req, res) => {
+        try {
+            const keyword = String(req.query.key || '').trim();
+            if (!keyword) return res.json({ ok: false, error: '需要 key, 如 gamepb.activitypb.ActivityService.List' });
+            const overview = protocolCatalog.getOverview();
+            // 支持短名(ActivityService.List)与全名; 命中多个时全部返回
+            const matched = overview.interfaces.filter(i => i.key.includes(keyword));
+            if (!matched.length) return res.json({ ok: false, error: `还没采到该接口: ${keyword}` });
+
+            // 样本被 overview 默认过滤掉了, 这里直接读原始文件拿样本
+            const sources = protocolCatalog.listRawCatalogs();
+            const mode = String(req.query.mode || 'tree');
+            const depth = Number(req.query.depth) || 5;
+            const decoded = [];
+            for (const target of matched.slice(0, 3)) {
+                const samples = [];
+                for (const data of sources) {
+                    for (const it of (data.interfaces || [])) {
+                        if (it.key !== target.key) continue;
+                        for (const s of (it.samples || [])) samples.push({ accountId: data.accountId, ...s });
+                    }
+                }
+                // 响应/推送才带数据, 请求体通常只有几个参数 —— 先 S->C
+                samples.sort((a, b) => (a.dir === b.dir ? 0 : (a.dir === 'S->C' ? -1 : 1)));
+                decoded.push({
+                    key: target.key,
+                    count: target.count,
+                    sampleCount: samples.length,
+                    samples: samples.slice(0, 3).map((s) => {
+                        const buf = Buffer.from(s.hex || '', 'hex');
+                        return {
+                            accountId: s.accountId || '',
+                            dir: s.dir,
+                            bytes: s.bytes,
+                            truncated: !!s.truncated,
+                            lines: mode === 'strings'
+                                ? protocolCatalog.wire.collectStrings(buf)
+                                : protocolCatalog.wire.describe(buf, { depth }),
+                        };
+                    }),
+                });
+            }
+            res.json({ ok: true, data: { keyword, mode, decoded } });
+        } catch (e) {
+            res.status(500).json({ ok: false, error: e.message });
+        }
+    });
+
+    // 把当前采集结果定成基线: 之后新出现的接口/字段都是"更新"
+    app.post('/api/protocol/baseline', (req, res) => {
+        try {
+            const baseline = protocolCatalog.freezeBaseline();
+            res.json({ ok: true, data: { frozenAt: baseline.frozenAt, interfaceCount: baseline.interfaces.length } });
+        } catch (e) {
+            res.status(500).json({ ok: false, error: e.message });
+        }
+    });
 
     app.get('/api/solar-terms', withAccount(accountId => provider.getSolarTerms(accountId), { softErrors: false }));
 

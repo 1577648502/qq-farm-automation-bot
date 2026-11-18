@@ -1370,6 +1370,10 @@ async function getCubShop() {
         price: toNum(g.price),
         limit: toNum(g.limit_count),
         bought: toNum(g.bought_num),
+        // 剩余可买: 0 = 已售罄; null = 不限购(前端按 99 封顶)
+        remaining: toNum(g.limit_count) > 0
+            ? Math.max(0, toNum(g.limit_count) - toNum(g.bought_num))
+            : null,
         unlocked: !!g.unlocked,
         currencyId: toNum(g.price_id) || 1007,
         // 收益比 = 整只回收 / 幼崽成本
@@ -1380,9 +1384,101 @@ async function getCubShop() {
 }
 
 /**
+ * 读取金券余额(1007)。
+ * 金券在**农场背包**里(不是牧场背包), 所以走 ItemService.Bag 而不是 GetBag{scene:2}。
+ * @returns {Promise<number|null>} 余额; 读不到返回 null, 由调用方决定是拦下还是放行
+ */
+async function getVoucherBalance() {
+    try {
+        const warehouse = require('./warehouse');
+        const bag = await warehouse.getBag();
+        for (const it of warehouse.getBagItems(bag)) {
+            if (toNum(it && it.id) === 1007) return toNum(it.count);
+        }
+        return 0;
+    } catch {
+        return null;
+    }
+}
+
+/**
+ * 按指定数量买某一种幼崽(面板加购用)。
+ * 与 autoBuyCubs 的区别: 那个是"按收益比自动挑", 这里是"用户点哪个买哪个、买几只"。
+ *
+ * @param {number} goodsId 商品 id(ShopInfo 里的 GoodsInfo.id)
+ * @param {number} count 购买数量
+ * @param {{price?:number}} [opts] price 不传则现查一次商店拿单价
+ * @returns {Promise<{ok:boolean, bought:number, spent:number, name:string, price:number}>}
+ */
+async function buyCubByGoods(goodsId, count, opts = {}) {
+    const want = Math.max(1, Math.floor(toNum(count) || 1));
+    const shop = await getCubShop();
+    const goods = shop.find(g => g.goodsId === toNum(goodsId));
+    if (!goods) {
+        return { ok: false, bought: 0, spent: 0, name: '', price: 0, error: '商店里没有这个幼崽' };
+    }
+    if (!goods.unlocked) {
+        return { ok: false, bought: 0, spent: 0, name: goods.name, price: goods.price, error: '该幼崽尚未解锁' };
+    }
+    if (goods.price <= 0) {
+        return { ok: false, bought: 0, spent: 0, name: goods.name, price: 0, error: '价格异常' };
+    }
+
+    // 限购余量: remaining=null 表示不限购
+    let quantity = want;
+    if (goods.remaining !== null && goods.remaining !== undefined) {
+        if (goods.remaining <= 0) {
+            return { ok: false, bought: 0, spent: 0, name: goods.name, price: goods.price, error: '已达限购' };
+        }
+        quantity = Math.min(quantity, goods.remaining);
+    }
+
+    // 余额校验: 读不到余额时不拦(交给服务端判定), 读到则提前挡住, 避免必然失败的请求
+    const price = toNum(opts.price) > 0 ? toNum(opts.price) : goods.price;
+    const balance = await getVoucherBalance();
+    if (balance !== null) {
+        const affordable = Math.floor(balance / price);
+        if (affordable <= 0) {
+            return {
+                ok: false, bought: 0, spent: 0, name: goods.name, price,
+                error: `金券不足(需 ${price}, 现有 ${balance})`,
+            };
+        }
+        quantity = Math.min(quantity, affordable);
+    }
+
+    if (quantity <= 0) {
+        return { ok: false, bought: 0, spent: 0, name: goods.name, price, error: '可买数量为 0' };
+    }
+
+    try {
+        const reply = await purchaseShopGoods(goods.goodsId, quantity, price);
+        const costItems = (reply && reply.cost_items) || [];
+        const spentThis = costItems.reduce((s, it) => s + toNum(it.count), 0) || price * quantity;
+        log('牧场', `购买幼崽: ${goods.name}x${quantity} (花费 ${spentThis} 金券)`, {
+            module: 'ranch', event: '买幼崽', result: 'ok',
+            animalId: goods.animalId, count: quantity, spent: spentThis,
+        });
+        return {
+            ok: true, bought: quantity, spent: spentThis, name: goods.name, price,
+            // 实际买到的可能被服务端限购/余额削减, 如实返回
+            requested: want,
+        };
+    } catch (e) {
+        logWarn('牧场', `买幼崽失败 ${goods.name}x${quantity}: ${e.message}`, {
+            module: 'ranch', event: '买幼崽', result: 'error',
+            animalId: goods.animalId, count: quantity,
+        });
+        return { ok: false, bought: 0, spent: 0, name: goods.name, price, error: e.message };
+    }
+}
+
+/**
  * 自动买幼崽: 按收益比从高到低, 优先买还有空槽能养、收益比最高的。
- * @param opts.maxSpend 本次最多花多少金券(默认 5000)
- * @param opts.slots 空槽位数(默认从牧场详情算)
+ * @param {object} [opts]
+ * @param {number} [opts.maxSpend] 本次最多花多少金券(默认 5000)
+ * @param {number} [opts.slots] 空槽位数(默认从牧场详情算)
+ * @returns {Promise<{bought:number, spent:number, details:string[]}>} 本次购买结果
  */
 async function autoBuyCubs(opts = {}) {
     const result = { bought: 0, spent: 0, details: [] };
@@ -1487,7 +1583,7 @@ async function operateRanch(opts = {}) {
     // 便于定位"半更新"部署下 admin/worker 版本不一致的问题
     if (typeof opts === 'string') opts = { op: opts };
     const op = String((opts && opts.op) || '').trim();
-    if (op && !['harvest', 'produce', 'feed', 'feedmachine', 'buycub', 'rotation', 'clean', 'steal', 'place', 'collect', 'harvestanimal', 'donate', 'hazard', 'upgrade'].includes(op)) {
+    if (op && !['harvest', 'produce', 'feed', 'feedmachine', 'buycub', 'rotation', 'clean', 'steal', 'place', 'collect', 'harvestanimal', 'donate', 'hazard', 'upgrade', 'batch'].includes(op)) {
         logWarn('牧场', `收到未知操作: ${JSON.stringify(opts).slice(0, 200)}`, {
             module: 'ranch', event: '操作牧场', result: 'unknown_op', op,
         });
@@ -1543,6 +1639,20 @@ async function operateRanch(opts = {}) {
             return { ok: true, action: '牧草机加草', detail: `存量 ${r.stored}` };
         }
         case 'buycub': {
+            // 用户指定了 goodsId + count(面板加购) → 精确买; 否则走"按收益比自动挑"
+            if (toNum(opts.goodsId) > 0) {
+                const r = await buyCubByGoods(opts.goodsId, opts.count, { price: opts.price });
+                if (!r.ok) {
+                    return { ok: false, action: '买幼崽', error: r.error, name: r.name };
+                }
+                return {
+                    ok: true,
+                    action: '买幼崽',
+                    detail: `${r.name}x${r.bought} / 花 ${r.spent} 金券`,
+                    bought: r.bought,
+                    spent: r.spent,
+                };
+            }
             // 买幼崽(利益最大: 按 整只回收/幼崽成本 收益比排序)
             const r = await autoBuyCubs({ maxSpend: toNum(opts.maxSpend) || 5000 });
             return {
@@ -1577,13 +1687,15 @@ async function operateRanch(opts = {}) {
             return { ok: true, action: '幼崽入栏', detail: `当前在养 ${animals.length} 只` };
         }
         case 'collect': {
-            const r = await collectProduce(slot);
+            // ⚠ CollectProduce 服务端不存在(对照实验证实), 不要发请求
+            return { ok: false, action: '收取产物', error: '该接口服务端未开放，请用「收获」批量收取' };
             let n = 0;
             for (const g of (r.gains || [])) for (const it of (g.items || [])) n += toNum(it.count);
             return { ok: true, action: '收取产物', detail: `槽${slot} → ${n} 个` };
         }
         case 'harvestanimal': {
-            const r = await harvestAnimal(slot);
+            // ⚠ HarvestAnimal 服务端不存在(对照实验证实), 不要发请求
+            return { ok: false, action: '收获出栏', error: '该接口服务端未开放，请用「收获」批量收取' };
             let n = 0;
             for (const g of (r.gains || [])) for (const it of (g.items || [])) n += toNum(it.count);
             return { ok: true, action: '收获出栏', detail: `槽${slot} → ${n} 个` };
@@ -1599,6 +1711,35 @@ async function operateRanch(opts = {}) {
             if (!opts.gid) throw new Error('需要指定好友 gid');
             await putHazard(toNum(opts.gid), slot);
             return { ok: true, action: '放蚊子', detail: `gid=${toNum(opts.gid)}` };
+        }
+        case 'batch': {
+            // 批量操作(对照农场"整田操作"): harvest/produce/clean/feed
+            const sub = String(opts.batch || '').trim();
+            if (sub === 'harvest') {
+                const r = await harvestRanch(1);
+                const items = [];
+                for (const g of (r.gains || [])) for (const it of (g.items || [])) {
+                    const id = toNum(it.item_id);
+                    if (id === 1102) continue;
+                    items.push(`${getAnimalName(id) || id}x${toNum(it.count)}`);
+                }
+                return { ok: true, action: '全场收获', detail: items.join('，') || '没有可收的' };
+            }
+            if (sub === 'produce') {
+                const r = await triggerProduce(0);
+                let n = 0;
+                for (const p2 of (r.receipts || [])) n += toNum(p2.count);
+                return { ok: true, action: '全场催产', detail: `${n} 个产物` };
+            }
+            if (sub === 'clean') {
+                const r = await autoCleanOwnRanch();
+                return { ok: true, action: '全场清理', detail: r.cleaned > 0 ? '清理完成' : '没有待清理的' };
+            }
+            if (sub === 'feed') {
+                const r = await feedAnimal(4, toNum(opts.count) || 1);
+                return { ok: true, action: '全场喂罐头', detail: '已投喂' };
+            }
+            throw new Error(`不支持的批量操作: ${sub}`);
         }
         case 'upgrade': {
             const f = require('./ranch-facility');
@@ -1665,6 +1806,8 @@ module.exports = {
     autoFeedMachine,
     getCubShop,
     autoBuyCubs,
+    buyCubByGoods,
+    getVoucherBalance,
     autoSellRanchProducts,
     placeAnimal,
     collectProduce,

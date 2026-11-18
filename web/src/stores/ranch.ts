@@ -57,6 +57,8 @@ export interface CubShopItem {
   price: number
   limit: number
   bought: number
+  /** 剩余可买; null = 不限购 */
+  remaining?: number | null
   unlocked: boolean
   currencyId: number
   valueRatio: number
@@ -135,7 +137,12 @@ export const useRanchStore = defineStore('ranch', () => {
     })
     if (!data?.ok)
       throw new Error(data?.error || '获取幼崽商店失败')
-    return data.data as { shop: CubShopItem[], best: CubShopItem | null }
+    return data.data as {
+      shop: CubShopItem[]
+      best: CubShopItem | null
+      /** 金券余额; null = 读不到, 前端不做余额拦截 */
+      voucher: number | null
+    }
   }
 
   async function fetchWeightScore(accountId: string) {
@@ -156,7 +163,7 @@ export const useRanchStore = defineStore('ranch', () => {
     return data.data as { open: boolean, refreshAt: number, goods: RotationShopGoods[] }
   }
 
-  async function operate(accountId: string, opts: { op: string, slot?: number, feedType?: number, count?: number, maxSpend?: number }) {
+  async function operate(accountId: string, opts: { op: string, slot?: number, feedType?: number, count?: number, maxSpend?: number, batch?: string, goodsId?: number, cubItemId?: number, gid?: number, instId?: number, complete?: boolean, price?: number }) {
     const { data } = await api.post('/api/ranch/operate', opts, {
       headers: { 'x-account-id': accountId },
     })
