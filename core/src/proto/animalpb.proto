@@ -235,13 +235,17 @@ message AnimalTarget {
 }
 
 // 幼崽入栏: 背包幼崽 → 指定栏舍空位
+// ⭐ 2026-11-18 抓包(20261118-165223_入栏)定案:
+//   真实请求 = {1: {1: host_gid, 2: cub_item_id}}
+//   幼崽 id 放在 target 的 **#2**(AnimalTarget.slot 的位置), 没有 #2/#3 字段!
+//   一次只放一只, 连续入栏就是连续发多个请求(客户端抓包里连发 4 条)。
+//   旧定义 {target, cub_item_id, count} 是错的 —— 服务端看到 cub_item_id=0
+//   会拒绝(1045205)。
 message PlaceAnimalRequest {
-    AnimalTarget target = 1;
-    int64 cub_item_id = 2;            // 幼崽物品 id(60001 鸡 / 60002 兔 ...)
-    int64 count = 3;                  // 一次放几只(客户端每次 1, 拖拽连续触发)
+    AnimalTarget target = 1;   // {1: host_gid, 2: cub_item_id(幼崽物品id)}
 }
 message PlaceAnimalReply {
-    RanchInfo ranch = 1;
+    RanchInfo ranch = 1;       // 放完后的牧场全量
 }
 
 // 收取副产品(≠HarvestRanch 一键收获; 这是单槽"收走产物但动物留栏")

@@ -358,6 +358,37 @@ proto.loadProto().then(async () => {
         check('有倒计时', Math.abs(waiting.harvestInSec - 60) <= 2, waiting.harvestInSec);
     }
 
+    section('16. PlaceAnimal 编码与抓包一致(幼崽id放target#2, 无count)');
+    {
+        // 抓包 20261118-165223_入栏: C->S = 0a0708914e10e1d403
+        //   {1: {1: 10001(host_gid), 2: 60001(幼崽id)}} —— 没有 cub_item_id/count 字段
+        // 旧实现发 {1:{1:gid,2:0}, 2:60001, 3:1} → 服务端读到 cub_item_id=0 → 1045205
+        const protobuf = require('protobufjs');
+        const { toLong } = require(`${SB}/src/utils/utils`);
+        const w = protobuf.Writer.create();
+        const tw = w.uint32(10).fork();
+        tw.uint32(8).int64(toLong(10001));    // target.host_gid
+        tw.uint32(16).int64(toLong(60001));   // target.#2 = 幼崽物品id
+        tw.ldelim();
+        const hex = w.finish().toString('hex');
+        check('PlaceAnimal 编码与抓包一致', hex === '0a0708914e10e1d403', hex);
+
+        // 实际调用验证
+        const calls = installStub({
+            PlaceAnimal: () => types.PlaceAnimalReply.encode(types.PlaceAnimalReply.create({
+                ranch: { animals: [{ slot: 1, animal_id: 60001, stage: 1, feed_state: 2 }] },
+            })).finish(),
+        });
+        const ranch = freshRanch();
+        await ranch.placeAnimal(60001);
+        const req = types.PlaceAnimalRequest.decode(calls[0].body);
+        check('请求里 host_gid = 10001', Number(req.target.host_gid) === 10001, Number(req.target.host_gid));
+        check('target#2 = 幼崽id 60001', Number(req.target.slot) === 60001, Number(req.target.slot));
+        check('没有多余的 #2(cub_item_id)', req.cub_item_id === undefined || Number(req.cub_item_id) === 0,
+            req.cub_item_id);
+        check('没有多余的 #3(count)', req.count === undefined || Number(req.count) === 0, req.count);
+    }
+
     finish();
 }).catch((e) => {
     console.error('测试异常:', e);

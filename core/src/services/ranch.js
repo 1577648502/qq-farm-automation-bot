@@ -510,12 +510,24 @@ async function stealFriendProduce(hostGid) {
 // 与 HarvestRanch(一键全场)区分: 这里都是单个槽位/单个动物的操作。
 
 /** 幼崽入栏: 把背包里的幼崽放进窝/棚的空位 */
-async function placeAnimal(cubItemId, count = 1, slot = 0, hostGid = 0) {
+/**
+ * 幼崽入栏(AnimalService.PlaceAnimal)。
+ *
+ * ⭐ 2026-11-18 抓包(20261118-165223_入栏)定案, 推翻旧实现:
+ *   真实请求 = {1: {1: host_gid, 2: cub_item_id}}
+ *   · 幼崽物品 id 放在 target 的 #2 (AnimalTarget.slot 的字段位置)
+ *   · **没有**独立的 cub_item_id / count 字段
+ *   · 一次只放一只; 客户端连发 4 条连续入 4 只(抓包实测)
+ *   · slot 由服务端自己挑空位(请求里没有 slot)
+ *   旧实现把 60001 填进 cub_item_id(#2)、target.slot=0,
+ *   服务端读到的 cub_item_id=0 → 拒绝(1045205)。
+ *
+ * @param cubItemId 幼崽物品 id(60001 鸡 / 60002 兔 …)
+ */
+async function placeAnimal(cubItemId, hostGid = 0) {
     const gid = resolveRanchHostGid(hostGid);
     const body = types.PlaceAnimalRequest.encode(types.PlaceAnimalRequest.create({
-        target: { host_gid: toLong(gid), slot: toLong(toNum(slot)) },
-        cub_item_id: toLong(toNum(cubItemId)),
-        count: toLong(Math.max(1, toNum(count) || 1)),
+        target: { host_gid: toLong(gid), slot: toLong(toNum(cubItemId)) },
     })).finish();
     const { body: replyBody } = await network.sendMsgAsync('gamepb.animalpb.AnimalService', 'PlaceAnimal', body);
     return types.PlaceAnimalReply.decode(replyBody);
@@ -705,25 +717,17 @@ async function autoPlaceCubs(opts = {}) {
     const maxPerRound = Math.max(1, toNum(opts.maxPerRound) || 8);
     free = Math.min(free, maxPerRound);
 
-    // 3. 逐个放进空槽位
-    // ⚠ PlaceAnimal 的 target.slot 必须是一个**真实空槽**的 slot 号。
-    //   已占用的 slot 集合从 view.animals 拿; 不在里面的按容量从 1 开始补。
-    const usedSlots = new Set(animals.map(a => toNum(a.slot)).filter(s => s > 0));
-    const emptySlots = [];
-    for (let s = 1; s <= capacity && emptySlots.length < free; s++) {
-        if (!usedSlots.has(s)) emptySlots.push(s);
-    }
-    // 拿不到具体 slot 号时, 用 slot=0 让服务端自己挑空位(实测可用)
-    const slotsToUse = emptySlots.length ? emptySlots : Array.from({ length: free }, () => 0);
-
-    for (let i = 0; i < free && i < slotsToUse.length; i++) {
-        // 轮转使用背包里的幼崽(优先用完数量最多的那种)
+    // 3. 连续入栏。
+    // ⚠ 抓包定案: 请求里**没有 slot**, 服务端自己挑空位 —— 所以不用算空槽号,
+    //   直接连发(客户端抓包就是连发 4 条), 每条放一只。
+    for (let i = 0; i < free; i++) {
+        // 轮转使用背包里的幼崽
         const cub = cubs[i % cubs.length];
         if (!cub || cub.count <= 0) continue;
         try {
-            await placeAnimal(cub.id, 1, slotsToUse[i]);
+            await placeAnimal(cub.id);
             result.placed += 1;
-            result.details.push(`${cub.name}#${slotsToUse[i]}`);
+            result.details.push(`${cub.name}`);
             cub.count -= 1;
             await sleep(300);
         } catch (e) {
@@ -2638,9 +2642,17 @@ async function operateRanch(opts = {}) {
             // 幼崽入栏(opts.cubItemId / opts.count / opts.slot)
             const cub = toNum(opts.cubItemId);
             if (!cub) throw new Error('缺少幼崽物品 id');
-            const r = await placeAnimal(cub, toNum(opts.count) || 1, slot);
-            const animals = (r.ranch && r.ranch.animals) || [];
-            return { ok: true, action: '幼崽入栏', detail: `当前在养 ${animals.length} 只` };
+            // 一次放一只(抓包定案); 想放多只就多调几次
+            const times = Math.max(1, Math.min(toNum(opts.count) || 1, 8));
+            let placedN = 0;
+            let lastAnimals = 0;
+            for (let i = 0; i < times; i++) {
+                const r = await placeAnimal(cub);
+                placedN += 1;
+                lastAnimals = ((r.ranch && r.ranch.animals) || []).length;
+                await sleep(300);
+            }
+            return { ok: true, action: '幼崽入栏', detail: `已放 ${placedN} 只，当前在养 ${lastAnimals} 只` };
         }
         case 'collect': {
             // ⚠ CollectProduce 服务端不存在(对照实验证实), 不要发请求
