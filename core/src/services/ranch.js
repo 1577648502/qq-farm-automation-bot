@@ -918,17 +918,22 @@ function toRanchView(reply) {
         const nextReadyMs = toNum(a.produce_at);
         const grownFlag = toNum(a.grown_flag);
         const harvestInSec = nextReadyMs > 0 ? Math.round((nextReadyMs - nowMs) / 1000) : null;
-        // ⭐ 2026-11-18 线上实测(账号3)推翻"#10 过期=可收":
-//     幼年鸡(grown=0, feed_state=3)的 #10 = -159s(已过), 但 HarvestRanch 回
-//     1045211「当前没有可收取的产物」。
-//   对照抓包: 成年动物(grown=1)的 #10 都是**未来**时刻(+3s~+7191s)。
-//   → #10 的语义分两种:
-//       grown=0: 当前**成长阶段**结束时刻(过了该长大, 不是有产物)
-//       grown=1: **下次产出**时刻
-//   → 可收判定必须同时满足: grown=1 且 #10 已过。
-//   幼年动物 #10 过期显示"待成长", 不显示"可收获"。
+        // ⭐⭐ 2026-11-18 线上实测最终定案(账号1 鹅 + 入栏抓包 + 账号3 鸡):
+//     可收的权威标志是 **feed_state**, 不是 #10 是否过期:
+//
+//       feed_state=1  有草吃/刚入栏    → 可收获(抓包 t+13s 入栏后 t+30s 收获成功)
+//       feed_state=2  正常产出中      → 可收获(抓包里鸡 4 秒一轮)
+//       feed_state=3  产出冷却中      → 不可收(账号1 鹅 #10 过期3388s 仍收不了, 1045211)
+//       feed_state=4  成熟待收获      → 可收获(账号1 兔子)
+//       feed_state=5  刚收获完        → 不可收(抓包 t+35s 收获成功后)
+//
+//     #10 的语义也随状态变( grown=0 时是成长阶段结束时刻; grown=1 时参考值 ),
+//     但它**不是**可收依据 —— 账号1 的鹅 #10 过了近 1 小时依然 1045211。
+//     可收 = grown=1 且 feed_state ∈ {1, 2, 4}(5 是刚收完, 3 是冷却)。
 const isGrown = grownFlag === 1;
-const harvestable = isGrown && harvestInSec !== null && harvestInSec <= 0;
+const feedStateNum = toNum(a.feed_state);
+const HARVESTABLE_FEED_STATES = new Set([1, 2, 4]);
+const harvestable = isGrown && HARVESTABLE_FEED_STATES.has(feedStateNum);
         const animals_entry = {
             slot: toNum(a.slot),
             animalId,
@@ -944,10 +949,14 @@ const harvestable = isGrown && harvestInSec !== null && harvestInSec <= 0;
             //   · 饥饿(feed_state=1): 动物没草吃, 不产出 → 服务端不下发 produce_at
             //   · 幼年/未开轮
             harvestInSec,
-            // null 时给可读原因, 值为 'hungry' | 'juvenile' | ''
-            produceUnknownReason: harvestInSec !== null
+            // 不可收时的可读原因(feedState 权威):
+            //   3=产出冷却 / 5=刚收获完 / hungry=缺草 / 幼年
+            produceUnknownReason: harvestable
                 ? ''
-                : (toNum(a.feed_state) === 1 ? 'hungry' : (grownFlag === 1 ? 'idle' : 'juvenile')),
+                : (!isGrown ? 'juvenile'
+                    : (feedStateNum === 3 ? 'cooling'
+                        : (feedStateNum === 5 ? 'justHarvested'
+                            : (feedStateNum === 1 && !HARVESTABLE_FEED_STATES.has(feedStateNum) ? 'hungry' : 'idle')))),
             // 兼容旧字段, 语义与 harvestInSec 一致
             produceInSec: harvestInSec === null ? null : Math.max(0, harvestInSec),
             // 催产就绪 = 确实到了下次产出时刻

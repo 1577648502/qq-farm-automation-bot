@@ -122,12 +122,13 @@ proto.loadProto().then(async () => {
         // 未来 2.6 秒(与实测同量级) → 还没到点
         const soon = mk(now + 2600);
         check('未来 2.6 秒 → harvestInSec ≈ 3', Math.abs(soon.harvestInSec - 3) <= 2, soon.harvestInSec);
-        check('未来 → 不可收', soon.harvestable === false, soon.harvestable);
+        // feed_state=2(产出中)是可收状态 —— #10 未来只影响倒计时, 不影响可收性
+        check('feed=2 仍可收(#10 只管倒计时)', soon.harvestable === true, soon.harvestable);
 
         // 已过 5 秒 → 可收
         const passed = mk(now - 5000);
         check('已过 5 秒 → harvestInSec ≈ -5', Math.abs(passed.harvestInSec + 5) <= 2, passed.harvestInSec);
-        check('已过 → 可收', passed.harvestable === true, passed.harvestable);
+        check('已过 → 仍可收(feed=2)', passed.harvestable === true, passed.harvestable);
         check('canProduce 跟随 harvestable', passed.canProduce === true, passed.canProduce);
     }
 
@@ -140,7 +141,8 @@ proto.loadProto().then(async () => {
         });
         const a = view.animals[0];
         check('无 #10 → harvestInSec = null', a.harvestInSec === null, a.harvestInSec);
-        check('无 #10 → 不判可收', a.harvestable === false, a.harvestable);
+        // feed=2 本身是可收状态; #10 只决定倒计时有没有
+        check('无 #10 → 可收性由 feedState 决定(feed=2 可收)', a.harvestable === true, a.harvestable);
     }
 
     section('5. 不再使用 #25(它在 5 份抓包里从未出现过)');
@@ -341,21 +343,24 @@ proto.loadProto().then(async () => {
         }).animals[0];
         const now = Date.now();
 
-        // 幼年 + #10 已过 → 不是可收(它在等长大, 不是等收获)
-        const juv = mk(0, now - 159 * 1000);
-        check('幼年 #10 过期 → 不可收', juv.harvestable === false, juv.harvestable);
-        check('幼年 #10 过期 → 不能催产', juv.canProduce === false, juv.canProduce);
-        check('幼年显示 grown=false', juv.grown === false, juv.grown);
+        // mk(grown, produceAt, feedState)
+        const mk2 = (grown, feedState) => ranch.toRanchView({
+            ranch: { animals: [{ slot: 1, animal_id: 60001, stage: 1, feed_state: feedState, grown_flag: grown, produce_at: now - 3000 }] },
+        }).animals[0];
 
-        // 成年 + #10 已过 → 可收
-        const adult = mk(1, now - 5000);
-        check('成年 #10 过期 → 可收', adult.harvestable === true, adult.harvestable);
-        check('成年 #10 过期 → 可催产', adult.canProduce === true, adult.canProduce);
+        // 幼年(任何 feedState) → 不可收
+        const juv = mk2(0, 3);
+        check('幼年 → 不可收', juv.harvestable === false, juv.harvestable);
+        check('幼年 → 不能催产', juv.canProduce === false, juv.canProduce);
 
-        // 成年 + #10 未到 → 不可收, 但有倒计时
-        const waiting = mk(1, now + 60 * 1000);
-        check('成年 #10 未来 → 不可收', waiting.harvestable === false, waiting.harvestable);
-        check('有倒计时', Math.abs(waiting.harvestInSec - 60) <= 2, waiting.harvestInSec);
+        // 成年 + feedState 权威判定(线上实测: feed=3 时 #10 过期近1小时仍 1045211)
+        check('成年 feed=1(有草吃) → 可收', mk2(1, 1).harvestable === true, mk2(1, 1).harvestable);
+        check('成年 feed=2(产出中) → 可收', mk2(1, 2).harvestable === true, mk2(1, 2).harvestable);
+        check('成年 feed=3(冷却) → 不可收(账号1 鹅现场)', mk2(1, 3).harvestable === false, mk2(1, 3).harvestable);
+        check('成年 feed=4(待收获) → 可收', mk2(1, 4).harvestable === true, mk2(1, 4).harvestable);
+        check('成年 feed=5(刚收完) → 不可收(抓包 t+35s)', mk2(1, 5).harvestable === false, mk2(1, 5).harvestable);
+        check('冷却状态有 reason', mk2(1, 3).produceUnknownReason === 'cooling', mk2(1, 3).produceUnknownReason);
+        check('刚收完有 reason', mk2(1, 5).produceUnknownReason === 'justHarvested', mk2(1, 5).produceUnknownReason);
     }
 
     section('16. PlaceAnimal 编码与抓包一致(幼崽id放target#2, 无count)');
