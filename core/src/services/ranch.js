@@ -942,6 +942,10 @@ const isGrown = grownFlag === 1;
 const feedStateNum = toNum(a.feed_state);
 const harvestable = isGrown && feedStateNum === 4;
 const canProduceNow = isGrown && (feedStateNum === 3 || feedStateNum === 4);
+// ⭐ #25(trigger_ready_at) 只在 feed=3/4/5 出现; feed=2(生产期)的倒计时用 #10。
+const deliverInSec = feedStateNum === 2 && nextReadyMs > 0
+    ? Math.max(0, Math.round((nextReadyMs - nowMs) / 1000))
+    : null;
         const animals_entry = {
             slot: toNum(a.slot),
             animalId,
@@ -952,6 +956,8 @@ const canProduceNow = isGrown && (feedStateNum === 3 || feedStateNum === 4);
             grown: grownFlag === 1,
             // 副产物就绪 → 可以"收获"(CollectProduce)
             harvestable,
+            // 生产期倒计时(feed=2 Delivering): 截图鹅"生产期 02:49:09"就是它
+            deliverInSec,
             // 距下次产出秒数。
             // null 有两种情况, 要能区分(否则页面只能显示"未知", 用户以为坏了):
             //   · 饥饿(feed_state=1): 动物没草吃, 不产出 → 服务端不下发 produce_at
