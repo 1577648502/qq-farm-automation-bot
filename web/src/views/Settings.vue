@@ -342,7 +342,7 @@ const localStrategySettings = ref({
   stealDelaySeconds: 0,
   plantOrderRandom: false,
   plantDelaySeconds: 0,
-  intervals: { farmMin: 2, farmMax: 5, helpMin: 10, helpMax: 15, stealMin: 10, stealMax: 15 },
+  intervals: { farmMin: 2, farmMax: 5, helpMin: 10, helpMax: 15, stealMin: 10, stealMax: 15, ranchMin: 20, ranchMax: 25 },
   friendQuietHours: { enabled: false, start: '23:00', end: '07:00' },
 })
 
@@ -732,6 +732,8 @@ function syncLocalStrategySettings(submitted?: any) {
       helpMax: settings.value.intervals?.helpMax ?? 15,
       stealMin: settings.value.intervals?.stealMin ?? 10,
       stealMax: settings.value.intervals?.stealMax ?? 15,
+      ranchMin: settings.value.intervals?.ranchMin ?? 20,
+      ranchMax: settings.value.intervals?.ranchMax ?? 25,
     },
     friendQuietHours: {
       enabled: settings.value.friendQuietHours?.enabled ?? false,
@@ -2460,11 +2462,11 @@ async function onBackupFileChange(ev: Event) {
                   牧场巡查
                 </div>
                 <div class="grid grid-cols-2 gap-2">
-                  <BaseInput v-model.number="localStrategySettings.intervals.ranchMin" label="最小 (秒)" type="number" min="60" />
-                  <BaseInput v-model.number="localStrategySettings.intervals.ranchMax" label="最大 (秒)" type="number" min="60" />
+                  <BaseInput v-model.number="localStrategySettings.intervals.ranchMin" label="最小 (秒)" type="number" min="5" />
+                  <BaseInput v-model.number="localStrategySettings.intervals.ranchMax" label="最大 (秒)" type="number" min="5" />
                 </div>
                 <p class="mt-1.5 text-[10px] text-amber-600/80 dark:text-amber-400/80">
-                  动物周期长，默认 300~480 秒；下限 60 秒（更频繁会被服务端限流）。有状态推送时 1 分钟内响应，不受此间隔限制。
+                  与农场巡查一致（默认 20~25 秒）。收获/入栏/收蛋都在巡检里自动执行。
                 </p>
               </div>
             </div>

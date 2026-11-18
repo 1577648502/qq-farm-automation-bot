@@ -917,36 +917,30 @@ function toRanchView(reply) {
         // 现在: 直接用 #10。它缺失时才算不出来(返回 null), 不再编任何间隔。
         const nextReadyMs = toNum(a.produce_at);
         const grownFlag = toNum(a.grown_flag);
-        const harvestInSec = nextReadyMs > 0 ? Math.round((nextReadyMs - nowMs) / 1000) : null;
-        // ⭐⭐⭐ 2026-11-18 终版(你的截图 + 入栏抓包对照, 推翻上一版):
-//
-//   客户端真实流程(抓包 20261118-165223):
-//     ... → TriggerProduce(催产, t+24s) → HarvestRanch(收获, t+30s, 成功)
-//
-//   收获成功时动物 feed=4, 且响应里首次出现 #25(trigger_ready_at)。
-//   → feed_state 的真实含义:
-//       1 成长中(有草)      → 等待
-//       2 产出中(未到点)    → 等待(截图鹅"生产期 02:49:09"就是这时)
-//       3 产蛋冷却          → 等待
-//       4 **催产就绪**      → 先 TriggerProduce → 再 HarvestRanch
-//       5 刚收完            → 等待
-//
-//   所以:
-//     · harvestable(可直接收) = feed=4 且已经催产过 → 实际客户端从不直接收,
-//       都是催产+收获连做, 所以面板的"可收获"按钮应该走 催产→收获 两步
-//     · canProduce(可催产) = feed ∈ {3, 4}(冷却到点/催产就绪)
-//
-//   你面板上兔子"可收获"点了报 1045211, 就是因为只发了 HarvestRanch
-//   而没先 TriggerProduce —— 抓包里客户端是两步连做的。
+
+        // ⭐⭐⭐ 2026-11-18 终版 —— 参照农场 getNextRipeness 的同款思想:
+        //   农场: 服务端给每个阶段 begin_time, 倒计时 = 成熟阶段时刻 - now, 无任何状态推导。
+        //   牧场: #10(produce_at) 就是"当前阶段结束时刻", 倒计时 = #10 - now。
+        //
+        //   四阶段(你三张截图定名)与 feed_state 对照(全部抓包枚举):
+        //     成长期 grown=0, feed=1/5   #10 未来=成长期倒计时; 过期=该进生产期(等刷新)
+        //     生产期 grown=1, feed=2/3   #10 未来=生产期倒计时; 过期=蛋已上架(#6≥1)待收
+        //     成熟期 grown=1, feed=4     可收获(收副产物+出栏)
+        //     刚收完 grown=1, feed=5     等吃草进下一轮
+        //
+        //   harvestable = feed===4 (官方气泡 CanHarvest; 收蛋走 CollectProduce 按 #6>0)
+        //   倒计时一律 = #10 - now(未来值), 过期显示"待服务端刷新", 不夹 0 不编造。
 const isGrown = grownFlag === 1;
 const feedStateNum = toNum(a.feed_state);
 const harvestable = isGrown && feedStateNum === 4;
 const canProduceNow = isGrown && (feedStateNum === 3 || feedStateNum === 4);
-// ⭐ #25(trigger_ready_at) 只在 feed=3/4/5 出现; feed=2(生产期)的倒计时用 #10。
-// 生产期 = feed 2 和 3(线上实证: 鹅 feed=3 持续 3.4 小时是长周期产蛋;
-//   兔 feed=2 是 1 小时短周期)。两者都有 #10 生产结束时刻。
-const deliverInSec = isGrown && (feedStateNum === 2 || feedStateNum === 3) && nextReadyMs > 0
-    ? Math.max(0, Math.round((nextReadyMs - nowMs) / 1000))
+// 阶段倒计时(成长期/生产期通用, 农场同款: 未来时刻-当前):
+//   未来值 → 显示 MM:SS; 过期/缺失 → null(面板显示对应阶段文案)
+const stageEndInSec = nextReadyMs > 0
+    ? Math.round((nextReadyMs - nowMs) / 1000)
+    : null;
+const deliverInSec = isGrown && (feedStateNum === 2 || feedStateNum === 3)
+    ? stageEndInSec
     : null;
         const animals_entry = {
             slot: toNum(a.slot),
@@ -958,13 +952,16 @@ const deliverInSec = isGrown && (feedStateNum === 2 || feedStateNum === 3) && ne
             grown: grownFlag === 1,
             // 副产物就绪 → 可以"收获"(CollectProduce)
             harvestable,
-            // 生产期倒计时(feed=2 Delivering): 截图鹅"生产期 02:49:09"就是它
+            // 生产期倒计时(feed=2/3, 农场同款未来时刻-当前)
             deliverInSec,
+            // 成长期倒计时(grown=0 时 #10 = 成长结束时刻)
+            stageEndInSec,
             // 距下次产出秒数。
             // null 有两种情况, 要能区分(否则页面只能显示"未知", 用户以为坏了):
             //   · 饥饿(feed_state=1): 动物没草吃, 不产出 → 服务端不下发 produce_at
             //   · 幼年/未开轮
-            harvestInSec,
+            // 兼容旧字段: 与 stageEndInSec 同值(前端旧引用)
+            harvestInSec: stageEndInSec,
             // 不可收时的可读原因(按四阶段):
             //   grown=0 → growing / feed=5 → justHarvested / feed=1 → hungry / 其余 idle
             produceUnknownReason: harvestable
@@ -972,8 +969,8 @@ const deliverInSec = isGrown && (feedStateNum === 2 || feedStateNum === 3) && ne
                 : (!isGrown ? 'growing'
                     : (feedStateNum === 5 ? 'justHarvested'
                         : (feedStateNum === 1 ? 'hungry' : 'idle'))),
-            // 兼容旧字段, 语义与 harvestInSec 一致
-            produceInSec: harvestInSec === null ? null : Math.max(0, harvestInSec),
+            // 兼容旧字段: 与 stageEndInSec 同源(不夹 0, 前端按阶段区分文案)
+            produceInSec: stageEndInSec,
             // 催产就绪 = 确实到了下次产出时刻
             // 催产只对成年动物有效(幼年的是"成长", 不是"产出")
             canProduce: canProduceNow,
@@ -1285,8 +1282,15 @@ async function runRanchCare(opts = {}) {
     await gap();
 
     // 1. 收获(蛋/崽/整只; 任务"完成1次收获""收获鸡蛋N个""收获整鸡N次"靠它驱动)
-    //    ⭐ 客户端真实顺序: 催产 → 收获(入栏抓包 t+24s→t+30s), 两步连做才能收出来
+    //    ⭐ 官方操作顺序: 收副产物(CollectProduce, 架上的蛋) → 催产 → 收获(HarvestRanch)
+    //    只发 HarvestRanch 收不到架上的蛋(鹅 feed=3/#6≥1 就是蛋在架上)
     if (isAutomationOn('ranch_harvest')) try {
+        for (const s of [1, 2, 3, 4, 5, 6]) {
+            try {
+                await collectProduce(s);
+                await sleep(200);
+            } catch { /* 槽空/未就绪, 静默 */ }
+        }
         await triggerProduce(0).catch(() => null);
         await gap();
         const harvestReply = await harvestRanch(1);
@@ -1573,7 +1577,7 @@ function ranchIntervalRangeSec() {
         let hi = Number(iv && iv.ranchMax) || 0;
         if (lo > 0 && hi > 0) {
             if (lo > hi) [lo, hi] = [hi, lo];
-            minSec = Math.max(60, lo);      // 下限 60s: 更频繁会限流(1045202)
+            minSec = Math.max(5, lo);       // 下限 5s(用户可与农场同设 20~25)
             maxSec = Math.max(minSec, hi);
         }
     } catch { /* 读不到就用默认 */ }
@@ -2563,10 +2567,26 @@ async function operateRanch(opts = {}) {
                     slot,
                 };
             }
-                        // ⭐ 客户端真实流程(入栏抓包 t+24s→t+30s): 催产 → 收获 两步连做。
-            //   只发 HarvestRanch 会报 1045211「没有可收取的产物」——
-            //   面板上"可收获"点了报错就是因为缺了催产那一步。
-            //   先催产(失败不阻断: 可能已在就绪状态), 再收获。
+                        // ⭐ 官方操作顺序(文档 6.2 RPC 一览 + 入栏抓包 t+17~t+36):
+            //   收取副产物(CollectProduce) → 催产(TriggerProduce) → 收获(HarvestRanch)
+            //   之前只发 HarvestRanch: 架上有蛋(feed=3/#6≥1)时收不到 → 一直 1045211。
+            //   CollectProduce 按槽收(鹅/鸡的蛋在架上); slot=0 尝试全场。
+            let collectedText = '';
+            for (const s of [1, 2, 3, 4, 5, 6]) {
+                try {
+                    const cr = await collectProduce(s);
+                    const got = ((cr.items || cr.get_items || []).map(it => `${toNum(it.id)}x${toNum(it.count)}`)).join(',');
+                    if (got) collectedText += (collectedText ? '，' : '') + `槽${s}:${got}`;
+                    await sleep(200);
+                } catch (e) {
+                    const code = parseRanchErrorCode(e);
+                    if (!isExpectedRanchError(e) && code !== 1045211) {
+                        logWarn('牧场', `收副产物槽${s}失败: ${e.message}`, { module: 'ranch', event: '收副产物', result: 'error', slot: s });
+                    }
+                }
+            }
+            if (collectedText) result.details.push(`副产物${collectedText}`);
+            // 催产(给冷却到点的动物开新一轮; 失败不阻断)
             try {
                 await triggerProduce(0).catch(() => null);
                 await sleep(400);

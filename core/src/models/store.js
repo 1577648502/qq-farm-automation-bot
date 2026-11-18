@@ -226,10 +226,9 @@ const DEFAULT_ACCOUNT_CONFIG = {
         helpMax: 25,
         stealMin: 20,
         stealMax: 25,
-        // 牧场巡检间隔(秒)。动物周期长(成长+产蛋按小时计), 默认比农场慢;
-        // 有推送触发时 1 分钟内响应, 不受此间隔限制。
-        ranchMin: 300,
-        ranchMax: 480,
+        // 牧场巡检间隔(秒), 与农场一致(用户要求 20~25)
+        ranchMin: 20,
+        ranchMax: 25,
     },
     friendQuietHours: {
         enabled: false,
