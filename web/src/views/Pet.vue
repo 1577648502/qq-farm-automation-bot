@@ -12,6 +12,7 @@ const { currentAccountId, currentAccount } = storeToRefs(accountStore)
 const { overview, dogs, dogFoods, guardLogs, capitalMode, loading, currentTab, feedLoading,
   guardReward, guardRewardLoading, guardRewardClaiming, guardRewardError } = storeToRefs(petStore)
 void dogFoods
+void guardRewardLoading
 
 const error = ref("")
 const qualityColors = {

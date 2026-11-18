@@ -599,14 +599,16 @@ function toggleRanchCubPriority(animalId: number) {
     localStrategySettings.value.ranchCubPriority = [...list, animalId]
 }
 
-/** 把某个幼崽在优先列表里上移一位 */
+/** 把某个幼崽在优先列表里上移/下移一位 */
 function moveRanchCubPriority(animalId: number, delta: number) {
-  const list = [...(localStrategySettings.value.ranchCubPriority || [])]
+  const list: number[] = [...(localStrategySettings.value.ranchCubPriority || [])]
   const idx = list.indexOf(animalId)
   const next = idx + delta
   if (idx < 0 || next < 0 || next >= list.length)
     return
-  ;[list[idx], list[next]] = [list[next], list[idx]]
+  const tmp = list[idx] as number
+  list[idx] = list[next] as number
+  list[next] = tmp
   localStrategySettings.value.ranchCubPriority = list
 }
 
@@ -722,9 +724,6 @@ function syncLocalStrategySettings(submitted?: any) {
     plantOrderRandom: !!settings.value.plantOrderRandom,
     plantDelaySeconds: settings.value.plantDelaySeconds ?? 0,
     // 牧场幼崽策略
-    ranchCubStrategy: settings.value.ranchCubStrategy ?? 'max_profit',
-    ranchCubPriority: settings.value.ranchCubPriority ?? [],
-    ranchCubFallbackStrategy: settings.value.ranchCubFallbackStrategy ?? 'max_level',
     intervals: {
       farmMin: settings.value.intervals?.farmMin ?? 2,
       farmMax: settings.value.intervals?.farmMax ?? 5,

@@ -102,20 +102,6 @@ async function buyGrassManually() {
   }
 }
 
-/** 手动买幼崽(复用加购流程) */
-async function buyCubManually(g: any) {
-  const id = currentAccountId.value
-  if (!id) return
-  try {
-    const r = await ranchStore.operate(id, { op: 'buycub', goodsId: g.goodsId, count: 1, price: g.price })
-    if (r?.ok === false) throw new Error(r.error || '购买失败')
-    toast.success(`已买 ${g.name} x${(r as any)?.bought ?? 1}`)
-    await loadRanchShop()
-    await reloadCubShop()
-  } catch (e: any) {
-    toast.error(e?.message || '购买失败')
-  }
-}
 // 幼崽商城筛选/排序(对照种子商城的 FILTERS)
 const cubFilter = ref<'all' | 'available' | 'locked' | 'soldout'>('all')
 const cubSort = ref<'ratio' | 'price' | 'profit'>('ratio')
@@ -1199,7 +1185,6 @@ onUnmounted(() => {
             <div v-if="g.profit !== null && g.profit !== undefined" class="text-[10px] text-emerald-600 dark:text-emerald-400">
               单只净赚 {{ formatNumber(g.profit) }} 金券
             </div>
-            </div>
 
             <!-- 加购区: 数量步进 + 合计 + 购买(对齐农场商城) -->
             <div class="mt-2 flex items-center justify-center gap-1">
@@ -1258,6 +1243,7 @@ onUnmounted(() => {
               </template>
             </BaseButton>
           </div>
+          </div>   <!-- 网格闭合(补回被误删的) -->
         </template>   <!-- 幼崽分类结束 -->
         </div>
       </div>

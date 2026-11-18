@@ -108,15 +108,14 @@ console.log(`[web] 开始构建前端 (${why}) — 快速模式, 跳过类型检
 
 // 优先直接调用本地 vite, 不依赖全局 pnpm 是否在 PATH
 const viteBin = join(webDir, 'node_modules', '.bin', process.platform === 'win32' ? 'vite.cmd' : 'vite')
-const useVite = existsSync(viteBin)
-const cmd = useVite ? viteBin : 'pnpm'
-const args = useVite ? ['build'] : ['-C', 'web', 'build:fast']
-const cwd = useVite ? webDir : root
+const cmd = 'pnpm'
+const args = ['build']
+const cwd = webDir
 
 const r = spawnSync(cmd, args, {
   stdio: 'inherit',
   cwd,
-  shell: !useVite,
+  shell: false,
   env: {
     ...process.env,
     // 限制 Node 堆: 小内存服务器超出时会明确报错, 而不是整机假死

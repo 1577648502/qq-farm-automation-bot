@@ -17,8 +17,8 @@ RUN pnpm install --frozen-lockfile
 COPY core ./core
 COPY web ./web
 
-# 快速构建: 跳过 vue-tsc 类型检查(省约 500MB 内存), 构建产物随镜像固化
-RUN pnpm build:web:fast
+# 前端完整构建(含 vue-tsc 类型检查), 产物随镜像固化
+RUN pnpm build:web
 
 # ==========================================
 FROM node:20-alpine AS prod-deps

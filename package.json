@@ -20,7 +20,6 @@
     "install:all": "pnpm install -r",
     "serve": "pnpm -C core start",
     "dev:force-build": "FORCE_BUILD_WEB=1 node scripts/ensure-web-build.mjs && pnpm dev:core",
-    "build:web:fast": "pnpm -C web build:fast",
     "build:analyze": "pnpm -C web build:analyze",
     "check:imports": "node core/scripts/check-imports.js",
     "check:settings": "node core/scripts/check-settings-fields.js",

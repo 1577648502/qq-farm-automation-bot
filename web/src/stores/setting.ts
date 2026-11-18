@@ -30,6 +30,8 @@ export interface IntervalsConfig {
   helpMax?: number
   stealMin?: number
   stealMax?: number
+  ranchMin?: number
+  ranchMax?: number
 }
 
 export interface FriendQuietHoursConfig {
@@ -58,6 +60,10 @@ export interface SettingsState {
   bagSeedPriority: number[]
   bagSeedFallbackStrategy: string
   plantSeedExclude: number[]
+  // 牧场幼崽策略(独立于农场)
+  ranchCubStrategy: string
+  ranchCubPriority: number[]
+  ranchCubFallbackStrategy: string
   intervals: IntervalsConfig
   friendQuietHours: FriendQuietHoursConfig
   automation: AutomationConfig
@@ -111,6 +117,9 @@ function createDefaultSettings(): SettingsState {
   return {
     plantingStrategy: 'max_exp',
     preferredSeedId: 0,
+    ranchCubStrategy: 'max_profit',
+    ranchCubPriority: [],
+    ranchCubFallbackStrategy: 'max_level',
     bagSeedPriority: [],
     bagSeedFallbackStrategy: 'level',
     plantSeedExclude: [],

@@ -472,7 +472,7 @@ watch(currentAccountId, () => refresh())
               <div v-if="!inspectResult.decoded?.length" class="py-8 text-center text-sm text-gray-400">
                 没有可用样本（该接口可能是空请求且未收到响应）
               </div>
-              <div v-for="(d, i) in inspectResult.decoded" :key="d.key" class="space-y-1">
+              <div v-for="d in inspectResult.decoded" :key="d.key" class="space-y-1">
                 <div class="text-xs text-gray-500">
                   {{ d.key }} · 采集 {{ d.count }} 次 · 样本 {{ d.sampleCount }} 条
                 </div>
@@ -482,7 +482,7 @@ watch(currentAccountId, () => refresh())
                   class="rounded border border-gray-200 p-2 dark:border-gray-700"
                 >
                   <div class="mb-1 text-[11px] text-gray-400">
-                    样本 {{ j + 1 }} · {{ s.accountId }} · {{ s.dir }} · {{ s.bytes }}B{{ s.truncated ? ' (截断)' : '' }}
+                    样本 {{ Number(j) + 1 }} · {{ s.accountId }} · {{ s.dir }} · {{ s.bytes }}B{{ s.truncated ? ' (截断)' : '' }}
                   </div>
                   <pre class="whitespace-pre-wrap break-all text-[11px] text-gray-700 leading-relaxed dark:text-gray-300">{{ (s.lines || []).join('\n') }}</pre>
                 </div>
