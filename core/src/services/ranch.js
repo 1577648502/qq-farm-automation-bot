@@ -1250,6 +1250,10 @@ async function getRanchOverview(accountId = '') {
             } catch {
                 view.buildings = [];
             }
+            // ⭐ 倒计时到点 → 立即安排下一轮, 不等随机巡查间隔。
+            //   服务端给了 infant/grow/produce/mature_ready_at_ms, 到期就能干活的
+            //   直接插队; 失败也不影响返回(调度是旁路)。
+            try { scheduleRanchFromCountdowns(view); } catch { /* 旁路, 不影响概览 */ }
             return view;
         } catch (e) {
             logWarn('牧场', `获取牧场详情失败: ${e.message}`, {
@@ -1281,9 +1285,20 @@ async function runRanchCare(opts = {}) {
     const STEP_GAP_MS = Math.max(200, toNum(opts.stepGapMs) || 800);
     const gap = () => sleep(STEP_GAP_MS);
 
+    // 分组执行: 自动巡查按组各自调度(对照农场的 农场/帮助/偷菜 三套独立间隔),
+    // 不再"一轮把 15 个步骤全跑一遍"。手动「一键巡牧场」不传 groups = 全组。
+    const wantGroups = Array.isArray(opts.groups) && opts.groups.length
+        ? new Set(opts.groups.map(String))
+        : null;
+    const want = (group) => !wantGroups || wantGroups.has(group);
+    const step = async (group, opts2, fn) => {
+        if (!want(group)) return undefined;
+        return fn();
+    };
+
     // 0. 自动使用牧场背包道具(与农场 automation.auto_use_items 同一个开关)
     //    罐头(80021~80034)灌进桶也在这里发生 —— 桶有时长才能喂。
-    if (opts.autoUseItems !== false && isAutomationOn('auto_use_items')) {
+    if (want('feed') && opts.autoUseItems !== false && isAutomationOn('auto_use_items')) {
         try {
             const r = await autoUseRanchBagItems();
             if (r.used > 0) result.details.push(`用道具${r.used}`);
@@ -1297,7 +1312,7 @@ async function runRanchCare(opts = {}) {
     await gap();
 
     // 0. 牧草机补草(任务"给牧草机添加牧草"也靠它驱动)
-    if (opts.feedMachine !== false && isAutomationOn('ranch_feedmachine')) {
+    if (want('feed') && opts.feedMachine !== false && isAutomationOn('ranch_feedmachine')) {
         try {
             const fm = await autoFeedMachine(opts);
             result.feedMachineAdded = fm.fed;
@@ -1314,7 +1329,7 @@ async function runRanchCare(opts = {}) {
     // 1. 收获(蛋/崽/整只; 任务"完成1次收获""收获鸡蛋N个""收获整鸡N次"靠它驱动)
     //    ⭐ 官方操作顺序: 收副产物(CollectProduce, 架上的蛋) → 催产 → 收获(HarvestRanch)
     //    只发 HarvestRanch 收不到架上的蛋(鹅 feed=3/#6≥1 就是蛋在架上)
-    if (isAutomationOn('ranch_harvest')) try {
+    if (want('core') && isAutomationOn('ranch_harvest')) try {
         for (const s of [1, 2, 3, 4, 5, 6]) {
             try {
                 await collectProduce(s);
@@ -1353,7 +1368,7 @@ async function runRanchCare(opts = {}) {
     await gap();
 
     // 2. 催产(空请求 = 全部槽位; 任务"生产N次"靠它驱动)
-    if (isAutomationOn('ranch_produce')) try {
+    if (want('core') && isAutomationOn('ranch_produce')) try {
         const produceReply = await triggerProduce(0);
         for (const r of (produceReply.receipts || [])) {
             result.produced += toNum(r.count);
@@ -1382,7 +1397,7 @@ async function runRanchCare(opts = {}) {
     // ⚠ 20261117 抓包: 真实客户端全程没调 FeedAnimal —— 动物吃牧草机里的草是自动的,
     //   这个接口是手动"投喂罐头"用的(消耗罐头 80021+)。自动巡牧场默认不发,
     //   需要 runRanchCare({ feedType: 4 }) 显式传入才执行。
-    if (opts.feedType && opts.feedType !== 0) {
+    if (want('feed') && opts.feedType && opts.feedType !== 0) {
         const feedType = toNum(opts.feedType) || 4;
         try {
             await feedAnimal(feedType, 1);
@@ -1405,7 +1420,7 @@ async function runRanchCare(opts = {}) {
     await gap();
 
     // 4. 出售产物(任务"出售鸡蛋"靠它驱动; type=107 的蛋/崽)
-    if (opts.sell !== false && isAutomationOn('ranch_sell')) {
+    if (want('daily') && opts.sell !== false && isAutomationOn('ranch_sell')) {
         try {
             const r = await autoSellRanchProducts(opts);
             result.sold = r.sold;
@@ -1423,7 +1438,7 @@ async function runRanchCare(opts = {}) {
     //   幼崽只是进了背包(itemType=105)。不补这一步, 槽位永远算作"空",
     //   于是每轮巡检都再买 4 只 → 实测背包里堆了 1242 只鸡。
     //   抓包证实: 客户端买完后会调 AnimalService.PlaceAnimal 入栏。
-    if (opts.placeCubs !== false) {
+    if (want('core') && opts.placeCubs !== false) {
         try {
             const placed = await autoPlaceCubs(opts);
             result.cubsPlaced = placed.placed;
@@ -1438,7 +1453,7 @@ async function runRanchCare(opts = {}) {
     await gap();
 
     // 6. 买幼崽(任务"领养鸡幼崽N个"靠它驱动; 按收益比优先)
-    if (opts.buyCubs !== false && isAutomationOn('ranch_buy_cubs')) {
+    if (want('core') && opts.buyCubs !== false && isAutomationOn('ranch_buy_cubs')) {
         try {
             let careView = null;
             try { careView = await getRanchOverview(); } catch { careView = null; }
@@ -1453,7 +1468,7 @@ async function runRanchCare(opts = {}) {
     await gap();
 
     // 5.5a 清理自己的牧场(20261117 抓包: CleanAllRanch 清自己, 产便便 → 游商货币)
-    if (opts.cleanOwn !== false && isAutomationOn('ranch_clean')) {
+    if (want('daily') && opts.cleanOwn !== false && isAutomationOn('ranch_clean')) {
         try {
             const r = await autoCleanOwnRanch();
             result.cleanedFriends += r.cleaned;   // 沿用统计字段
@@ -1466,7 +1481,7 @@ async function runRanchCare(opts = {}) {
     await gap();
 
     // 5.5b 偷好友牧场产物(20261117 抓包: StealProduce{gid}, feed_state==4 才偷)
-    if (opts.stealFriends !== false && isAutomationOn('ranch_steal')) {
+    if (want('steal') && opts.stealFriends !== false && isAutomationOn('ranch_steal')) {
         try {
             const r = await autoStealFriendProduce(opts);
             result.stolenFriends = r.cleaned;
@@ -1484,7 +1499,7 @@ async function runRanchCare(opts = {}) {
         facility = require('./ranch-facility');
     } catch { facility = null; }
 
-    if (facility && opts.upgradeBuildings !== false && isAutomationOn('ranch_upgrade')) {
+    if (want('daily') && facility && opts.upgradeBuildings !== false && isAutomationOn('ranch_upgrade')) {
         try {
             const r = await facility.autoUpgradeBuildings(opts);
             result.buildingsCompleted = r.completed;
@@ -1499,7 +1514,7 @@ async function runRanchCare(opts = {}) {
 
     await gap();
 
-    if (facility && opts.unlockRegions !== false && isAutomationOn('ranch_unlock')) {
+    if (want('daily') && facility && opts.unlockRegions !== false && isAutomationOn('ranch_unlock')) {
         try {
             const r = await facility.autoUnlockRegions(opts);
             result.regionsCompleted = r.completed;
@@ -1515,7 +1530,7 @@ async function runRanchCare(opts = {}) {
     await gap();
 
     // 6. 游商兑换(便便换有机化肥, 纯赚)
-    if (opts.rotationShop !== false && isAutomationOn('ranch_rotation')) {
+    if (want('daily') && opts.rotationShop !== false && isAutomationOn('ranch_rotation')) {
         try {
             const r = await autoBuyRotationShop(opts);
             result.rotationBought = r.bought;
@@ -1529,7 +1544,7 @@ async function runRanchCare(opts = {}) {
     // ⚠ 修正: 牧场任务与农场任务完全独立, 必须用 TaskInfo{scene_id:2} 拉列表
     //   (见 docs/mc-ranch/牧场任务系统功能文档.md); 之前调 checkAndClaimTasks()
     //   拉的是农场任务列表, 牧场任务从来没领过。
-    if (isAutomationOn('ranch_task')) {   // 统一由开关决定(原来 checkRanch 传 claimTasks:false 导致永不执行)
+    if (want('daily') && isAutomationOn('ranch_task')) {   // 统一由开关决定(原来 checkRanch 传 claimTasks:false 导致永不执行)
         try {
             const { checkAndClaimRanchTasks } = require('./task');
             const r = await checkAndClaimRanchTasks();
@@ -1543,7 +1558,7 @@ async function runRanchCare(opts = {}) {
     await gap();
 
     // 手册(图鉴)领奖: 之前只在手动 API 里有, 巡检从不调用 → "手册的领奖没加"
-    if (opts.illustrated !== false && isAutomationOn('ranch_task')) {
+    if (want('daily') && opts.illustrated !== false && isAutomationOn('ranch_task')) {
         try {
             const ill = require('./illustrated');
             const r = await ill.claimIllustratedRewards();
@@ -1558,85 +1573,175 @@ async function runRanchCare(opts = {}) {
     return result;
 }
 
-// ============ 巡牧场循环(对照农场 checkFarm/startFarmCheckLoop 架构) ============
-// 牧场节奏是分钟级的(产出间隔约 180 分钟, 每日操作有次数上限),
-// 不能像巡田那样 3 秒一轮 —— 上一版挂在 farm tick 里每轮 8~10 个 RPC,
-// 直接把连接打掉线了(面板进牧场页掉线就是这么叠加出来的)。
+// ============ 牧场巡查(三套独立节奏, 对照农场的 农场/帮助/偷菜) ============
+//
+// 用农场那套模型重做:
+//   农场 → farmMin/farmMax | 帮助 → helpMin/helpMax | 偷菜 → stealMin/stealMax
+//   牧场 → ranchMin/ranchMax 拆成三组, 各自独立计时:
+//     core   收蛋/催产/入栏/买幼崽/牧草机 (分钟级, 最频繁)
+//     daily  任务/游商/清理/建筑/地块/出售 (低频, 默认 10 分钟)
+//     steal  偷好友牧场产物 (与好友偷菜同频)
+//
+// 以前是一轮把 15 个步骤全跑一遍: 一次巡查发 20+ 个 RPC, 既容易被服务端当
+// 突发流量, 也让每一组都被最慢的那一步拖着。分组后谁到点谁跑。
+//
+// 除了按间隔, 每组还会按**服务端给的时刻**提前安排一次:
+//   幼崽/成长/生产/成熟 到点 → core 组立即跑
+//   牧草机耗尽 → feed 组立即跑
+// 倒计时到点就走, 不用等下一轮巡查。
 
-const RANCH_CHECK_INTERVAL_MIN_MS = 5 * 60 * 1000;   // 正常轮询间隔 5~8 分钟
+const RANCH_CHECK_INTERVAL_MIN_MS = 5 * 60 * 1000;   // 兜底轮询间隔 5~8 分钟
 const RANCH_CHECK_INTERVAL_MAX_MS = 8 * 60 * 1000;
 const RANCH_PUSH_THROTTLE_MS = 60 * 1000;            // 推送触发最少间隔(1 分钟)
 // 失败退避: 连续失败时按 2^N 拉长间隔, 上限 60 分钟
 const RANCH_BACKOFF_MAX_MS = 60 * 60 * 1000;
 
+/** 巡查分组: 每组有自己的间隔与开关 */
+const RANCH_GROUPS = {
+    core: { key: 'core', label: '牧场巡查', minKey: 'ranchMin', maxKey: 'ranchMax' },
+    daily: { key: 'daily', label: '牧场日常', minKey: 'ranchDailyMin', maxKey: 'ranchDailyMax' },
+    steal: { key: 'steal', label: '牧场偷取', minKey: 'ranchStealMin', maxKey: 'ranchStealMax' },
+};
+
 const ranchScheduler = createScheduler('ranch');
-// 下次巡检时刻(ms), 供面板显示"下次巡查倒计时"(对照农场的 nextFarmRunAt)
-let nextRanchCheckAt = 0;
+// 每组的下次执行时刻(ms), 供面板显示倒计时
+const nextRanchGroupAt = { core: 0, daily: 0, steal: 0 };
+let nextRanchCheckAt = 0;      // 兼容旧字段: 取三组里最早的
 let isCheckingRanch = false;
+let isCheckingRanchGroup = {}; // 每组防重入(三组可并行, 单组不重叠)
 let ranchLoopRunning = false;
 let externalRanchSchedulerMode = false;
 let ranchFailStreak = 0;
 let lastRanchPushAt = 0;
+// 倒计时到期后已经处理过的时刻标记, 避免同一个到期点反复触发
+let lastDeadlineHandledAt = 0;
 
-function randomRanchIntervalMs() {
-    const { minSec, maxSec } = ranchIntervalRangeSec();
+function randomRanchIntervalMs(groupKey = 'core') {
+    const { minSec, maxSec } = ranchIntervalRangeSec(groupKey);
     return (minSec + Math.floor(Math.random() * (maxSec - minSec + 1))) * 1000;
 }
 
-/** 下次巡牧场的延迟: 正常随机 5-8 分钟; 连续失败按 2^N 退避 */
-function nextRanchDelayMs() {
-    const base = randomRanchIntervalMs();
+/** 下次巡牧场的延迟: 正常随机; 连续失败按 2^N 退避 */
+function nextRanchDelayMs(groupKey = 'core') {
+    const base = randomRanchIntervalMs(groupKey);
     if (ranchFailStreak <= 0) return base;
     return Math.min(RANCH_BACKOFF_MAX_MS, base * Math.min(2 ** ranchFailStreak, 64));
 }
 
-/**
- * 读取用户配置的牧场巡检间隔(秒), 默认 300~480。
- * 对照农场的 farmMin/farmMax —— 用户要求"巡查按农场的来, 单独一份牧场的"。
- */
-function ranchIntervalRangeSec() {
-    let minSec = RANCH_CHECK_INTERVAL_MIN_MS / 1000;
-    let maxSec = RANCH_CHECK_INTERVAL_MAX_MS / 1000;
+/** 读某个分组的间隔配置(秒) */
+function ranchIntervalRangeSec(groupKey = 'core') {
+    const g = RANCH_GROUPS[groupKey] || RANCH_GROUPS.core;
+    const fallback = groupKey === 'daily' ? { min: 600, max: 900 } : { min: 20, max: 25 };
+    let minSec = fallback.min;
+    let maxSec = fallback.max;
     try {
+        // ⚠ 2026-11-19 修: 这里原来用 store.getAccountConfigSnapshot(), 但那个函数
+        //   **没有导出**(store 内部私有), 于是 typeof 判断永远为假 → 一直用默认
+        //   5~8 分钟, 用户在设置里填 20 秒也完全不生效。改用导出的 getIntervals()。
         const store = require('../models/store');
-        const cfg = typeof store.getAccountConfigSnapshot === 'function'
-            ? store.getAccountConfigSnapshot(process.env.FARM_ACCOUNT_ID || '')
+        const iv = typeof store.getIntervals === 'function'
+            ? store.getIntervals(process.env.FARM_ACCOUNT_ID || '')
             : null;
-        const iv = cfg && cfg.intervals ? cfg.intervals : null;
-        let lo = Number(iv && iv.ranchMin) || 0;
-        let hi = Number(iv && iv.ranchMax) || 0;
+        // 优先用本组自己的键; 老配置没有这些键时回落到农场的对应值,
+        // 保证升级后行为不会突然变成"五分钟才巡一次"。
+        let lo = Number(iv && iv[g.minKey]) || 0;
+        let hi = Number(iv && iv[g.maxKey]) || 0;
+        if (!(lo > 0 && hi > 0)) {
+            if (groupKey === 'daily') {
+                lo = Number(iv && iv.ranchMin) || 0;
+                hi = Number(iv && iv.ranchMax) || 0;
+            } else if (groupKey === 'steal') {
+                lo = Number(iv && iv.stealMin) || 0;
+                hi = Number(iv && iv.stealMax) || 0;
+            }
+        }
         if (lo > 0 && hi > 0) {
             if (lo > hi) [lo, hi] = [hi, lo];
-            minSec = Math.max(5, lo);       // 下限 5s(用户可与农场同设 20~25)
+            minSec = Math.max(5, lo);
             maxSec = Math.max(minSec, hi);
         }
     } catch { /* 读不到就用默认 */ }
     return { minSec, maxSec };
 }
 
-function scheduleNextRanchCheck(delayMs) {
-    if (externalRanchSchedulerMode) return;
-    if (!ranchLoopRunning) return;
-    nextRanchCheckAt = Date.now() + Math.max(0, delayMs);
-    ranchScheduler.setTimeoutTask('ranch_check_loop', Math.max(0, delayMs), async () => {
-        if (!ranchLoopRunning) return;
-        await checkRanch();
-        if (!ranchLoopRunning) return;
-        scheduleNextRanchCheck(nextRanchDelayMs());
-    });
+function refreshNextRanchAt() {
+    const vals = Object.values(nextRanchGroupAt).filter(v => v > 0);
+    nextRanchCheckAt = vals.length ? Math.min(...vals) : 0;
 }
 
 /**
- * 巡牧场一轮(自动模式入口, 对照农场 checkFarm):
- * 防重入 + ranch_auto 开关闸门 + 汇总日志 + 统计。
+ * 把"已到期"的判定修正成"到点即跑":
+ * worker 的统一 tick 最短 1 秒一次, 但可能因为别的分组在跑而推迟。
+ * 这里额外挂一个只针对**最近到期时刻**的定时器, 到点立即触发对应分组,
+ * 不用等下一轮统一 tick(也不会因为统一 tick 被 farm/help/steal 拖住而迟到)。
+ */
+function armRanchDeadlineTimer() {
+    if (externalRanchSchedulerMode) {
+        // 外部调度模式: 由 worker 的 1 秒 tick 负责; 但仍把时刻算好
+        return;
+    }
+    ranchScheduler.clear('ranch_deadline');
+    if (!ranchLoopRunning) return;
+    const now = Date.now();
+    let soonestKey = '';
+    let soonestAt = Infinity;
+    for (const [k, at] of Object.entries(nextRanchGroupAt)) {
+        const t = Number(at) || 0;
+        if (t > 0 && t < soonestAt) { soonestAt = t; soonestKey = k; }
+    }
+    if (!soonestKey || !Number.isFinite(soonestAt)) return;
+    const delay = Math.max(0, soonestAt - now);
+    if (delay > 30 * 60 * 1000) return;   // 太远就不挂精确定时器
+    ranchScheduler.setTimeoutTask('ranch_deadline', delay, async () => {
+        if (!ranchLoopRunning) return;
+        // 到点就跑这一组, 不等统一 tick
+        await checkRanchGroup(soonestKey);
+        if (!ranchLoopRunning) return;
+        armRanchDeadlineTimer();
+    });
+}
+
+function scheduleRanchGroup(groupKey, delayMs) {
+    if (!ranchLoopRunning) return;
+    const g = RANCH_GROUPS[groupKey];
+    if (!g) return;
+    const delay = Math.max(0, delayMs);
+    nextRanchGroupAt[groupKey] = Date.now() + delay;
+    refreshNextRanchAt();
+    ranchScheduler.setTimeoutTask(`ranch_group_${groupKey}`, delay, async () => {
+        if (!ranchLoopRunning) return;
+        await checkRanchGroup(groupKey);
+        if (!ranchLoopRunning) return;
+        scheduleRanchGroup(groupKey, nextRanchDelayMs(groupKey));
+    });
+    // 自驱模式下由自己续期; 统一调度器模式下由 worker 轮询
+    if (externalRanchSchedulerMode) {
+        ranchScheduler.clear(`ranch_group_${groupKey}`);
+    } else {
+        armRanchDeadlineTimer();
+    }
+}
+
+function scheduleNextRanchCheck(delayMs, groupKey = 'core') {
+    if (externalRanchSchedulerMode) return;
+    if (!ranchLoopRunning) return;
+    scheduleRanchGroup(groupKey, delayMs);
+}
+
+/**
+ * 执行某个分组的巡查(防重入 + 开关闸门 + 汇总日志 + 统计)。
+ * @param {'core'|'daily'|'steal'} groupKey
  * @returns {Promise<boolean>} 本轮有没有实际干活
  */
-async function checkRanch() {
-    if (isCheckingRanch) return false;
+async function checkRanchGroup(groupKey) {
+    const g = RANCH_GROUPS[groupKey] || RANCH_GROUPS.core;
+    const key = g.key;
+    if (isCheckingRanchGroup[key]) return false;
     if (!isAutomationOn('ranch_auto')) return false;
+    isCheckingRanchGroup[key] = true;
     isCheckingRanch = true;
     try {
-        const result = await runRanchCare({ claimTasks: false });
+        const result = await runRanchCare({ claimTasks: false, groups: [key] });
         if (result && result.skipped === 'scene_locked') return false;
 
         // 统计(对照农场 recordOperation)
@@ -1645,13 +1750,9 @@ async function checkRanch() {
         if (result.fed > 0) recordOperation('ranchFeed', result.fed);
 
         // 限流算一次失败 → 退避; 否则清零
-        if (result.rateLimited) {
-            ranchFailStreak += 1;
-        } else {
-            ranchFailStreak = 0;
-        }
+        if (result.rateLimited) ranchFailStreak += 1;
+        else ranchFailStreak = 0;
 
-        // 一行汇总日志(对照农场 `[收:2 草:1] → 收获15/催产2` 格式)
         const parts = [];
         if (result.harvested > 0) parts.push(`收:${result.harvested}`);
         if (result.produced > 0) parts.push(`产:${result.produced}`);
@@ -1659,24 +1760,42 @@ async function checkRanch() {
         if (result.feedMachineAdded > 0) parts.push(`草:${result.feedMachineAdded}`);
         if (result.sold > 0) parts.push(`卖:${result.sold}`);
         if (result.boughtCubs > 0) parts.push(`崽:${result.boughtCubs}`);
+        if (result.cubsPlaced > 0) parts.push(`栏:${result.cubsPlaced}`);
         if (result.rotationBought > 0) parts.push(`商:${result.rotationBought}`);
+        if (result.cleanedFriends > 0) parts.push(`清:${result.cleanedFriends}`);
+        if (result.stolenFriends > 0) parts.push(`偷:${result.stolenFriends}`);
+        if (result.ranchTasksClaimed > 0) parts.push(`任:${result.ranchTasksClaimed}`);
         if (parts.length > 0) {
-            log('牧场', `[${parts.join(' ')}] ${result.details.join('/')}`, {
-                module: 'ranch', event: '巡牧场', result: 'ok', actions: parts,
+            log('牧场', `[${g.label}] [${parts.join(' ')}] ${result.details.join('/')}`, {
+                module: 'ranch', event: g.label, result: 'ok', actions: parts,
             });
         }
+        // 干完活重新拉一次详情, 用服务端最新的 *_ready_at_ms 把下一轮提前到
+        // "下一个真正能干的时刻"(getRanchOverview 内部会调 scheduleRanchFromCountdowns)。
+        // 有 10 秒缓存, 不会额外打请求。
+        try { await getRanchOverview(); } catch { /* 旁路 */ }
         return parts.length > 0;
     } catch (e) {
         ranchFailStreak += 1;
-        logWarn('牧场', `巡牧场失败(连续第 ${ranchFailStreak} 次): ${e.message}`, {
-            module: 'ranch', event: '巡牧场', result: 'error',
+        logWarn('牧场', `${g.label}失败(连续第 ${ranchFailStreak} 次): ${e.message}`, {
+            module: 'ranch', event: g.label, result: 'error',
         });
         return false;
     } finally {
+        isCheckingRanchGroup[key] = false;
         isCheckingRanch = false;
     }
 }
 
+/** 兼容旧入口: 全组跑一遍(手动一键巡牧场 / 老调用方) */
+async function checkRanch() {
+    const keys = Object.keys(RANCH_GROUPS);
+    let any = false;
+    for (const k of keys) {
+        if (await checkRanchGroup(k)) any = true;
+    }
+    return any;
+}
 /**
  * FacilitiesNotify 推送触发(对照农场 landsChanged → onLandsChangedPush):
  * 动物产出/牧草机状态变化时服务端会推, 节流 1 分钟后插队巡一轮。
@@ -1701,28 +1820,125 @@ function startRanchCheckLoop(options = {}) {
     externalRanchSchedulerMode = !!options.externalScheduler;
     ranchLoopRunning = true;
     ranchFailStreak = 0;
+    isCheckingRanchGroup = {};
+    lastDeadlineHandledAt = 0;
     sceneLocked = false;        // 场景锁定状态是 per-connection 的, 新连接重新探测
     sceneLockedAt = 0;
     networkEvents.on('ranchFacilitiesChanged', onRanchFacilitiesChanged);
-    if (!externalRanchSchedulerMode) {
-        scheduleNextRanchCheck(randomRanchIntervalMs());
+    for (const k of Object.keys(RANCH_GROUPS)) {
+        // 外部调度模式也要把各组的下次时刻设出来, 否则 worker 永远判不到期
+        if (externalRanchSchedulerMode) {
+            nextRanchGroupAt[k] = Date.now() + randomRanchIntervalMs(k);
+        } else {
+            scheduleRanchGroup(k, randomRanchIntervalMs(k));
+        }
     }
+    refreshNextRanchAt();
+    armRanchDeadlineTimer();
 }
 
 function stopRanchCheckLoop() {
     ranchLoopRunning = false;
     externalRanchSchedulerMode = false;
     ranchScheduler.clearAll();
+    for (const k of Object.keys(nextRanchGroupAt)) nextRanchGroupAt[k] = 0;
+    nextRanchCheckAt = 0;
     networkEvents.removeListener('ranchFacilitiesChanged', onRanchFacilitiesChanged);
 }
 
 /**
- * 插队巡一轮(worker 统一调度器用): 挂到外部队列时由 worker 决定节奏,
- * 这里只保留防重入与开关闸门。
+ * 插队跑一轮(worker 统一调度器用)。
+ * @param {string} [groupKey] 指定分组; 不传 = 全部三组
  */
-async function runRanchTick() {
+async function runRanchTick(groupKey = '') {
     if (!ranchLoopRunning) return false;
-    return checkRanch();
+    if (!groupKey) return checkRanch();
+    try {
+        return await checkRanchGroup(groupKey);
+    } finally {
+        // 外部调度模式下没有自己的 timer, 由这里续期下次时刻。
+        // 注意这里取 min: "倒计时到点"可能已经把时刻提前, 提前的那个优先;
+        // 否则就回到正常随机间隔(含失败退避)。
+        if (externalRanchSchedulerMode) {
+            const nowMs = Date.now();
+            const cur = Number(nextRanchGroupAt[groupKey]) || 0;
+            const next = nowMs + nextRanchDelayMs(groupKey);
+            nextRanchGroupAt[groupKey] = (cur > nowMs && cur < next) ? cur : next;
+            refreshNextRanchAt();
+        }
+    }
+}
+
+/** 各分组下次执行时刻(ms), 供 worker/面板显示倒计时 */
+function getRanchNextRunAt() {
+    return { ...nextRanchGroupAt, any: nextRanchCheckAt };
+}
+
+/** 该分组是否到点 */
+function isRanchGroupDue(groupKey, nowMs = Date.now()) {
+    const at = Number(nextRanchGroupAt[groupKey] || 0);
+    return at > 0 && nowMs >= at;
+}
+
+/**
+ * 把某组的下次执行时刻提前到 atMs(用于"倒计时到点立即执行")。
+ * 只提前不推后, 且同一到期点只安排一次。
+ */
+function pullRanchGroupForward(groupKey, atMs, reason = '') {
+    if (!ranchLoopRunning) return false;
+    if (!RANCH_GROUPS[groupKey]) return false;
+    const at = Number(atMs) || 0;
+    if (at <= 0) return false;
+    // 最多提前 30 分钟, 避免把"很久以后"的到期点也塞进队列
+    const guard = 30 * 60 * 1000;
+    const when = Math.min(at, Date.now() + guard);
+    const cur = Number(nextRanchGroupAt[groupKey] || 0);
+    if (cur > 0 && cur <= when) return false;
+    nextRanchGroupAt[groupKey] = when;
+    refreshNextRanchAt();
+    if (!externalRanchSchedulerMode) {
+        scheduleRanchGroup(groupKey, Math.max(0, when - Date.now()));
+    } else {
+        // 外部模式下时刻已写入 nextRanchGroupAt, worker 1 秒 tick 会立刻看到;
+        // 这里不重挂 timer, 但仍刷新聚合时刻供面板显示。
+    }
+    if (reason) {
+        log('牧场', `${RANCH_GROUPS[groupKey].label} 提前到 ${new Date(when).toLocaleTimeString()} (${reason})`, {
+            module: 'ranch', event: '倒计时到期', result: 'schedule', when,
+        });
+    }
+    return true;
+}
+
+/**
+ * 按服务端时刻安排下一次巡查: 倒计时到点就走, 不等下一轮随机间隔。
+ * 数据来源是 GetRanchDetail 里官方字段(不是猜的):
+ *   infant/grow/produce/mature_ready_at_ms → core 组
+ *   grass_blocked / 牧草机状态              → feed(core) 组
+ * @param {object} view getRanchOverview() 的返回
+ */
+function scheduleRanchFromCountdowns(view) {
+    if (!ranchLoopRunning || !view) return;
+    const now = Date.now();
+    const dueTimes = [];
+    for (const a of (view.animals || [])) {
+        // 每个阶段的"到点"都在服务端字段里; 只取未来的
+        for (const sec of [a.infantInSec, a.growInSec, a.produceInSec, a.matureInSec, a.deliveringInSec]) {
+            if (typeof sec === 'number' && sec > 0) dueTimes.push(now + sec * 1000);
+        }
+        // 已经可收/可催产 = 现在就该跑
+        if (a.canHarvest || a.canProduce) dueTimes.push(now + 1000);
+    }
+    if (!dueTimes.length) return;
+    const soonest = Math.min(...dueTimes);
+    // 同一个到期点只处理一次(每次巡查都会重算, 避免反复提前)
+    if (Math.abs(soonest - lastDeadlineHandledAt) < 1000) return;
+    lastDeadlineHandledAt = soonest;
+    pullRanchGroupForward('core', soonest + 1500, '动物倒计时到点');
+    // 牧草断了也要尽快补
+    if ((view.animals || []).some(a => a.grassBlocked)) {
+        pullRanchGroupForward('core', now + 1500, '牧草断了');
+    }
 }
 
 // ============ 游商(兑换集市, RotationShop 7) ============
@@ -2937,8 +3153,15 @@ module.exports = {
     startRanchCheckLoop,
     stopRanchCheckLoop,
     runRanchTick,
+    checkRanchGroup,
     getNextRanchDelayMs: nextRanchDelayMs,
     getNextRanchCheckAt: () => nextRanchCheckAt,
+    // 分组巡查: worker 按组各自计时(对照农场的 农场/帮助/偷菜 三套独立间隔)
+    RANCH_GROUPS,
+    getRanchNextRunAt,
+    isRanchGroupDue,
+    pullRanchGroupForward,
+    scheduleRanchFromCountdowns,
     ranchIntervalRangeSec,
     toRanchView,
     getAnimalName,

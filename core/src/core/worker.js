@@ -577,6 +577,19 @@ function applyIntervalsToRuntime(intervals) {
     const stealRange = normalizeIntervalRangeSec(data.stealMin, data.stealMax, 10);
     CONFIG.stealCheckIntervalMin = stealRange.min * 1000;
     CONFIG.stealCheckIntervalMax = stealRange.max * 1000;
+
+    // 牧场三组独立间隔(与农场同构): core / daily / steal
+    // ranch.js 的 ranchIntervalRangeSec() 直接读账号配置快照, 这里只做校验兜底,
+    // 保证设置里填了非法值时不会把调度打乱。
+    const ranchCore = normalizeIntervalRangeSec(data.ranchMin, data.ranchMax, 20);
+    CONFIG.ranchCheckIntervalMin = ranchCore.min * 1000;
+    CONFIG.ranchCheckIntervalMax = ranchCore.max * 1000;
+    const ranchDaily = normalizeIntervalRangeSec(data.ranchDailyMin, data.ranchDailyMax, 600);
+    CONFIG.ranchDailyIntervalMin = ranchDaily.min * 1000;
+    CONFIG.ranchDailyIntervalMax = ranchDaily.max * 1000;
+    const ranchSteal = normalizeIntervalRangeSec(data.ranchStealMin, data.ranchStealMax, 20);
+    CONFIG.ranchStealIntervalMin = ranchSteal.min * 1000;
+    CONFIG.ranchStealIntervalMax = ranchSteal.max * 1000;
 }
 
 function randomIntervalMs(minMs, maxMs) {
@@ -607,22 +620,41 @@ function resetUnifiedSchedule() {
 }
 
 // ============ 牧场调度 ============
-// 循环/防重入/退避/推送触发都在 services/ranch.js 内部(对照 farm.js 架构),
-// 这里只负责在统一调度器里按时调 runRanchTick() 并回写下次时间。
+// 对照农场的三套独立节奏：牧场拆成 core / daily / steal 三组,
+// 每组自己的间隔与下次时刻(ranch.js 内部维护 nextRanchGroupAt)。
+// 这里负责在统一调度器里按时调各组的 runRanchTick(group)。
 let nextRanchRunAt = 0;
+
+/** 牧场各组是否到点(供 runUnifiedTick / 下次唤醒时间使用) */
+function ranchDueGroups(nowMs = Date.now()) {
+    const out = [];
+    for (const k of Object.keys(ranch.RANCH_GROUPS || {})) {
+        if (ranch.isRanchGroupDue(k, nowMs)) out.push(k);
+    }
+    return out;
+}
+
+/** 把 ranch.js 内的下次时刻同步到 worker, 供面板倒计时与唤醒计算 */
+function refreshNextRanchRunAt() {
+    const at = ranch.getRanchNextRunAt ? ranch.getRanchNextRunAt() : { any: 0 };
+    nextRanchRunAt = Number(at.any) || 0;
+}
 
 async function runRanchTick(auto) {
     if (!auto.ranch_auto) {
         nextRanchRunAt = Date.now() + 60 * 1000;   // 关着时每分钟看一眼开关
         return;
     }
+    const due = ranchDueGroups();
     try {
-        await ranch.runRanchTick();
+        for (const groupKey of due) {
+            await ranch.runRanchTick(groupKey);
+        }
     } catch {
-        // checkRanch 内部已记日志
+        // 各组内部已记日志
     } finally {
-        // 间隔/退避策略由 ranch 服务给出(连续失败自动拉长, 上限 60 分钟)
-        nextRanchRunAt = Date.now() + ranch.getNextRanchDelayMs();
+        // 每组的下次时刻由 ranch 服务自己续期(含失败退避与"倒计时到点"提前)
+        refreshNextRanchRunAt();
     }
 }
 
@@ -723,7 +755,9 @@ async function runUnifiedTick() {
     const dueFarm = now >= nextFarmRunAt;
     const dueHelp = now >= nextHelpRunAt;
     const dueSteal = now >= nextStealRunAt;
-    const dueRanch = now >= nextRanchRunAt;
+    // 牧场按组判定(三组各自到点各自跑), 而不是一个总时刻
+    refreshNextRanchRunAt();
+    const dueRanch = ranchDueGroups(now).length > 0;
     if (!dueFarm && !dueHelp && !dueSteal && !dueRanch) return;
 
     const auto = getAutomation();
@@ -1975,14 +2009,19 @@ function syncStatus() {
     const farmRemainSec = Math.max(0, Math.ceil((Number(nextFarmRunAt || 0) - nowMs) / 1000));
     const helpRemainSec = Math.max(0, Math.ceil((Number(nextHelpRunAt || 0) - nowMs) / 1000));
     const stealRemainSec = Math.max(0, Math.ceil((Number(nextStealRunAt || 0) - nowMs) / 1000));
-    // 牧场下次巡检倒计时: 统一调度器模式由本文件的 nextRanchRunAt 回写
-    //   (ranch.js 内部的 nextRanchCheckAt 只在自驱模式下更新, externalScheduler=true 时恒 0)
-    const ranchRemainSec = Math.max(0, Math.ceil((Number(nextRanchRunAt || 0) - nowMs) / 1000));
+    // 牧场下次巡检倒计时: 三组各自一份(对照农场的 farm/help/steal)
+    refreshNextRanchRunAt();
+    const ranchAt = ranch.getRanchNextRunAt ? ranch.getRanchNextRunAt() : {};
+    const toRemain = (at) => Math.max(0, Math.ceil((Number(at || 0) - nowMs) / 1000));
+    const ranchRemainSec = toRemain(nextRanchRunAt);
     fullStats.nextChecks = {
         farmRemainSec,
         helpRemainSec,
         stealRemainSec,
         ranchRemainSec,
+        ranchCoreRemainSec: toRemain(ranchAt.core),
+        ranchDailyRemainSec: toRemain(ranchAt.daily),
+        ranchStealRemainSec: toRemain(ranchAt.steal),
         friendRemainSec: Math.max(helpRemainSec, stealRemainSec),
     };
 

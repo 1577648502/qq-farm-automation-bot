@@ -342,7 +342,7 @@ const localStrategySettings = ref({
   stealDelaySeconds: 0,
   plantOrderRandom: false,
   plantDelaySeconds: 0,
-  intervals: { farmMin: 2, farmMax: 5, helpMin: 10, helpMax: 15, stealMin: 10, stealMax: 15, ranchMin: 20, ranchMax: 25 },
+  intervals: { farmMin: 2, farmMax: 5, helpMin: 10, helpMax: 15, stealMin: 10, stealMax: 15, ranchMin: 20, ranchMax: 25, ranchDailyMin: 600, ranchDailyMax: 900, ranchStealMin: 20, ranchStealMax: 25 },
   friendQuietHours: { enabled: false, start: '23:00', end: '07:00' },
 })
 
@@ -564,7 +564,7 @@ async function loadRanchCubs() {
     return
   try {
     const res = await api.get('/api/ranch/cub-shop', { headers: { 'x-account-id': id } })
-    if (res.data?.ok)
+    if (res.data?.ok) {
       ranchCubs.value = (res.data.data?.shop || []).map((g: any) => ({
         goodsId: g.goodsId,
         animalId: g.animalId,
@@ -572,6 +572,7 @@ async function loadRanchCubs() {
         price: g.price,
         unlocked: !!g.unlocked,
       }))
+    }
   }
   catch { /* 拉不到就只显示已保存的 id */ }
 }
@@ -733,6 +734,10 @@ function syncLocalStrategySettings(submitted?: any) {
       stealMax: settings.value.intervals?.stealMax ?? 15,
       ranchMin: settings.value.intervals?.ranchMin ?? 20,
       ranchMax: settings.value.intervals?.ranchMax ?? 25,
+      ranchDailyMin: settings.value.intervals?.ranchDailyMin ?? 600,
+      ranchDailyMax: settings.value.intervals?.ranchDailyMax ?? 900,
+      ranchStealMin: settings.value.intervals?.ranchStealMin ?? 20,
+      ranchStealMax: settings.value.intervals?.ranchStealMax ?? 25,
     },
     friendQuietHours: {
       enabled: settings.value.friendQuietHours?.enabled ?? false,
@@ -2389,20 +2394,20 @@ async function onBackupFileChange(ev: Event) {
                   </label>
                   <div class="flex shrink-0 items-center gap-1">
                     <span class="mr-1 rounded bg-amber-100 px-1.5 text-[10px] text-amber-700 dark:bg-amber-900/40 dark:text-amber-300">
-                      #{{ (localStrategySettings.ranchCubPriority || []).indexOf(opt.value) >= 0
+                      #{{ (localStrategySettings.ranchCubPriority || []).includes(opt.value)
                         ? (localStrategySettings.ranchCubPriority || []).indexOf(opt.value) + 1
                         : '—' }}
                     </span>
                     <button
-                      class="rounded px-1 text-gray-500 disabled:opacity-30 hover:bg-gray-100 dark:hover:bg-gray-700"
+                      class="rounded px-1 text-gray-500 hover:bg-gray-100 disabled:opacity-30 dark:hover:bg-gray-700"
                       :disabled="(localStrategySettings.ranchCubPriority || []).indexOf(opt.value) <= 0"
                       @click="moveRanchCubPriority(opt.value, -1)"
                     >
                       ↑
                     </button>
                     <button
-                      class="rounded px-1 text-gray-500 disabled:opacity-30 hover:bg-gray-100 dark:hover:bg-gray-700"
-                      :disabled="(localStrategySettings.ranchCubPriority || []).indexOf(opt.value) < 0
+                      class="rounded px-1 text-gray-500 hover:bg-gray-100 disabled:opacity-30 dark:hover:bg-gray-700"
+                      :disabled="!(localStrategySettings.ranchCubPriority || []).includes(opt.value)
                         || (localStrategySettings.ranchCubPriority || []).indexOf(opt.value) >= (localStrategySettings.ranchCubPriority || []).length - 1"
                       @click="moveRanchCubPriority(opt.value, 1)"
                     >
@@ -2454,18 +2459,44 @@ async function onBackupFileChange(ev: Event) {
                   <BaseInput v-model.number="localStrategySettings.intervals.stealMax" label="最大 (秒)" type="number" min="1" />
                 </div>
               </div>
-              <!-- 牧场巡查: 独立一份(用户要求与农场分开) -->
+              <!-- 牧场巡查: 与农场同构, 拆成三套独立节奏 -->
               <div class="rounded-lg bg-amber-50 p-3 dark:bg-amber-900/20">
                 <div class="mb-2 flex items-center gap-2 text-sm text-amber-700 font-medium dark:text-amber-300">
                   <div class="i-fas-paw text-base" />
-                  牧场巡查
+                  牧场巡查（收获/收蛋/催产/入栏/买幼崽/牧草机）
                 </div>
                 <div class="grid grid-cols-2 gap-2">
                   <BaseInput v-model.number="localStrategySettings.intervals.ranchMin" label="最小 (秒)" type="number" min="5" />
                   <BaseInput v-model.number="localStrategySettings.intervals.ranchMax" label="最大 (秒)" type="number" min="5" />
                 </div>
                 <p class="mt-1.5 text-[10px] text-amber-600/80 dark:text-amber-400/80">
-                  与农场巡查一致（默认 20~25 秒）。收获/入栏/收蛋都在巡检里自动执行。
+                  与农场巡查一致（默认 20~25 秒）。倒计时一到点会立即执行，不用等这一轮。
+                </p>
+              </div>
+              <div class="rounded-lg bg-amber-50 p-3 dark:bg-amber-900/20">
+                <div class="mb-2 flex items-center gap-2 text-sm text-amber-700 font-medium dark:text-amber-300">
+                  <div class="i-carbon-task text-base" />
+                  牧场日常（任务/游商/清理/建筑/地块/出售）
+                </div>
+                <div class="grid grid-cols-2 gap-2">
+                  <BaseInput v-model.number="localStrategySettings.intervals.ranchDailyMin" label="最小 (秒)" type="number" min="5" />
+                  <BaseInput v-model.number="localStrategySettings.intervals.ranchDailyMax" label="最大 (秒)" type="number" min="5" />
+                </div>
+                <p class="mt-1.5 text-[10px] text-amber-600/80 dark:text-amber-400/80">
+                  这些是低频操作，默认 600~900 秒，没必要跟着巡查一起跑。
+                </p>
+              </div>
+              <div class="rounded-lg bg-amber-50 p-3 dark:bg-amber-900/20">
+                <div class="mb-2 flex items-center gap-2 text-sm text-amber-700 font-medium dark:text-amber-300">
+                  <div class="i-carbon-grab text-base" />
+                  牧场偷取（偷好友产物）
+                </div>
+                <div class="grid grid-cols-2 gap-2">
+                  <BaseInput v-model.number="localStrategySettings.intervals.ranchStealMin" label="最小 (秒)" type="number" min="5" />
+                  <BaseInput v-model.number="localStrategySettings.intervals.ranchStealMax" label="最大 (秒)" type="number" min="5" />
+                </div>
+                <p class="mt-1.5 text-[10px] text-amber-600/80 dark:text-amber-400/80">
+                  与「偷菜巡查」同频（默认 20~25 秒）。每家好友每天只偷一次。
                 </p>
               </div>
             </div>

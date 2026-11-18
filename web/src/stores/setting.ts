@@ -32,6 +32,12 @@ export interface IntervalsConfig {
   stealMax?: number
   ranchMin?: number
   ranchMax?: number
+  /** 牧场日常组(任务/游商/清理/建筑/地块/出售) */
+  ranchDailyMin?: number
+  ranchDailyMax?: number
+  /** 牧场偷取组(偷好友产物) */
+  ranchStealMin?: number
+  ranchStealMax?: number
 }
 
 export interface FriendQuietHoursConfig {

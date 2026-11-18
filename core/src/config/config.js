@@ -28,6 +28,13 @@ const CONFIG = {
     friendCheckInterval: 12000,
     farmCheckIntervalMin: 3000,
     farmCheckIntervalMax: 5000,
+    // 牧场三组独立节奏(对照农场): core / daily / steal
+    ranchCheckIntervalMin: 20 * 1000,
+    ranchCheckIntervalMax: 25 * 1000,
+    ranchDailyIntervalMin: 600 * 1000,
+    ranchDailyIntervalMax: 900 * 1000,
+    ranchStealIntervalMin: 20 * 1000,
+    ranchStealIntervalMax: 25 * 1000,
     friendCheckIntervalMin: 12000,
     friendCheckIntervalMax: 15000,
     adminPort: Number(process.env.ADMIN_PORT),

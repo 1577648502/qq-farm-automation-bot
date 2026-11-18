@@ -277,11 +277,16 @@ const nextFarmCheck = ref('--:--:--')
 const nextHelpCheck = ref('--:--:--')
 const nextStealCheck = ref('--:--:--')
 const nextRanchCheck = ref('--:--:--')
+// 牧场三组独立倒计时(对照农场的 农场/帮助/偷菜)
+const nextRanchDailyCheck = ref('--:--:--')
+const nextRanchStealCheck = ref('--:--:--')
 const localUptime = ref(0)
 let localNextFarmRemainSec = 0
 let localNextHelpRemainSec = 0
 let localNextStealRemainSec = 0
 let localNextRanchRemainSec = 0
+let localNextRanchDailyRemainSec = 0
+let localNextRanchStealRemainSec = 0
 
 function updateCountdowns() {
   // Update uptime
@@ -324,6 +329,22 @@ function updateCountdowns() {
     else {
       nextRanchCheck.value = '巡查中...'
     }
+
+    if (localNextRanchDailyRemainSec > 0) {
+      localNextRanchDailyRemainSec--
+      nextRanchDailyCheck.value = formatDuration(localNextRanchDailyRemainSec)
+    }
+    else {
+      nextRanchDailyCheck.value = '巡查中...'
+    }
+
+    if (localNextRanchStealRemainSec > 0) {
+      localNextRanchStealRemainSec--
+      nextRanchStealCheck.value = formatDuration(localNextRanchStealRemainSec)
+    }
+    else {
+      nextRanchStealCheck.value = '巡查中...'
+    }
   }
 }
 
@@ -335,7 +356,9 @@ watch(status, (newVal) => {
     localNextFarmRemainSec = newVal.nextChecks.farmRemainSec || 0
     localNextHelpRemainSec = newVal.nextChecks.helpRemainSec || 0
     localNextStealRemainSec = newVal.nextChecks.stealRemainSec || 0
-    localNextRanchRemainSec = newVal.nextChecks.ranchRemainSec || 0
+    localNextRanchRemainSec = newVal.nextChecks.ranchCoreRemainSec ?? newVal.nextChecks.ranchRemainSec ?? 0
+    localNextRanchDailyRemainSec = newVal.nextChecks.ranchDailyRemainSec || 0
+    localNextRanchStealRemainSec = newVal.nextChecks.ranchStealRemainSec || 0
     updateCountdowns() // Update immediately
   }
   if (newVal?.uptime !== undefined) {
@@ -1014,10 +1037,26 @@ useIntervalFn(() => void fetchRanchOverview(), 60000)
             <div class="min-w-0 flex items-center justify-between gap-2">
               <div class="flex shrink-0 items-center gap-2 text-gray-700 dark:text-gray-300">
                 <div class="i-fas-paw text-lg text-amber-500" />
-                <span>牧场</span>
+                <span>牧场巡查</span>
               </div>
               <div class="shrink-0 whitespace-nowrap text-lg font-bold font-mono tabular-nums">
                 {{ nextRanchCheck }}
+              </div>
+            </div>
+            <div class="min-w-0 flex items-center justify-between gap-2 pl-7">
+              <div class="flex shrink-0 items-center gap-2 text-xs text-gray-500 dark:text-gray-400">
+                <span>牧场日常</span>
+              </div>
+              <div class="shrink-0 whitespace-nowrap text-xs text-gray-500 font-mono tabular-nums dark:text-gray-400">
+                {{ nextRanchDailyCheck }}
+              </div>
+            </div>
+            <div class="min-w-0 flex items-center justify-between gap-2 pl-7">
+              <div class="flex shrink-0 items-center gap-2 text-xs text-gray-500 dark:text-gray-400">
+                <span>牧场偷取</span>
+              </div>
+              <div class="shrink-0 whitespace-nowrap text-xs text-gray-500 font-mono tabular-nums dark:text-gray-400">
+                {{ nextRanchStealCheck }}
               </div>
             </div>
           </div>

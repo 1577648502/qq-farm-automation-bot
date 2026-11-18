@@ -226,9 +226,16 @@ const DEFAULT_ACCOUNT_CONFIG = {
         helpMax: 25,
         stealMin: 20,
         stealMax: 25,
-        // 牧场巡检间隔(秒), 与农场一致(用户要求 20~25)
+        // 牧场巡查: 对照农场拆成三组独立节奏
+        //   ranchMin/Max       core  收蛋/催产/入栏/买幼崽/牧草机 (与农场同频 20~25)
+        //   ranchDailyMin/Max  daily 任务/游商/清理/建筑/地块/出售 (低频)
+        //   ranchStealMin/Max  steal 偷好友牧场产物 (与好友偷菜同频)
         ranchMin: 20,
         ranchMax: 25,
+        ranchDailyMin: 600,
+        ranchDailyMax: 900,
+        ranchStealMin: 20,
+        ranchStealMax: 25,
     },
     friendQuietHours: {
         enabled: false,
