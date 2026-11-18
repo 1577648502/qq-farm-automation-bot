@@ -211,6 +211,118 @@ function feedFailureHint(feedType, e) {
  * @param {{maxItems?:number}} [opts]
  * @returns {Promise<{used:number, details:string[]}>}
  */
+/**
+ * 自动使用牧场背包里可直接使用的道具 —— 对照农场的 warehouse.autoUseBagItems。
+ *
+ * 为什么牧场要单独一套:
+ *   牧场道具在 **GetBag{global_scene_id:2}** 里, 农场背包(ItemService.Bag)里根本没有
+ *   (线上实测: 农场背包 0 个罐头, 牧场背包 4 个)。
+ *   而 warehouse 的 AUTO_USE_EXCLUDED_TYPES 把 type=109(罐头) 排除掉了 ——
+ *   那条注释写的就是"本仓库没有牧场模块", 现在补上了。
+ *
+ * 自动使用的判定与农场一致:
+ *   · ItemInfo.can_use === 1
+ *   · 排除"必须先选目标/走别的协议"的类型(容器/礼包/化肥/活动道具/狗粮/现金类)
+ *
+ * 受同一个开关控制: automation.auto_use_items
+ *
+ * @param {{onlyIds?:number[]}} [opts]
+ * @returns {Promise<{used:number, details:string[]}>}
+ */
+const AUTO_USE_SCAN_INTERVAL_MS = 60 * 1000;
+let ranchAutoUseLastCheckAt = 0;
+const ranchAutoUseFailedIds = new Set();
+// 与农场 warehouse.js 的 AUTO_USE_EXCLUDED_TYPES 保持同樣口径:
+// 排除容器(2)/礼包(11,33)/化肥(7)/狗粮(9)/活动道具(23)/现金类(25,27,36)
+const RANCH_AUTO_USE_EXCLUDED_TYPES = new Set([2, 7, 11, 33, 9, 23, 25, 27, 36]);
+
+async function autoUseRanchBagItems(opts = {}) {
+    const now = Date.now();
+    const onlyIds = Array.isArray(opts.onlyIds) && opts.onlyIds.length
+        ? new Set(opts.onlyIds.map(x => Number(x) || 0).filter(x => x > 0))
+        : null;
+    if (!onlyIds && now - ranchAutoUseLastCheckAt < AUTO_USE_SCAN_INTERVAL_MS) {
+        return { used: 0, details: [] };
+    }
+    const finish = (r) => {
+        if (!onlyIds) ranchAutoUseLastCheckAt = now;
+        return r;
+    };
+
+    let getItemById = null;
+    try { getItemById = require('../config/gameConfig').getItemById; } catch { /* 没配置就不做 */ }
+
+    let bag;
+    try {
+        bag = await require('./warehouse').getRanchBagItems();
+    } catch {
+        return finish({ used: 0, details: [], reason: '读取牧场背包失败' });
+    }
+
+    const targets = [];
+    const cans = [];
+    for (const it of bag) {
+        const id = toNum(it.id);
+        const count = toNum(it.count);
+        const uid = toNum(it.uid);
+        if (id <= 0 || count <= 0 || uid <= 0) continue;
+        if (ids_contains(onlyIds, id)) continue;      // onlyIds 给了但没命中 → 跳过
+        if (ranchAutoUseFailedIds.has(id)) continue;
+        const info = getItemById ? getItemById(id) : null;
+        if (!info || Number(info.can_use) !== 1) continue;
+        const type = Number(info.type) || 0;
+        if (RANCH_AUTO_USE_EXCLUDED_TYPES.has(type)) continue;
+        // 罐头(type=109)不走"直接 Use" —— 它的语义是灌进罐头桶,
+        // 由 fillCanBuckets 统一处理(按大档优先、量入为出), 避免两条路径抢着用。
+        if (type === 109) { cans.push({ id, count }); continue; }
+        targets.push({ id, count, uid, name: info.name || `#${id}` });
+    }
+    if (!targets.length && !cans.length) return finish({ used: 0, details: [] });
+
+    let used = 0;
+    const details = [];
+    for (const t of targets) {
+        try {
+            await useItemWithUid(t.id, t.count, t.uid);
+            used += t.count;
+            details.push(`${t.name}x${t.count}`);
+            await sleep(300);
+        } catch (e) {
+            // 连续失败就记住, 别每轮刷同一条错误
+            ranchAutoUseFailedIds.add(t.id);
+            logWarn('牧场', `自动使用道具失败 ${t.name}: ${String(e.message || '').slice(0, 80)}`, {
+                module: 'ranch', event: '自动使用道具', result: 'error', itemId: t.id,
+            });
+        }
+    }
+    // 罐头单独交给 fillCanBuckets(按大档优先灌进桶, 桶有时长才能喂动物)
+    if (cans.length) {
+        for (const kind of ['normal', 'organic']) {
+            const wantIds = kind === 'normal' ? [80021, 80022, 80023, 80024] : [80031, 80032, 80033, 80034];
+            if (!cans.some(c => wantIds.includes(c.id))) continue;
+            try {
+                const r = await fillCanBuckets(kind, { maxItems: 4 });
+                if (r.used > 0) {
+                    used += r.used;
+                    details.push(`${kind === 'normal' ? '普通' : '有机'}罐头x${r.used}`);
+                }
+            } catch { /* 灌桶失败不影响其他道具 */ }
+        }
+    }
+
+    if (used > 0) {
+        log('牧场', `已自动使用牧场背包道具: ${details.join('，')}`, {
+            module: 'ranch', event: '自动使用道具', result: 'ok', count: used,
+        });
+    }
+    return finish({ used, details });
+}
+
+/** onlyIds 为空时不过滤; 给了就只处理列表内的 */
+function ids_contains(onlyIds, id) {
+    return !!onlyIds && !onlyIds.has(id);
+}
+
 async function fillCanBuckets(kind = 'normal', opts = {}) {
     const result = { used: 0, details: [] };
     // 普通罐头 80021~80024 / 有机罐头 80031~80034
@@ -1079,6 +1191,21 @@ async function runRanchCare(opts = {}) {
     // 服务端会把这种"突发"当异常, 是掉线的直接原因之一。
     const STEP_GAP_MS = Math.max(200, toNum(opts.stepGapMs) || 800);
     const gap = () => sleep(STEP_GAP_MS);
+
+    // 0. 自动使用牧场背包道具(与农场 automation.auto_use_items 同一个开关)
+    //    罐头(80021~80034)灌进桶也在这里发生 —— 桶有时长才能喂。
+    if (opts.autoUseItems !== false && isAutomationOn('auto_use_items')) {
+        try {
+            const r = await autoUseRanchBagItems();
+            if (r.used > 0) result.details.push(`用道具${r.used}`);
+        } catch (e) {
+            if (!isExpectedRanchError(e)) {
+                logWarn('牧场', `自动使用道具失败: ${e.message}`, { module: 'ranch', event: '自动使用道具', result: 'error' });
+            }
+        }
+    }
+
+    await gap();
 
     // 0. 牧草机补草(任务"给牧草机添加牧草"也靠它驱动)
     if (opts.feedMachine !== false && isAutomationOn('ranch_feedmachine')) {
@@ -2550,6 +2677,7 @@ module.exports = {
     stealFriendProduce,
     autoStealFriendProduce,
     purchaseRotationGoods,
+    autoUseRanchBagItems,
     fillCanBuckets,
     useItemWithUid,
     getRanchWeightScore,

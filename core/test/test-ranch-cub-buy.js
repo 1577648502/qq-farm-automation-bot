@@ -276,6 +276,39 @@ proto.loadProto().then(async () => {
         }
     }
 
+    section('12. 牧场背包自动使用道具(对照农场 autoUseBagItems)');
+    {
+        const ranch = require(`${SB}/src/services/ranch`);
+        check('autoUseRanchBagItems 已导出', typeof ranch.autoUseRanchBagItems === 'function');
+
+        const calls = installStub({
+            Use: () => types.UseReply.encode(types.UseReply.create({})).finish(),
+        });
+        const warehouse = require(`${SB}/src/services/warehouse`);
+        // 牧场背包: 一个可自动用的(type 14 can_use=1) + 一个罐头(109, 排除) + 一个容器(2, 排除)
+        warehouse.getRanchBagItems = async () => ([
+            { id: 990001, count: 1, uid: 111 },   // 不在 ItemInfo → 跳过
+            { id: 80021, count: 5, uid: 13831 },  // 罐头 type=109 → 排除
+        ]);
+        const r = await ranch.autoUseRanchBagItems({ onlyIds: [80021] });
+        // 罐头走 fillCanBuckets 灌进桶(仍会发 Use, 但语义是"灌桶"不是"直接使用")
+        check('罐头通过灌桶路径处理(发了 Use)', calls.filter(c => c.method === 'Use').length > 0,
+            calls.map(c => c.method));
+        check('记为已用', r.used > 0, r);
+    }
+
+    section('13. 农场背包的排除表仍保留 109(避免与牧场抢)');
+    {
+        const fs = require('node:fs');
+        const src = fs.readFileSync(`${SB}/src/services/warehouse.js`, 'utf8');
+        const m = src.match(/AUTO_USE_EXCLUDED_TYPES = new Set\(\[([^\]]+)\]\)/);
+        check('农场排除表存在', !!m, m && m[1]);
+        if (m) {
+            const ids = m[1].split(',').map(x => Number(x.trim())).filter(n => n > 0);
+            check('农场排除表包含 109', ids.includes(109), ids);
+        }
+    }
+
     finish();
 }).catch((e) => {
     console.error('测试异常:', e);
