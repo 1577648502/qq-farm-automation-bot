@@ -122,14 +122,14 @@ proto.loadProto().then(async () => {
         // 未来 2.6 秒(与实测同量级) → 还没到点
         const soon = mk(now + 2600);
         check('未来 2.6 秒 → harvestInSec ≈ 3', Math.abs(soon.harvestInSec - 3) <= 2, soon.harvestInSec);
-        // feed_state=2(产出中)是可收状态 —— #10 未来只影响倒计时, 不影响可收性
-        check('feed=2 仍可收(#10 只管倒计时)', soon.harvestable === true, soon.harvestable);
+        // feed=2(产出中)不可收 —— 截图鹅"生产期 02:49:09"就是这时, 收获报 1045211
+        check('feed=2 → 不可收', soon.harvestable === false, soon.harvestable);
 
         // 已过 5 秒 → 可收
         const passed = mk(now - 5000);
         check('已过 5 秒 → harvestInSec ≈ -5', Math.abs(passed.harvestInSec + 5) <= 2, passed.harvestInSec);
-        check('已过 → 仍可收(feed=2)', passed.harvestable === true, passed.harvestable);
-        check('canProduce 跟随 harvestable', passed.canProduce === true, passed.canProduce);
+        check('已过 → 仍不可收(feed=2)', passed.harvestable === false, passed.harvestable);
+        check('canProduce: feed=2 不可催产(还在产出中)', passed.canProduce === false, passed.canProduce);
     }
 
     section('4. #10 缺失 → 不编倒计时, 也不判可收');
@@ -141,8 +141,8 @@ proto.loadProto().then(async () => {
         });
         const a = view.animals[0];
         check('无 #10 → harvestInSec = null', a.harvestInSec === null, a.harvestInSec);
-        // feed=2 本身是可收状态; #10 只决定倒计时有没有
-        check('无 #10 → 可收性由 feedState 决定(feed=2 可收)', a.harvestable === true, a.harvestable);
+        // feed=2 不可收; #10 只决定倒计时有没有
+        check('无 #10 → feed=2 不可收', a.harvestable === false, a.harvestable);
     }
 
     section('5. 不再使用 #25(它在 5 份抓包里从未出现过)');
@@ -333,34 +333,25 @@ proto.loadProto().then(async () => {
         check('请求 target.host_gid = 10001', Number(req.target.host_gid) === 10001, Number(req.target.host_gid));
     }
 
-    section('15. 可收判定必须 grown=1(线上实测推翻旧判定)');
+    section('15. feed_state 终版模型(你的截图+入栏抓包对照)');
     {
-        // 线上事故(账号3): 幼年鸡(grown=0, feed=3)的 #10=-159s, 旧判定把它当成"可收",
-        // 点收获服务端回 1045211「当前没有可收取的产物」。
+        // 客户端真实流程(抓包): TriggerProduce(t+24s) → HarvestRanch(t+30s, 成功)
+        //   收获成功时动物 feed=4, 响应首次出现 #25(trigger_ready_at)
+        //   → feed=4 是"催产就绪"; 只发 HarvestRanch 会报 1045211(缺催产那一步)
         const ranch = require(`${SB}/src/services/ranch`);
-        const mk = (grown, produceAt) => ranch.toRanchView({
-            ranch: { animals: [{ slot: 1, animal_id: 60001, stage: 1, feed_state: 3, grown_flag: grown, produce_at: produceAt }] },
-        }).animals[0];
-        const now = Date.now();
-
-        // mk(grown, produceAt, feedState)
-        const mk2 = (grown, feedState) => ranch.toRanchView({
-            ranch: { animals: [{ slot: 1, animal_id: 60001, stage: 1, feed_state: feedState, grown_flag: grown, produce_at: now - 3000 }] },
+        const mk = (grown, feedState) => ranch.toRanchView({
+            ranch: { animals: [{ slot: 1, animal_id: 60001, stage: 1, feed_state: feedState, grown_flag: grown, produce_at: Date.now() - 3000 }] },
         }).animals[0];
 
-        // 幼年(任何 feedState) → 不可收
-        const juv = mk2(0, 3);
-        check('幼年 → 不可收', juv.harvestable === false, juv.harvestable);
-        check('幼年 → 不能催产', juv.canProduce === false, juv.canProduce);
-
-        // 成年 + feedState 权威判定(线上实测: feed=3 时 #10 过期近1小时仍 1045211)
-        check('成年 feed=1(有草吃) → 可收', mk2(1, 1).harvestable === true, mk2(1, 1).harvestable);
-        check('成年 feed=2(产出中) → 可收', mk2(1, 2).harvestable === true, mk2(1, 2).harvestable);
-        check('成年 feed=3(冷却) → 不可收(账号1 鹅现场)', mk2(1, 3).harvestable === false, mk2(1, 3).harvestable);
-        check('成年 feed=4(待收获) → 可收', mk2(1, 4).harvestable === true, mk2(1, 4).harvestable);
-        check('成年 feed=5(刚收完) → 不可收(抓包 t+35s)', mk2(1, 5).harvestable === false, mk2(1, 5).harvestable);
-        check('冷却状态有 reason', mk2(1, 3).produceUnknownReason === 'cooling', mk2(1, 3).produceUnknownReason);
-        check('刚收完有 reason', mk2(1, 5).produceUnknownReason === 'justHarvested', mk2(1, 5).produceUnknownReason);
+        check('feed=4 + 成年 → 可收获(面板按钮走催产→收获两步)', mk(1, 4).harvestable === true, mk(1, 4).harvestable);
+        check('feed=4 → 可催产', mk(1, 4).canProduce === true, mk(1, 4).canProduce);
+        check('feed=3(冷却) → 不可收但可催产', mk(1, 3).harvestable === false && mk(1, 3).canProduce === true,
+            { h: mk(1, 3).harvestable, p: mk(1, 3).canProduce });
+        check('feed=2(产出中, 截图鹅"生产期") → 不可收', mk(1, 2).harvestable === false, mk(1, 2).harvestable);
+        check('feed=5(刚收完) → 不可收', mk(1, 5).harvestable === false, mk(1, 5).harvestable);
+        check('幼年 → 不可收不可催产', mk(0, 4).harvestable === false && mk(0, 4).canProduce === false,
+            { h: mk(0, 4).harvestable, p: mk(0, 4).canProduce });
+        check('feed=3 有 cooling reason', mk(1, 3).produceUnknownReason === 'cooling', mk(1, 3).produceUnknownReason);
     }
 
     section('16. PlaceAnimal 编码与抓包一致(幼崽id放target#2, 无count)');

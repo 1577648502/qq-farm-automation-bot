@@ -918,22 +918,30 @@ function toRanchView(reply) {
         const nextReadyMs = toNum(a.produce_at);
         const grownFlag = toNum(a.grown_flag);
         const harvestInSec = nextReadyMs > 0 ? Math.round((nextReadyMs - nowMs) / 1000) : null;
-        // ⭐⭐ 2026-11-18 线上实测最终定案(账号1 鹅 + 入栏抓包 + 账号3 鸡):
-//     可收的权威标志是 **feed_state**, 不是 #10 是否过期:
+        // ⭐⭐⭐ 2026-11-18 终版(你的截图 + 入栏抓包对照, 推翻上一版):
 //
-//       feed_state=1  有草吃/刚入栏    → 可收获(抓包 t+13s 入栏后 t+30s 收获成功)
-//       feed_state=2  正常产出中      → 可收获(抓包里鸡 4 秒一轮)
-//       feed_state=3  产出冷却中      → 不可收(账号1 鹅 #10 过期3388s 仍收不了, 1045211)
-//       feed_state=4  成熟待收获      → 可收获(账号1 兔子)
-//       feed_state=5  刚收获完        → 不可收(抓包 t+35s 收获成功后)
+//   客户端真实流程(抓包 20261118-165223):
+//     ... → TriggerProduce(催产, t+24s) → HarvestRanch(收获, t+30s, 成功)
 //
-//     #10 的语义也随状态变( grown=0 时是成长阶段结束时刻; grown=1 时参考值 ),
-//     但它**不是**可收依据 —— 账号1 的鹅 #10 过了近 1 小时依然 1045211。
-//     可收 = grown=1 且 feed_state ∈ {1, 2, 4}(5 是刚收完, 3 是冷却)。
+//   收获成功时动物 feed=4, 且响应里首次出现 #25(trigger_ready_at)。
+//   → feed_state 的真实含义:
+//       1 成长中(有草)      → 等待
+//       2 产出中(未到点)    → 等待(截图鹅"生产期 02:49:09"就是这时)
+//       3 产蛋冷却          → 等待
+//       4 **催产就绪**      → 先 TriggerProduce → 再 HarvestRanch
+//       5 刚收完            → 等待
+//
+//   所以:
+//     · harvestable(可直接收) = feed=4 且已经催产过 → 实际客户端从不直接收,
+//       都是催产+收获连做, 所以面板的"可收获"按钮应该走 催产→收获 两步
+//     · canProduce(可催产) = feed ∈ {3, 4}(冷却到点/催产就绪)
+//
+//   你面板上兔子"可收获"点了报 1045211, 就是因为只发了 HarvestRanch
+//   而没先 TriggerProduce —— 抓包里客户端是两步连做的。
 const isGrown = grownFlag === 1;
 const feedStateNum = toNum(a.feed_state);
-const HARVESTABLE_FEED_STATES = new Set([1, 2, 4]);
-const harvestable = isGrown && HARVESTABLE_FEED_STATES.has(feedStateNum);
+const harvestable = isGrown && feedStateNum === 4;
+const canProduceNow = isGrown && (feedStateNum === 3 || feedStateNum === 4);
         const animals_entry = {
             slot: toNum(a.slot),
             animalId,
@@ -956,12 +964,12 @@ const harvestable = isGrown && HARVESTABLE_FEED_STATES.has(feedStateNum);
                 : (!isGrown ? 'juvenile'
                     : (feedStateNum === 3 ? 'cooling'
                         : (feedStateNum === 5 ? 'justHarvested'
-                            : (feedStateNum === 1 && !HARVESTABLE_FEED_STATES.has(feedStateNum) ? 'hungry' : 'idle')))),
+                            : (feedStateNum === 1 ? 'hungry' : 'idle')))),
             // 兼容旧字段, 语义与 harvestInSec 一致
             produceInSec: harvestInSec === null ? null : Math.max(0, harvestInSec),
             // 催产就绪 = 确实到了下次产出时刻
             // 催产只对成年动物有效(幼年的是"成长", 不是"产出")
-            canProduce: isGrown && harvestable,
+            canProduce: canProduceNow,
             hungry: toNum(a.feed_state) === 1,
             sellCost: a.sell_cost ? { itemId: toNum(a.sell_cost.item_id), amount: toNum(a.sell_cost.amount) } : null,
             mutant: !!(a.mutant && toNum(a.mutant.field_1) > 0),
@@ -1270,7 +1278,10 @@ async function runRanchCare(opts = {}) {
     await gap();
 
     // 1. 收获(蛋/崽/整只; 任务"完成1次收获""收获鸡蛋N个""收获整鸡N次"靠它驱动)
+    //    ⭐ 客户端真实顺序: 催产 → 收获(入栏抓包 t+24s→t+30s), 两步连做才能收出来
     if (isAutomationOn('ranch_harvest')) try {
+        await triggerProduce(0).catch(() => null);
+        await gap();
         const harvestReply = await harvestRanch(1);
         for (const gain of (harvestReply.gains || [])) {
             for (const item of (gain.items || [])) {
@@ -2519,6 +2530,14 @@ async function operateRanch(opts = {}) {
                     slot,
                 };
             }
+                        // ⭐ 客户端真实流程(入栏抓包 t+24s→t+30s): 催产 → 收获 两步连做。
+            //   只发 HarvestRanch 会报 1045211「没有可收取的产物」——
+            //   面板上"可收获"点了报错就是因为缺了催产那一步。
+            //   先催产(失败不阻断: 可能已在就绪状态), 再收获。
+            try {
+                await triggerProduce(0).catch(() => null);
+                await sleep(400);
+            } catch { /* 催产失败继续尝试收获 */ }
             const r = await harvestRanch(1);
             const items = [];
             for (const gain of (r.gains || [])) {
