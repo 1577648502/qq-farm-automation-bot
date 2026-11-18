@@ -87,25 +87,30 @@ proto.loadProto().then(async () => {
             let j; try { j = JSON.parse(line) } catch { continue }
             if (!j.key || !j.key.includes('GetRanchDetail') || j.dir !== 'S->C') continue;
             const d = types.GetRanchDetailReply.decode(Buffer.from(j.bodyHex, 'hex'));
-            if (d.ranch && d.ranch.animals && d.ranch.animals.length === 3
-                && String(d.ranch.animals[0].animal_id) === '60002') {
+            // ⭐ 2026-11-18: #1 是 repeated(窝/棚各一条), 不再是单个 ranch
+            const all = d.ranches || [];
+            const animals = all.flatMap(r => r.animals || []);
+            if (animals.length === 3 && String(animals[0].animal_id) === '60002') {
                 found = d;
-                if (String(d.ranch.grass && d.ranch.grass.grass_count) === '100') break;
+                if (String(all[0].grass && all[0].grass.grass_count) === '100') break;
             }
         }
         check('找到 21:58:07 那帧(3 只兔子)', !!found, !!found);
         if (found) {
-            check('窝数量 = 3', String(found.ranch.coop_count) === '3', found.ranch.coop_count);
-            check('棚数量 = 3', String(found.ranch.pen_count) === '3', found.ranch.pen_count);
-            check('牧草 = 100', String(found.ranch.grass.grass_count) === '100',
-                found.ranch.grass && found.ranch.grass.grass_count);
+            const ranch = (found.ranches || [])[0];
+            const animals = ranch.animals || [];
+            check('栏舍容量 = 3(#2 capacity)', String(ranch.capacity) === '3', ranch.capacity);
+            check('在养数量 = 3(#3 animal_count)', String(ranch.animal_count) === '3', ranch.animal_count);
+            check('husbandry_type = 1(窝)', String(ranch.husbandry_type) === '1', ranch.husbandry_type);
+            check('牧草 = 100', String(ranch.grass.grass_count) === '100',
+                ranch.grass && ranch.grass.grass_count);
             check('牧场经验 = 30', String(found.ranch_exp) === '30', found.ranch_exp);
             check('三只动物分属槽位 1/2/3',
-                found.ranch.animals.map(a => String(a.slot)).join(',') === '1,2,3',
-                found.ranch.animals.map(a => String(a.slot)));
+                animals.map(a => String(a.slot_index)).join(',') === '1,2,3',
+                animals.map(a => String(a.slot_index)));
             check('动物都是兔子 60002',
-                found.ranch.animals.every(a => String(a.animal_id) === '60002'),
-                found.ranch.animals.map(a => String(a.animal_id)));
+                animals.every(a => String(a.animal_id) === '60002'),
+                animals.map(a => String(a.animal_id)));
         }
     }
 
@@ -144,17 +149,21 @@ proto.loadProto().then(async () => {
         const a = view.animals[0];
         check('动物带名字', !!a.name && a.name !== `动物#${a.animalId}`, a.name);
         check('动物带槽位/阶段', Number.isInteger(a.slot) && Number.isInteger(a.stage), a);
-        // 2026-11-18 修正: 这份抓包没有 trigger_ready_at(#25), 无法推算下次产出时刻。
-        // 旧实现用 "#10(上次产出) + 2小时" 硬编码 — 那是兔子的间隔, 鸡完全不同,
-        // 算出来的倒计时是错的(会把鸡显示成"22 小时后产出")。
-        // 现在算不出来就返回 null, 页面显示"产出时间未知", 而不是编一个假倒计时。
-        // 2026-11-18 入栏抓包终案: #10=本轮计时起点, #25=下次产出时刻。
-        //   这份抓包的动物 feed=5(刚收完)、无 #25 → 无倒计时(null)。
-        //   之前用 #10 直接算倒计时的做法(夹0/不夹0都不对)已废弃。
-        check('feed=5 无 #25 → 无倒计时', a.produceInSec === null, a.produceInSec);
-        check('feed=3(冷却) → 不可收(即使 #10 已过)', a.harvestable === false, a.harvestable);
-        check('grown=1/feed=3 → idle reason(现在归入生产期, 倒计时另算)', a.produceUnknownReason === 'idle', a.produceUnknownReason);
+        // ⭐ 2026-11-18 终案: 字段语义取自官方客户端解码器(mcboot/game.js),
+        //   不再从抓包猜。倒计时/可收位全部来自服务端时刻与布尔位:
+        //     stage 1..4 = 幼崽/成长/生产/成熟
+        //     #10 grow_ready_at_ms  #11 produce_ready_at_ms  #14 infant_ready_at_ms
+        //     #25 mature_ready_at_ms  #7 can_harvest  #15 producing  #16 can_deliver
+        check('动物阶段是 1..4', a.stage >= 1 && a.stage <= 4, a.stage);
+        check('阶段文案取自四阶段', ['幼崽', '成长', '生产', '成熟'].includes(a.stageText), a.stageText);
+        check('harvestable 直接等于服务端 can_harvest',
+            a.harvestable === !!Number(a.canHarvest ?? 0) || a.harvestable === false, a.harvestable);
+        check('倒计时字段都是秒或 null', [a.infantInSec, a.growInSec, a.produceInSec, a.matureInSec]
+            .every(v => v === null || typeof v === 'number'),
+            [a.infantInSec, a.growInSec, a.produceInSec, a.matureInSec]);
         check('牧场经验在视图顶层', Number.isInteger(view.ranchExp), view.ranchExp);
+        check('视图按栏舍分组(coops/pens)', Array.isArray(view.coops) && Array.isArray(view.pens),
+            { coops: (view.coops || []).length, pens: (view.pens || []).length });
     }
 
     section('5. runRanchCare 用抓包回放跑通');

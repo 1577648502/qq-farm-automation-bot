@@ -122,8 +122,9 @@ proto.loadProto().then(async () => {
             AllCells: () => allCells,
             // 必须先能切到牧场场景, 否则 getRanchDetail 直接返回 1045002
             PlayerSceneLogin: () => Buffer.alloc(0),
+            // 空牧场: ranches 为空数组(repeated), 面板靠 AllCells 兜底
             GetRanchDetail: () => types.GetRanchDetailReply.encode(types.GetRanchDetailReply.create({
-                ranch: { animals: [], coop_count: 0, pen_count: 0 },
+                ranches: [],
             })).finish(),
             GetRanchOpTimes: () => types.GetRanchOpTimesReply.encode(types.GetRanchOpTimesReply.create({})).finish(),
             GetFacilityDetail: () => Buffer.alloc(0),

@@ -104,42 +104,73 @@ proto.loadProto().then(async () => {
             calls.filter(c => c.method === 'BuyGoods').length);
     }
 
-    section('3. #10 语义定案: 本轮计时起点, 不是倒计时终点');
+    section('3. 四阶段倒计时: 幼崽/成长/生产/成熟 各自用服务端时刻');
     {
-        // 入栏抓包时间线: 动作(入栏/催产/收获)后 #10 立即重置为当前时刻附近(+8s/-3s/-8s/-14s)
-        // → #10 是"本轮计时起点"。真正的产出倒计时是 #25(trigger_ready_at)。
+        // ⭐ 2026-11-18 终案: 字段语义来自官方客户端解码器(mcboot/game.js),
+        //   不是从抓包猜:
+        //     #10 grow_ready_at_ms(成长期结束)  #11 produce_ready_at_ms(本次产出)
+        //     #14 infant_ready_at_ms(幼崽期结束) #25 mature_ready_at_ms(成熟)
+        //     #7 can_harvest  #15 producing  #16 can_deliver
         const ranch = require(`${SB}/src/services/ranch`);
         const now = Date.now();
-        const v = ranch.toRanchView({
-            ranch: { animals: [{ slot: 1, animal_id: 60001, stage: 1, feed_state: 3,
-                produce_at: now - 3000, trigger_ready_at: now + 9000, grown_flag: 0 }] },
+        const mk = (stage, fields = {}) => ranch.toRanchView({
+            ranches: [{ husbandry_type: 1, capacity: 3, animal_count: 1,
+                animals: [{ slot_index: 1, animal_id: 60001, stage, ...fields }] }],
         }).animals[0];
-        check('feed=3 倒计时用 #25(约9秒)', Math.abs((v.deliverInSec || 0) - 9) <= 2, v.deliverInSec);
-        check('#10 过期不影响倒计时', v.harvestable === false, v.harvestable);
+
+        const infant = mk(1, { infant_ready_at_ms: now + 8000 });
+        check('幼崽期倒计时 = infant_ready_at_ms(约8秒)', Math.abs((infant.infantInSec || 0) - 8) <= 2, infant.infantInSec);
+        check('幼崽期不可收', infant.harvestable === false, infant.harvestable);
+
+        const growing = mk(2, { grow_ready_at_ms: now + 8000 });
+        check('成长期倒计时 = grow_ready_at_ms(约8秒)', Math.abs((growing.growInSec || 0) - 8) <= 2, growing.growInSec);
+        check('成长期不可收', growing.harvestable === false, growing.harvestable);
+
+        const laying = mk(3, { producing: true, produce_ready_at_ms: now + 30000 });
+        check('生产期倒计时 = produce_ready_at_ms(约30秒)', Math.abs((laying.produceInSec || 0) - 30) <= 2, laying.produceInSec);
+        check('生产期不可收', laying.harvestable === false, laying.harvestable);
+
+        const mature = mk(4, { mature_ready_at_ms: now + 3000 });
+        check('成熟期倒计时 = mature_ready_at_ms(约3秒)', Math.abs((mature.matureInSec || 0) - 3) <= 2, mature.matureInSec);
+
+        const ready = mk(4, { can_harvest: true, mature_ready_at_ms: now - 1000 });
+        check('can_harvest=1 → 可收(服务端权威位)', ready.harvestable === true, ready.harvestable);
+        check('可收时 harvestInSec = 0', ready.harvestInSec === 0, ready.harvestInSec);
     }
 
-    section('4. #25 缺失(feed=3) → 无倒计时(不编造)');
+    section('4. 服务端没给时刻 → 不编造倒计时');
     {
         const ranch = require(`${SB}/src/services/ranch`);
         const v = ranch.toRanchView({
-            ranch: { animals: [{ slot: 1, animal_id: 60001, stage: 6, feed_state: 3, grown_flag: 1 }] },
+            ranches: [{ husbandry_type: 1, animals: [{ slot_index: 1, animal_id: 60001, stage: 3 }] }],
         }).animals[0];
-        check('无 #25 → deliverInSec = null', v.deliverInSec === null, v.deliverInSec);
-        check('无 #25 → 不可收', v.harvestable === false, v.harvestable);
+        check('无任何 *_ready_at_ms → 各倒计时全为 null',
+            [v.infantInSec, v.growInSec, v.produceInSec, v.matureInSec].every(x => x === null),
+            [v.infantInSec, v.growInSec, v.produceInSec, v.matureInSec]);
+        check('无 can_harvest → 不可收', v.harvestable === false, v.harvestable);
     }
 
-    section('5. #25 是生产期倒计时的权威来源(催产后出现)');
+    section('5. 栏舍分组来自服务端(repeated ranches), 不再按动物 ID 猜');
     {
-        const now = Date.now();
         const ranch = require(`${SB}/src/services/ranch`);
-        const v = ranch.toRanchView({
-            ranch: { animals: [{ slot: 1, animal_id: 60002, stage: 6, feed_state: 3,
-                produce_at: now - 60 * 1000,
-                trigger_ready_at: now + 30 * 1000,   // 30 秒后可产出
-                grown_flag: 1 }] },
-        }).animals[0];
-        check('生产期倒计时 = #25(约30秒)', Math.abs((v.deliverInSec || 0) - 30) <= 2, v.deliverInSec);
-        check('#10 过期不影响', v.harvestable === false, v.harvestable);
+        const view = ranch.toRanchView({
+            ranches: [
+                { ranch_inst_id: 10001, husbandry_type: 1, capacity: 5, animal_count: 2,
+                    animals: [{ slot_index: 1, animal_id: 60001, stage: 2 }, { slot_index: 2, animal_id: 60001, stage: 2 }] },
+                { ranch_inst_id: 10003, husbandry_type: 2, capacity: 3, animal_count: 1,
+                    animals: [{ slot_index: 1, animal_id: 70002, stage: 3 }] },
+            ],
+        });
+        check('窝/棚各一组', (view.coops || []).length === 1 && (view.pens || []).length === 1,
+            { coops: (view.coops || []).length, pens: (view.pens || []).length });
+        check('窝容量/在养 = 5/2', view.coops[0].capacity === 5 && view.coops[0].animalCount === 2,
+            { cap: view.coops[0].capacity, n: view.coops[0].animalCount });
+        check('棚容量/在养 = 3/1', view.pens[0].capacity === 3 && view.pens[0].animalCount === 1,
+            { cap: view.pens[0].capacity, n: view.pens[0].animalCount });
+        check('棚动物带 husbandryType=2', view.animals.find(a => a.animalId === 70002).husbandryType === 2,
+            view.animals.find(a => a.animalId === 70002).husbandryType);
+        check('coopCount/penCount 是真实容量(5/3)', view.coopCount === 5 && view.penCount === 3,
+            { coop: view.coopCount, pen: view.penCount });
     }
 
     section('6. 幼崽策略: 收益比 / 等级 / 优先列表');
@@ -214,19 +245,30 @@ proto.loadProto().then(async () => {
         check('有机罐头失败不误导', !/每只动物只能用一次/.test(organic), organic);
     }
 
-    section('9. 成熟判定只看 grown_flag(#18), 不看 stage(抓包实证)');
+    section('9. 阶段语义照抄官方客户端解码器(#5=stage, #18=can_feed)');
     {
-        // 158 条 grown_flag=1 的样本里 stage 从 1 到 400 都有
-        // → stage 不是生长阶段, 是实例序号之类的值, 完全不可靠
+        // 官方 AnimalInfo 解码器: #5=stage(1..4), #7=can_harvest, #15=producing,
+        //   #16=can_deliver, #18=can_feed, #19=limited_can_used, #20=can_donate
+        // 旧实现把 #18 当成 grown_flag → 永远"成年", 这是倒计时/阶段全错的根因。
         const ranch = require(`${SB}/src/services/ranch`);
-        const mk = (stage, grown) => ranch.toRanchView({
-            ranch: { animals: [{ slot: 1, animal_id: 60001, stage, feed_state: 2, grown_flag: grown, produce_at: Date.now() + 3000 }] },
-        }).animals[0].stageText;
+        const mk = (stage, extra = {}) => ranch.toRanchView({
+            ranches: [{ husbandry_type: 1, animals: [{ slot_index: 1, animal_id: 60001, stage, ...extra }] }],
+        }).animals[0];
 
-        check('grown=1 + stage=3 → 成年(旧实现会误判成"成长中(3/6)")', mk(3, 1) === '成年', mk(3, 1));
-        check('grown=1 + stage=1 → 成年', mk(1, 1) === '成年', mk(1, 1));
-        check('grown=1 + stage=397 → 成年', mk(397, 1) === '成年', mk(397, 1));
-        check('grown=undefined → 不是成年', mk(3, undefined) !== '成年', mk(3, undefined));
+        check('stage=1 → 幼崽', mk(1).stageText === '幼崽', mk(1).stageText);
+        check('stage=2 → 成长', mk(2).stageText === '成长', mk(2).stageText);
+        check('stage=3 → 生产', mk(3).stageText === '生产', mk(3).stageText);
+        check('stage=4 → 成熟', mk(4).stageText === '成熟', mk(4).stageText);
+        check('can_feed(#18)=1 不等于"成年"', mk(3, { can_feed: 1 }).stageText === '生产',
+            mk(3, { can_feed: 1 }).stageText);
+        check('can_deliver(#16) 映射到 canProduce', mk(3, { can_deliver: 1 }).canProduce === true,
+            mk(3, { can_deliver: 1 }).canProduce);
+        check('grass_blocked(#12) 映射到 hungry', mk(3, { grass_blocked: 1 }).hungry === true,
+            mk(3, { grass_blocked: 1 }).hungry);
+        check('limited_can_used(#19) 透传', mk(3, { limited_can_used: 1 }).limitedCanUsed === true,
+            mk(3, { limited_can_used: 1 }).limitedCanUsed);
+        check('can_donate(#20) 透传', mk(4, { can_donate: 1 }).canDonate === true,
+            mk(4, { can_donate: 1 }).canDonate);
     }
 
     section('10. Use(灌罐头) 编码必须与抓包一致');
@@ -312,38 +354,49 @@ proto.loadProto().then(async () => {
         check('请求 target.host_gid = 10001', Number(req.target.host_gid) === 10001, Number(req.target.host_gid));
     }
 
-    section('15. 倒计时终案(入栏抓包完整时间线定案)');
+    section('15. 端到端: 线上真帧(协议观察器采集)按新字段解码正确');
     {
-        // 时间线(t=秒): 入栏后 feed=1 #10=+8 #25=- → 催产 feed=3 #10=-3 #25=+9
-        //   → 收获 feed=4 → 再查 feed=5
-        // 定案: #10=本轮计时起点(动作即重置), #25=下次产出时刻(催产后出现)
-        //   成长期倒计时 = #10(feed=1 时是成长完成点)
-        //   生产期倒计时 = #25(feed=3, 官方 trigger_ready_at)
+        // 这些帧来自 core/data/protocol/catalog-*.json(服务端协议观察器自动采集),
+        // 不是手写构造 —— 用它们验证"真实帧 → 视图"这段没有第二次猜。
         const ranch = require(`${SB}/src/services/ranch`);
+        const { types } = proto;
         const now = Date.now();
-        const mk = (grown, feed, produceAt, triggerReadyAt) => ranch.toRanchView({
-            ranch: { animals: [{ slot: 1, animal_id: 60001, stage: 1, feed_state: feed, grown_flag: grown,
-                produce_at: produceAt, trigger_ready_at: triggerReadyAt }] },
-        }).animals[0];
+        // 窝: 3 只鹅(60003), stage=4, can_harvest 未置位, mature_ready_at_ms 在未来
+        const coopFrame = {
+            ranches: [{
+                ranch_inst_id: 10001, capacity: 4, animal_count: 3, husbandry_type: 1,
+                animals: [1, 2, 3].map(slot => ({
+                    ranch_inst_id: 10001, slot_index: slot, animal_id: 60003, stage: 4,
+                    produce_count: 2, grow_ready_at_ms: now - 7 * 3600 * 1000,
+                    infant_ready_at_ms: now - 9 * 3600 * 1000,
+                    can_feed: 1, can_donate: 1,
+                    mature_ready_at_ms: now + 3600 * 1000,
+                })),
+            }],
+            ranch_exp: 30,
+        };
+        const v = ranch.toRanchView(types.GetRanchDetailReply.fromObject(coopFrame));
+        check('3 只鹅都解出来', v.animals.length === 3, v.animals.length);
+        check('stage=4 → 成熟', v.animals[0].stageText === '成熟', v.animals[0].stageText);
+        check('成熟期倒计时约 1 小时', Math.abs(v.animals[0].matureInSec - 3600) <= 5, v.animals[0].matureInSec);
+        check('can_harvest 未置位 → 不可收', v.animals[0].harvestable === false, v.animals[0].harvestable);
 
-        // 成长期(入栏后): feed=1, #10=+8s → 成长倒计时约 8s
-        const growing = mk(1, 1, now + 8000, 0);
-        check('成长期 feed=1 → 不可收', growing.harvestable === false, growing.harvestable);
-        check('成长期倒计时 = #10(约8秒)', Math.abs((growing.stageEndInSec || 0) - 8) <= 2, growing.stageEndInSec);
-
-        // 生产期(催产后): feed=3, #25=+9s → 生产期倒计时约 9s
-        const laying = mk(0, 3, now - 3000, now + 9000);
-        check('生产期 feed=3 → 不可收', laying.harvestable === false, laying.harvestable);
-        check('生产期倒计时 = #25(约9秒)', Math.abs((laying.deliverInSec || 0) - 9) <= 2, laying.deliverInSec);
-
-        // 成熟期(收获时机): feed=4 → 可收
-        const mature = mk(1, 4, now - 8000, now + 3000);
-        check('成熟期 feed=4 → 可收', mature.harvestable === true, mature.harvestable);
-
-        // 刚收完: feed=5
-        const done = mk(0, 5, now - 14000, now - 2000);
-        check('刚收完 feed=5 → 不可收', done.harvestable === false, done.harvestable);
-        check('刚收完无倒计时', done.deliverInSec === null, done.deliverInSec);
+        // 棚: 牛(70002) stage=3 producing, produce_ready_at_ms 在未来
+        const penFrame = {
+            ranches: [{
+                ranch_inst_id: 10003, capacity: 3, animal_count: 1, husbandry_type: 2,
+                animals: [{
+                    ranch_inst_id: 10003, slot_index: 1, animal_id: 70002, stage: 3,
+                    producing: true, can_feed: 1, can_donate: 1,
+                    produce_ready_at_ms: now + 10 * 3600 * 1000,
+                }],
+            }],
+        };
+        const pv = ranch.toRanchView(types.GetRanchDetailReply.fromObject(penFrame));
+        check('棚被单独分组', (pv.pens || []).length === 1 && pv.pens[0].ranchInstId === 10003,
+            pv.pens);
+        check('生产期倒计时约 10 小时', Math.abs(pv.animals[0].produceInSec - 36000) <= 5, pv.animals[0].produceInSec);
+        check('producing → 不可收', pv.animals[0].harvestable === false, pv.animals[0].harvestable);
     }
 
     section('16. PlaceAnimal 编码与抓包一致(幼崽id放target#2, 无count)');
@@ -364,7 +417,8 @@ proto.loadProto().then(async () => {
         // 实际调用验证
         const calls = installStub({
             PlaceAnimal: () => types.PlaceAnimalReply.encode(types.PlaceAnimalReply.create({
-                ranch: { animals: [{ slot: 1, animal_id: 60001, stage: 1, feed_state: 2 }] },
+                ranches: [{ husbandry_type: 1, capacity: 3, animal_count: 1,
+                    animals: [{ slot_index: 1, animal_id: 60001, stage: 1 }] }],
             })).finish(),
         });
         const ranch = freshRanch();

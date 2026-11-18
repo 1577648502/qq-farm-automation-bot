@@ -1,17 +1,24 @@
 <script setup lang="ts">
+import type { RanchFacility } from '@/stores/ranch'
 import { useIntervalFn } from '@vueuse/core'
 import { storeToRefs } from 'pinia'
-import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 
+import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
+import api from '@/api'
+import ConfirmModal from '@/components/ConfirmModal.vue'
 import BaseButton from '@/components/ui/BaseButton.vue'
 import LoadingState from '@/components/ui/LoadingState.vue'
-import ConfirmModal from '@/components/ConfirmModal.vue'
-import api from '@/api'
 import { useAccountStore } from '@/stores/account'
-import { useRanchStore, type RanchFacility } from '@/stores/ranch'
+import { useRanchStore } from '@/stores/ranch'
 import { useStatusStore } from '@/stores/status'
 import { useToastStore } from '@/stores/toast'
 
+/**
+ * 嵌入模式: 由父页面(个人 → 我的牧场)传入。
+ * 为 true 时只显示"总览"内容, 隐藏本页的页签栏 —— 否则会出现
+ * 「个人页签 → 牧场页签」两层嵌套, 手机上没法用。
+ */
+withDefaults(defineProps<{ embedded?: boolean }>(), { embedded: false })
 /**
  * 牧场面板(11-17 新玩法)。
  * 功能对照农场面板: 总览 + 每只动物按状态手动操作; 自动行为由设置里的牧场开关控制。
@@ -25,13 +32,6 @@ const { overview, loading } = storeToRefs(ranchStore)
 const { currentAccountId, currentAccount } = storeToRefs(accountStore)
 const { status, loading: statusLoading, realtimeConnected } = storeToRefs(statusStore)
 void currentAccount
-
-/**
- * 嵌入模式: 由父页面(个人 → 我的牧场)传入。
- * 为 true 时只显示"总览"内容, 隐藏本页的页签栏 —— 否则会出现
- * 「个人页签 → 牧场页签」两层嵌套, 手机上没法用。
- */
-withDefaults(defineProps<{ embedded?: boolean }>(), { embedded: false })
 
 const currentTab = ref<'overview' | 'cubShop' | 'tiers' | 'tasks' | 'buildings'>('overview')
 const cubShopLoading = ref(false)
@@ -49,8 +49,10 @@ const grassBuying = ref(false)
 
 async function loadRanchShop(category?: 'all' | 'item' | 'cub') {
   const id = currentAccountId.value
-  if (!id) return
-  if (category) ranchShopCategory.value = category
+  if (!id)
+    return
+  if (category)
+    ranchShopCategory.value = category
   ranchShopLoading.value = true
   ranchShopError.value = ''
   try {
@@ -59,11 +61,14 @@ async function loadRanchShop(category?: 'all' | 'item' | 'cub') {
       headers: { 'x-account-id': id },
     })
     const d = res.data
-    if (!d?.ok) throw new Error(d?.error || '获取牧场商城失败')
+    if (!d?.ok)
+      throw new Error(d?.error || '获取牧场商城失败')
     ranchShopItems.value = d.data?.items || []
-  } catch (e: any) {
+  }
+  catch (e: any) {
     ranchShopError.value = e?.response?.data?.error || e?.message || '获取牧场商城失败'
-  } finally {
+  }
+  finally {
     ranchShopLoading.value = false
   }
 }
@@ -83,21 +88,26 @@ const ranchShopCounts = computed(() => {
 /** 手动买牧草 */
 async function buyGrassManually() {
   const id = currentAccountId.value
-  if (!id || grassBuying.value) return
+  if (!id || grassBuying.value)
+    return
   const n = Math.max(1, Math.floor(Number(grassBuyCount.value) || 1))
   grassBuying.value = true
   try {
     const res = await api.post('/api/ranch/grass/buy', { count: n }, { headers: { 'x-account-id': id } })
     const d = res.data
-    if (!d?.ok) throw new Error(d?.error || '购买失败')
+    if (!d?.ok)
+      throw new Error(d?.error || '购买失败')
     const r = d.data || {}
-    if (r.ok) toast.success(`已买牧草 ${r.bought} 个，花 ${r.spent}`)
+    if (r.ok)
+      toast.success(`已买牧草 ${r.bought} 个，花 ${r.spent}`)
     else toast.error(r.error || '购买失败')
     await loadRanchShop()
     await reloadCubShop()
-  } catch (e: any) {
+  }
+  catch (e: any) {
     toast.error(e?.response?.data?.error || e?.message || '购买失败')
-  } finally {
+  }
+  finally {
     grassBuying.value = false
   }
 }
@@ -110,7 +120,8 @@ const cubSort = ref<'ratio' | 'price' | 'profit'>('ratio')
 const cubShopFiltered = computed(() => {
   const all = Array.isArray(cubShopList.value) ? cubShopList.value : []
   const list = all.filter((g: any) => {
-    if (!g) return false
+    if (!g)
+      return false
     // 后端老版本可能没有 remaining / profit 字段, 一律做空值保护
     const remain = g.remaining
     const noLimit = remain === null || remain === undefined
@@ -357,20 +368,14 @@ watch(overview, () => {
   elapsedSec.value = 0
 })
 
-/** 距下次产出秒数; null = 还没进入产出周期(幼年/未开轮), 不能当成"可收" */
-function produceInSec(a: { harvestInSec?: number | null, produceInSec?: number | null }) {
-  const raw = a.harvestInSec ?? a.produceInSec
-  if (raw === null || raw === undefined)
-    return null
-  return Math.max(0, raw - elapsedSec.value)
+/** 服务端给的"距就绪秒数" → 减去本地已过的秒数, 得到当前剩余(夹到 0) */
+function remain(sec: number | null | undefined) {
+  return Math.max(0, (sec ?? 0) - elapsedSec.value)
 }
 
-/** 该动物现在能不能收 —— 以后端派生字段为准, 前端不再自己用秒数猜 */
-function isHarvestable(a: { harvestable?: boolean, harvestInSec?: number | null, produceInSec?: number | null }) {
-  if (typeof a.harvestable === 'boolean')
-    return a.harvestable
-  const sec = produceInSec(a)
-  return sec !== null && sec <= 0
+/** 该动物现在能不能收 —— 以服务端 can_harvest 为准, 前端不再自己用秒数猜 */
+function isHarvestable(a: { harvestable?: boolean }) {
+  return a.harvestable === true
 }
 
 // 批量操作(对照农场整田操作): 只保留服务端确实支持的接口
@@ -382,11 +387,13 @@ const BATCH_OPS = [
 ]
 async function runBatch(batch: string, extra: Record<string, any> = {}) {
   const id = currentAccountId.value
-  if (!id) return
+  if (!id)
+    return
   opBusy.value = 'batch'
   try {
     const r = await ranchStore.operate(id, { op: 'batch', batch, ...extra })
-    if (r && r.ok === false) toast.error(r.error || '操作未成功')
+    if (r && r.ok === false)
+      toast.error(r.error || '操作未成功')
     else toast.success(`${r.action}：${r.detail || '完成'}`)
   }
   catch (e: any) {
@@ -444,7 +451,7 @@ const careSummary = computed(() => {
     return { harvestable: 0, hungry: 0, mutant: 0 }
   return {
     harvestable: ov.animals.filter(a => isHarvestable(a)).length,
-    hungry: ov.animals.filter(a => a.feedState === 1).length,
+    hungry: ov.animals.filter(a => a.grassBlocked === true).length,
     mutant: ov.animals.filter(a => a.mutant).length,
   }
 })
@@ -462,48 +469,43 @@ interface PenView {
   locked: boolean
   /** AllCells 里的真实建筑(没有 = 该建筑还没建造/没放置) */
   building?: { instId: number, buildingId: number, level: number, status: number, kind: string }
+  /** 服务端 GetRanchDetail 里有没有这一组(没有=该栏舍未解锁) */
+  exists?: boolean
 }
 
 const pensView = computed<PenView[]>(() => {
   const ov = overview.value
   if (!ov)
     return []
-  // 窝/棚的建筑容量来自 AllCells 的真实建筑(coopBuildings/penBuildings),
-  // 不再用 coopCount/penCount 凑数 —— 那两个是"规划格数", 不代表已解锁。
+  // ⭐ 2026-11-18: 栏舍分组直接来自服务端 —— GetRanchDetailReply#1 是 repeated,
+  //   窝(husbandry_type=1)和棚(=2)各一条, capacity / animal_count 都是真实值。
+  //   以前这两个值被读成"窝数量/棚数量", 再拿动物 ID 段去猜分组, 于是新号棚位错乱。
   const coopB = (ov.coopBuildings || [])[0]
   const penB = (ov.penBuildings || [])[0]
-  const pens = [
-    {
-      key: 'coop',
-      title: '窝（小动物）',
+  const makeGroup = (key: string, title: string, group: any, building: any, facilitySlot: number) => {
+    const animals = group ? (group.animals || []) : []
+    const capacity = group ? (group.capacity || 0) : 0
+    return {
+      key,
+      title,
       icon: 'i-carbon-home',
-      // 有真实建筑就用它的占位容量, 否则回落到牧场详情
-      capacity: ov.coopCount || 0,
-      facility: (ov.facilities || []).find(f => f.slot === 10001),
-      animals: ov.animals.filter(a => a.animalId < 70000 && a.animalId >= 60000),
+      capacity,
+      facility: (ov.facilities || []).find(f => f.slot === facilitySlot),
+      animals,
       emptySlots: 0,
       locked: false,
-      building: coopB,
-    },
-    {
-      key: 'pen',
-      title: '棚（大动物）',
-      icon: 'i-carbon-home',
-      capacity: ov.penCount || 0,
-      // 棚的建筑实例不在固定槽位(10000/10001/10002)里, 用 penBuildings 判断
-      facility: undefined,
-      animals: ov.animals.filter(a => a.animalId >= 70000 && a.animalId < 80000),
-      emptySlots: 0,
-      locked: false,
-      building: penB,
-    },
+      building,
+      exists: !!group,
+    }
+  }
+  const pens: PenView[] = [
+    makeGroup('coop', '窝（小动物）', (ov.coops || [])[0], coopB, 10001),
+    makeGroup('pen', '棚（大动物）', (ov.pens || [])[0], penB, 0),
   ]
   for (const p of pens) {
-    // ⭐ 真实建筑缺失 = 该栏舍还没建/没解锁。
-    //   之前直接用 penCount=4 渲染 4 个空位, 但游戏内棚是"未解锁" (用户现场反馈)。
-    const hasBuilding = !!p.building
-    p.emptySlots = hasBuilding ? Math.max(0, (p.capacity || 0) - p.animals.length) : 0
-    p.locked = !hasBuilding || ((p.capacity || 0) === 0 && p.animals.length === 0)
+    // 服务端没有这一组 = 该栏舍还没解锁(棚要更高等级)
+    p.emptySlots = Math.max(0, (p.capacity || 0) - p.animals.length)
+    p.locked = !p.exists || (p.capacity === 0 && p.animals.length === 0)
   }
   return pens
 })
@@ -591,7 +593,8 @@ const sellMessage = computed(() => {
   return [
     `账号：${account}`,
     `动物：${a.name}（槽位 ${a.slot}，${a.stageText || ''}）`,
-    a.sellCost ? `预计回收：${a.sellCost.amount} 金券` : '回收金额以服务端结算为准',
+    // #22 是 expected_harvest_sells(收获预计所得), 不是出售价 —— 别混为一谈
+    a.sellCost ? `收获预计所得：${a.sellCost.amount} 金券` : '收获所得以服务端结算为准',
     '',
     '出售后这只动物会从栏舍移除，无法撤回。',
   ].join('\n')
@@ -759,7 +762,7 @@ onUnmounted(() => {
       <button
         class="flex items-center rounded-lg font-medium transition-colors space-x-2"
         :class="[embedded ? 'min-h-[36px] px-3 py-1.5 text-sm' : 'min-h-[44px] px-4 py-2',
-          currentTab === 'overview' ? 'text-white shadow-md' : 'bg-white text-gray-600 hover:bg-gray-100 dark:bg-gray-800 dark:text-gray-300 dark:hover:bg-gray-700']"
+                 currentTab === 'overview' ? 'text-white shadow-md' : 'bg-white text-gray-600 hover:bg-gray-100 dark:bg-gray-800 dark:text-gray-300 dark:hover:bg-gray-700']"
         :style="currentTab === 'overview' ? { backgroundColor: 'var(--theme-primary)' } : {}"
         @click="currentTab = 'overview'"
       >
@@ -769,7 +772,7 @@ onUnmounted(() => {
       <button
         class="flex items-center rounded-lg font-medium transition-colors space-x-2"
         :class="[embedded ? 'min-h-[36px] px-3 py-1.5 text-sm' : 'min-h-[44px] px-4 py-2',
-          currentTab === 'cubShop' ? 'text-white shadow-md' : 'bg-white text-gray-600 hover:bg-gray-100 dark:bg-gray-800 dark:text-gray-300 dark:hover:bg-gray-700']"
+                 currentTab === 'cubShop' ? 'text-white shadow-md' : 'bg-white text-gray-600 hover:bg-gray-100 dark:bg-gray-800 dark:text-gray-300 dark:hover:bg-gray-700']"
         :style="currentTab === 'cubShop' ? { backgroundColor: 'var(--theme-primary)' } : {}"
         @click="openCubShop"
       >
@@ -779,7 +782,7 @@ onUnmounted(() => {
       <button
         class="flex items-center rounded-lg font-medium transition-colors space-x-2"
         :class="[embedded ? 'min-h-[36px] px-3 py-1.5 text-sm' : 'min-h-[44px] px-4 py-2',
-          currentTab === 'tiers' ? 'text-white shadow-md' : 'bg-white text-gray-600 hover:bg-gray-100 dark:bg-gray-800 dark:text-gray-300 dark:hover:bg-gray-700']"
+                 currentTab === 'tiers' ? 'text-white shadow-md' : 'bg-white text-gray-600 hover:bg-gray-100 dark:bg-gray-800 dark:text-gray-300 dark:hover:bg-gray-700']"
         :style="currentTab === 'tiers' ? { backgroundColor: 'var(--theme-primary)' } : {}"
         @click="openTiers"
       >
@@ -789,7 +792,7 @@ onUnmounted(() => {
       <button
         class="flex items-center rounded-lg font-medium transition-colors space-x-2"
         :class="[embedded ? 'min-h-[36px] px-3 py-1.5 text-sm' : 'min-h-[44px] px-4 py-2',
-          currentTab === 'tasks' ? 'text-white shadow-md' : 'bg-white text-gray-600 hover:bg-gray-100 dark:bg-gray-800 dark:text-gray-300 dark:hover:bg-gray-700']"
+                 currentTab === 'tasks' ? 'text-white shadow-md' : 'bg-white text-gray-600 hover:bg-gray-100 dark:bg-gray-800 dark:text-gray-300 dark:hover:bg-gray-700']"
         :style="currentTab === 'tasks' ? { backgroundColor: 'var(--theme-primary)' } : {}"
         @click="openRanchTasks"
       >
@@ -803,7 +806,7 @@ onUnmounted(() => {
       <button
         class="flex items-center rounded-lg font-medium transition-colors space-x-2"
         :class="[embedded ? 'min-h-[36px] px-3 py-1.5 text-sm' : 'min-h-[44px] px-4 py-2',
-          currentTab === 'buildings' ? 'text-white shadow-md' : 'bg-white text-gray-600 hover:bg-gray-100 dark:bg-gray-800 dark:text-gray-300 dark:hover:bg-gray-700']"
+                 currentTab === 'buildings' ? 'text-white shadow-md' : 'bg-white text-gray-600 hover:bg-gray-100 dark:bg-gray-800 dark:text-gray-300 dark:hover:bg-gray-700']"
         :style="currentTab === 'buildings' ? { backgroundColor: 'var(--theme-primary)' } : {}"
         @click="openBuildings"
       >
@@ -880,7 +883,7 @@ onUnmounted(() => {
       </div>
       <div class="p-3 sm:p-4">
         <LoadingState v-if="ranchTasksLoading && !ranchTasks.length" />
-        <div v-else-if="ranchTasksError" class="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-600 dark:border-red-800 dark:bg-red-900/20">
+        <div v-else-if="ranchTasksError" class="border border-red-200 rounded-lg bg-red-50 p-3 text-sm text-red-600 dark:border-red-800 dark:bg-red-900/20">
           {{ ranchTasksError }}
         </div>
         <div v-else-if="!ranchTasks.length" class="py-10 text-center text-sm text-gray-400">
@@ -890,7 +893,7 @@ onUnmounted(() => {
           <div
             v-for="t in ranchTasks"
             :key="t.id"
-            class="flex flex-wrap items-center gap-2 rounded border px-2.5 py-2 text-xs"
+            class="flex flex-wrap items-center gap-2 border rounded px-2.5 py-2 text-xs"
             :class="t.canClaim
               ? 'border-amber-300 bg-amber-50 dark:border-amber-700 dark:bg-amber-900/20'
               : 'border-gray-100 dark:border-gray-700'"
@@ -938,22 +941,24 @@ onUnmounted(() => {
           AllCells 只返回状态不返回倒计时，所以这里不显示剩余时间；升级/解锁请用总览页的操作按钮。
         </p>
       </div>
-      <div class="p-3 sm:p-4 space-y-4">
+      <div class="p-3 space-y-4 sm:p-4">
         <LoadingState v-if="buildingsLoading && !ranchBuildings.length" />
-        <div v-else-if="buildingsError" class="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-600 dark:border-red-800 dark:bg-red-900/20">
+        <div v-else-if="buildingsError" class="border border-red-200 rounded-lg bg-red-50 p-3 text-sm text-red-600 dark:border-red-800 dark:bg-red-900/20">
           {{ buildingsError }}
         </div>
 
         <section>
-          <h4 class="mb-2 text-sm font-semibold">建筑</h4>
+          <h4 class="mb-2 text-sm font-semibold">
+            建筑
+          </h4>
           <div v-if="!ranchBuildings.length" class="py-6 text-center text-xs text-gray-400">
             暂无建筑数据
           </div>
-          <div v-else class="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+          <div v-else class="grid gap-2 lg:grid-cols-3 sm:grid-cols-2">
             <div
               v-for="b in ranchBuildings"
               :key="b.instId"
-              class="flex items-center justify-between rounded border border-gray-100 px-2.5 py-2 text-xs dark:border-gray-700"
+              class="flex items-center justify-between border border-gray-100 rounded px-2.5 py-2 text-xs dark:border-gray-700"
             >
               <div class="flex items-center gap-2">
                 <span class="rounded bg-indigo-50 px-1.5 py-0.5 text-[10px] text-indigo-600 dark:bg-indigo-900/30 dark:text-indigo-300">
@@ -965,28 +970,32 @@ onUnmounted(() => {
                 <span class="text-gray-700 font-medium dark:text-gray-200">Lv{{ b.level }}</span>
                 <!-- 建筑 status 实测是 9/10/11(不是地块的 1/2), 且语义无权威定义:
                      不翻译成"升级中", 直接显示状态码, 避免误导 -->
-                <span class="text-gray-400 text-[10px]">状态{{ b.status }}</span>
+                <span class="text-[10px] text-gray-400">状态{{ b.status }}</span>
               </div>
             </div>
           </div>
         </section>
 
         <section>
-          <h4 class="mb-2 text-sm font-semibold">地块</h4>
+          <h4 class="mb-2 text-sm font-semibold">
+            地块
+          </h4>
           <div v-if="!ranchCells.length" class="py-6 text-center text-xs text-gray-400">
             暂无地块数据
           </div>
-          <div v-else class="grid grid-cols-3 gap-1.5 sm:grid-cols-5 lg:grid-cols-8">
+          <div v-else class="grid grid-cols-3 gap-1.5 lg:grid-cols-8 sm:grid-cols-5">
             <div
               v-for="c in ranchCells"
-              :key="c.regionId + '-' + c.seq"
-              class="rounded border px-1 py-1.5 text-center text-[10px]"
+              :key="`${c.regionId}-${c.seq}`"
+              class="border rounded px-1 py-1.5 text-center text-[10px]"
               :class="c.unlocked
                 ? 'border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-800 dark:bg-emerald-900/20 dark:text-emerald-300'
                 : 'border-gray-200 bg-gray-50 text-gray-400 dark:border-gray-700 dark:bg-gray-900/30'"
               :title="`region ${c.regionId} · seq ${c.seq}${c.capacity ? ` · 容量 ${c.capacity}` : ''}`"
             >
-              <div class="font-mono">{{ c.seq }}</div>
+              <div class="font-mono">
+                {{ c.seq }}
+              </div>
               <div>{{ c.unlocked ? '已解锁' : '未解锁' }}</div>
             </div>
           </div>
@@ -1003,7 +1012,7 @@ onUnmounted(() => {
           </h3>
           <div class="flex flex-wrap items-center gap-3">
             <!-- 金券余额: 余额未知时不显示, 避免误导(与不拦截余额的策略一致) -->
-            <span class="rounded-lg border border-amber-200 bg-amber-50 px-2 py-1 text-xs text-amber-700 dark:border-amber-800 dark:bg-amber-900/20 dark:text-amber-300">
+            <span class="border border-amber-200 rounded-lg bg-amber-50 px-2 py-1 text-xs text-amber-700 dark:border-amber-800 dark:bg-amber-900/20 dark:text-amber-300">
               金券 <strong>{{ voucherBalance === null ? '未知' : formatNumber(Number(voucherBalance)) }}</strong>
             </span>
             <span class="text-xs text-gray-400">
@@ -1041,7 +1050,7 @@ onUnmounted(() => {
         </div>
 
         <!-- 道具: 牧草手动购买 -->
-        <div v-if="ranchShopCategory === 'item'" class="mt-3 rounded-lg border border-emerald-200 bg-emerald-50/60 p-3 dark:border-emerald-800 dark:bg-emerald-900/20">
+        <div v-if="ranchShopCategory === 'item'" class="mt-3 border border-emerald-200 rounded-lg bg-emerald-50/60 p-3 dark:border-emerald-800 dark:bg-emerald-900/20">
           <div class="flex flex-wrap items-center gap-3">
             <div class="min-w-0 flex-1">
               <div class="text-sm text-emerald-900 font-semibold dark:text-emerald-200">
@@ -1084,14 +1093,20 @@ onUnmounted(() => {
           >
             {{ f.label }} <span class="opacity-70">{{ cubCounts[f.key] }}</span>
           </button>
-          <div class="flex-1"></div>
+          <div class="flex-1" />
           <select
             v-model="cubSort"
             class="h-8 border border-gray-300 rounded-lg bg-white px-2 text-xs dark:border-gray-600 dark:bg-gray-800"
           >
-            <option value="ratio">按收益比</option>
-            <option value="profit">按单只净赚</option>
-            <option value="price">按价格</option>
+            <option value="ratio">
+              按收益比
+            </option>
+            <option value="profit">
+              按单只净赚
+            </option>
+            <option value="price">
+              按价格
+            </option>
           </select>
         </div>
       </div>
@@ -1103,7 +1118,7 @@ onUnmounted(() => {
           <div v-else-if="!ranchShopFiltered.length" class="py-8 text-center text-sm text-gray-500">
             商店暂无在售道具
           </div>
-          <div v-else class="grid grid-cols-1 gap-3 md:grid-cols-3 lg:grid-cols-4 sm:grid-cols-2">
+          <div v-else class="grid grid-cols-1 gap-3 lg:grid-cols-4 md:grid-cols-3 sm:grid-cols-2">
             <div
               v-for="g in ranchShopFiltered"
               :key="g.goodsId"
@@ -1113,8 +1128,12 @@ onUnmounted(() => {
                 <span class="rounded bg-emerald-100 px-1.5 py-0.5 text-[10px] text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300">道具</span>
                 <span class="text-[10px] text-gray-400">#{{ g.goodsId }}</span>
               </div>
-              <div class="text-sm font-bold text-gray-800 dark:text-gray-100">{{ g.name }}</div>
-              <div class="mt-0.5 text-[11px] text-gray-500">单价 {{ g.price }} 金券</div>
+              <div class="text-sm text-gray-800 font-bold dark:text-gray-100">
+                {{ g.name }}
+              </div>
+              <div class="mt-0.5 text-[11px] text-gray-500">
+                单价 {{ g.price }} 金券
+              </div>
               <div class="text-[10px] text-gray-400">
                 {{ g.limit > 0 ? `限购 ${g.bought}/${g.limit}` : '不限购' }}
               </div>
@@ -1132,121 +1151,121 @@ onUnmounted(() => {
 
         <!-- 幼崽分类: 原加购界面 -->
         <template v-else>
-        <LoadingState v-if="cubShopLoading && !cubShopList.length" />
-        <div v-else-if="cubShopError" class="py-8 text-center text-sm text-gray-500">
-          {{ cubShopError }}
-        </div>
-        <div v-else-if="!cubShopList.length" class="py-8 text-center text-sm text-gray-500">
-          商店暂无在售幼崽
-        </div>
-        <div v-else-if="!cubShopFiltered.length" class="py-8 text-center text-sm text-gray-500">
-          该筛选条件下没有幼崽
-        </div>
-        <div v-else class="grid grid-cols-1 gap-3 md:grid-cols-3 lg:grid-cols-4 sm:grid-cols-2">
-          <div
-            v-for="g in cubShopFiltered"
-            :key="g.goodsId"
-            class="flex flex-col border rounded-lg p-3 text-center transition"
-            :class="g.valueRatio >= 2.4
-              ? 'border-amber-300 bg-amber-50/60 dark:border-amber-700 dark:bg-amber-900/20'
-              : 'border-gray-200 bg-white dark:border-gray-700 dark:bg-gray-800'"
-          >
-            <div class="flex items-start justify-between">
-              <span
-                v-if="g.valueRatio >= 2.4"
-                class="rounded bg-amber-500 px-1 py-0.5 text-[10px] text-white"
-              >
-                高收益
-              </span>
-              <span v-else />
-              <span
-                v-if="g.limit > 0"
-                class="rounded px-1 py-0.5 text-[10px]"
-                :class="cubIsLimitReached(g)
-                  ? 'bg-red-100 text-red-600 dark:bg-red-900/40 dark:text-red-300'
-                  : 'bg-gray-100 text-gray-500 dark:bg-gray-700 dark:text-gray-300'"
-              >
-                限购 {{ g.bought }}/{{ g.limit }}
-              </span>
-            </div>
-
-            <div class="mb-1 mt-1 h-10 w-10 flex items-center justify-center self-center">
-              <div class="i-fas-paw text-3xl text-amber-500" />
-            </div>
-            <div class="text-xs font-bold">
-              {{ g.name }}
-            </div>
-            <div class="mt-0.5 text-[11px] text-gray-500">
-              金券 {{ formatNumber(g.price) }} / 只
-            </div>
-            <div class="mt-0.5 text-[10px] text-gray-400">
-              回收比 {{ (g.valueRatio || 0).toFixed(2) }}
-            </div>
-            <div v-if="g.profit !== null && g.profit !== undefined" class="text-[10px] text-emerald-600 dark:text-emerald-400">
-              单只净赚 {{ formatNumber(g.profit) }} 金券
-            </div>
-
-            <!-- 加购区: 数量步进 + 合计 + 购买(对齐农场商城) -->
-            <div class="mt-2 flex items-center justify-center gap-1">
-              <button
-                type="button"
-                class="h-7 w-7 flex items-center justify-center border border-gray-200 rounded-md text-gray-600 dark:border-gray-600 dark:text-gray-300 disabled:opacity-40"
-                :disabled="cubIsDisabled(g) || getCubQuantity(g) <= 1"
-                @click="cubQuantities[g.goodsId] = getCubQuantity(g) - 1"
-              >
-                −
-              </button>
-              <input
-                v-model.number="cubQuantities[g.goodsId]"
-                type="number"
-                min="1"
-                :max="cubMaxQuantity(g)"
-                :disabled="cubIsDisabled(g)"
-                class="h-7 w-12 border border-gray-200 rounded-md bg-white px-1 text-center text-xs text-gray-900 outline-none dark:border-gray-600 dark:bg-gray-800 dark:text-white"
-                @blur="normalizeCubQuantity(g)"
-              >
-              <button
-                type="button"
-                class="h-7 w-7 flex items-center justify-center border border-gray-200 rounded-md text-gray-600 dark:border-gray-600 dark:text-gray-300 disabled:opacity-40"
-                :disabled="cubIsDisabled(g) || getCubQuantity(g) >= cubMaxQuantity(g)"
-                @click="cubQuantities[g.goodsId] = getCubQuantity(g) + 1"
-              >
-                +
-              </button>
-            </div>
-
-            <div class="mt-1 h-4 text-[10px]">
-              <span v-if="cubIsLimitReached(g)" class="text-red-500">已售罄</span>
-              <span v-else-if="cubIsInsufficient(g)" class="text-red-500">金券不足</span>
-              <span v-else class="text-gray-400">
-                合计 {{ formatNumber(cubTotalPrice(g)) }} 金券
-              </span>
-            </div>
-
-            <BaseButton
-              class="mt-2 w-full"
-              size="sm"
-              :disabled="cubIsDisabled(g) || cubBuyBusy === g.goodsId"
-              @click="openCubPurchase(g)"
-            >
-              <template v-if="g.unlocked === false">
-                未解锁
-              </template>
-              <template v-else-if="cubIsLimitReached(g)">
-                已售罄
-              </template>
-              <template v-else-if="cubBuyBusy === g.goodsId">
-                购买中…
-              </template>
-              <template v-else>
-                购买
-              </template>
-            </BaseButton>
+          <LoadingState v-if="cubShopLoading && !cubShopList.length" />
+          <div v-else-if="cubShopError" class="py-8 text-center text-sm text-gray-500">
+            {{ cubShopError }}
           </div>
+          <div v-else-if="!cubShopList.length" class="py-8 text-center text-sm text-gray-500">
+            商店暂无在售幼崽
+          </div>
+          <div v-else-if="!cubShopFiltered.length" class="py-8 text-center text-sm text-gray-500">
+            该筛选条件下没有幼崽
+          </div>
+          <div v-else class="grid grid-cols-1 gap-3 lg:grid-cols-4 md:grid-cols-3 sm:grid-cols-2">
+            <div
+              v-for="g in cubShopFiltered"
+              :key="g.goodsId"
+              class="flex flex-col border rounded-lg p-3 text-center transition"
+              :class="g.valueRatio >= 2.4
+                ? 'border-amber-300 bg-amber-50/60 dark:border-amber-700 dark:bg-amber-900/20'
+                : 'border-gray-200 bg-white dark:border-gray-700 dark:bg-gray-800'"
+            >
+              <div class="flex items-start justify-between">
+                <span
+                  v-if="g.valueRatio >= 2.4"
+                  class="rounded bg-amber-500 px-1 py-0.5 text-[10px] text-white"
+                >
+                  高收益
+                </span>
+                <span v-else />
+                <span
+                  v-if="g.limit > 0"
+                  class="rounded px-1 py-0.5 text-[10px]"
+                  :class="cubIsLimitReached(g)
+                    ? 'bg-red-100 text-red-600 dark:bg-red-900/40 dark:text-red-300'
+                    : 'bg-gray-100 text-gray-500 dark:bg-gray-700 dark:text-gray-300'"
+                >
+                  限购 {{ g.bought }}/{{ g.limit }}
+                </span>
+              </div>
+
+              <div class="mb-1 mt-1 h-10 w-10 flex items-center self-center justify-center">
+                <div class="i-fas-paw text-3xl text-amber-500" />
+              </div>
+              <div class="text-xs font-bold">
+                {{ g.name }}
+              </div>
+              <div class="mt-0.5 text-[11px] text-gray-500">
+                金券 {{ formatNumber(g.price) }} / 只
+              </div>
+              <div class="mt-0.5 text-[10px] text-gray-400">
+                回收比 {{ (g.valueRatio || 0).toFixed(2) }}
+              </div>
+              <div v-if="g.profit !== null && g.profit !== undefined" class="text-[10px] text-emerald-600 dark:text-emerald-400">
+                单只净赚 {{ formatNumber(g.profit) }} 金券
+              </div>
+
+              <!-- 加购区: 数量步进 + 合计 + 购买(对齐农场商城) -->
+              <div class="mt-2 flex items-center justify-center gap-1">
+                <button
+                  type="button"
+                  class="h-7 w-7 flex items-center justify-center border border-gray-200 rounded-md text-gray-600 dark:border-gray-600 dark:text-gray-300 disabled:opacity-40"
+                  :disabled="cubIsDisabled(g) || getCubQuantity(g) <= 1"
+                  @click="cubQuantities[g.goodsId] = getCubQuantity(g) - 1"
+                >
+                  −
+                </button>
+                <input
+                  v-model.number="cubQuantities[g.goodsId]"
+                  type="number"
+                  min="1"
+                  :max="cubMaxQuantity(g)"
+                  :disabled="cubIsDisabled(g)"
+                  class="h-7 w-12 border border-gray-200 rounded-md bg-white px-1 text-center text-xs text-gray-900 outline-none dark:border-gray-600 dark:bg-gray-800 dark:text-white"
+                  @blur="normalizeCubQuantity(g)"
+                >
+                <button
+                  type="button"
+                  class="h-7 w-7 flex items-center justify-center border border-gray-200 rounded-md text-gray-600 dark:border-gray-600 dark:text-gray-300 disabled:opacity-40"
+                  :disabled="cubIsDisabled(g) || getCubQuantity(g) >= cubMaxQuantity(g)"
+                  @click="cubQuantities[g.goodsId] = getCubQuantity(g) + 1"
+                >
+                  +
+                </button>
+              </div>
+
+              <div class="mt-1 h-4 text-[10px]">
+                <span v-if="cubIsLimitReached(g)" class="text-red-500">已售罄</span>
+                <span v-else-if="cubIsInsufficient(g)" class="text-red-500">金券不足</span>
+                <span v-else class="text-gray-400">
+                  合计 {{ formatNumber(cubTotalPrice(g)) }} 金券
+                </span>
+              </div>
+
+              <BaseButton
+                class="mt-2 w-full"
+                size="sm"
+                :disabled="cubIsDisabled(g) || cubBuyBusy === g.goodsId"
+                @click="openCubPurchase(g)"
+              >
+                <template v-if="g.unlocked === false">
+                  未解锁
+                </template>
+                <template v-else-if="cubIsLimitReached(g)">
+                  已售罄
+                </template>
+                <template v-else-if="cubBuyBusy === g.goodsId">
+                  购买中…
+                </template>
+                <template v-else>
+                  购买
+                </template>
+              </BaseButton>
+            </div>
           </div>   <!-- 网格闭合(补回被误删的) -->
         </template>   <!-- 幼崽分类结束 -->
-        </div>
       </div>
+    </div>
 
     <div v-if="currentTab === 'overview'" class="space-y-4">
       <div class="rounded-lg bg-white shadow dark:bg-gray-800">
@@ -1258,7 +1277,7 @@ onUnmounted(() => {
               牧场总览
             </h3>
             <div v-if="overview" class="flex items-center gap-3 text-xs text-gray-500 dark:text-gray-400">
-              <span>窝 {{ overview.coopCount }} · 棚 {{ overview.penCount }}</span>
+              <span>窝 {{ overview.coopAnimals ?? 0 }}/{{ overview.coopCount }} · 棚 {{ overview.penAnimals ?? 0 }}/{{ overview.penCount }}</span>
               <span>牧草 {{ overview.grassCount }}</span>
               <span v-if="overview.ranchLevel">牧场 Lv{{ overview.ranchLevel }} <span class="text-gray-400">{{ overview.ranchLevelExp }}/{{ overview.ranchLevelNeeded }}</span></span>
               <span v-else>经验 {{ overview.ranchExp }}</span>
@@ -1332,7 +1351,7 @@ onUnmounted(() => {
           </div>
           <!-- 只有"连建筑都没有"才是真空态; 有窝/棚但没动物时仍要显示建筑视图 -->
           <div
-            v-else-if="overview.animals.length === 0 && (overview.coopCount || 0) === 0 && (overview.penCount || 0) === 0"
+            v-else-if="overview.animals.length === 0 && !(overview.coops || []).length && !(overview.pens || []).length"
             class="flex flex-col items-center justify-center gap-3 py-10 text-center"
           >
             <div class="i-fas-paw text-4xl text-gray-300" />
@@ -1345,7 +1364,7 @@ onUnmounted(() => {
             </div>
           </div>
 
-        <!-- 建筑视图(对应农场的"田地"): 窝 / 棚 分组。
+          <!-- 建筑视图(对应农场的"田地"): 窝 / 棚 分组。
              批量操作条和建筑网格必须包在同一个 v-else 里 —— 它们之间不能再插
              独立 v-if 节点, 否则会把上面那条 "空态 v-else-if" 链切断。 -->
           <div v-else class="space-y-4">
@@ -1367,7 +1386,7 @@ onUnmounted(() => {
                    autoBuyRotationShop 会自己判断是否营业/有没有便便。 -->
               <button
                 type="button"
-                class="min-h-[38px] inline-flex items-center gap-1.5 border rounded-lg px-3 py-1.5 text-xs font-medium transition disabled:opacity-50 border-violet-300 bg-violet-50 text-violet-700 hover:bg-violet-100 dark:border-violet-700 dark:bg-violet-900/30 dark:text-violet-300"
+                class="min-h-[38px] inline-flex items-center gap-1.5 border border-violet-300 rounded-lg bg-violet-50 px-3 py-1.5 text-xs text-violet-700 font-medium transition dark:border-violet-700 dark:bg-violet-900/30 hover:bg-violet-100 dark:text-violet-300 disabled:opacity-50"
                 :disabled="opBusy !== ''"
                 @click="runOp('rotation')"
               >
@@ -1377,7 +1396,7 @@ onUnmounted(() => {
               <!-- 偷好友牧场产物: 自动流程由 ranch_steal 开关控制, 这里给手动补跑一次 -->
               <button
                 type="button"
-                class="min-h-[38px] inline-flex items-center gap-1.5 border rounded-lg px-3 py-1.5 text-xs font-medium transition disabled:opacity-50 border-pink-300 bg-pink-50 text-pink-700 hover:bg-pink-100 dark:border-pink-700 dark:bg-pink-900/30 dark:text-pink-300"
+                class="min-h-[38px] inline-flex items-center gap-1.5 border border-pink-300 rounded-lg bg-pink-50 px-3 py-1.5 text-xs text-pink-700 font-medium transition dark:border-pink-700 dark:bg-pink-900/30 hover:bg-pink-100 dark:text-pink-300 disabled:opacity-50"
                 :disabled="opBusy !== ''"
                 @click="stealConfirming = true"
               >
@@ -1387,7 +1406,7 @@ onUnmounted(() => {
               <!-- 建筑升级 / 地块解锁: 后端是一键(先领竣工再升级), 不传 instId 即整场 -->
               <button
                 type="button"
-                class="min-h-[38px] inline-flex items-center gap-1.5 border rounded-lg px-3 py-1.5 text-xs font-medium transition disabled:opacity-50 border-indigo-300 bg-indigo-50 text-indigo-700 hover:bg-indigo-100 dark:border-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-300"
+                class="min-h-[38px] inline-flex items-center gap-1.5 border border-indigo-300 rounded-lg bg-indigo-50 px-3 py-1.5 text-xs text-indigo-700 font-medium transition dark:border-indigo-700 dark:bg-indigo-900/30 hover:bg-indigo-100 dark:text-indigo-300 disabled:opacity-50"
                 :disabled="opBusy !== ''"
                 @click="runOp('upgrade')"
               >
@@ -1396,7 +1415,7 @@ onUnmounted(() => {
               </button>
               <button
                 type="button"
-                class="min-h-[38px] inline-flex items-center gap-1.5 border rounded-lg px-3 py-1.5 text-xs font-medium transition disabled:opacity-50 border-cyan-300 bg-cyan-50 text-cyan-700 hover:bg-cyan-100 dark:border-cyan-700 dark:bg-cyan-900/30 dark:text-cyan-300"
+                class="min-h-[38px] inline-flex items-center gap-1.5 border border-cyan-300 rounded-lg bg-cyan-50 px-3 py-1.5 text-xs text-cyan-700 font-medium transition dark:border-cyan-700 dark:bg-cyan-900/30 hover:bg-cyan-100 dark:text-cyan-300 disabled:opacity-50"
                 :disabled="opBusy !== ''"
                 @click="runOp('unlock')"
               >
@@ -1477,24 +1496,27 @@ onUnmounted(() => {
                   </div>
 
                   <div class="mt-1 text-center text-[10px]">
-                    <!-- 四阶段终案:
-                         feed=1 吃草成长期(幼年=长身体/成年=上一轮结束吃草) → #10 倒计时
-                         feed=3 生产期(催产后) → #25 倒计时
-                         feed=4 产物就绪 → 可收获 -->
+                    <!-- 四阶段(官方客户端 AnimalStageShow):
+                         1 幼崽期 → infant_ready_at_ms  剩余
+                         2 成长期 → grow_ready_at_ms    剩余
+                         3 生产期 → produce_ready_at_ms 剩余(或交付倒计时)
+                         4 成熟期 → mature_ready_at_ms  剩余, 到点可收获
+                         can_harvest 是服务端权威可收位, 优先于任何倒计时 -->
                     <span v-if="isHarvestable(a)" class="text-amber-600 font-medium dark:text-amber-400">可收获</span>
-                    <span v-else-if="a.feedState === 3 && (a.deliverInSec ?? 0) > 0" class="text-orange-500" title="生产期：蛋/崽产出中(#25 下次产出时刻)，到点可收">生产期 {{ formatTime(a.deliverInSec) }}</span>
-                    <span v-else-if="a.feedState === 1 && (a.stageEndInSec ?? 0) > 0" class="text-sky-600 dark:text-sky-400" :title="a.grown ? '吃草成长期（上一轮已收，攒体力进入下一轮生产）' : '成长期（长成后自动开始生产期）'">成长期 {{ formatTime(a.stageEndInSec) }}</span>
-                    <span v-else-if="a.feedState === 5" class="text-gray-400" title="刚收获过，等服务端重置状态">已收获·待下一轮</span>
-                    <span v-else-if="a.feedState === 1" class="text-red-500" title="动物没吃上牧草，停止成长。牧草断了会自动购买">饥饿·缺牧草</span>
-                    <span v-else class="text-gray-400" title="等待服务端刷新状态">产出待定</span>
+                    <span v-else-if="a.stage === 4 && remain(a.matureInSec) > 0" class="text-emerald-600 dark:text-emerald-400" title="成熟期：到点即可收获">成熟期 {{ formatTime(remain(a.matureInSec)) }}</span>
+                    <span v-else-if="a.stage === 3 && remain(a.producing ? a.produceInSec : a.deliveringInSec) > 0" class="text-orange-500" title="生产期：蛋/崽产出中（#11 produce_ready_at_ms）">生产期 {{ formatTime(remain(a.producing ? a.produceInSec : a.deliveringInSec)) }}</span>
+                    <span v-else-if="a.stage === 2 && remain(a.growInSec) > 0" class="text-sky-600 dark:text-sky-400" title="成长期：幼崽长大后开始生产">成长期 {{ formatTime(remain(a.growInSec)) }}</span>
+                    <span v-else-if="a.stage === 1 && remain(a.infantInSec) > 0" class="text-sky-500" title="幼崽期：到点进入成长期">幼崽期 {{ formatTime(remain(a.infantInSec)) }}</span>
+                    <span v-else-if="a.grassBlocked" class="text-red-500" title="动物没吃上牧草，停止成长。牧草断了会自动购买">饥饿·缺牧草</span>
+                    <span v-else class="text-gray-400" title="等待服务端刷新状态">{{ a.stageText }}·待定</span>
                   </div>
 
                   <div
                     v-if="a.sellCost"
                     class="mt-0.5 text-[10px] text-gray-400"
-                    title="产物出售参考价"
+                    title="收获后按参考价出售可得(#22 expected_harvest_sells)"
                   >
-                    金券 {{ a.sellCost.amount }}
+                    收获约 {{ a.sellCost.amount }} 金券
                   </div>
 
                   <!-- 单只收获: 服务端未提供该接口(CollectProduce/HarvestAnimal 实测不存在),
@@ -1536,7 +1558,7 @@ onUnmounted(() => {
                       type="button"
                       class="min-h-[36px] flex-1 border border-rose-300 rounded-lg bg-rose-50 px-2 py-1.5 text-xs text-rose-700 font-medium transition dark:border-rose-700 dark:bg-rose-900/30 hover:bg-rose-100 dark:text-rose-300 disabled:opacity-40"
                       :disabled="operateLoading === a.slot || opBusy !== ''"
-                      :title="a.sellCost ? `约 ${a.sellCost.amount} 金券` : '出售这只动物'"
+                      title="出售这只动物(回收价以服务端结算为准)"
                       @click="openSellConfirm(a)"
                     >
                       出售
@@ -1628,6 +1650,5 @@ onUnmounted(() => {
       @cancel="stealConfirming = false"
       @confirm="confirmSteal"
     />
-
   </div>
 </template>

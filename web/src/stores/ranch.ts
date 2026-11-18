@@ -31,23 +31,58 @@ export interface RanchAnimal {
   slot: number
   animalId: number
   name: string
+  /** 所属栏舍实例 ID(窝=10001, 棚=10003 …) */
+  ranchInstId?: number
+  /** 1=窝 2=棚(服务端 husbandry_type) */
+  husbandryType?: number
+  /** 阶段 1=幼崽 2=成长 3=生产 4=成熟 */
   stage: number
   stageText: string
+  /** 兼容字段: 等于 stage(旧前端按 feedState 分支出倒计时) */
   feedState: number
-  /** 是否成年(后端按 grown_flag 判定) */
-  grown?: boolean
-  /** 副产物就绪, 可收获(后端权威字段) */
+  /** 可收获(服务端 can_harvest, 权威) */
   harvestable?: boolean
-  /** 距下次产出秒数; null = 还没进入产出周期 */
-  harvestInSec?: number | null
-  /** 兼容字段, 语义同 harvestInSec */
-  produceInSec: number | null
-  /** 催产就绪(后端权威字段) */
+  canHarvest?: boolean
+  /** 生产期(constructing) */
+  producing?: boolean
+  /** 可交付(催产) */
+  canDeliver?: boolean
   canProduce?: boolean
-  /** 饥饿 */
+  /** 饥饿(牧草断了) */
   hungry?: boolean
+  grassBlocked?: boolean
+  canFeed?: boolean
+  canDonate?: boolean
+  limitedCanUsed?: boolean
+  produceCount?: number
+  /** 各阶段就绪倒计时(秒; null=服务端没给该字段, 负数=已过) */
+  infantInSec?: number | null
+  growInSec?: number | null
+  produceInSec?: number | null
+  matureInSec?: number | null
+  deliveringInSec?: number | null
+  /** 距"可收获"秒数; 0=现在就能收 */
+  harvestInSec?: number | null
+  deliverInSec?: number | null
+  /** 当前阶段剩余秒数 */
+  stageEndInSec?: number | null
+  /** 当前倒计时的阶段名(幼崽期/成长期/生产期/成熟期/交付中) */
+  countdownKind?: string
+  produceUnknownReason?: string
+  expectedHarvestExp?: number
+  expectedProduceExp?: number
+  /** 预计收获所得 */
   sellCost: { itemId: number, amount: number } | null
   mutant: boolean
+}
+
+/** 服务端返回的单个栏舍(窝/棚各一条) */
+export interface RanchGroup {
+  ranchInstId: number
+  husbandryType: number
+  capacity: number
+  animalCount: number
+  animals: RanchAnimal[]
 }
 
 export interface CubShopItem {
@@ -87,6 +122,11 @@ export interface RanchOverview {
   hostGid: number
   coopCount: number
   penCount: number
+  /** 服务端原值: 窝/棚各自的容量(不是"规划格数") */
+  coops?: RanchGroup[]
+  pens?: RanchGroup[]
+  coopAnimals?: number
+  penAnimals?: number
   grassCount: number
   ranchExp: number
   /** 牧场等级(独立于农场等级) */

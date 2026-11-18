@@ -480,16 +480,20 @@ async function stealFriendProduce(hostGid) {
     await sleep(300);
     try {
         const detail = await getRanchDetail(gid);
-        // 可偷判定(20261117 抓包对比): 动物 feed_state(#5)==4(产物就绪) 才有可偷产物
-        // 被偷的好友全部动物 f5=4/f6=2; 没得偷的 f5=3(产出中)/1(成长中)
-        const animals = (detail.ranch && detail.ranch.animals) || [];
-        const hasStealable = animals.some(a => toNum(a.feed_state) === 4);
+        // 可偷判定: 用**服务端给的权威位**, 不再自己从 stage 猜。
+        //   动物级: can_harvest(#7)
+        //   产物架: ShelfInfo.can_steal(#6) —— 这才是"这家的产物可偷"的直接信号
+        const ranches = detail.ranches || [];
+        const animals = ranches.flatMap(r => r.animals || []);
+        const shelves = ranches.flatMap(r => r.shelves || []);
+        const hasStealable = shelves.some(s => toNum(s.can_steal) === 1)
+            || animals.some(a => toNum(a.can_harvest) === 1);
         if (!hasStealable) return { ok: false, reason: 'nothing_to_steal', gid };
         const stealBody = types.StealProduceRequest.encode(types.StealProduceRequest.create({
             host_gid: toLong(gid),
         })).finish();
         const { body: replyBody } = await network.sendMsgAsync('gamepb.animalpb.AnimalService', 'StealProduce', stealBody);
-        return { ok: true, gid, ranch: types.StealProduceReply.decode(replyBody).ranch };
+        return { ok: true, gid, ranches: types.StealProduceReply.decode(replyBody).ranches || [] };
     } finally {
         await sleep(300);
         const leaveBody = (() => {
@@ -865,143 +869,166 @@ function getAnimalName(animalId) {
     return ANIMAL_NAMES[toNum(animalId)] || `动物#${toNum(animalId)}`;
 }
 
-/** 动物成长阶段名(抓包 stage 1..6; 语义按"幼年→成年"近似, 后续按游戏内文案校正) */
 /**
- * 生长阶段文案。stage 实测就是 1..6(2026-11-17 真号: 槽1=4 槽2=5 槽3=6)。
- * 成年以 grown_flag(#18) 为准(stage 到 6 也是成年, 两个信号一致时更稳)。
- */
-/**
- * 生长阶段文案。
+ * 动物阶段文案。
  *
- * ⭐ 2026-11-18 用全部抓包实证(158 条 grown=1 的样本):
- *     grown_flag(#18) = 1        → 已成熟
- *     grown_flag(#18) = undefined→ 未成熟
- *   这 158 条里 stage 从 1 到 400 都有 —— **stage 不是生长阶段**,
- *   它更像实例序号/uid 尾数, 数值完全不可靠(见过 397/995/998)。
+ * ⭐ 2026-11-18 终案 —— 语义来自官方客户端解码器, 不再猜:
+ *   mcboot/game.js 里的 AnimalInfo 解码器把每个 wire 号都命名了:
+ *     #1 ranch_inst_id  #2 slot_index  #3 animal_inst_id  #4 animal_id  #5 stage
+ *     #6 produce_count  #7 can_harvest
+ *     #10 grow_ready_at_ms  #11 produce_ready_at_ms  #12 grass_blocked
+ *     #14 infant_ready_at_ms #15 producing #16 can_deliver #17 delivering_until_ms
+ *     #18 can_feed #19 limited_can_used #20 can_donate
+ *     #21 expected_harvest_exp #22 expected_harvest_sells
+ *     #23 expected_produce_exp #24 expected_produce_sells #25 mature_ready_at_ms
+ *     #30 mutation
  *
- * 所以旧实现 `grownFlag===1 && s>=6` 是错的: stage=3 的成熟鸡会被判成"成长中(3/6)"。
- * 现在只看 grown_flag, stage 仅用于未成熟时给个粗略文案。
+ * 所以旧实现里 `feed_state(#5)` / `grown_flag(#18)` / `produce_at(#10)` /
+ * `trigger_ready_at(#25)` / `sell_cost(#22)` 全是错的 —— #5 是 stage, #18 是 can_feed,
+ * #10 是「成长就绪时刻」, #25 是「成熟就绪时刻」, #22 是「收获预计所得」。
+ * 这是之前倒计时一会儿 0、一会儿几小时、阶段永远"成年"的真正原因。
+ *
+ * 四阶段(官方 AnimalStageShow: 幼崽→成长→生产→成熟)按服务端给的时刻判:
+ *   幼崽期  infant_ready_at_ms  未到
+ *   成长期  infant_ready_at_ms 已到, grow_ready_at_ms 未到
+ *   生产期  grow_ready_at_ms   已到, producing=true
+ *   成熟期  其余(can_harvest=true 时可收)
  */
-function getStageText(stage, grownFlag) {
-    const s = toNum(stage);
-    // grown_flag 是唯一的权威成熟标志
-    if (toNum(grownFlag) === 1) return '成年';
-    // 未成熟: stage 数值不可靠, 只能说"未成熟"
-    if (s <= 1) return '幼年';
-    return '成长中';
+const STAGE_TEXT = ['', '幼崽', '成长', '生产', '成熟'];
+
+function getStageText(stage) {
+    const s = Number(toNum(stage)) || 0;
+    if (s >= 0 && s < STAGE_TEXT.length && STAGE_TEXT[s]) return STAGE_TEXT[s];
+    return s > 0 ? `阶段${s}` : '未知';
 }
 
-/** 把 proto 的 RanchInfo 转成面板直接可渲染的对象 */
+/** 把 proto 的 RanchInfo(repeated: 窝 + 棚)转成面板直接可渲染的对象 */
 function toRanchView(reply) {
-    const ranch = reply.ranch || {};
+    const ranches = (reply && reply.ranches) || [];
     const nowMs = Date.now();
     const animals = [];
-    for (const a of (ranch.animals || [])) {
-        const animalId = toNum(a.animal_id);
-        if (!animalId) continue; // 空槽占位
-        // ⭐⭐ 产出时刻语义(2026-11-18 用 5 份抓包实测确定, 推翻之前两次错误结论):
-        //
-        //   produce_at(#10) = **下一次产出时刻**(ms)
-        //   last_feed_at(#14) = 上一次喂食/计时起点(ms)
-        //
-        // 判据(三份不同时间的抓包, 同一只鸡):
-        //   #10 - 抓包时刻 = +2.6s / -51.0s / -2.6s   ← 都在秒级, 说明 #10 就在"当前"附近
-        //   说明它描述的是"这一轮产出"，不是几小时前的历史值。
-        //
-        // 之前的两次错误结论(务必别再改回去):
-        //   ① 曾以为 #10 是"上次产出" → 拿 #25 当下次产出。但 #25 在 5 份抓包、2 种动物里
-        //      **从未出现过**, 那是凭一次观测臆断的字段。
-        //   ② 后来改成"#10 + 2 小时"兜底 → 2 小时只是**兔子**的间隔(#23=180 分钟),
-        //      鸡的间隔是秒级, 于是鸡全部算成 "2 小时后产出"。
-        //
-        // ⭐⭐⭐⭐ 2026-11-18 终案 —— 入栏抓包(20261118-165223)完整时间线定案:
-        //
-        //   t+13s 入栏后   feed=1  #10=+8s   #25=-     grown=1
-        //   t+24s 催产后   feed=3  #10=-3s   #25=+9s   grown=0   ← 催产触发 1→3
-        //   t+30s 收获后   feed=4  #10=-8s   #25=+3s   grown=1
-        //   t+35s 再查     feed=5  #10=-14s  #25=-2s   grown=0
-        //
-        //   ① feed=1→3 由催产(TriggerProduce)触发
-        //   ② #10 = 本轮计时起点(每次动作重置为当前), 不是任何倒计时终点
-        //   ③ #25(trigger_ready_at) = **下一次产出时刻**(催产后出现, = #10+12s)
-        //      之前判它死刑("从未出现")是因为旧抓包里没有催产操作的帧
-        //
-        //   倒计时正确来源:
-        //     成长期(feed=1): #10(成长完成点) — #10 过期=该进生产期, 面板显示"待催产"
-        //     生产期(feed=3): #25(下次产出时刻) — 官方 trigger_ready_at 就是为这个生的
-        //     成熟期(feed=4): #25 已过 → 可收蛋(CollectProduce) + 可再催产
-        //     刚收完(feed=5): 等服务端重置回 1
-        //
-        //   harvestable: feed=4(官方气泡 CanHarvest); 收蛋按 #25 已过 + CollectProduce
-        const nextReadyMs = toNum(a.produce_at);           // #10 本轮计时起点
-        const triggerReadyMs = toNum(a.trigger_ready_at);  // #25 下次产出时刻
-        const grownFlag = toNum(a.grown_flag);
-const isGrown = grownFlag === 1;
-const feedStateNum = toNum(a.feed_state);
-const nowMs2 = Date.now();
-// 下次产出倒计时(秒): feed=3 用 #25; 其它阶段没有可靠终点 → null
-const produceInSecLive = feedStateNum === 3 && triggerReadyMs > 0
-    ? Math.round((triggerReadyMs - nowMs2) / 1000)
-    : null;
-// 成长期倒计时: feed=1 且 #10 未来(=成长完成点)
-const growInSec = feedStateNum === 1 && nextReadyMs > 0
-    ? Math.round((nextReadyMs - nowMs2) / 1000)
-    : null;
-const harvestable = isGrown && feedStateNum === 4;
-const canProduceNow = isGrown && (feedStateNum === 3 || feedStateNum === 4);
-const deliverInSec = produceInSecLive;
-const stageEndInSec = feedStateNum === 1 ? growInSec : deliverInSec;
-        const animals_entry = {
-            slot: toNum(a.slot),
-            animalId,
-            name: getAnimalName(animalId),
-            stage: toNum(a.stage),
-            stageText: getStageText(a.stage, grownFlag),
-            feedState: toNum(a.feed_state),
-            grown: grownFlag === 1,
-            // 副产物就绪 → 可以"收获"(CollectProduce)
-            harvestable,
-            // 生产期倒计时(feed=3, #25 trigger_ready_at 定案)
-            deliverInSec: produceInSecLive,
-            // 成长期倒计时(feed=1, #10 为成长完成点)
-            stageEndInSec: growInSec,
-            // 不可收时的可读原因(按四阶段):
-            //   grown=0 → growing / feed=5 → justHarvested / feed=1 → hungry / 其余 idle
-            produceUnknownReason: harvestable
-                ? ''
-                : (!isGrown ? 'growing'
-                    : (feedStateNum === 5 ? 'justHarvested'
-                        : (feedStateNum === 1 ? 'hungry' : 'idle'))),
-            // 兼容旧字段: 按阶段取对应倒计时
-            produceInSec: stageEndInSec,
-            // 催产就绪 = 确实到了下次产出时刻
-            // 催产只对成年动物有效(幼年的是"成长", 不是"产出")
-            canProduce: canProduceNow,
-            hungry: toNum(a.feed_state) === 1,
-            sellCost: a.sell_cost ? { itemId: toNum(a.sell_cost.item_id), amount: toNum(a.sell_cost.amount) } : null,
-            mutant: !!(a.mutant && toNum(a.mutant.field_1) > 0),
-        };
-        animals.push(animals_entry);
+    const coops = [];
+    const pens = [];
+    for (const ranch of ranches) {
+        const ranchInstId = toNum(ranch.ranch_inst_id);
+        const husbandryType = toNum(ranch.husbandry_type);   // 1=窝 2=棚
+        const capacity = toNum(ranch.capacity);
+        const animalCount = toNum(ranch.animal_count);
+        const group = { ranchInstId, husbandryType, capacity, animalCount, animals: [] };
+        (husbandryType === 2 ? pens : coops).push(group);
+
+        for (const a of (ranch.animals || [])) {
+            const animalId = toNum(a.animal_id);
+            if (!animalId) continue; // 空槽占位
+            const stage = toNum(a.stage);
+            const msDelta = (t) => {
+                const v = toNum(t);
+                return v > 0 ? Math.round((v - nowMs) / 1000) : null;
+            };
+            const infantInSec = msDelta(a.infant_ready_at_ms);    // 幼崽期结束
+            const growInSec = msDelta(a.grow_ready_at_ms);        // 成长期结束
+            const produceInSec = msDelta(a.produce_ready_at_ms);  // 本次产出就绪
+            const matureInSec = msDelta(a.mature_ready_at_ms);    // 成熟就绪
+            const deliveringInSec = msDelta(a.delivering_until_ms);// 交付倒计时(气泡用)
+            const canHarvest = !!toNum(a.can_harvest);
+            const producing = !!toNum(a.producing);
+            const canDeliver = !!toNum(a.can_deliver);
+            const grassBlocked = !!toNum(a.grass_blocked);
+            // 当前阶段的主倒计时: 只取"未到且与本阶段相关"的那一个
+            let countdownSec = null;
+            let countdownKind = '';
+            if (stage === 1 && infantInSec !== null && infantInSec > 0) {
+                countdownSec = infantInSec; countdownKind = '幼崽期';
+            } else if (stage === 2 && growInSec !== null && growInSec > 0) {
+                countdownSec = growInSec; countdownKind = '成长期';
+            } else if (stage === 3) {
+                if (produceInSec !== null && produceInSec > 0) {
+                    countdownSec = produceInSec; countdownKind = '生产期';
+                } else if (deliveringInSec !== null && deliveringInSec > 0) {
+                    countdownSec = deliveringInSec; countdownKind = '交付中';
+                }
+            } else if (stage === 4 && matureInSec !== null && matureInSec > 0) {
+                countdownSec = matureInSec; countdownKind = '成熟期';
+            }
+            // 兼容旧前端的字段名, 语义重新对齐:
+            //   harvestInSec  = 距"可收获"的秒数
+            //   deliverInSec  = 同 harvestInSec
+            //   stageEndInSec = 当前阶段剩余秒数
+            const harvestInSec = canHarvest ? 0 : (countdownSec !== null ? countdownSec : null);
+            animals.push({
+                slot: toNum(a.slot_index),
+                animalId,
+                name: getAnimalName(animalId),
+                ranchInstId,
+                husbandryType,
+                stage,
+                stageText: getStageText(stage),
+                // 旧前端按 feedState 分支出倒计时, 这里把 stage 原样给出
+                feedState: stage,
+                // 官方权威位
+                canHarvest,
+                harvestable: canHarvest,
+                producing,
+                canDeliver,
+                canProduce: canDeliver,
+                grassBlocked,
+                hungry: grassBlocked,
+                canFeed: !!toNum(a.can_feed),
+                canDonate: !!toNum(a.can_donate),
+                limitedCanUsed: !!toNum(a.limited_can_used),
+                produceCount: toNum(a.produce_count),
+                // 倒计时(秒, 负数=已过)
+                infantInSec,
+                growInSec,
+                produceInSec,
+                matureInSec,
+                deliveringInSec,
+                harvestInSec,
+                deliverInSec: harvestInSec,
+                stageEndInSec: countdownSec,
+                countdownKind,
+                produceUnknownReason: canHarvest
+                    ? ''
+                    : (producing ? 'producing'
+                        : (stage === 1 ? 'infant'
+                            : (stage === 2 ? 'growing'
+                                : (grassBlocked ? 'hungry' : 'idle')))),
+                // 预计收获所得(#22 expected_harvest_sells) — 旧代码当成 sell_cost
+                expectedHarvestExp: toNum(a.expected_harvest_exp),
+                expectedProduceExp: toNum(a.expected_produce_exp),
+                sellCost: (a.expected_harvest_sells && a.expected_harvest_sells[0])
+                    ? {
+                        itemId: toNum(a.expected_harvest_sells[0].item_id),
+                        amount: toNum(a.expected_harvest_sells[0].amount),
+                    }
+                    : null,
+                mutant: !!(a.mutation && toNum(a.mutation.mutation_type) > 0),
+            });
+            group.animals.push(animals[animals.length - 1]);
+        }
     }
+    const coopAnimals = coops.reduce((n, g) => n + g.animalCount, 0);
+    const penAnimals = pens.reduce((n, g) => n + g.animalCount, 0);
     return {
-        hostGid: toNum(ranch.host_gid),
-        coopCount: toNum(ranch.coop_count),
-        penCount: toNum(ranch.pen_count),
-        grassCount: ranch.grass ? toNum(ranch.grass.grass_count) : 0,
-        ranchExp: toNum(reply.ranch_exp),
+        // 兼容旧字段: 窝的实例 ID + 窝/棚的容量
+        hostGid: coops.length ? coops[0].ranchInstId : (ranches[0] ? toNum(ranches[0].ranch_inst_id) : 0),
+        coopCount: coops.reduce((n, g) => n + g.capacity, 0),
+        penCount: pens.reduce((n, g) => n + g.capacity, 0),
+        coopAnimals,
+        penAnimals,
+        // 新结构: 前端按栏舍分组渲染(每组的 husbandryType / capacity 都是服务端原值)
+        coops,
+        pens,
+        grassCount: ranches[0] && ranches[0].grass ? toNum(ranches[0].grass.grass_count) : 0,
+        ranchExp: toNum(reply && reply.ranch_exp),
         animals,
-        // 原始字段(调试/后续扩展用)
-        building: ranch.building ? {
-            type: toNum(ranch.building.type),
-            stored: toNum(ranch.building.stored),
-        } : null,
     };
 }
 
-/** 是不是"空 ranch"(懒初始化未完成): 全部关键字段都为 0 且没有动物 */
+/** 是不是"空 ranch"(懒初始化未完成) */
 function isEmptyRanchView(view) {
     return !view
-        || (!view.hostGid && !view.coopCount && !view.penCount
+        || (!(view.coops || []).length && !(view.pens || []).length
             && (view.animals || []).length === 0);
 }
 
@@ -2733,7 +2760,7 @@ async function operateRanch(opts = {}) {
             for (let i = 0; i < times; i++) {
                 const r = await placeAnimal(cub);
                 placedN += 1;
-                lastAnimals = ((r.ranch && r.ranch.animals) || []).length;
+                lastAnimals = (r.ranches || []).reduce((n, x) => n + (x.animals || []).length, 0);
                 await sleep(300);
             }
             return { ok: true, action: '幼崽入栏', detail: `已放 ${placedN} 只，当前在养 ${lastAnimals} 只` };

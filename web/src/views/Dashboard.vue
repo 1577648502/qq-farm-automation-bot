@@ -18,43 +18,54 @@ const accountStore = useAccountStore()
 // ===== 牧场状态卡片 =====
 const ranchOverview = ref<any>(null)
 const ranchLoading = ref(false)
-const ranchTick = ref(0)   // 每秒触发重建倒计时
+const ranchTick = ref(0) // 每秒触发重建倒计时
+// 记录拿到数据的时间点, 倒计时按经过秒数递减
+const ranchFetchedAt = ref(0)
 
 async function fetchRanchOverview() {
   const id = accountStore.currentAccountId
-  if (!id) return
+  if (!id)
+    return
   ranchLoading.value = true
   try {
     const res = await api.get('/api/ranch/overview', { headers: { 'x-account-id': id } })
-    if (res.data?.ok) { ranchOverview.value = res.data.data; ranchFetchedAt.value = Date.now() }
-    else ranchOverview.value = null
-  } catch { ranchOverview.value = null }
+    if (res.data?.ok) {
+      ranchOverview.value = res.data.data
+      ranchFetchedAt.value = Date.now()
+    }
+    else {
+      ranchOverview.value = null
+    }
+  }
+  catch { ranchOverview.value = null }
   finally { ranchLoading.value = false }
 }
 
 /** 最近一只动物的可收获倒计时 */
-// 记录拿到数据的时间点, 倒计时按经过秒数递减
-const ranchFetchedAt = ref(0)
 const ranchNextReady = computed(() => {
   const elapsed = ranchFetchedAt.value ? Math.floor((Date.now() - ranchFetchedAt.value) / 1000) : 0
   const list = ranchOverview.value?.animals || []
   const secs = list
-    .map((a: any) => (typeof a.harvestInSec === 'number' ? a.harvestInSec - elapsed : null))
+    .map((a: any) => (typeof a.harvestInSec === 'number' && a.harvestInSec > 0 ? a.harvestInSec - elapsed : null))
     .filter((v: any) => typeof v === 'number' && v > 0)
-  if (!secs.length) return null
+  if (!secs.length)
+    return null
   return Math.min(...secs)
 })
 
 const ranchSummary = computed(() => {
   const ov = ranchOverview.value
-  if (!ov) return null
+  if (!ov)
+    return null
   const animals = ov.animals || []
   return {
     total: animals.length,
     harvestable: animals.filter((a: any) => a.harvestable).length,
-    hungry: animals.filter((a: any) => a.hungry).length,
+    hungry: animals.filter((a: any) => a.grassBlocked === true).length,
     coop: ov.coopCount || 0,
     pen: ov.penCount || 0,
+    coopAnimals: ov.coopAnimals || 0,
+    penAnimals: ov.penAnimals || 0,
     grass: ov.grassCount || 0,
     level: ov.ranchLevel || 0,
     levelExp: ov.ranchLevelExp || 0,
@@ -63,8 +74,10 @@ const ranchSummary = computed(() => {
 })
 
 function fmtCountdown(sec: number | null) {
-  if (sec === null || sec === undefined) return '—'
-  if (sec <= 0) return '可收获'
+  if (sec === null || sec === undefined)
+    return '—'
+  if (sec <= 0)
+    return '可收获'
   const h = Math.floor(sec / 3600)
   const m = Math.floor((sec % 3600) / 60)
   const s2 = sec % 60
@@ -653,7 +666,9 @@ useIntervalFn(refresh, 10000)
 // Countdown timer (every 1s)
 useIntervalFn(updateCountdowns, 1000)
 // 牧场倒计时 + 定时刷新(60s)
-useIntervalFn(() => { ranchTick.value++ }, 1000)
+useIntervalFn(() => {
+  ranchTick.value++
+}, 1000)
 useIntervalFn(() => void fetchRanchOverview(), 60000)
 </script>
 
@@ -717,9 +732,9 @@ useIntervalFn(() => void fetchRanchOverview(), 60000)
               />
             </div>
             <div class="mt-2 min-w-0 flex flex-wrap justify-between gap-x-2 gap-y-1 text-xs text-gray-400">
-              <span class="shrink-0">{{ ranchSummary.total }} 只在养 · 窝{{ ranchSummary.coop }} 棚{{ ranchSummary.pen }}</span>
+              <span class="shrink-0">{{ ranchSummary.total }} 只在养 · 窝{{ ranchSummary.coopAnimals }}/{{ ranchSummary.coop }} 棚{{ ranchSummary.penAnimals }}/{{ ranchSummary.pen }}</span>
               <span class="min-w-0 break-words text-right">
-                下次产出
+                下个倒计时
                 <span :class="ranchNextReady === null ? '' : 'text-orange-500'">{{ fmtCountdown(ranchNextReady) }}</span>
               </span>
             </div>
