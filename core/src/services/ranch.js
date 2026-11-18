@@ -288,6 +288,67 @@ async function harvestAnimal(slot = 0, hostGid = 0) {
 }
 
 /**
+ * 牧场幼崽购买策略标签(供面板展示)。
+ * 与农场的 PLANTING_STRATEGY_LABELS 是两套, 互不影响。
+ */
+const RANCH_CUB_STRATEGY_LABELS = {
+    max_profit: '收益比最高(整只回收 ÷ 幼崽成本)',
+    max_level: '等级最高(优先解锁高级动物)',
+    preferred: '指定幼崽优先',
+    bag_priority: '背包幼崽优先(有就不买)',
+};
+
+/**
+ * 按用户配置的策略给候选幼崽排序/过滤。
+ *
+ * 策略来源优先级: opts.strategy(测试/手动) > 账号配置 ranchCubStrategy > 默认 max_profit
+ *
+ * @param {Array<object>} cubs 已过滤过(解锁/有价/收益比>0)的候选
+ * @param {object} [opts]
+ * @returns {Array<object>} 排序后的候选; 空数组表示"按此策略不该买"
+ */
+function applyCubStrategy(cubs, opts = {}) {
+    let strategy = String(opts.strategy || '').trim();
+    let preferredId = toNum(opts.preferredCubId) || 0;
+    if (!strategy) {
+        try {
+            const store = require('../models/store');
+            const cfg = store.getAccountConfigSnapshot
+                ? store.getAccountConfigSnapshot(process.env.FARM_ACCOUNT_ID || '')
+                : null;
+            if (cfg) {
+                strategy = String(cfg.ranchCubStrategy || '');
+                preferredId = toNum(cfg.ranchPreferredCubId) || 0;
+            }
+        } catch { /* 读不到配置就用默认 */ }
+    }
+    if (!RANCH_CUB_STRATEGY_LABELS[strategy]) strategy = 'max_profit';
+
+    const list = [...cubs];
+    switch (strategy) {
+        case 'bag_priority':
+            // 该策略下"买"这件事本身就该让位给入栏, 由调用方(autoPlaceCubs)处理
+            return [];
+        case 'preferred': {
+            const hit = list.filter(g => g.animalId === preferredId || g.goodsId === preferredId);
+            if (hit.length > 0) return hit;
+            // 指定项不在售: 退回收益比, 而不是什么都不买
+            break;
+        }
+        case 'max_level':
+            // 高等级动物(animalId 大的通常更高级)优先, 同级再看收益比
+            list.sort((a, b) => (b.animalId - a.animalId) || (b.valueRatio - a.valueRatio));
+            return list;
+        case 'max_profit':
+        default:
+            break;
+    }
+    // max_profit / preferred 回退: 收益比从高到低
+    list.sort((a, b) => b.valueRatio - a.valueRatio);
+    return list;
+}
+
+/**
  * 自动把背包里的幼崽放进空栏位。
  *
  * 为什么必须单独做这一步:
@@ -507,24 +568,28 @@ function toRanchView(reply) {
     for (const a of (ranch.animals || [])) {
         const animalId = toNum(a.animal_id);
         if (!animalId) continue; // 空槽占位
-        // produce_at(#10) 是"上次产出"时刻, 已过去, 不能拿来算倒计时(见下方说明)
-        const readyAt = toNum(a.trigger_ready_at);
-        const grownFlag = toNum(a.grown_flag);
-        // ⭐⭐ 2026-11-17 线上实测(账号1真实回包)修正语义:
-        //   produce_at(#10) = **上次产出**时刻(已过去), 不是下次!
-        //   trigger_ready_at(#25) = **下次可产出**时刻。
-        //   证据: 4 只兔子 produce_at 距今 -3141s, f25 = produce_at + 7212s = 正好 2.003 小时。
+        // ⭐⭐ 产出时刻语义(2026-11-18 用 5 份抓包实测确定, 推翻之前两次错误结论):
         //
-        // ⚠ 2026-11-18 修正另一处错误:
-        //   原来 #25 缺失时硬编码 "#10 + 2 小时" 当倒计时 —— 但 2 小时是**兔子**的间隔,
-        //   鸡的间隔短得多(抓包里 #10 与 #14 只差 4 秒), 于是"鸡的成熟倒计时"完全不对。
-        //   不同动物间隔不同, 且协议里没有稳定字段给出它(#23 produce_interval 本次抓包缺失),
-        //   所以**算不出来就不算**: harvestInSec = null, 页面显示"未知",
-        //   让服务端在真正可收时通过 harvestable 告诉我们, 而不是凭一个假间隔误导用户。
-        const nextReadyMs = readyAt > 0 ? readyAt : 0;
+        //   produce_at(#10) = **下一次产出时刻**(ms)
+        //   last_feed_at(#14) = 上一次喂食/计时起点(ms)
+        //
+        // 判据(三份不同时间的抓包, 同一只鸡):
+        //   #10 - 抓包时刻 = +2.6s / -51.0s / -2.6s   ← 都在秒级, 说明 #10 就在"当前"附近
+        //   说明它描述的是"这一轮产出"，不是几小时前的历史值。
+        //
+        // 之前的两次错误结论(务必别再改回去):
+        //   ① 曾以为 #10 是"上次产出" → 拿 #25 当下次产出。但 #25 在 5 份抓包、2 种动物里
+        //      **从未出现过**, 那是凭一次观测臆断的字段。
+        //   ② 后来改成"#10 + 2 小时"兜底 → 2 小时只是**兔子**的间隔(#23=180 分钟),
+        //      鸡的间隔是秒级, 于是鸡全部算成 "2 小时后产出"。
+        //
+        // 现在: 直接用 #10。它缺失时才算不出来(返回 null), 不再编任何间隔。
+        const nextReadyMs = toNum(a.produce_at);
+        const grownFlag = toNum(a.grown_flag);
         const harvestInSec = nextReadyMs > 0 ? Math.round((nextReadyMs - nowMs) / 1000) : null;
-        // 没有 #25 时不判"可收获": 用假间隔算出来的"已过期"会导致面板一直显示可收,
-        // 点了服务端回 1045211「当前没有可收取的产物」(用户现场就是这个)。
+        // 已到点(或刚过)即视为可收。鸡这类秒级产出的动物, #10 常常只比当前早几秒,
+        // 用 <=0 判断正好覆盖; 若 #10 缺失则不判可收, 避免点了服务端回
+        // 1045211「当前没有可收取的产物」。
         const harvestable = harvestInSec !== null && harvestInSec <= 0;
         const animals_entry = {
             slot: toNum(a.slot),
@@ -1781,9 +1846,16 @@ async function buyCubByGoods(goodsId, count, opts = {}) {
 async function autoBuyCubs(opts = {}) {
     const result = { bought: 0, spent: 0, details: [] };
     const shop = await getCubShop();
-    const usable = shop.filter(g => g.unlocked && g.price > 0 && g.valueRatio > 0);
+    let usable = shop.filter(g => g.unlocked && g.price > 0 && g.valueRatio > 0);
     if (usable.length === 0) {
         log('牧场', '幼崽商店没有可买的(未解锁或价格为 0)', { module: 'ranch', event: '买幼崽', result: 'skip' });
+        return result;
+    }
+
+    // 按用户配置的策略挑幼崽(对照农场 plantingStrategy, 但牧场完全独立)
+    usable = applyCubStrategy(usable);
+    if (usable.length === 0) {
+        log('牧场', '按当前幼崽策略没有可选目标', { module: 'ranch', event: '买幼崽', result: 'skip' });
         return result;
     }
 
@@ -1824,7 +1896,18 @@ async function autoBuyCubs(opts = {}) {
         }
     } catch { /* 读不到背包就不做这个保护, 交给上限兜底 */ }
 
-    if (bagCubs >= buyBudget) {
+    // 背包优先(默认开): 背包里有幼崽就先入栏, 不再买。
+    // 关掉它 = 允许"边买边堆", 一般不需要, 留给特殊玩法。
+    let bagPriority = true;
+    try {
+        const store = require('../models/store');
+        const cfg = store.getAccountConfigSnapshot
+            ? store.getAccountConfigSnapshot(process.env.FARM_ACCOUNT_ID || '')
+            : null;
+        if (cfg && cfg.ranchBagCubPriority !== undefined) bagPriority = !!cfg.ranchBagCubPriority;
+    } catch { /* 读不到就按默认开 */ }
+
+    if (bagPriority && bagCubs > 0) {
         log('牧场', `背包里已有 ${bagCubs} 只幼崽未入栏, 暂停买幼崽(应先入栏, 不是继续买)`, {
             module: 'ranch', event: '买幼崽', result: 'skip', bagCubs,
         });

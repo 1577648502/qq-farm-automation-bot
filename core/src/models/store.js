@@ -52,6 +52,13 @@ function writeKnownFriendGidsCache(accountId, gids) {
 }
 const ALLOWED_PLANTING_STRATEGIES = ['preferred', 'level', 'max_exp', 'max_fert_exp', 'max_profit', 'max_fert_profit', 'bag_priority'];
 const ALLOWED_BAG_SEED_FALLBACK_STRATEGIES = ALLOWED_PLANTING_STRATEGIES.filter(s => s !== 'bag_priority');
+// 牧场幼崽购买策略(独立于农场的种植策略)
+const ALLOWED_RANCH_CUB_STRATEGIES = ['max_profit', 'max_level', 'preferred', 'bag_priority'];
+const DEFAULT_RANCH_CUB_STRATEGY = 'max_profit';
+function normalizeRanchCubStrategy(v) {
+    const s = String(v || '');
+    return ALLOWED_RANCH_CUB_STRATEGIES.includes(s) ? s : DEFAULT_RANCH_CUB_STRATEGY;
+}
 const MILK_TEA_INTERACT_TYPES = new Set([1, 2, 3, 4, 5]);
 const MILK_TEA_HIRE_DURATIONS = new Set([1, 2, 3]);
 const PUSHOO_CHANNELS = new Set([
@@ -193,6 +200,15 @@ const DEFAULT_ACCOUNT_CONFIG = {
     },
     plantingStrategy: 'max_exp',
     preferredSeedId: 0,
+    // ---- 牧场幼崽策略(对照农场 plantingStrategy, 但完全独立) ----
+    //   max_profit : 整只回收/幼崽成本 收益比最高(默认, 等同原来的行为)
+    //   max_level  : 优先解锁等级最高的幼崽
+    //   preferred  : 优先买指定幼崽(ranchPreferredCubId)
+    //   bag_priority: 背包里已有幼崽就先入栏, 不买
+    ranchCubStrategy: 'max_profit',
+    ranchPreferredCubId: 0,
+    // 背包优先: 牧场背包里有幼崽时先入栏(不再购买), 与农场的"背包种子优先"同义
+    ranchBagCubPriority: true,
     intervals: {
         farm: 2,
         farmMin: 20,
@@ -421,6 +437,10 @@ function cloneAccountConfig(base = DEFAULT_ACCOUNT_CONFIG) {
             ? String(base.plantingStrategy)
             : DEFAULT_ACCOUNT_CONFIG.plantingStrategy,
         preferredSeedId: Math.max(0, Number.parseInt(base.preferredSeedId, 10) || 0),
+        // 牧场幼崽策略(与农场独立)
+        ranchCubStrategy: normalizeRanchCubStrategy(base.ranchCubStrategy),
+        ranchPreferredCubId: Math.max(0, Number.parseInt(base.ranchPreferredCubId, 10) || 0),
+        ranchBagCubPriority: base.ranchBagCubPriority === undefined ? true : !!(base.ranchBagCubPriority),
         plantBlacklist: rawPlantBlacklist.map(Number).filter(n => Number.isFinite(n) && n > 0),
         plantSeedExclude: rawPlantSeedExclude.map(Number).filter(n => Number.isFinite(n) && n > 0),
         stealthEnabled: !!(base.stealthEnabled),
@@ -475,6 +495,17 @@ function normalizeAccountConfig(input, fallback = accountFallbackConfig) {
 
     if (src.preferredSeedId !== undefined && src.preferredSeedId !== null) {
         cfg.preferredSeedId = Math.max(0, Number.parseInt(src.preferredSeedId, 10) || 0);
+    }
+
+    // 牧场幼崽策略
+    if (src.ranchCubStrategy !== undefined && src.ranchCubStrategy !== null) {
+        cfg.ranchCubStrategy = normalizeRanchCubStrategy(src.ranchCubStrategy);
+    }
+    if (src.ranchPreferredCubId !== undefined && src.ranchPreferredCubId !== null) {
+        cfg.ranchPreferredCubId = Math.max(0, Number.parseInt(src.ranchPreferredCubId, 10) || 0);
+    }
+    if (src.ranchBagCubPriority !== undefined && src.ranchBagCubPriority !== null) {
+        cfg.ranchBagCubPriority = !!src.ranchBagCubPriority;
     }
 
     if (src.intervals && typeof src.intervals === 'object') {
@@ -866,6 +897,10 @@ function getConfigSnapshot(accountId) {
         automation: { ...cfg.automation },
         plantingStrategy: cfg.plantingStrategy,
         preferredSeedId: cfg.preferredSeedId,
+        // 牧场幼崽策略(独立于农场)
+        ranchCubStrategy: cfg.ranchCubStrategy,
+        ranchPreferredCubId: cfg.ranchPreferredCubId,
+        ranchBagCubPriority: cfg.ranchBagCubPriority,
         intervals: { ...cfg.intervals },
         friendQuietHours: { ...cfg.friendQuietHours },
         knownFriendGids: [...(cfg.knownFriendGids || [])],

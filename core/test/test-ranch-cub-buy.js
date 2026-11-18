@@ -104,43 +104,61 @@ proto.loadProto().then(async () => {
             calls.filter(c => c.method === 'BuyGoods').length);
     }
 
-    section('3. 没有 #25(下次产出时刻) → 不编倒计时');
+    section('3. produce_at(#10) 就是"下次产出时刻"(5 份抓包实测确认)');
     {
-        // produce_at(#10) 有值, trigger_ready_at(#25) 缺失
-        // 旧实现会算 "#10 + 2小时", 把鸡的倒计时算错
+        // 实测依据: 同一只鸡在三份不同时间的抓包里,
+        //   #10 - 抓包时刻 = +2.6s / -51.0s / -2.6s  —— 都在秒级
+        // 若 #10 是"上次产出"(几小时前), 差值会是几千秒。所以它就是下次产出时刻。
         const now = Date.now();
-        const view = require(`${SB}/src/services/ranch`).toRanchView({
+        const mk = (produceAt) => require(`${SB}/src/services/ranch`).toRanchView({
             ranch: {
                 animals: [{
-                    slot: 1, animal_id: 60001, stage: 3, feed_state: 2,
-                    produce_at: now - 8 * 60 * 1000,   // 8 分钟前产出过
-                    last_feed_at: now - 8 * 60 * 1000 + 4000,
-                    grown_flag: 1,
+                    slot: 1, animal_id: 60001, stage: 6, feed_state: 2,
+                    produce_at: produceAt, grown_flag: 1,
                 }],
+            },
+        }).animals[0];
+
+        // 未来 2.6 秒(与实测同量级) → 还没到点
+        const soon = mk(now + 2600);
+        check('未来 2.6 秒 → harvestInSec ≈ 3', Math.abs(soon.harvestInSec - 3) <= 2, soon.harvestInSec);
+        check('未来 → 不可收', soon.harvestable === false, soon.harvestable);
+
+        // 已过 5 秒 → 可收
+        const passed = mk(now - 5000);
+        check('已过 5 秒 → harvestInSec ≈ -5', Math.abs(passed.harvestInSec + 5) <= 2, passed.harvestInSec);
+        check('已过 → 可收', passed.harvestable === true, passed.harvestable);
+        check('canProduce 跟随 harvestable', passed.canProduce === true, passed.canProduce);
+    }
+
+    section('4. #10 缺失 → 不编倒计时, 也不判可收');
+    {
+        const view = require(`${SB}/src/services/ranch`).toRanchView({
+            ranch: {
+                animals: [{ slot: 1, animal_id: 60001, stage: 6, feed_state: 2, grown_flag: 1 }],
             },
         });
         const a = view.animals[0];
-        check('#25 缺失时 harvestInSec = null', a.harvestInSec === null, a.harvestInSec);
-        check('不判为可收获', a.harvestable === false, a.harvestable);
-        check('canProduce 同步为 false', a.canProduce === false, a.canProduce);
+        check('无 #10 → harvestInSec = null', a.harvestInSec === null, a.harvestInSec);
+        check('无 #10 → 不判可收', a.harvestable === false, a.harvestable);
     }
 
-    section('4. 有 #25 → 正常算倒计时');
+    section('5. 不再使用 #25(它在 5 份抓包里从未出现过)');
     {
+        // 即使某天真下发了 #25, 也不该再影响倒计时 —— 语义已确定用 #10
         const now = Date.now();
         const view = require(`${SB}/src/services/ranch`).toRanchView({
             ranch: {
                 animals: [{
                     slot: 1, animal_id: 60002, stage: 6, feed_state: 3,
-                    produce_at: now - 3600 * 1000,
-                    trigger_ready_at: now + 60 * 1000,   // 1 分钟后可产出
+                    produce_at: now + 30 * 1000,      // 30 秒后
+                    trigger_ready_at: now + 999 * 1000, // 干扰项
                     grown_flag: 1,
                 }],
             },
         });
         const a = view.animals[0];
-        check('harvestInSec 约 60 秒', Math.abs(a.harvestInSec - 60) <= 2, a.harvestInSec);
-        check('还没到点 → 不可收', a.harvestable === false, a.harvestable);
+        check('#25 被忽略, 只看 #10(约 30 秒)', Math.abs(a.harvestInSec - 30) <= 2, a.harvestInSec);
     }
 
     finish();
