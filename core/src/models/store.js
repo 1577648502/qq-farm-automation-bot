@@ -779,6 +779,10 @@ function loadGlobalConfig() {
                     activityYuLuoChengShi: data.systemConfig.activityYuLuoChengShi !== false,
                     activityGongYiXiaoHongHua: data.systemConfig.activityGongYiXiaoHongHua !== false,
                     activityMengChong: data.systemConfig.activityMengChong !== false,
+                    // ⚠ 曾漏掉这个字段: 保存时写了, 但加载白名单里没有 → 重启后被丢弃
+                    //   → getActivityStatus 读 undefined → !== false → 变回 true
+                    //   (用户反馈"关掉奶茶活动, 重启又出现了"就是这么来的)
+                    activityMilkTea: data.systemConfig.activityMilkTea !== false,
                 };
             }
 

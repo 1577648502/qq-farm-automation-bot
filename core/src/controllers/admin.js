@@ -474,7 +474,10 @@ function startAdminServer(dataProvider) {
     });
 
 app.use('/api', (req, res, next) => {
-        if (req.path === '/login' || req.path === '/card-claim/status' || req.path === '/card-claim/claim' || req.path === '/activities/status' || req.path === '/game-version' || req.path.startsWith('/pet/')) return next();
+        // ⚠ /pet/ 之前被放行(免鉴权), 但这些接口内部用了 withAccount →
+        //   checkAccountAccess 需要 req.currentUser, 放行后恒为 undefined → 全部 403
+        //   (用户反馈"宠物页进去就报错"就是这个原因)。这里不放行, 走正常鉴权。
+        if (req.path === '/login' || req.path === '/card-claim/status' || req.path === '/card-claim/claim' || req.path === '/activities/status' || req.path === '/game-version') return next();
         return authRequired(req, res, next);
     });
 
