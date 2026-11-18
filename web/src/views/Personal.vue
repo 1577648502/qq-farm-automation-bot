@@ -5,8 +5,9 @@ import FarmPanel from '@/components/FarmPanel.vue'
 import IllustratedPanel from '@/components/IllustratedPanel.vue'
 import SeedShopPanel from '@/components/SeedShopPanel.vue'
 import TaskPanel from '@/components/TaskPanel.vue'
+import Ranch from '@/views/Ranch.vue'
 
-const currentTab = ref<'farm' | 'bag' | 'task' | 'illustrated' | 'seedShop'>('farm')
+const currentTab = ref<'farm' | 'ranch' | 'bag' | 'task' | 'illustrated' | 'seedShop'>('farm')
 </script>
 
 <template>
@@ -23,6 +24,19 @@ const currentTab = ref<'farm' | 'bag' | 'task' | 'illustrated' | 'seedShop'>('fa
         <div class="flex items-center space-x-2">
           <div class="i-carbon-sprout text-lg" />
           <span>我的农场</span>
+        </div>
+      </button>
+      <button
+        class="min-h-[44px] rounded-lg px-4 py-2 font-medium transition-colors"
+        :class="currentTab === 'ranch'
+          ? 'text-white shadow-md'
+          : 'bg-white text-gray-600 hover:bg-gray-100 dark:bg-gray-800 dark:text-gray-300 dark:hover:bg-gray-700'"
+        :style="currentTab === 'ranch' ? { backgroundColor: 'var(--theme-primary)' } : {}"
+        @click="currentTab = 'ranch'"
+      >
+        <div class="flex items-center space-x-2">
+          <div class="i-fas-paw text-lg" />
+          <span>我的牧场</span>
         </div>
       </button>
       <button
@@ -90,6 +104,8 @@ const currentTab = ref<'farm' | 'bag' | 'task' | 'illustrated' | 'seedShop'>('fa
         leave-to-class="transform opacity-0 scale-95"
       >
         <FarmPanel v-if="currentTab === 'farm'" />
+        <!-- embedded: 只显示牧场总览, 隐藏牧场页自己的页签栏(避免页签套页签) -->
+        <Ranch v-else-if="currentTab === 'ranch'" embedded />
         <BagPanel v-else-if="currentTab === 'bag'" />
         <TaskPanel v-else-if="currentTab === 'task'" />
         <IllustratedPanel v-else-if="currentTab === 'illustrated'" />

@@ -1075,6 +1075,28 @@ async function purchaseRotationGoods(uid, count = 1, refreshAtSec = 0) {
     return { ok: true, items };
 }
 
+/**
+ * 游商购买失败是否属于"当前不可买"的正常业务状态。
+ *
+ * 1004012 是线上实际返回的错误码(含义未知, 但出现在 RotationBuyGoods 上),
+ * 从商品带"最低等级"限制来看, 大概率是等级/限购/刷新条件不满足。
+ * 这类情况每轮都会发生, 不该当故障刷 error 日志。
+ */
+function isRotationNotPurchasable(e) {
+    const msg = String((e && e.message) || '');
+    // 已知的"买不了"错误码: 1004012(线上实际) + 1019 系列(限购/库存)
+    return /code=1004012|code=1004019|code=1004020/.test(msg)
+        || /限购|已售罄|未达|等级不足/.test(msg);
+}
+
+/** 给"不可购买"一个可读原因, 便于日志里一眼看出该做什么 */
+function rotationErrorHint(e) {
+    const msg = String((e && e.message) || '');
+    if (/code=1004012/.test(msg)) return '等级不足或限购已满';
+    if (/限购|已售罄/.test(msg)) return '限购已满';
+    return msg.replace(/^.*code=\d+\s*/, '').trim() || '当前不可购买';
+}
+
 async function getRotationShop() {
     const body = types.GetRanchDetailRequest.encode(types.GetRanchDetailRequest.create({})).finish();
     void body; // RotationShopInfo 的请求体就是 {1:7}, 不依赖 ranch proto
@@ -1112,7 +1134,15 @@ function parseRotationShopReply(bodyBytes) {
                 else if (f2 === 8) g.discountFrom = Number(v2) * 1000;
                 else if (f2 === 9) g.discountTo = Number(v2) * 1000;
                 else if (f2 === 10) g.limit = Number(v2);
-                else if (f2 === 13) g.uid = Number(v2);
+                else if (f2 === 12 && w2 === 2) {
+                    // 限制条件: {1: "最低等级", 2: "5"} —— 等级不够时服务端拒绝购买(1004012)
+                    const cond = {};
+                    for (const [f3, , v3] of walkWire(v2)) {
+                        if (f3 === 1) cond.name = v3.toString('utf8');
+                        else if (f3 === 2) cond.value = v3.toString('utf8');
+                    }
+                    g.condition = cond;
+                } else if (f2 === 13) g.uid = Number(v2);
             }
             out.goods.push(g);
         }
@@ -1234,15 +1264,52 @@ async function autoStealFriendProduce(opts = {}) {
 }
 
 async function autoBuyRotationShop(opts = {}) {
-    const result = { bought: 0, details: [] };
+    const result = { bought: 0, details: [], reason: '' };
     const shop = await getRotationShop();
     if (!shop.open) {
+        result.reason = '集市未营业';
         log('游商', '兑换集市未营业, 跳过', { module: 'ranch', event: '游商', result: 'skip' });
         return result;
     }
     // 只考虑便便计价的商品
     const targets = shop.goods.filter(g => g.currencyId === 7002 && g.price > 0);
-    if (targets.length === 0) return result;
+    if (targets.length === 0) {
+        result.reason = '游商没有便便计价的商品';
+        return result;
+    }
+
+    // ⚠ 商品可能带等级门槛({1:"最低等级", 2:"5"}), 不够时服务端直接拒绝(1004012)。
+    //   以前不看这个字段, 于是每轮都发一次必然失败的请求并刷一条 error 日志。
+    //   玩家等级从 userState 取(登录时就有), 取不到时不拦(交给服务端判定)。
+    let playerLevel = 0;
+    try {
+        const { getUserState } = require('../utils/network');
+        playerLevel = Number((getUserState() || {}).level) || 0;
+    } catch { /* 取不到就不做本地拦截 */ }
+
+    const blockedByLevel = [];
+    const eligible = targets.filter((g) => {
+        const cond = g.condition;
+        if (!cond || !cond.name || !cond.value) return true;
+        if (!/等级/.test(String(cond.name))) return true;
+        const need = Number(cond.value) || 0;
+        if (need <= 0 || playerLevel <= 0) return true;
+        if (playerLevel < need) {
+            blockedByLevel.push(`${g.condition.name} ${need}`);
+            return false;
+        }
+        return true;
+    });
+    if (blockedByLevel.length) {
+        // 只记一条汇总(不是每个商品一条), 且用 info 级别 —— 这是"暂时买不了", 不是故障
+        log('游商', `跳过 ${blockedByLevel.length} 个未达等级要求的商品(需 ${[...new Set(blockedByLevel)].join('/')}，当前 Lv${playerLevel})`, {
+            module: 'ranch', event: '游商', result: 'skip', count: blockedByLevel.length, playerLevel,
+        });
+    }
+    if (eligible.length === 0) {
+        result.reason = `商品都需要等级要求（当前 Lv${playerLevel}）`;
+        return result;
+    }
 
     // 背包里的便便数量
     const { getRanchBagDetail } = require('./warehouse');
@@ -1250,11 +1317,12 @@ async function autoBuyRotationShop(opts = {}) {
     const poop = bag.items.find(it => Number(it.id) === 7002);
     let poopCount = poop ? Number(poop.count) : 0;
     if (poopCount <= 0) {
+        result.reason = '没有便便可兑换';
         log('游商', '没有便便可兑换', { module: 'ranch', event: '游商', result: 'skip' });
         return result;
     }
 
-    for (const g of targets) {
+    for (const g of eligible) {
         if (poopCount < g.price) continue;
         // 限购次数
         const maxByLimit = g.limit > 0 ? g.limit : 99;
@@ -1271,9 +1339,17 @@ async function autoBuyRotationShop(opts = {}) {
                 result.details.push(`#${g.itemId}x${count}(便便${g.price * count})`);
             }
         } catch (e) {
-            logWarn('游商', `购买失败 #${g.itemId}: ${e.message}`, {
-                module: 'ranch', event: '游商购买', result: 'error', itemId: g.itemId,
-            });
+            // 1004012 等"当前买不了"(等级/限购/已过期)属正常业务状态, 不是故障:
+            // 记 info 而不是 warn, 否则每轮刷一条 error 日志。
+            if (isRotationNotPurchasable(e)) {
+                log('游商', `商品 #${g.itemId} 当前不可购买(${rotationErrorHint(e)})，跳过`, {
+                    module: 'ranch', event: '游商购买', result: 'skip', itemId: g.itemId,
+                });
+            } else {
+                logWarn('游商', `购买失败 #${g.itemId}: ${e.message}`, {
+                    module: 'ranch', event: '游商购买', result: 'error', itemId: g.itemId,
+                });
+            }
         }
         await sleep(300);
     }
@@ -1717,11 +1793,16 @@ async function operateRanch(opts = {}) {
         }
         case 'rotation': {
             const r = await autoBuyRotationShop(opts);
-            return {
-                ok: true,
-                action: '游商兑换',
-                detail: r.bought > 0 ? r.details.join('，') : '集市未营业或没有便便',
-            };
+            // 把"为什么没买到"说清楚, 而不是一律"集市未营业或没有便便"
+            let detail;
+            if (r.bought > 0) {
+                detail = r.details.join('，');
+            } else if (r.reason) {
+                detail = r.reason;
+            } else {
+                detail = '集市未营业或没有便便';
+            }
+            return { ok: true, action: '游商兑换', detail };
         }
         case 'clean': {
             // 清理自己的牧场(20261117 抓包修正: CleanAllRanch 只清自己)
@@ -1897,5 +1978,9 @@ module.exports = {
     autoStealFriendProduce,
     purchaseRotationGoods,
     getRanchWeightScore,
-    __privateRanchFns: { calcRanchLevel, parseRotationShopReply, parseFeedMachineReply, walkWire, isEmptyRanchView },
+    __privateRanchFns: {
+        calcRanchLevel, parseRotationShopReply, parseFeedMachineReply, walkWire, isEmptyRanchView,
+        // 游商: 供测试验证"等级不够就不发购买请求 + 不刷 error 日志"
+        autoBuyRotationShop, isRotationNotPurchasable, rotationErrorHint,
+    },
 };

@@ -4,6 +4,9 @@
  *
  * 数据来源: GET /api/ranch/bag (返回 items 含 itemType/name/count)
  *           GET /api/ranch/bag/tabs (页签: 牧场产物/幼崽/饲料/道具)
+ *
+ * 这是一个可嵌入的面板(被「我的背包」页当作一个页签使用, 不再自己渲染标题栏)。
+ * mounted 时自动拉一次; 切账号时重拉。
  */
 import { computed, onMounted, ref, watch } from 'vue'
 import { useAccountStore } from '@/stores/account'

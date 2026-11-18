@@ -26,6 +26,13 @@ const { currentAccountId, currentAccount } = storeToRefs(accountStore)
 const { status, loading: statusLoading, realtimeConnected } = storeToRefs(statusStore)
 void currentAccount
 
+/**
+ * 嵌入模式: 由父页面(个人 → 我的牧场)传入。
+ * 为 true 时只显示"总览"内容, 隐藏本页的页签栏 —— 否则会出现
+ * 「个人页签 → 牧场页签」两层嵌套, 手机上没法用。
+ */
+withDefaults(defineProps<{ embedded?: boolean }>(), { embedded: false })
+
 const currentTab = ref<'overview' | 'cubShop' | 'tiers' | 'tasks' | 'buildings'>('overview')
 const cubShopLoading = ref(false)
 const cubShopError = ref('')
@@ -621,7 +628,9 @@ onUnmounted(() => {
 
 <template>
   <div class="space-y-4">
-    <div class="mb-1 flex flex-wrap gap-2">
+    <!-- 嵌入模式(被「个人 → 我的牧场」页签使用): 隐藏本页自己的页签栏,
+         避免"页签套页签"。独立路由访问时保持原样。 -->
+    <div v-if="!embedded" class="mb-1 flex flex-wrap gap-2">
       <button
         class="min-h-[44px] flex items-center rounded-lg px-4 py-2 font-medium transition-colors space-x-2"
         :class="currentTab === 'overview' ? 'text-white shadow-md' : 'bg-white text-gray-600 hover:bg-gray-100 dark:bg-gray-800 dark:text-gray-300 dark:hover:bg-gray-700'"

@@ -3,6 +3,7 @@ import { useIntervalFn } from '@vueuse/core'
 import { storeToRefs } from 'pinia'
 import { computed, onMounted, ref, watch } from 'vue'
 import ConfirmModal from '@/components/ConfirmModal.vue'
+import RanchBagPanel from '@/components/RanchBagPanel.vue'
 import { useAccountStore } from '@/stores/account'
 import { useBagStore } from '@/stores/bag'
 import { useStatusStore } from '@/stores/status'
@@ -18,6 +19,13 @@ const { items, loading: bagLoading, originalItems } = storeToRefs(bagStore)
 const { status, loading: statusLoading, error: statusError, realtimeConnected } = storeToRefs(statusStore)
 
 const imageErrors = ref<Record<string | number, boolean>>({})
+
+/**
+ * 农场 / 牧场背包切换。
+ * 两套仓库在服务端完全独立: 农场走 ItemService.Bag, 牧场走 GetBag{global_scene_id:2}。
+ * 牧场那边是独立面板(RanchBagPanel), 自己拉数据, 不参与农场的分类/批量逻辑。
+ */
+const bagSource = ref<'farm' | 'ranch'>('farm')
 
 const CATEGORY_OPTIONS = [
   { label: '全部', value: 'all' },
@@ -346,6 +354,31 @@ useIntervalFn(loadBag, 60000)
       </div>
     </div>
 
+    <!-- 农场/牧场背包切换: 两套仓库在服务端完全独立(农场 ItemService.Bag,
+         牧场 GetBag{global_scene_id:2}), 所以放在最外层而不是混进分类里 -->
+    <div class="flex gap-1 border-b border-gray-200 dark:border-gray-700">
+      <button
+        type="button"
+        class="px-3 py-2 text-sm"
+        :class="bagSource === 'farm' ? 'border-b-2 border-sky-500 font-medium text-sky-600' : 'text-gray-500'"
+        @click="bagSource = 'farm'"
+      >
+        农场背包
+      </button>
+      <button
+        type="button"
+        class="px-3 py-2 text-sm"
+        :class="bagSource === 'ranch' ? 'border-b-2 border-amber-500 font-medium text-amber-600' : 'text-gray-500'"
+        @click="bagSource = 'ranch'"
+      >
+        牧场背包
+      </button>
+    </div>
+
+    <!-- 牧场背包: 独立面板自己拉数据 -->
+    <RanchBagPanel v-if="bagSource === 'ranch'" />
+
+    <template v-else>
     <LoadingState v-if="bagLoading || statusLoading" />
 
     <div v-else-if="!currentAccountId" class="rounded-lg bg-white p-8 text-center text-gray-500 shadow dark:bg-gray-800">
@@ -512,6 +545,7 @@ useIntervalFn(loadBag, 60000)
         </div>
       </div>
     </div>
+    </template>
 
     <ConfirmModal
       :show="confirmModal.show"
