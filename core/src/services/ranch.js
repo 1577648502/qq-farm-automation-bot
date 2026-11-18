@@ -921,8 +921,15 @@ function toRanchView(reply) {
             grown: grownFlag === 1,
             // 副产物就绪 → 可以"收获"(CollectProduce)
             harvestable,
-            // 距下次产出秒数; null = 还没进入产出周期(幼年/未开轮)
+            // 距下次产出秒数。
+            // null 有两种情况, 要能区分(否则页面只能显示"未知", 用户以为坏了):
+            //   · 饥饿(feed_state=1): 动物没草吃, 不产出 → 服务端不下发 produce_at
+            //   · 幼年/未开轮
             harvestInSec,
+            // null 时给可读原因, 值为 'hungry' | 'juvenile' | ''
+            produceUnknownReason: harvestInSec !== null
+                ? ''
+                : (toNum(a.feed_state) === 1 ? 'hungry' : (grownFlag === 1 ? 'idle' : 'juvenile')),
             // 兼容旧字段, 语义与 harvestInSec 一致
             produceInSec: harvestInSec === null ? null : Math.max(0, harvestInSec),
             // 催产就绪 = 确实到了下次产出时刻
@@ -2025,10 +2032,31 @@ async function autoFeedMachine(opts = {}) {
     // 背包里的散装牧草
     const { getRanchBagDetail } = require('./warehouse');
     const bag = await getRanchBagDetail();
-    const grass = bag.items.find(it => Number(it.id) === 7001);
-    const have = grass ? Number(grass.count) : 0;
+    const grass = bag.items.find(it => Number(it.id) === GRASS_ITEM_ID);
+    let have = grass ? Number(grass.count) : 0;
+
+    // 背包没草 → 自动去牧场商店买(2026-11-18 抓包实证: shop6 / goods 10001 / 单价 60)
+    // 受 automation.ranch_buy_grass 控制(默认开), 避免有人不想花金券
+    if (have <= 0 && opts.buyGrass !== false && isAutomationOn('ranch_buy_grass')) {
+        const capacityLeft = machine.capacity > 0 ? Math.max(0, machine.capacity - machine.stored) : 100;
+        const wantCount = Math.min(Math.max(1, toNum(opts.buyGrassCount) || 10), Math.max(1, capacityLeft));
+        const r = await buyGrass(wantCount).catch(() => null);
+        if (r && r.ok) {
+            // 买完 auto_add=1 已直接进牧草机, 不用再 AddFeed
+            const after = await getFeedMachine().catch(() => null);
+            const stored = after ? after.stored : machine.stored;
+            log('牧场', `牧草断了 → 自动买 ${r.bought} 个(花 ${r.spent}), 牧草机现在 ${stored}`, {
+                module: 'ranch', event: '牧草机加草', result: 'ok', bought: r.bought, spent: r.spent, stored,
+            });
+            return { fed: r.bought, stored };
+        }
+        log('牧场', `牧草断了且自动购买失败: ${r && r.error ? r.error : '未知原因'}`, {
+            module: 'ranch', event: '牧草机加草', result: 'error',
+        });
+    }
+
     if (have <= 0) {
-        log('牧场', `牧草机存量 ${machine.stored} 但背包没有牧草`, {
+        log('牧场', `牧草机存量 ${machine.stored} 但背包没有牧草(自动购买未开启或失败)`, {
             module: 'ranch', event: '牧草机加草', result: 'skip',
         });
         return { fed: 0, stored: machine.stored };
@@ -2037,6 +2065,102 @@ async function autoFeedMachine(opts = {}) {
     if (add <= 0) return { fed: 0, stored: machine.stored };
     const r = await addFeedToMachine(add);
     return { fed: add, stored: r.stored };
+}
+
+/**
+ * 买牧草(牧场商店 shop 6 的 goods 10001)。
+ *
+ * 2026-11-18 抓包实证(20261118-160756_购买牧草):
+ *   BuyGoods {1: 10001, 2: 10, 3: 60} → 买 10 个, 单价 60
+ *   响应 {1:{1:10001, 3:60, 6:7001(牧草), 7:1}}
+ *   auto_add=1 时买完直接进牧草机, 不需要额外 AddFeed。
+ *
+ * @param {number} count 买几个
+ * @returns {Promise<{ok:boolean, bought:number, spent:number, error?:string}>}
+ */
+async function buyGrass(count = 10) {
+    const want = Math.max(1, Math.floor(toNum(count) || 1));
+    // 先查一次商店拿单价与限购(auto_add 场景下 price 必须与服务端一致)
+    let goods = null;
+    try {
+        const list = await getShopGoodsList(FEED_SHOP_ID);
+        goods = (list || []).find(g => toNum(g.id) === GRASS_GOODS_ID) || null;
+    } catch { /* 查不到就走默认单价 */ }
+    const price = goods ? toNum(goods.price) : 60;
+
+    let quantity = want;
+    const limit = goods ? toNum(goods.limit_count) : 0;
+    const boughtNum = goods ? toNum(goods.bought_num) : 0;
+    if (limit > 0) {
+        const remain = Math.max(0, limit - boughtNum);
+        if (remain <= 0) return { ok: false, bought: 0, spent: 0, error: '牧草已达限购' };
+        quantity = Math.min(quantity, remain);
+    }
+    if (quantity <= 0) return { ok: false, bought: 0, spent: 0, error: '可买数量为 0' };
+
+    try {
+        await purchaseShopGoods(GRASS_GOODS_ID, quantity, price);
+        log('牧场', `买牧草 ${quantity} 个(单价 ${price})`, {
+            module: 'ranch', event: '买牧草', result: 'ok', count: quantity, price,
+        });
+        return { ok: true, bought: quantity, spent: price * quantity };
+    } catch (e) {
+        const code = parseRanchErrorCode(e);
+        const raw = String(e.message || '').replace(/^[^:]*:\s*/, '').trim();
+        logWarn('牧场', `买牧草失败(code=${code || '?'}): ${raw}`, {
+            module: 'ranch', event: '买牧草', result: 'error', count: quantity, code, raw,
+        });
+        return { ok: false, bought: 0, spent: 0, error: raw || `买牧草失败(code=${code})` };
+    }
+}
+
+/**
+ * 牧场商城(道具 + 幼崽) —— 分类聚合, 供面板展示与手动购买。
+ *
+ * 商店分工(2026-11-18 抓包实证):
+ *   shop 5 = 牧场幼崽(goods 10002~10029 → item 60001~60016)
+ *   shop 6 = 牧场道具(goods 10001 → item 7001 牧草, 单价 60)
+ *
+ * @param {'all'|'item'|'cub'} category
+ * @returns {Promise<{category:string, items:Array<object>}>}
+ */
+async function getRanchShop(category = 'all') {
+    const wantItem = category === 'all' || category === 'item';
+    const wantCub = category === 'all' || category === 'cub';
+
+    let getItemById = null;
+    try { getItemById = require('../config/gameConfig').getItemById; } catch { /* 没配置就退化 */ }
+
+    const out = [];
+    if (wantItem) {
+        try {
+            for (const g of await getShopGoodsList(FEED_SHOP_ID)) {
+                const itemId = toNum(g.item_id);
+                const info = getItemById ? getItemById(itemId) : null;
+                out.push({
+                    category: 'item',
+                    goodsId: toNum(g.id),
+                    itemId,
+                    name: (info && info.name) || (itemId === GRASS_ITEM_ID ? '牧草' : `道具#${itemId}`),
+                    price: toNum(g.price),
+                    currencyId: toNum(g.price_id) || 1007,
+                    limit: toNum(g.limit_count),
+                    bought: toNum(g.bought_num),
+                    remaining: toNum(g.limit_count) > 0
+                        ? Math.max(0, toNum(g.limit_count) - toNum(g.bought_num)) : null,
+                    unlocked: !!g.unlocked,
+                });
+            }
+        } catch { /* 单个商店失败不影响另一类 */ }
+    }
+    if (wantCub) {
+        try {
+            for (const g of await getCubShop()) {
+                out.push({ category: 'cub', ...g });
+            }
+        } catch { /* 同上 */ }
+    }
+    return { category, items: out };
 }
 
 // ============ 买幼崽(收益最大) ============
@@ -2053,6 +2177,12 @@ async function autoFeedMachine(opts = {}) {
 // "利益最大"按 每金券投入的整只回收率 排序: 整只价 / 幼崽价。
 // 鸡 = 6/2 = 3.0 最高(且鸡蛋 3×N 持续产出), 兔 = 2.0, 鹅 = 2.0, 其余更低。
 const CUB_SHOP_ID = 5;
+// 牧场商店(饲料/牧草) —— 2026-11-18 抓包 20261118-160756 实证:
+//   牧草 = shopId 6 的 goods_id 10001, item_id 7001, 单价 60
+//   BuyGoods {1:10001(商品id), 2:数量, 3:单价} + auto_add=1 → 直接进牧草机
+const FEED_SHOP_ID = 6;
+const GRASS_GOODS_ID = 10001;
+const GRASS_ITEM_ID = 7001;
 const GROWN_VALUE = {
     60001: 6, 60002: 2160, 60003: 5424, 60004: 8136, 60005: 13536, 60006: 20304,
     70001: 1440, 70002: 2160,
@@ -2690,6 +2820,8 @@ module.exports = {
     autoStealFriendProduce,
     purchaseRotationGoods,
     autoUseRanchBagItems,
+    getRanchShop,
+    buyGrass,
     fillCanBuckets,
     useItemWithUid,
     getRanchWeightScore,

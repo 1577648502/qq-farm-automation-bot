@@ -818,6 +818,7 @@ function createDefaultAutomation(fertilizer: string = 'none') {
     ranch_harvest: true,
     ranch_produce: true,
     ranch_feedmachine: true,
+    ranch_buy_grass: true,
     rob_treasure: false,
     fertilizer,
     skip_own_weed_bug: false,
@@ -2621,6 +2622,7 @@ async function onBackupFileChange(ev: Event) {
                 <BaseSwitch v-model="localAutomationSettings.automation.ranch_harvest" label="自动收获" />
                 <BaseSwitch v-model="localAutomationSettings.automation.ranch_produce" label="自动催产" />
                 <BaseSwitch v-model="localAutomationSettings.automation.ranch_feedmachine" label="自动牧草机补草" />
+                <BaseSwitch v-model="localAutomationSettings.automation.ranch_buy_grass" label="牧草断了自动购买" />
                 <div class="col-span-full text-xs text-gray-400 dark:text-gray-500">
                   自动经营按 5~8 分钟一轮依次执行：收获 → 催产 → 牧草机补草 → 卖产物 → 买幼崽 → 清理牧场 → 偷好友产物 → 建筑升级 → 地块解锁 → 游商兑换 → 领牧场任务。
                   每一步都有独立开关（手动在牧场页点单个操作不受这些开关影响）；关闭总开关后所有牧场动作停止。

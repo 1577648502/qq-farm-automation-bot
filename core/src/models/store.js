@@ -182,6 +182,7 @@ const DEFAULT_ACCOUNT_CONFIG = {
         ranch_harvest: true,     // 自动收获(全场 HarvestRanch)
         ranch_produce: true,     // 自动催产(全场 TriggerProduce)
         ranch_feedmachine: true, // 牧草机自动补草
+        ranch_buy_grass: true,   // 牧草断了时自动去牧场商店买(单价60金券)
         ranch_upgrade: true,   // 自动建筑升级 + 领竣工
         ranch_unlock: true,    // 自动地块解锁 + 领竣工
         fertilizer_buy_organic: false,

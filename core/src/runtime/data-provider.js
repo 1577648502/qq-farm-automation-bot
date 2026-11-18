@@ -147,6 +147,8 @@ function createDataProvider(options) {
         runRanchCare: (accountRef, opts) => callWorkerApi(resolveAccountRefId(accountRef), 'runRanchCare', [opts || {}]),
         operateRanch: (accountRef, opts) => callWorkerApi(resolveAccountRefId(accountRef), 'operateRanch', [opts || {}]),
         getCubShop: (accountRef) => callWorkerApi(resolveAccountRefId(accountRef), 'getCubShop'),
+        getRanchShop: (accountRef, category) => callWorkerApi(resolveAccountRefId(accountRef), 'getRanchShop', category || 'all'),
+        buyGrass: (accountRef, count) => callWorkerApi(resolveAccountRefId(accountRef), 'buyGrass', count || 10),
         getVoucherBalance: (accountRef) => callWorkerApi(resolveAccountRefId(accountRef), 'getVoucherBalance'),
         getRotationShop: (accountRef) => callWorkerApi(resolveAccountRefId(accountRef), 'getRotationShop'),
         getRanchWeightScore: (accountRef) => callWorkerApi(resolveAccountRefId(accountRef), 'getRanchWeightScore'),

@@ -37,6 +37,85 @@ const currentTab = ref<'overview' | 'cubShop' | 'tiers' | 'tasks' | 'buildings'>
 const cubShopLoading = ref(false)
 const cubShopError = ref('')
 const cubShopList = ref<any[]>([])
+
+// ===== 牧场商城(道具/幼崽分类) =====
+// 商店分工(抓包实证): shop5=幼崽, shop6=道具(牧草)
+const ranchShopCategory = ref<'all' | 'item' | 'cub'>('item')
+const ranchShopItems = ref<any[]>([])
+const ranchShopLoading = ref(false)
+const ranchShopError = ref('')
+const grassBuyCount = ref(10)
+const grassBuying = ref(false)
+
+async function loadRanchShop(category?: 'all' | 'item' | 'cub') {
+  const id = currentAccountId.value
+  if (!id) return
+  if (category) ranchShopCategory.value = category
+  ranchShopLoading.value = true
+  ranchShopError.value = ''
+  try {
+    const res = await api.get('/api/ranch/shop', {
+      params: { category: ranchShopCategory.value },
+      headers: { 'x-account-id': id },
+    })
+    const d = res.data
+    if (!d?.ok) throw new Error(d?.error || '获取牧场商城失败')
+    ranchShopItems.value = d.data?.items || []
+  } catch (e: any) {
+    ranchShopError.value = e?.response?.data?.error || e?.message || '获取牧场商城失败'
+  } finally {
+    ranchShopLoading.value = false
+  }
+}
+
+const ranchShopFiltered = computed(() =>
+  ranchShopItems.value.filter((g: any) => ranchShopCategory.value === 'all' || g.category === ranchShopCategory.value))
+
+const ranchShopCounts = computed(() => {
+  const all = ranchShopItems.value
+  return {
+    all: all.length,
+    item: all.filter((g: any) => g.category === 'item').length,
+    cub: all.filter((g: any) => g.category === 'cub').length,
+  }
+})
+
+/** 手动买牧草 */
+async function buyGrassManually() {
+  const id = currentAccountId.value
+  if (!id || grassBuying.value) return
+  const n = Math.max(1, Math.floor(Number(grassBuyCount.value) || 1))
+  grassBuying.value = true
+  try {
+    const res = await api.post('/api/ranch/grass/buy', { count: n }, { headers: { 'x-account-id': id } })
+    const d = res.data
+    if (!d?.ok) throw new Error(d?.error || '购买失败')
+    const r = d.data || {}
+    if (r.ok) toast.success(`已买牧草 ${r.bought} 个，花 ${r.spent}`)
+    else toast.error(r.error || '购买失败')
+    await loadRanchShop()
+    await reloadCubShop()
+  } catch (e: any) {
+    toast.error(e?.response?.data?.error || e?.message || '购买失败')
+  } finally {
+    grassBuying.value = false
+  }
+}
+
+/** 手动买幼崽(复用加购流程) */
+async function buyCubManually(g: any) {
+  const id = currentAccountId.value
+  if (!id) return
+  try {
+    const r = await ranchStore.operate(id, { op: 'buycub', goodsId: g.goodsId, count: 1, price: g.price })
+    if (r?.ok === false) throw new Error(r.error || '购买失败')
+    toast.success(`已买 ${g.name} x${(r as any)?.bought ?? 1}`)
+    await loadRanchShop()
+    await reloadCubShop()
+  } catch (e: any) {
+    toast.error(e?.message || '购买失败')
+  }
+}
 // 幼崽商城筛选/排序(对照种子商城的 FILTERS)
 const cubFilter = ref<'all' | 'available' | 'locked' | 'soldout'>('all')
 const cubSort = ref<'ratio' | 'price' | 'profit'>('ratio')
@@ -138,7 +217,7 @@ async function openTiers() {
 
 async function openCubShop() {
   currentTab.value = 'cubShop'
-  await reloadCubShop()
+  await Promise.all([reloadCubShop(), loadRanchShop()])
 }
 
 /** 拉一次幼崽商店(带金券余额), 把每行的数量归一到合法区间 */
@@ -709,7 +788,7 @@ onUnmounted(() => {
         @click="openCubShop"
       >
         <div class="i-carbon-shopping-cart text-lg" />
-        <span>幼崽商城</span>
+        <span>牧场商城</span>
       </button>
       <button
         class="flex items-center rounded-lg font-medium transition-colors space-x-2"
@@ -934,7 +1013,7 @@ onUnmounted(() => {
         <div class="flex flex-wrap items-center justify-between gap-2">
           <h3 class="flex items-center gap-2 text-lg font-bold">
             <div class="i-fas-paw text-xl text-amber-500" />
-            幼崽商城
+            牧场商城
           </h3>
           <div class="flex flex-wrap items-center gap-3">
             <!-- 金券余额: 余额未知时不显示, 避免误导(与不拦截余额的策略一致) -->
@@ -949,8 +1028,64 @@ onUnmounted(() => {
             </BaseButton>
           </div>
         </div>
-        <!-- 筛选 + 排序(对照种子商城的 FILTERS) -->
+        <!-- 分类切换: 道具 / 幼崽(抓包实证: shop6=道具 牧草, shop5=幼崽) -->
         <div class="mt-2 flex flex-wrap items-center gap-2">
+          <button
+            v-for="c in [
+              { key: 'item', label: '道具' },
+              { key: 'cub', label: '幼崽' },
+            ]"
+            :key="c.key"
+            type="button"
+            class="rounded-lg px-3 py-1 text-xs font-medium transition"
+            :class="ranchShopCategory === c.key
+              ? 'bg-amber-500 text-white'
+              : 'bg-gray-100 text-gray-600 hover:bg-gray-200 dark:bg-gray-700 dark:text-gray-300'"
+            @click="loadRanchShop(c.key as any)"
+          >
+            {{ c.label }} <span class="opacity-70">{{ c.key === 'item' ? ranchShopCounts.item : ranchShopCounts.cub }}</span>
+          </button>
+          <div class="flex-1" />
+          <span class="text-xs text-gray-400">
+            {{ ranchShopCategory === 'cub' ? '按收益比排序（整只回收 ÷ 幼崽成本）' : '牧场道具（牧草等）' }}
+          </span>
+          <BaseButton variant="secondary" size="sm" :loading="cubShopLoading || ranchShopLoading" @click="openCubShop">
+            <span class="i-carbon-renew mr-1" />刷新
+          </BaseButton>
+        </div>
+
+        <!-- 道具: 牧草手动购买 -->
+        <div v-if="ranchShopCategory === 'item'" class="mt-3 rounded-lg border border-emerald-200 bg-emerald-50/60 p-3 dark:border-emerald-800 dark:bg-emerald-900/20">
+          <div class="flex flex-wrap items-center gap-3">
+            <div class="min-w-0 flex-1">
+              <div class="text-sm text-emerald-900 font-semibold dark:text-emerald-200">
+                牧草 · 单价 60 金券
+              </div>
+              <p class="mt-0.5 text-xs text-emerald-700/90 dark:text-emerald-300/90">
+                买完自动进牧草机（auto_add）。牧场牧草断了会自动买，这里是手动补。
+              </p>
+            </div>
+            <label class="flex items-center gap-1.5 text-xs text-gray-600 dark:text-gray-300">
+              数量
+              <input
+                v-model.number="grassBuyCount"
+                type="number"
+                min="1"
+                class="h-9 w-20 border border-gray-300 rounded-lg bg-white px-2 text-center text-sm dark:border-gray-600 dark:bg-gray-800"
+              >
+            </label>
+            <BaseButton size="sm" :loading="grassBuying" @click="buyGrassManually">
+              {{ grassBuying ? '购买中…' : '购买牧草' }}
+            </BaseButton>
+          </div>
+        </div>
+
+        <div v-if="ranchShopError" class="mt-2 text-xs text-red-500">
+          {{ ranchShopError }}
+        </div>
+
+        <!-- 筛选 + 排序(对照种子商城的 FILTERS) -->
+        <div v-if="ranchShopCategory === 'cub'" class="mt-2 flex flex-wrap items-center gap-2">
           <button
             v-for="f in CUB_FILTERS"
             :key="f.key"
@@ -976,7 +1111,43 @@ onUnmounted(() => {
       </div>
 
       <div class="p-3 sm:p-4">
-        <LoadingState v-if="cubShopLoading && !cubShopList.length" />        <div v-else-if="cubShopError" class="py-8 text-center text-sm text-gray-500">
+        <!-- 道具分类: 列出商店道具(牧场商店 shop6) -->
+        <template v-if="ranchShopCategory === 'item'">
+          <LoadingState v-if="ranchShopLoading && !ranchShopItems.length" />
+          <div v-else-if="!ranchShopFiltered.length" class="py-8 text-center text-sm text-gray-500">
+            商店暂无在售道具
+          </div>
+          <div v-else class="grid grid-cols-1 gap-3 md:grid-cols-3 lg:grid-cols-4 sm:grid-cols-2">
+            <div
+              v-for="g in ranchShopFiltered"
+              :key="g.goodsId"
+              class="flex flex-col border border-gray-200 rounded-lg bg-white p-3 dark:border-gray-700 dark:bg-gray-800"
+            >
+              <div class="mb-1 flex items-start justify-between">
+                <span class="rounded bg-emerald-100 px-1.5 py-0.5 text-[10px] text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300">道具</span>
+                <span class="text-[10px] text-gray-400">#{{ g.goodsId }}</span>
+              </div>
+              <div class="text-sm font-bold text-gray-800 dark:text-gray-100">{{ g.name }}</div>
+              <div class="mt-0.5 text-[11px] text-gray-500">单价 {{ g.price }} 金券</div>
+              <div class="text-[10px] text-gray-400">
+                {{ g.limit > 0 ? `限购 ${g.bought}/${g.limit}` : '不限购' }}
+              </div>
+              <BaseButton
+                class="mt-2 w-full"
+                size="sm"
+                :disabled="!g.unlocked || grassBuying || g.itemId !== 7001"
+                @click="buyGrassManually()"
+              >
+                {{ g.itemId === 7001 ? `买 ${grassBuyCount} 个` : '暂不支持' }}
+              </BaseButton>
+            </div>
+          </div>
+        </template>
+
+        <!-- 幼崽分类: 原加购界面 -->
+        <template v-else>
+        <LoadingState v-if="cubShopLoading && !cubShopList.length" />
+        <div v-else-if="cubShopError" class="py-8 text-center text-sm text-gray-500">
           {{ cubShopError }}
         </div>
         <div v-else-if="!cubShopList.length" class="py-8 text-center text-sm text-gray-500">
@@ -1087,6 +1258,7 @@ onUnmounted(() => {
               </template>
             </BaseButton>
           </div>
+        </template>   <!-- 幼崽分类结束 -->
         </div>
       </div>
 
@@ -1321,7 +1493,9 @@ onUnmounted(() => {
                   <div class="mt-1 text-center text-[10px]">
                     <span v-if="isHarvestable(a)" class="text-amber-600 font-medium dark:text-amber-400">可收获</span>
                     <span v-else-if="produceInSec(a) !== null" class="text-orange-500">{{ formatTime(produceInSec(a) ?? 0) }} 后产出</span>
-                    <span v-else class="text-gray-400" title="服务端本次未下发下次产出时刻，无法推算倒计时">产出时间未知</span>
+                    <span v-else-if="a.produceUnknownReason === 'hungry'" class="text-red-500" title="动物没吃上牧草，停止产出。去农场种「牧草种子」，收获后牧草会自动补进牧草机">饥饿·缺牧草</span>
+                    <span v-else-if="a.produceUnknownReason === 'juvenile'" class="text-gray-400">未成熟</span>
+                    <span v-else class="text-gray-400" title="服务端本次未下发下次产出时刻">产出待定</span>
                   </div>
 
                   <div

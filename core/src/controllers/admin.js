@@ -1568,6 +1568,11 @@ app.use('/api', (req, res, next) => {
         return { rows: getCubRankings(shop, sortBy), sort: sortBy };
     }, { softErrors: true }));
 
+    // 牧场商城(道具 + 幼崽分类)
+    app.get('/api/ranch/shop', withAccount((accountId, req) => provider.getRanchShop(accountId, req.query.category || 'all'), { softErrors: true }));
+    // 手动买牧草
+    app.post('/api/ranch/grass/buy', withAccount((accountId, req) => provider.buyGrass(accountId, (req.body || {}).count || 10), { softErrors: true }));
+
     // 幼崽商店(带收益比, 供"利益最大"展示) + 金券余额(面板加购要校验)
     app.get('/api/ranch/cub-shop', withAccount(async (accountId) => {
         const shop = await provider.getCubShop(accountId);

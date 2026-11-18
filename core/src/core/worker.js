@@ -1337,6 +1337,12 @@ async function handleApiCall(msg) {
             case 'getCubShop':
                 result = await require('../services/ranch').getCubShop();
                 break;
+            case 'getRanchShop':
+                result = await require('../services/ranch').getRanchShop(args[0] || 'all');
+                break;
+            case 'buyGrass':
+                result = await require('../services/ranch').buyGrass(args[0] || 10);
+                break;
             case 'getVoucherBalance':
                 result = await require('../services/ranch').getVoucherBalance();
                 break;
