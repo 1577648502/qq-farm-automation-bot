@@ -13,6 +13,7 @@ const { recordOperation } = require('../services/stats');
 const { types } = require('./proto');
 const { toLong, toNum, syncServerTime, log, logWarn } = require('./utils');
 const cryptoWasm = require('./crypto-wasm');
+const protocolObserver = require('./protocol-observer');
 const { observeVersionInfo } = require('./client-version');
 
 // 延迟加载 warehouse 模块避免循环依赖
@@ -107,6 +108,9 @@ function hasOwn(obj, key) {
 // async function encodeMsg(serviceName, methodName, bodyBytes) {
 async function encodeMsg(serviceName, methodName, bodyBytes, clientSeqValue) {
     let finalBody = bodyBytes || Buffer.alloc(0);
+    // 协议观察器: 抓的是**加密前**的请求明文 —— mitmproxy 抓 C->S 只能拿到密文, 这里反而更全。
+    // 记录失败绝不能影响收发, observe 内部已吞异常。
+    protocolObserver.observe('C->S', `${serviceName}.${methodName}`, finalBody);
     if (finalBody.length > 0) {
         finalBody = await cryptoWasm.encryptBuffer(finalBody);
     }
@@ -219,6 +223,12 @@ function handleMessage(data) {
             const errorCode = toNum(meta.error_code);
             const clientSeqVal = toNum(meta.client_seq);
 
+            // 协议观察器: 响应 body 是明文, 直接记(含错误帧, 错误码单独统计)
+            protocolObserver.observe('S->C', `${meta.service_name}.${meta.method_name}`, msg.body, {
+                errorCode,
+                errorMessage: meta.error_message,
+            });
+
             const cb = pendingCallbacks.get(clientSeqVal);
             if (cb) {
                 pendingCallbacks.delete(clientSeqVal);
@@ -249,6 +259,9 @@ function handleNotify(msg) {
         if (process.env.FARM_DEBUG_NOTIFY === '1') {
             console.log('[NOTIFY]', type, Buffer.from(eventBody || []).toString('hex'));
         }
+
+        // 协议观察器: 推送也在采集范围内(很多玩法状态只走推送, 不请求)
+        protocolObserver.observe('S->C', `[Notify] ${type}`, Buffer.from(eventBody || []));
 
         // 被踢下线
         if (type.includes('Kickout')) {

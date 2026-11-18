@@ -1,0 +1,461 @@
+/**
+ * 协议观察器 —— 让机器人自己把「游戏改了什么」记下来
+ *
+ * 为什么需要:
+ *   以前每次游戏更新活动, 都要手动 mitmproxy 抓包 + 解码 + 人工比对, 一次半小时。
+ *   但机器人本来就在跑同一条网关连接, 而且它手里的**请求体是加密前的明文**
+ *   (network.encodeMsg 在加密之前调用本模块), 比 mitmproxy 抓 C→S 还全。
+ *
+ * 做什么:
+ *   1) 被动记录每个 service.method 的「字段结构指纹」(字段号 + wire type, 不含具体值);
+ *   2) 与基线(baseline.json)对比, 自动标出 **新接口 / 老接口的新字段**;
+ *   3) 对 ActivityService.List 额外做结构化提取: 活动组/子活动/标题/时间,
+ *      以及每个子活动 body 用的是哪个字段号、这个字段号在 proto 里有没有定义
+ *      —— 新玩法一上线就会以「未定义字段号」的形式露头。
+ *
+ * 开销控制:
+ *   - 指纹计算纯内存, 不落盘; 只有首次出现/采样窗口内的帧才写原始 hex;
+ *   - catalog 每 FLUSH_INTERVAL_MS 或进程退出时原子落盘;
+ *   - 每个接口最多保留 MAX_SAMPLES_PER_KEY 条样本, 单个样本超过 MAX_SAMPLE_BYTES 截断。
+ *
+ * 关闭: FARM_PROTOCOL_OBSERVER=0
+ * 目录: data/protocol/
+ *   catalog-<账号>.json   该账号采到的接口清单(每进程一份, 不会互相覆盖)
+ *   baseline.json         基线(共享), 面板上点「以此为准」才更新
+ */
+const fs = require('node:fs');
+const path = require('node:path');
+const { getDataDir } = require('../config/runtime-paths');
+const wire = require('./wire');
+
+const FLUSH_INTERVAL_MS = 5000;
+const MAX_SAMPLES_PER_KEY = 4;
+const MAX_SAMPLE_BYTES = 8192;
+const MAX_KEYS = 3000;
+const MAX_FIELD_PATHS_PER_KEY = 600;
+
+const ACTIVITY_SERVICE = 'gamepb.activitypb.ActivityService';
+
+let enabled = process.env.FARM_PROTOCOL_OBSERVER !== '0';
+let startedAt = 0;
+let flushTimer = null;
+let dirty = false;
+let protoReflection = null;
+
+/** key = "service.method" 或 "[Notify] xxx" */
+const catalog = new Map();
+let baseline = null;
+/** 最近一次活动列表的结构化快照: groupId -> group(按 id 合并, 不互相覆盖) */
+let activityGroups = new Map();
+let activitySummaries = new Map();
+let activityAt = 0;
+
+function dataDir() {
+    return path.join(getDataDir(), 'protocol');
+}
+function fileOf(name) {
+    return path.join(dataDir(), name);
+}
+/** 每个 worker 进程只写自己账号的文件, 避免多账号互相覆盖 */
+function catalogFile() {
+    // 账号 id 在 worker 里由 workerData 写进环境变量(见 core/worker.js 顶部)
+    const id = String(process.env.FARM_ACCOUNT_ID || '').trim() || 'default';
+    const safe = id.replace(/[^\w.-]/g, '_');
+    return fileOf(`catalog-${safe}.json`);
+}
+
+function ensureDir() {
+    try {
+        fs.mkdirSync(dataDir(), { recursive: true });
+    } catch { /* 目录建不出来就让写文件失败, 不影响主流程 */ }
+}
+
+function writeJsonAtomic(filePath, value) {
+    ensureDir();
+    const tmp = `${filePath}.tmp-${process.pid}-${Date.now()}`;
+    fs.writeFileSync(tmp, `${JSON.stringify(value, null, 2)}\n`);
+    fs.renameSync(tmp, filePath);
+}
+
+function readJsonSafe(filePath, fallback) {
+    try {
+        return JSON.parse(fs.readFileSync(filePath, 'utf8'));
+    } catch {
+        return fallback;
+    }
+}
+
+/** 取 proto 反射信息(字段号集合), 拿不到就返回 null —— 观察器不能因为 proto 挂了而失效 */
+function getProtoReflection() {
+    if (protoReflection !== null) return protoReflection;
+    try {
+        const { getRoot } = require('./proto');
+        const root = getRoot();
+        if (!root) return (protoReflection = false);
+        const activityData = root.lookupType('gamepb.activitypb.ActivityData');
+        const knownBodyFields = new Map();
+        for (const [name, field] of Object.entries(activityData.fields)) {
+            knownBodyFields.set(field.id, name);
+        }
+        protoReflection = { activityData, knownBodyFields };
+    } catch {
+        protoReflection = false;
+    }
+    return protoReflection;
+}
+
+function emptyEntry(key) {
+    return {
+        key,
+        count: 0,
+        firstSeenAt: Date.now(),
+        lastSeenAt: 0,
+        dirs: {},
+        fieldPaths: [],
+        errors: 0,
+        samples: [],
+        bytes: { min: 0, max: 0 },
+    };
+}
+
+function getEntry(key) {
+    let entry = catalog.get(key);
+    if (!entry) {
+        if (catalog.size >= MAX_KEYS) return null;
+        entry = emptyEntry(key);
+        catalog.set(key, entry);
+    }
+    return entry;
+}
+
+/**
+ * 记录一帧
+ * @param {'C->S'|'S->C'} dir
+ * @param {string} key service.method 或 [Notify] xxx
+ * @param {Buffer} body 明文业务 body(请求为加密前明文)
+ * @param {{errorCode?:number, errorMessage?:string}} [meta]
+ */
+function observe(dir, key, body, meta = {}) {
+    if (!enabled || !key) return;
+    const buf = Buffer.isBuffer(body) ? body : Buffer.from(body || []);
+    const entry = getEntry(key);
+    if (!entry) return;
+
+    // 实时可见性: FARM_PROTO_LOG=1 时每个新接口打一行
+    const wasNew = entry.count === 0;
+    if (wasNew) require('./protocol-log').logInterface(key, dir);
+
+    entry.count += 1;
+    entry.lastSeenAt = Date.now();
+    entry.dirs[dir] = (entry.dirs[dir] || 0) + 1;
+    if (buf.length) {
+        entry.bytes.min = entry.bytes.min ? Math.min(entry.bytes.min, buf.length) : buf.length;
+        entry.bytes.max = Math.max(entry.bytes.max, buf.length);
+    }
+    if (meta.errorCode) entry.errors += 1;
+
+    // 指纹: 只对非空 body 算
+    if (buf.length) {
+        const fp = wire.footprint(buf);
+        const had = new Set(entry.fieldPaths);
+        let grew = false;
+        for (const p of fp.paths) {
+            if (!had.has(p) && entry.fieldPaths.length < MAX_FIELD_PATHS_PER_KEY) {
+                entry.fieldPaths.push(p);
+                had.add(p);
+                grew = true;
+            }
+        }
+        // 采样本: 结构有增长时必存; 否则按数量采样
+        if (entry.samples.length < MAX_SAMPLES_PER_KEY && (grew || entry.count % 40 === 0)) {
+            entry.samples.push({
+                at: Date.now(),
+                dir,
+                bytes: buf.length,
+                hex: buf.subarray(0, MAX_SAMPLE_BYTES).toString('hex'),
+                truncated: buf.length > MAX_SAMPLE_BYTES,
+            });
+        }
+    }
+
+    if (key === `${ACTIVITY_SERVICE}.List` && dir === 'S->C') {
+        try { harvestActivityList(buf); } catch { /* 结构提取失败不影响采集 */ }
+    }
+
+    dirty = true;
+    scheduleFlush();
+}
+
+/**
+ * 裸 wire 提取: 活动组 → 子活动 → body 字段号(除 head=1 外)。
+ * 路径: ListReply#1(ActivityGroup) → #2(ActivityData) → #1(ActivityHead#1=id) + 其它字段号
+ * @returns {Map<number, number[]>} childId -> [body field no...]
+ */
+function harvestRawBodyFields(buf) {
+    const out = new Map();
+    const top = wire.parseFields(buf).fields;
+    for (const groupField of top) {
+        if (groupField.no !== 1 || !groupField.bytes) continue;
+        const groupFields = wire.parseFields(groupField.bytes).fields;
+        for (const childField of groupFields) {
+            if (childField.no !== 2 || !childField.bytes) continue;
+            const dataFields = wire.parseFields(childField.bytes).fields;
+            const headField = dataFields.find(f => f.no === 1);
+            if (!headField || !headField.bytes) continue;
+            const headFields = wire.parseFields(headField.bytes).fields;
+            const idField = headFields.find(f => f.no === 1);
+            const childId = idField ? Number(idField.value) || 0 : 0;
+            if (!childId) continue;
+            const bodyNos = dataFields.filter(f => f.no !== 1).map(f => f.no);
+            out.set(childId, bodyNos);
+        }
+    }
+    return out;
+}
+
+/** 从 ActivityService.List 的回复里抽出活动组/子活动结构 */
+function harvestActivityList(buf) {
+    const reflection = getProtoReflection();
+    if (!reflection) return;
+    const { activityData } = reflection;
+
+    let reply;
+    try {
+        reply = require('./proto').types.ActivityListReply.decode(buf);
+    } catch {
+        return;
+    }
+    if (!reply || !Array.isArray(reply.groups)) return;
+
+    // 另走一遍裸 wire: proto 里没定义的字段号 protobufjs 会直接丢掉, 而新玩法恰恰
+    // 就是"没定义"的那种(2026-11-18 的「故友重逢」= ActivityData#109 就是这么漏的)。
+    // 所以每组子活动的真实 body 字段号必须以裸 wire 为准。
+    const rawBodyFieldsByChildId = harvestRawBodyFields(buf);
+
+    const groups = [];
+    for (const group of reply.groups) {
+        const head = group && group.head;
+        if (!head) continue;
+        const children = [];
+        for (const child of (Array.isArray(group.children) ? group.children : [])) {
+            const ch = child && child.head;
+            if (!ch) continue;
+            const childId = Number(ch.id) || 0;
+
+            // 已定义字段: 走 proto 反射拿名字(便于读)
+            const fieldsByName = new Map();
+            for (const [name, value] of Object.entries(child)) {
+                if (name === 'head' || !value) continue;
+                const fieldDef = activityData.fields[name];
+                if (!fieldDef) continue;
+                fieldsByName.set(fieldDef.id, name);
+            }
+            // 以裸 wire 的字段号为准, 能同时覆盖"已定义"和"proto 未定义"两种情况
+            const rawFields = rawBodyFieldsByChildId.get(childId) || [];
+            const bodyFields = rawFields.map((no) => ({
+                no,
+                name: fieldsByName.get(no) || `field${no}`,
+                defined: fieldsByName.has(no),
+            }));
+            // 兜底: 裸 wire 没抓到(理论上不会)时仍用反射结果
+            if (!bodyFields.length) {
+                for (const [no, name] of fieldsByName) {
+                    bodyFields.push({ no, name, defined: true });
+                }
+            }
+
+            children.push({
+                id: childId,
+                name: ch.name || '',
+                type: Number(ch.type) || 0,
+                status: Number(ch.status) || 0,
+                startTime: Number(ch.start_time) || 0,
+                endTime: Number(ch.end_time) || 0,
+                clientId: Number(ch.client_id) || 0,
+                bodyFields,
+            });
+        }
+        groups.push({
+            id: Number(head.id) || 0,
+            name: head.name || '',
+            startTime: Number(head.start_time) || 0,
+            endTime: Number(head.end_time) || 0,
+            status: Number(head.status) || 0,
+            children,
+        });
+    }
+
+    // ⚠ ListRequest#1 是场景号(1=农场, 2=牧场), 两个场景各返回自己的活动组。
+    //   必须按 groupId 合并, 否则后一次响应会把前一次的组冲掉(实测牧场那次只剩 1 个组)。
+    for (const g of groups) activityGroups.set(g.id, g);
+    for (const a of (Array.isArray(reply.all_activities) ? reply.all_activities : [])) {
+        const id = Number(a && a.id) || 0;
+        if (id) activitySummaries.set(id, { id, name: (a && a.name) || '' });
+    }
+    activityAt = Date.now();
+    dirty = true;
+}
+
+function snapshot() {
+    const baseKeys = new Map();
+    if (baseline && Array.isArray(baseline.interfaces)) {
+        for (const it of baseline.interfaces) baseKeys.set(it.key, it);
+    }
+    const interfaces = [];
+    for (const entry of catalog.values()) {
+        const base = baseKeys.get(entry.key);
+        const basePaths = base ? new Set(base.fieldPaths || []) : null;
+        const newFields = basePaths
+            ? entry.fieldPaths.filter(p => !basePaths.has(p))
+            : [];
+        interfaces.push({
+            key: entry.key,
+            count: entry.count,
+            errors: entry.errors,
+            firstSeenAt: entry.firstSeenAt,
+            lastSeenAt: entry.lastSeenAt,
+            dirs: entry.dirs,
+            bytes: entry.bytes,
+            fieldPaths: entry.fieldPaths,
+            newFields,
+            isNew: !base,
+            samples: entry.samples,
+        });
+    }
+    interfaces.sort((a, b) => b.lastSeenAt - a.lastSeenAt);
+
+    const baseActivity = baseline && baseline.activity ? baseline.activity : null;
+    const knownGroups = new Set(
+        baseActivity && Array.isArray(baseActivity.groupIds) ? baseActivity.groupIds : [],
+    );
+    const knownChildren = new Set(
+        baseActivity && Array.isArray(baseActivity.childIds) ? baseActivity.childIds : [],
+    );
+
+    let activity = null;
+    if (activityGroups.size) {
+        activity = {
+            at: activityAt,
+            groups: [...activityGroups.values()].map(g => ({
+                ...g,
+                isNew: baseline ? !knownGroups.has(g.id) : false,
+                children: g.children.map(c => ({
+                    ...c,
+                    isNew: baseline ? !knownChildren.has(c.id) : false,
+                    // body 字段在 proto 里没定义 => 新玩法, 需要补 .proto
+                    undefinedBodyFields: c.bodyFields.filter(f => !f.defined).map(f => f.no),
+                })),
+            })),
+            summaries: [...activitySummaries.values()],
+        };
+    }
+
+    return {
+        accountId: String(process.env.FARM_ACCOUNT_ID || '').trim() || 'default',
+        generatedAt: Date.now(),
+        startedAt,
+        baselineAt: baseline ? baseline.frozenAt : 0,
+        baselineInterfaces: baseline && Array.isArray(baseline.interfaces) ? baseline.interfaces.length : 0,
+        interfaceCount: interfaces.length,
+        interfaces,
+        newInterfaces: interfaces.filter(i => i.isNew).map(i => i.key),
+        activity,
+    };
+}
+
+/** 把当前 catalog 冻结成新基线(面板上的「以此为准」) */
+function freezeBaseline() {
+    const snap = snapshot();
+    const groupIds = [];
+    const childIds = [];
+    if (activityGroups.size) {
+        for (const g of activityGroups.values()) {
+            groupIds.push(g.id);
+            for (const c of g.children) childIds.push(c.id);
+        }
+    }
+    const next = {
+        frozenAt: Date.now(),
+        interfaces: snap.interfaces.map(i => ({
+            key: i.key,
+            fieldPaths: i.fieldPaths,
+            dirs: i.dirs,
+        })),
+        activity: { groupIds, childIds },
+    };
+    writeJsonAtomic(fileOf('baseline.json'), next);
+    baseline = next;
+    return next;
+}
+
+function loadBaseline() {
+    const raw = readJsonSafe(fileOf('baseline.json'), null);
+    baseline = (raw && Array.isArray(raw.interfaces)) ? raw : null;
+    return baseline;
+}
+
+function scheduleFlush() {
+    if (flushTimer) return;
+    flushTimer = setTimeout(() => {
+        flushTimer = null;
+        flush();
+    }, FLUSH_INTERVAL_MS);
+    if (flushTimer.unref) flushTimer.unref();
+}
+
+function flush() {
+    if (!dirty) return false;
+    dirty = false;
+    try {
+        const snap = snapshot();
+        // catalog-<账号>.json 只存结构化数据 + 少量样本
+        writeJsonAtomic(catalogFile(), snap);
+        return true;
+    } catch {
+        dirty = true;
+        return false;
+    }
+}
+
+function reset() {
+    catalog.clear();
+    activityGroups = new Map();
+    activitySummaries = new Map();
+    activityAt = 0;
+    dirty = true;
+    flush();
+}
+
+function start() {
+    if (startedAt) return true;
+    startedAt = Date.now();
+    loadBaseline();
+    ensureDir();
+    // 进程退出前落盘, 避免丢最后一次采集
+    const onExit = () => { try { flush(); } catch {} };
+    process.once('exit', onExit);
+    return true;
+}
+
+function stop() {
+    enabled = false;
+    if (flushTimer) { clearTimeout(flushTimer); flushTimer = null; }
+    flush();
+}
+
+function isEnabled() { return enabled; }
+function setEnabled(value) { enabled = !!value; }
+
+module.exports = {
+    start,
+    stop,
+    observe,
+    snapshot,
+    freezeBaseline,
+    loadBaseline,
+    flush,
+    reset,
+    isEnabled,
+    setEnabled,
+    __private: { harvestActivityList, getProtoReflection },
+};

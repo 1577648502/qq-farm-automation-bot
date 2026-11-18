@@ -16,6 +16,8 @@
     "build:mac": "pkg . --no-bytecode --targets node18-macos-x64,node18-macos-arm64 --out-path dist",
     "lint": "eslint . --fix",
     "sync:game-config": "node scripts/sync-game-config-from-qq-cache.js",
+    "proto:report": "node scripts/proto-report.js",
+    "proto:freeze": "node scripts/proto-report.js --freeze",
     "test:ws-capture-decode": "node scripts/ws-capture-decode.js --self-test",
     "test": "echo \"Error: no test specified\" && exit 1"
   },

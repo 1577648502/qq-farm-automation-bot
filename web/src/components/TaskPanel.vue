@@ -60,7 +60,7 @@ function formatTaskProgress(task: any) {
 <template>
   <div class="space-y-6">
     <!-- Daily Overview (Daily Gifts & Tasks) -->
-    <DailyOverview :daily-gifts="dailyGifts" />
+    <DailyOverview :daily-gifts="dailyGifts" :account-id="currentAccountId" />
 
     <!-- Growth Task -->
     <div class="flex flex-col rounded-lg bg-white p-4 shadow dark:bg-gray-800">

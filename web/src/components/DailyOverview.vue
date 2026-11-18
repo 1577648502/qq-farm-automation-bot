@@ -1,9 +1,52 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
+import api from '@/api'
+import { useToastStore } from '@/stores/toast'
 
 const props = defineProps<{
   dailyGifts: any
+  /** 当前账号, 手动领取时带上(不传则用全局 x-account-id) */
+  accountId?: string
 }>()
+
+const toast = useToastStore()
+const claimingKey = ref('')
+
+/**
+ * 只有"支持手动补领"的礼包才显示按钮。
+ * 其余(邮箱/分享/会员/月卡)走各自的游戏侧流程, 强行提供按钮只会发出必然失败的请求。
+ */
+const MANUAL_CLAIMABLE = new Set(['red_packet_daily'])
+
+function canManualClaim(gift: any) {
+  return !!gift && MANUAL_CLAIMABLE.has(gift.key) && !gift.doneToday
+}
+
+async function manualClaim(gift: any) {
+  if (!gift || claimingKey.value)
+    return
+  claimingKey.value = gift.key
+  try {
+    const headers: Record<string, string> = {}
+    const id = String(props.accountId || '').trim()
+    if (id)
+      headers['x-account-id'] = id
+    const res = await api.post('/api/red-packet/claim', {}, { headers })
+    const d = res.data
+    if (!d?.ok)
+      throw new Error(d?.error || '领取失败')
+    if (d.data?.claimed)
+      toast.success('红包领取成功')
+    else
+      toast.info('当前没有可领取的红包')
+  }
+  catch (e: any) {
+    toast.error(e?.response?.data?.error || e?.message || '领取失败')
+  }
+  finally {
+    claimingKey.value = ''
+  }
+}
 
 const GIFT_ICONS: Record<string, string> = {
   task_claim: 'i-carbon-task-complete',
@@ -12,6 +55,7 @@ const GIFT_ICONS: Record<string, string> = {
   daily_share: 'i-carbon-share',
   vip_daily_gift: 'i-carbon-star',
   month_card_gift: 'i-carbon-calendar',
+  red_packet_daily: 'i-carbon-piggy-bank',
 }
 
 function getGiftIcon(key: string) {
@@ -132,6 +176,17 @@ function formatGiftProgress(gift: any) {
               </span>
             </div>
           </div>
+
+          <!-- 手动补领: 只有红包支持(自动任务里已默认领, 这里给个即时入口) -->
+          <button
+            v-if="canManualClaim(gift)"
+            type="button"
+            class="mt-2 w-full border border-rose-200 rounded-md bg-rose-50 py-1 text-[11px] text-rose-600 font-medium transition hover:bg-rose-100 disabled:opacity-50 dark:border-rose-800 dark:bg-rose-900/20 dark:text-rose-300"
+            :disabled="!!claimingKey"
+            @click="manualClaim(gift)"
+          >
+            {{ claimingKey === gift.key ? '领取中…' : '立即领取' }}
+          </button>
         </div>
       </div>
     </div>

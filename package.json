@@ -8,6 +8,8 @@
     "lint": "pnpm lint:core && pnpm lint:web",
     "lint:core": "pnpm -C core lint",
     "sync:game-config": "pnpm -C core sync:game-config",
+    "proto:report": "pnpm -C core proto:report",
+    "proto:freeze": "pnpm -C core proto:freeze",
     "lint:web": "pnpm -C web lint",
     "build:web": "pnpm -C web build",
     "build": "pnpm build:web",
