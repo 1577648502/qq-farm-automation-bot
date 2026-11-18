@@ -648,7 +648,8 @@ useIntervalFn(() => void fetchRanchOverview(), 60000)
 <template>
   <div class="flex flex-col gap-6 pt-6">
     <!-- Status Cards -->
-    <div class="grid grid-cols-1 gap-4 lg:grid-cols-3 sm:grid-cols-2">
+    <!-- 牧场不再单独占一张卡(已并入左侧账号卡的 EXP 下方), 所以从 3 列收成 2 列 -->
+    <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
       <!-- Account & Exp -->
       <div class="min-w-0 flex flex-col rounded-lg bg-white p-4 shadow dark:bg-gray-800">
         <div class="mb-2 flex items-start justify-between">
@@ -683,58 +684,39 @@ useIntervalFn(() => void fetchRanchOverview(), 60000)
             <span class="shrink-0">效率: {{ expRate }}</span>
             <span class="min-w-0 break-words text-right">{{ timeToLevel }}</span>
           </div>
-        </div>
-      </div>
 
-      <!-- 牧场状态 -->
-      <div class="min-w-0 flex flex-col rounded-lg bg-white p-4 shadow dark:bg-gray-800">
-        <div class="mb-2 flex items-start justify-between">
-          <div class="flex items-center gap-1.5 text-sm text-gray-500">
-            <div class="i-fas-paw text-amber-500" />
-            牧场
-          </div>
-          <button type="button" class="rounded px-1.5 py-0.5 text-xs text-gray-400 transition disabled:opacity-50 hover:bg-gray-100 dark:hover:bg-gray-700" :disabled="ranchLoading" @click="fetchRanchOverview">
-            <div class="i-carbon-renew" :class="{ 'animate-spin': ranchLoading }" />
-          </button>
-        </div>
-        <template v-if="ranchSummary">
-          <div class="mb-2 flex items-baseline gap-1.5">
-            <span class="text-2xl text-amber-600 font-bold tabular-nums">{{ ranchSummary.total }}</span>
-            <span class="text-xs text-gray-400">只在养</span>
-            <span v-if="ranchSummary.level" class="ml-auto rounded bg-amber-100 px-1.5 py-0.5 text-[11px] text-amber-700 dark:bg-amber-900/30 dark:text-amber-300">
-              牧场 Lv{{ ranchSummary.level }}
-            </span>
-          </div>
-          <div v-if="ranchSummary.levelNeeded" class="mb-2">
-            <div class="mb-0.5 flex justify-between text-[10px] text-gray-400">
-              <span>经验</span>
-              <span class="tabular-nums">{{ ranchSummary.levelExp }} / {{ ranchSummary.levelNeeded }}</span>
+          <!-- 牧场进度: 与上面 EXP 同样的样式(标签 + 数值 + 进度条), 不单独开卡片。
+               数据为空时整行不渲染, 避免没开牧场的账号多一条空行。 -->
+          <div v-if="ranchSummary && ranchSummary.levelNeeded" class="mt-3">
+            <div class="mb-1 min-w-0 flex items-start justify-between gap-2 text-xs text-gray-500">
+              <div class="flex shrink-0 items-center gap-1">
+                <div class="i-fas-paw text-amber-500" />
+                <span>牧场</span>
+                <span class="rounded bg-amber-100 px-1 text-[10px] text-amber-700 dark:bg-amber-900/30 dark:text-amber-300">
+                  Lv{{ ranchSummary.level }}
+                </span>
+              </div>
+              <span class="min-w-0 break-words text-right tabular-nums">{{ formatNumber(ranchSummary.levelExp) }} / {{ formatNumber(ranchSummary.levelNeeded) }}</span>
             </div>
-            <div class="h-1 w-full overflow-hidden rounded-full bg-gray-100 dark:bg-gray-700">
+            <div class="h-1.5 w-full overflow-hidden rounded-full bg-gray-100 dark:bg-gray-700">
               <div
-                class="h-full rounded-full bg-amber-500 transition-all"
+                class="h-full rounded-full bg-amber-500 transition-all duration-500"
                 :style="{ width: `${Math.min(100, Math.round((ranchSummary.levelExp / ranchSummary.levelNeeded) * 100))}%` }"
               />
             </div>
-          </div>
-          <div class="mb-2 flex flex-wrap gap-1.5 text-[11px]">
-            <span class="rounded-full bg-amber-100 px-2 py-0.5 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400">可收 {{ ranchSummary.harvestable }}</span>
-            <span class="rounded-full bg-green-100 px-2 py-0.5 text-green-700 dark:bg-green-900/30 dark:text-green-400">饥饿 {{ ranchSummary.hungry }}</span>
-            <span class="rounded-full bg-gray-100 px-2 py-0.5 text-gray-600 dark:bg-gray-700 dark:text-gray-300">窝{{ ranchSummary.coop }} 棚{{ ranchSummary.pen }}</span>
-          </div>
-          <div class="mt-auto space-y-1 text-xs">
-            <div class="flex justify-between">
-              <span class="text-gray-400">下次产出</span>
-              <span class="font-medium tabular-nums" :class="ranchNextReady === null ? 'text-gray-400' : 'text-orange-500'">{{ fmtCountdown(ranchNextReady) }}</span>
+            <div class="mt-2 min-w-0 flex flex-wrap justify-between gap-x-2 gap-y-1 text-xs text-gray-400">
+              <span class="shrink-0">{{ ranchSummary.total }} 只在养 · 窝{{ ranchSummary.coop }} 棚{{ ranchSummary.pen }}</span>
+              <span class="min-w-0 break-words text-right">
+                下次产出
+                <span :class="ranchNextReady === null ? '' : 'text-orange-500'">{{ fmtCountdown(ranchNextReady) }}</span>
+              </span>
             </div>
-            <div class="flex justify-between">
-              <span class="text-gray-400">牧草</span>
-              <span class="tabular-nums">{{ ranchSummary.grass }}</span>
+            <div class="mt-1 flex flex-wrap gap-1 text-[10px]">
+              <span class="rounded-full bg-amber-100 px-1.5 py-0.5 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400">可收 {{ ranchSummary.harvestable }}</span>
+              <span class="rounded-full bg-green-100 px-1.5 py-0.5 text-green-700 dark:bg-green-900/30 dark:text-green-400">饥饿 {{ ranchSummary.hungry }}</span>
+              <span class="rounded-full bg-gray-100 px-1.5 py-0.5 text-gray-600 dark:bg-gray-700 dark:text-gray-300">牧草 {{ ranchSummary.grass }}</span>
             </div>
           </div>
-        </template>
-        <div v-else class="py-4 text-center text-xs text-gray-400">
-          {{ ranchLoading ? '加载中…' : '暂无牧场数据（点右上角刷新）' }}
         </div>
       </div>
 
