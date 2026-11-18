@@ -229,6 +229,68 @@ proto.loadProto().then(async () => {
             group && group.samples && group.samples.length);
     }
 
+    section('7. 损坏的 catalog 文件不能让 /api/protocol/overview 崩(线上真实故障)');
+    {
+        // 线上报错的根因: docker volume 里可能留着旧版本 worker 写出的 catalog。
+        // 旧结构里 bodyFields 可能含 null、children 可能缺失, 而 getOverview 原先直接
+        // c.bodyFields.filter(f => !f.defined) —— f 为 null 时抛
+        //   TypeError: Cannot read properties of null (reading 'defined')
+        // → 接口 500 → 页面整个报错。下面这些畸形形态都必须被容错。
+        const dir = path.join(DATA_DIR, 'protocol');
+        fs.mkdirSync(dir, { recursive: true });
+        const broken = path.join(dir, 'catalog-broken.json');
+        fs.writeFileSync(broken, JSON.stringify({
+            accountId: 'broken',
+            generatedAt: 1,
+            interfaces: [
+                { key: 'gamepb.testpb.TestService.Ok', count: 3, fieldPaths: ['1:0'], dirs: { 'S->C': 3 }, samples: [] },
+                null,                          // 整个接口项是 null
+                { count: 1 },                  // 缺 key
+            ],
+            activity: {
+                // ⚠ at 必须比前面几节写入的真实抓包快照更新, 否则聚合时按 at 取最新会跳过这份
+                at: Date.now() + 1000,
+                groups: [
+                    { id: 1, name: '坏组', children: null },                       // children 为 null
+                    { id: 2, name: '空子', children: [{ id: 20, bodyFields: null }] },  // bodyFields 为 null
+                    { id: 3, name: '怪字段', children: [{ id: 30, bodyFields: [null, { no: 9, defined: false }] }] },
+                    null,                                                          // 整个组是 null
+                ],
+            },
+        }));
+
+        let overview = null;
+        let threw = null;
+        try {
+            overview = catalog.getOverview();
+        } catch (e) {
+            threw = e;
+        }
+        check('损坏文件不抛异常', threw === null, threw && threw.message);
+        check('仍然返回可用视图', !!overview && overview.interfaceCount >= 1, overview && overview.interfaceCount);
+        check('正常接口被保留',
+            !!overview && overview.interfaces.some(i => i.key === 'gamepb.testpb.TestService.Ok'));
+        // null 项被过滤, 有值的照常识别。
+        // ⚠ 这里不能断言"只有 1 条": 前面第 3 节已经写过一份含「故友重逢 #109」的 catalog,
+        //   聚合时会一起出现。只针对 broken 这份里的 #30 做断言。
+        const undef = (overview && overview.activityChange && overview.activityChange.undefinedBodyFields) || [];
+        const brokenEntry = undef.find(x => x.id === 30);
+        check('bodyFields 里的 null 被跳过, 有效的 #9 仍被识别',
+            !!brokenEntry && JSON.stringify(brokenEntry.fields) === JSON.stringify([9]),
+            brokenEntry || undef);
+
+        // 完全非法的 JSON 也不能崩
+        fs.writeFileSync(broken, 'this is not json {{{');
+        let threw2 = null;
+        let overview2 = null;
+        try { overview2 = catalog.getOverview(); } catch (e) { threw2 = e; }
+        check('非法 JSON 不抛异常', threw2 === null, threw2 && threw2.message);
+        // 坏文件被忽略; 其他合法 catalog(前几节写的)仍然被读出来
+        check('非法 JSON 被跳过, 不影响其他账号的数据',
+            !!overview2 && !overview2.interfaces.some(i => i.key === 'gamepb.testpb.TestService.Ok'),
+            overview2 && overview2.interfaceCount);
+    }
+
     observer.stop();
     finish();
 }).catch((e) => {

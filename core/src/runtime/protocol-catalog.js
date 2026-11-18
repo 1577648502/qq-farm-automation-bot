@@ -51,6 +51,14 @@ function listRawCatalogs() {
 
 /**
  * 汇总所有账号采集结果, 并与 baseline.json 对比
+ *
+ * ⚠ 数据源是 worker 各写各的 catalog 文件 + 一份共享 baseline, 都可能:
+ *   · 版本比当前代码旧(镜像更新了但 docker volume 里留着旧文件)
+ *   · 写了一半(进程被 kill)
+ *   · 被手工改坏
+ *   所以这里整体兜住: 出问题返回空视图 + error, 绝不让 /api/protocol/overview 直接 500
+ *   —— 页面至少要能显示"为什么是空的", 而不是一个错误框。
+ *
  * @returns {{
  *   generatedAt:number,
  *   sources: Array<{accountId:string, at:number, interfaceCount:number}>,
@@ -62,6 +70,28 @@ function listRawCatalogs() {
  * }} 合并后的接口/活动视图(无数据时 interfaceCount=0)
  */
 function getOverview() {
+    try {
+        return getOverviewUnsafe();
+    } catch (e) {
+        return {
+            generatedAt: Date.now(),
+            hasBaseline: false,
+            baselineAt: 0,
+            baselineInterfaces: 0,
+            sources: [],
+            interfaceCount: 0,
+            newInterfaces: [],
+            interfacesWithNewFields: [],
+            interfaces: [],
+            activity: null,
+            activityChange: null,
+            error: `汇总失败: ${e && e.message ? e.message : e}`,
+            errorDetail: String((e && e.stack) || '').slice(0, 500),
+        };
+    }
+}
+
+function getOverviewUnsafe() {
     const baseline = readJsonSafe(path.join(protocolDir(), 'baseline.json'));
     const baseKeys = new Map();
     const baseGroups = new Set();
@@ -142,17 +172,26 @@ function getOverview() {
     interfaces.sort((a, b) => b.lastSeenAt - a.lastSeenAt);
 
     // 活动结构对比: 新活动组 / 新子活动 / proto 里没定义的 body 字段
+    // ⚠ catalog 文件是 worker 写出来的, 版本可能比当前代码旧(镜像更新了但 volume 里留着旧文件),
+    //   字段缺失/类型不对都可能出现。这里每一步都要容错, 否则一个坏文件就让整个接口 500。
     let activityChange = null;
     if (activity) {
-        const groups = (activity.groups || []).map(g => ({
-            ...g,
-            isNew: baseline ? !baseGroups.has(Number(g.id)) : false,
-            children: (g.children || []).map(c => ({
-                ...c,
-                isNew: baseline ? !baseChildren.has(Number(c.id)) : false,
-                undefinedBodyFields: (c.bodyFields || []).filter(f => !f.defined).map(f => f.no),
-            })),
-        }));
+        const groups = (Array.isArray(activity.groups) ? activity.groups : [])
+            .filter(g => g && typeof g === 'object')
+            .map(g => ({
+                ...g,
+                isNew: baseline ? !baseGroups.has(Number(g.id) || 0) : false,
+                children: (Array.isArray(g.children) ? g.children : [])
+                    .filter(c => c && typeof c === 'object')
+                    .map(c => ({
+                        ...c,
+                        isNew: baseline ? !baseChildren.has(Number(c.id) || 0) : false,
+                        bodyFields: Array.isArray(c.bodyFields) ? c.bodyFields.filter(f => f && typeof f === 'object') : [],
+                        undefinedBodyFields: (Array.isArray(c.bodyFields) ? c.bodyFields : [])
+                            .filter(f => f && typeof f === 'object' && !f.defined)
+                            .map(f => f.no),
+                    })),
+            }));
         activityChange = {
             at: activity.at,
             newGroups: groups.filter(g => g.isNew).map(g => ({ id: g.id, name: g.name })),

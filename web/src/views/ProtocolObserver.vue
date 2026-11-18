@@ -61,6 +61,8 @@ const currentAccountId = computed(() => accountStore.currentAccountId)
 const loading = ref(false)
 const freezing = ref(false)
 const error = ref('')
+// 后端聚合失败时返回的可读错误(不覆盖数据区)
+const dataError = ref('')
 const data = ref<any>(null)
 const filter = ref('')
 const activeTab = ref<'activity' | 'interfaces'>('activity')
@@ -80,7 +82,8 @@ const undefinedFields = computed(() => overview.value.activityChange?.undefinedB
 const hasUpdate = computed(() => newInterfaces.value.length > 0
   || newFieldCount.value > 0
   || undefinedFields.value.length > 0
-  || groups.value.some(g => g.isNew || g.children.some(c => c.isNew)))
+  // children 可能是 undefined: catalog 文件由 worker 写, 旧版本/异常写入的字段结构可能不全
+  || groups.value.some(g => g?.isNew || (g?.children || []).some(c => c?.isNew)))
 
 function fmtTime(ms: number) {
   if (!ms) return '-'
@@ -88,14 +91,21 @@ function fmtTime(ms: number) {
 }
 
 async function refresh() {
-  if (!currentAccountId.value) return
+  // 协议观察是**跨账号聚合**的(读 data/protocol/catalog-*.json), 不需要选账号也能看。
+  // 之前这里 return 会让页面永远停在 loading —— 没选账号的用户看到的就是"卡住/报错"。
   loading.value = true
   error.value = ''
   try {
-    const res = await api.get('/api/protocol/overview', { headers: { 'x-account-id': currentAccountId.value } })
+    const headers: Record<string, string> = {}
+    if (currentAccountId.value)
+      headers['x-account-id'] = currentAccountId.value
+    const res = await api.get('/api/protocol/overview', { headers })
     const d = res.data
     if (!d?.ok) throw new Error(d?.error || '获取失败')
     data.value = d.data
+    // 后端聚合失败时会带着 error 返回空视图(而不是 500)。这条不进 error.value,
+    // 否则整个数据区会被错误框替换; 单独用 dataError 显示在页面顶部。
+    dataError.value = d.data?.error || ''
   } catch (e: any) {
     error.value = e?.response?.data?.error || e?.message || '获取失败'
   } finally {
@@ -104,10 +114,12 @@ async function refresh() {
 }
 
 async function freeze() {
-  if (!currentAccountId.value) return
   freezing.value = true
   try {
-    const res = await api.post('/api/protocol/baseline', {}, { headers: { 'x-account-id': currentAccountId.value } })
+    const headers: Record<string, string> = {}
+    if (currentAccountId.value)
+      headers['x-account-id'] = currentAccountId.value
+    const res = await api.post('/api/protocol/baseline', {}, { headers })
     const d = res.data
     if (!d?.ok) throw new Error(d?.error || '操作失败')
     toast.success(`已冻结基线：${d.data.interfaceCount} 个接口`)
@@ -197,10 +209,8 @@ watch(currentAccountId, () => refresh())
       </div>
     </div>
 
-    <div v-if="!currentAccountId" class="py-12 text-center text-sm text-gray-400">
-      请先选择账号
-    </div>
-    <LoadingState v-else-if="loading && !data" text="加载中…" />
+    <!-- 不需要选账号: 协议观察聚合所有账号的采集结果 -->
+    <LoadingState v-if="loading && !data" text="加载中…" />
     <div v-else-if="error" class="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-600 dark:border-red-800 dark:bg-red-900/20">
       {{ error }}
     </div>
@@ -227,6 +237,20 @@ watch(currentAccountId, () => refresh())
       </div>
 
       <!-- 基线状态提示 -->
+      <!-- 后端聚合失败的可读原因(空视图 + 原因, 而不是整个页面报错) -->
+      <div
+        v-if="dataError"
+        class="rounded-lg border border-red-200 bg-red-50 p-3 text-xs text-red-700 dark:border-red-800 dark:bg-red-900/20 dark:text-red-300"
+      >
+        <div class="mb-1 flex items-center gap-1.5 font-semibold">
+          <div class="i-carbon-warning" />
+          数据汇总失败
+        </div>
+        <div class="font-mono break-all">
+          {{ dataError }}
+        </div>
+      </div>
+
       <div
         v-if="!overview.hasBaseline"
         class="rounded-lg border border-sky-200 bg-sky-50 p-3 text-xs text-sky-700 dark:border-sky-800 dark:bg-sky-900/20 dark:text-sky-300"
