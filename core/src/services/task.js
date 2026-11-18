@@ -327,6 +327,50 @@ async function checkAndClaimRanchTasks() {
     return result;
 }
 
+/**
+ * 牧场任务只读视图(面板用)。
+ *
+ * 与 checkAndClaimRanchTasks 的区别: 那个是自动领, 这个是"给人看" ——
+ * 返回每条任务的进度/是否已领/奖励, 页面据此渲染列表并允许单条手动领取。
+ *
+ * @returns {Promise<{tasks:Array<object>, claimable:number, claimed:number}>}
+ */
+async function getRanchTaskView() {
+    const reply = await getTaskInfo({ sceneId: RANCH_SCENE_ID });
+    const ti = (reply && reply.task_info) || null;
+    if (!ti) return { tasks: [], claimable: 0, claimed: 0 };
+
+    const MC_TYPES = new Set([4, 5, 6]);
+    const groups = [
+        ...(Array.isArray(ti.growth_tasks) ? ti.growth_tasks : []),
+        ...(Array.isArray(ti.daily_tasks) ? ti.daily_tasks : []),
+        ...(Array.isArray(ti.side_tasks) ? ti.side_tasks : []),
+        ...(Array.isArray(ti.tasks) ? ti.tasks : []),
+    ];
+    const mcTasks = groups.filter(t => MC_TYPES.has(toNum(t && t.task_type)));
+
+    const TYPE_LABEL = { 4: '成长', 5: '日常', 6: '支线' };
+    // ⚠ analyzeTaskList 只返回"可领"的; 面板要展示**全部**任务(含未完成/已领),
+    //   所以这里直接遍历原始任务用 formatTask 归一, 再补上 task_type。
+    const tasks = mcTasks.map((raw) => {
+        const t = formatTask(raw, 'daily');
+        const taskType = toNum(raw && raw.task_type);
+        return {
+            ...t,
+            taskType,
+            typeLabel: TYPE_LABEL[taskType] || '任务',
+            rewardText: getRewardSummary(t.rewards || []),
+        };
+    });
+
+    return {
+        tasks,
+        claimable: tasks.filter(t => t.canClaim).length,
+        claimed: tasks.filter(t => t.isClaimed).length,
+        total: tasks.length,
+    };
+}
+
 async function doClaim(task) {
     try {
         const useShare = task.shareMultiple > 1;
@@ -400,6 +444,7 @@ module.exports = {
     getTaskInfo,
     checkAndClaimTasks,
     checkAndClaimRanchTasks,
+    getRanchTaskView,
     initTaskSystem,
     cleanupTaskSystem,
     claimTaskReward,

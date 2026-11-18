@@ -1839,6 +1839,10 @@ app.use('/api', (req, res, next) => {
     app.get('/api/ranch/bag', withAccount(accountId => provider.getRanchBag(accountId), { softErrors: true }));
     app.get('/api/ranch/bag/tabs', withAccount(accountId => provider.getRanchBagTabs(accountId), { softErrors: true }));
 
+    // 牧场任务(独立于农场任务, scene_id=2): 查看 + 手动领取
+    app.get('/api/ranch/tasks', withAccount(accountId => provider.getRanchTasks(accountId), { softErrors: true }));
+    app.post('/api/ranch/tasks/claim', withAccount(accountId => provider.claimRanchTasks(accountId), { softErrors: true }));
+
     app.get('/api/bag/seeds', async (req, res) => {
         const id = getAccId(req);
         if (!id) return res.status(400).json({ ok: false, error: 'Missing x-account-id' });

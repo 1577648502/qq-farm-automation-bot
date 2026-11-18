@@ -1509,6 +1509,13 @@ async function handleApiCall(msg) {
             case 'getRanchBagTabs':
                 result = await require('../services/warehouse').getRanchBagTabs();
                 break;
+            // 牧场任务: 只读视图 + 手动一键领取(日常自动流程里也会领, 这里给面板入口)
+            case 'getRanchTasks':
+                result = await require('../services/task').getRanchTaskView();
+                break;
+            case 'claimRanchTasks':
+                result = await require('../services/task').checkAndClaimRanchTasks();
+                break;
             case 'getMugeOverview':
                 result = await require('../services/activity').getMugeOverview();
                 break;

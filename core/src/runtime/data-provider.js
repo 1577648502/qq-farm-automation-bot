@@ -496,6 +496,8 @@ function createDataProvider(options) {
         getMugeOverview: (accountRef) => callWorkerApi(resolveAccountRefId(accountRef), 'getMugeOverview', {}),
         getRanchBag: (accountRef) => callWorkerApi(resolveAccountRefId(accountRef), 'getRanchBag', {}),
         getRanchBagTabs: (accountRef) => callWorkerApi(resolveAccountRefId(accountRef), 'getRanchBagTabs', {}),
+        getRanchTasks: (accountRef) => callWorkerApi(resolveAccountRefId(accountRef), 'getRanchTasks', {}),
+        claimRanchTasks: (accountRef) => callWorkerApi(resolveAccountRefId(accountRef), 'claimRanchTasks', {}),
         claimMugeActivity: (accountRef, options) => callWorkerApi(resolveAccountRefId(accountRef), 'claimMugeActivity', options || {}),
         claimDailyRedPacket: (accountRef) => callWorkerApi(resolveAccountRefId(accountRef), 'claimDailyRedPacket'),
         getRedPacketState: (accountRef) => callWorkerApi(resolveAccountRefId(accountRef), 'getRedPacketState'),

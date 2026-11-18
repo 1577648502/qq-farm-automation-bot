@@ -89,6 +89,12 @@ export interface RanchOverview {
   penCount: number
   grassCount: number
   ranchExp: number
+  /** 牧场等级(独立于农场等级) */
+  ranchLevel?: number
+  /** 当前等级内经验 */
+  ranchLevelExp?: number
+  /** 当前等级所需经验 */
+  ranchLevelNeeded?: number
   animals: RanchAnimal[]
   facilities?: RanchFacility[]
   /** AllCells 的真实建筑清单 */

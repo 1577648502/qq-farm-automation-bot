@@ -326,6 +326,36 @@ async function useFeedBucket(slot, count = 1, hostGid = 0) {
     return feedAnimal(4, count, hostGid);
 }
 
+// ============ 牧场等级(独立于农场 RoleLevel) ============
+// ⚠ 20261118 实测反推(游戏内截图 + 抓包对照):
+//   游戏内牧场界面: Lv9 / 7396 / 1.3万
+//   抓包物品 1102(牧场经验累计) = 17396
+//   17396 - 7396 = 10000  → Lv9 的累计起点
+//   1.3万(13000)          → Lv9 本级需要的经验(current/needed = 7396/13000)
+//   即 Lv9 区间 [10000, 23000), 跨度 13000。
+// 只有 Lv9 这一段是实测的, 其余等级按"每级 +13000"外推(待更多样本校正)。
+const RANCH_LEVEL_BASE = 10000;     // Lv9 累计起点
+const RANCH_LEVEL_STEP = 13000;     // 每级跨度(实测 7396/13000)
+const RANCH_LEVEL_BASE_LEVEL = 9;   // 实测起点等级
+
+/**
+ * 由牧场经验累计值算等级与进度。
+ * @param {number} totalExp 物品 1102 的值
+ * @returns {{level:number, current:number, needed:number}}
+ */
+function calcRanchLevel(totalExp) {
+    const exp = Math.max(0, toNum(totalExp));
+    if (exp < RANCH_LEVEL_BASE) {
+        // 低于实测起点: 保守按每级 3000 向下推
+        const lv = Math.max(1, RANCH_LEVEL_BASE_LEVEL - Math.ceil((RANCH_LEVEL_BASE - exp) / RANCH_LEVEL_STEP));
+        const start = RANCH_LEVEL_BASE - (RANCH_LEVEL_BASE_LEVEL - lv) * RANCH_LEVEL_STEP;
+        return { level: lv, current: exp - start, needed: RANCH_LEVEL_STEP };
+    }
+    const lv = RANCH_LEVEL_BASE_LEVEL + Math.floor((exp - RANCH_LEVEL_BASE) / RANCH_LEVEL_STEP);
+    const start = RANCH_LEVEL_BASE + (lv - RANCH_LEVEL_BASE_LEVEL) * RANCH_LEVEL_STEP;
+    return { level: lv, current: exp - start, needed: RANCH_LEVEL_STEP };
+}
+
 // ============ 展示层: 面板用的视图 ============
 
 const ANIMAL_NAMES = {
@@ -529,12 +559,21 @@ async function getRanchOverview(accountId = '') {
         try {
             // ⭐ 先切牧场场景(必须, 否则所有牧场接口返回空/被限流), 再并发查询
             await enterRanchScene().catch(() => {});
-            const [detailReply, opTimesReply, facilities] = await Promise.all([
+            const [detailReply, opTimesReply, facilities, ranchExpReal] = await Promise.all([
                 getRanchDetail(),
                 getRanchOpTimes().catch(() => null),
                 getFacilities().catch(() => []),
+                require('./warehouse').getRanchExp().catch(() => 0),
             ]);
             const view = toRanchView(detailReply);
+            // ⭐ 牧场经验/等级: 用物品 1102 的真实累计值(GetRanchDetailReply#2 实测不返回, 是假的 30)
+            if (toNum(ranchExpReal) > 0) {
+                view.ranchExp = toNum(ranchExpReal);
+                const lvInfo = calcRanchLevel(ranchExpReal);
+                view.ranchLevel = lvInfo.level;
+                view.ranchLevelExp = lvInfo.current;
+                view.ranchLevelNeeded = lvInfo.needed;
+            }
 
             view.opLimits = (opTimesReply && opTimesReply.limits || []).map(l => ({
                 opId: toNum(l.op_id),
@@ -572,6 +611,21 @@ async function getRanchOverview(accountId = '') {
                 view.coopBuildings = view.buildings.filter(b => b.kind === 'coop');
                 view.penBuildings = view.buildings.filter(b => b.kind === 'pen');
                 view.feedBuildings = view.buildings.filter(b => b.kind === 'feed');
+
+                // 地块进度(解锁/占用配额): 面板要显示"已解锁 x/y、占用 z"。
+                // 注意 AllCells 只给状态不给倒计时 —— 解锁是否在进行中无法从协议判断,
+                // 所以这里只如实给 status/容量, 不编倒计时。
+                view.cells = (all.cells || []).map(c => ({
+                    regionId: c.regionId,
+                    cellType: c.cellType,
+                    seq: c.seq,
+                    unlocked: c.status === 2,
+                    instId: c.instId,
+                    capacity: c.capacity,
+                }));
+                view.regionOccupied = toNum(all.occupied);
+                view.regionQuota = toNum(all.quota);
+                view.regionSpeedUp = all.speedUp || [];
 
                 // ⭐ 从没进过牧场的号: GetRanchDetail 返回空 RanchInfo(窝0棚0牧草0),
                 //   但 AllCells / GetFacilityDetail 里的建筑是真实的。
@@ -1843,5 +1897,5 @@ module.exports = {
     autoStealFriendProduce,
     purchaseRotationGoods,
     getRanchWeightScore,
-    __privateRanchFns: { parseRotationShopReply, parseFeedMachineReply, walkWire, isEmptyRanchView },
+    __privateRanchFns: { calcRanchLevel, parseRotationShopReply, parseFeedMachineReply, walkWire, isEmptyRanchView },
 };

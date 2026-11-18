@@ -741,7 +741,8 @@ onUnmounted(() => {
             <div v-if="overview" class="flex items-center gap-3 text-xs text-gray-500 dark:text-gray-400">
               <span>窝 {{ overview.coopCount }} · 棚 {{ overview.penCount }}</span>
               <span>牧草 {{ overview.grassCount }}</span>
-              <span>经验 {{ overview.ranchExp }}</span>
+              <span v-if="overview.ranchLevel">牧场 Lv{{ overview.ranchLevel }} <span class="text-gray-400">{{ overview.ranchLevelExp }}/{{ overview.ranchLevelNeeded }}</span></span>
+              <span v-else>经验 {{ overview.ranchExp }}</span>
             </div>
           </div>
         </div>
