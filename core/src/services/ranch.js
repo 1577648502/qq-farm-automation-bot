@@ -726,19 +726,39 @@ function applyCubStrategy(cubs, opts = {}) {
 
     // 各策略的排序函数(与农场四项指标同构; 数值大的优先)
     //   没有对应指标的幼崽一律排到最后(null 不参与比较)
-    const bigger = (get) => (a, b) => {
+    // ⭐ 指标缺失时的兜底: 统一退回"收益比"排序。
+    //
+    // 线上问题(2026-11-19): 策略选 max_profit, 预览显示 Lv3 兔子, 实际却买了鸡。
+    // 根因是**所有幼崽的净利/时都是 null**(周期样本还没采集到),
+    // 两边对"全 null"的处理不同:
+    //   · 预览(前端 → /api/ranch/analytics?sort=profit) 走 getCubRankings,
+    //     全 null 时保持输入顺序, 而输入是按收益比排过的 → 选收益比最高的
+    //   · 购买(applyCubStrategy) 全 null 时返回 0(视为相等), 保持原始顺序,
+    //     而原始顺序是商城返回顺序 → 可能选中鸡
+    // 现在统一: 主指标全缺时按收益比挑, 与预览一致, 也不会选到"什么都算不上"的。
+    const bigger = (get, fallback) => (a, b) => {
         const av = get(a); const bv = get(b);
-        if (av === null && bv === null) return 0;
+        if (av === null && bv === null) {
+            return fallback ? fallback(a, b) : 0;
+        }
         if (av === null) return 1;
         if (bv === null) return -1;
         return bv - av;
     };
-    const byProfit = bigger(x => x.ratio ?? null);          // 收益比(整只回收 ÷ 成本)
-    const byLevel = bigger(x => x.level ?? null);           // 动物等级
-    const byExp = bigger(x => x.expPerHour ?? null);        // 经验/时
-    const byFertExp = bigger(x => x.fertExpPerHour ?? null);// 普通肥经验/时
-    const byNetProfit = bigger(x => x.netProfitPerHour ?? null);
-    const byFertProfit = bigger(x => x.fertProfitPerHour ?? null);
+    // 收益比: 候选对象里字段名是 valueRatio(getCubShop 产出) 或 ratio(analytics 产出),
+    // 两个都要认 —— 只认 ratio 的话购买侧永远读到 undefined, 兜底等同于失效。
+    const ratioOf = (x) => {
+        const v = (x && x.valueRatio !== undefined) ? x.valueRatio : (x && x.ratio);
+        return (v === undefined || v === null) ? null : Number(v);
+    };
+    const byRatio = (a, b) => (ratioOf(b) ?? 0) - (ratioOf(a) ?? 0) || (a.price ?? 0) - (b.price ?? 0);
+    const byProfit = byRatio;                                // 收益比(整只回收 ÷ 成本)
+    // 其余策略: 指标全缺时退回收益比, 保证"预览"和"实际购买"选同一只
+    const byLevel = bigger(x => x.level ?? null, byRatio);
+    const byExp = bigger(x => x.expPerHour ?? null, byRatio);
+    const byFertExp = bigger(x => x.fertExpPerHour ?? null, byRatio);
+    const byNetProfit = bigger(x => x.netProfitPerHour ?? null, byRatio);
+    const byFertProfit = bigger(x => x.fertProfitPerHour ?? null, byRatio);
     const pickSorter = (key) => {
         switch (key) {
             case 'max_level': return byLevel;

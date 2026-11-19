@@ -1584,6 +1584,14 @@ app.use('/api', (req, res, next) => {
         return { shop, best, voucher };
     }));
 
+    // 幼崽策略"实际会买哪只" —— 设置页的预览框用它, 保证与自动购买走同一套逻辑。
+    // 之前预览走 /api/ranch/analytics?sort=xx(独立排序), 购买走 applyCubStrategy,
+    // 两边对"指标全缺"的处理不同 → 预览显示兔子、实际买了鸡(线上 2026-11-19)。
+    app.get('/api/ranch/cub-strategy-pick', withAccount(
+        accountId => provider.getCubStrategyPick(accountId),
+        { softErrors: true },
+    ));
+
     // 游商(兑换集市)
     app.get('/api/ranch/rotation-shop', withAccount(async (accountId) => {
         const shop = await provider.getRotationShop(accountId);

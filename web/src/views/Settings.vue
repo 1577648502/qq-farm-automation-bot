@@ -584,18 +584,11 @@ async function loadRanchCubs() {
 }
 
 // ===== 幼崽策略预览(对照农场的 strategyPreviewLabel) =====
-// 农场的预览是「130级 薄荷」; 牧场同样显示「Lv 名称」。
+// ⚠ 2026-11-19: 预览必须与**实际购买**走同一套排序。
+//   之前预览查 /api/ranch/analytics?sort=xx(独立排序), 购买走 applyCubStrategy,
+//   两边对"指标全缺"处理不同 → 预览显示 Lv3 兔子, 实际却买了鸡。
+//   现在统一走后端 /api/ranch/cub-strategy-pick(内部就是 applyCubStrategy)。
 const ranchCubPreviewLabel = ref<string | null>(null)
-
-// 前端本地也要能把策略映射到 /api/ranch/analytics 的排序键
-const RANCH_SORT_BY_MAP: Record<string, string> = {
-  max_level: 'level',
-  max_exp: 'exp',
-  max_fert_exp: 'fert_exp',
-  max_profit: 'profit',
-  max_fert_profit: 'fert_profit',
-  bag_priority: 'exp',
-}
 
 watchEffect(async (onCleanup) => {
   const accountId = String(currentAccountId.value || '')
@@ -604,28 +597,26 @@ watchEffect(async (onCleanup) => {
     cancelled = true
   })
 
-  let strategy = localStrategySettings.value.ranchCubStrategy
-  if (strategy === 'bag_priority') {
-    // bag_priority: 预览显示"第二优先策略"会选中谁(与农场一致)
-    strategy = localStrategySettings.value.ranchCubFallbackStrategy || 'max_level'
-  }
-  const sortBy = RANCH_SORT_BY_MAP[strategy] || 'level'
   if (!accountId) {
     ranchCubPreviewLabel.value = null
     return
   }
+  // 依赖策略/优先级/回退, 任一变化都重新算
+  void localStrategySettings.value.ranchCubStrategy
+  void localStrategySettings.value.ranchCubFallbackStrategy
+  void (localStrategySettings.value.ranchCubPriority || []).length
+
   try {
-    const res = await api.get('/api/ranch/analytics', {
+    const res = await api.get('/api/ranch/cub-strategy-pick', {
       headers: { 'x-account-id': accountId },
-      params: { sort: sortBy },
     })
     if (cancelled)
       return
-    const rows = res.data?.data
-    const list = Array.isArray(rows) ? rows : (rows?.data || [])
-    const available = list.filter((r: any) => r.unlocked && !(r.remaining !== null && r.remaining <= 0))
-    const best = available[0]
-    ranchCubPreviewLabel.value = best ? `Lv${best.level ?? '-'} ${best.name}` : '暂无可用幼崽'
+    const d = res.data
+    const pick = d?.data?.pick
+    ranchCubPreviewLabel.value = pick
+      ? `Lv${pick.level ?? '-'} ${pick.name}`
+      : '暂无可用幼崽'
   }
   catch {
     if (!cancelled)

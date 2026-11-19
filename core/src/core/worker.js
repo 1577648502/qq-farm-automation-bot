@@ -1368,6 +1368,28 @@ async function handleApiCall(msg) {
             case 'operateRanch':
                 result = await require('../services/ranch').operateRanch(Array.isArray(args[0]) ? args[0][0] || {} : args[0] || {});
                 break;
+            case 'getCubStrategyPick': {
+                // 设置页预览: 用**购买时同一套** applyCubStrategy 排序, 取第一只
+                const ranchSvc = require('../services/ranch');
+                const shop = await ranchSvc.getCubShop();
+                const usable = (shop || []).filter(g => g.unlocked && g.price > 0 && g.valueRatio > 0);
+                const sorted = ranchSvc.__privateRanchFns.applyCubStrategy(usable);
+                const best = sorted[0] || null;
+                result = {
+                    pick: best ? {
+                        animalId: best.animalId,
+                        name: best.name,
+                        level: best.level ?? null,
+                        price: best.price,
+                        ratio: best.valueRatio ?? null,
+                    } : null,
+                    candidates: sorted.slice(0, 5).map(g => ({
+                        animalId: g.animalId, name: g.name, level: g.level ?? null,
+                    })),
+                    count: usable.length,
+                };
+                break;
+            }
             case 'getCubShop':
                 result = await require('../services/ranch').getCubShop();
                 break;

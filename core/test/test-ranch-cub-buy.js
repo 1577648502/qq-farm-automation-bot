@@ -227,6 +227,40 @@ proto.loadProto().then(async () => {
         check('不修改传入的数组', cubs[0].name === '鸡', cubs.map(c => c.name));
     }
 
+    section('6b. 指标全缺时按收益比兜底(预览与实际购买必须一致)');
+    {
+        // 线上 2026-11-19: 策略 max_profit, 预览显示 Lv3 兔子, 实际买了鸡。
+        // 根因: 所有幼崽的净利/时都是 null(周期样本未采集),
+        //   applyCubStrategy 全 null 时返回 0(视为相等) → 保持商城原始顺序 → 选中鸡;
+        //   而预览走另一套排序(按收益比) → 选兔子。
+        // 修法: 主指标全缺统一退回收益比。
+        const ranch = require(`${SB}/src/services/ranch`);
+        const apply = ranch.__privateRanchFns.applyCubStrategy;
+        const cubs = [
+            { goodsId: 1, animalId: 60001, name: '鸡', price: 1, valueRatio: 3, level: 1, netProfitPerHour: null },
+            { goodsId: 2, animalId: 60002, name: '鸭', price: 540, valueRatio: 4, level: 3, netProfitPerHour: null },
+            { goodsId: 3, animalId: 60004, name: '兔子', price: 2034, valueRatio: 2, level: 11, netProfitPerHour: null },
+        ];
+        const picked = apply(cubs, { strategy: 'max_profit' })[0];
+        check('max_profit 全 null → 选收益比最高的(鸭, 不是商城第 1 个鸡)',
+            picked.name === '鸭', picked.name);
+        check('不会选到收益比最低的兔子', picked.name !== '兔子', picked.name);
+
+        // max_level 不依赖周期, 仍按等级
+        check('max_level 仍按等级选(兔子 Lv11)',
+            apply(cubs, { strategy: 'max_level' })[0].name === '兔子',
+            apply(cubs, { strategy: 'max_level' })[0].name);
+
+        // 有指标时优先用指标, 不回退
+        const withData = [
+            { goodsId: 1, animalId: 60001, name: '鸡', price: 1, valueRatio: 3, level: 1, netProfitPerHour: 500 },
+            { goodsId: 2, animalId: 60002, name: '鸭', price: 540, valueRatio: 4, level: 3, netProfitPerHour: 10 },
+        ];
+        check('有净利/时数据时按数据排(鸡 500 > 鸭 10)',
+            apply(withData, { strategy: 'max_profit' })[0].name === '鸡',
+            apply(withData, { strategy: 'max_profit' })[0].name);
+    }
+
     section('7. FeedAnimal 编码与官方抓包逐字节一致(target#2 = animal_inst_id)');
     {
         // ⭐ 2026-11-19 官方抓包(20261119-091627_罐头)定案, 推翻之前"#2=feed_type"的猜测:
