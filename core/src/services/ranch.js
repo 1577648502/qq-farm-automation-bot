@@ -3053,46 +3053,42 @@ async function getCubShop() {
 /**
  * 幼崽的"每小时"四项指标 —— 与农场 analytics 的口径一一对应。
  *
- * 公式(对照 core/src/services/analytics.js):
+ * ⚠ 口径已经收敛到 ranch-analytics.getAnimalMetrics 唯一一处实现:
+ *   周期来自官方 MCAnimalConfig(28 种全覆盖), 收获经验来自服务端 AnimalInfo#21,
+ *   抓包样本只在官方表缺该动物时兜底。
+ *   之前这里自己用 expPerHourCache + 只有 worker 才有的 cycleTable 重算,
+ *   于是 admin 进程(分析页)重启后四项全是 null。现在两个进程同一套数据。
+ *
+ * 公式:
  *   经验/时        = 收获经验 / 周期 * 3600
  *   普通肥经验/时  = 收获经验 / (周期 - 3600) * 3600
  *   净利润/时      = (整只回收 - 幼崽成本) / 周期 * 3600
  *   普通肥净利润/时= 同上, 分母换成 (周期 - 3600)
- *
- * 周期来自 ranch-analytics 的实测样本表; 没样本时四项都给 null,
- * 由策略排序统一排到最后(不编造)。
  */
 function buildCubPerHourMetrics(animalId, grownValue, cost) {
-    const out = {
-        cycleSec: null,
-        expPerHour: null,
-        fertExpPerHour: null,
-        netProfitPerHour: null,
-        fertProfitPerHour: null,
-        level: null,
-    };
     try {
-        const an = require('./ranch-analytics');
-        const info = require('../config/gameConfig').getItemById(animalId);
-        out.level = Number(info && info.level) || null;
-        const cycleSec = an.getLearnedCycleSec(animalId);
-        if (!cycleSec || cycleSec <= 0) return out;
-        out.cycleSec = cycleSec;
-        const fertSec = Math.max(1, cycleSec - an.NORMAL_CAN_ADVANCE_SEC);
-        // 收获经验: 服务端在 AnimalInfo#21 给的是"每次收获经验", 周期内可收多次,
-        // 这里按单次口径计算(与农场"单次收获/生长时间"一致)
-        const exp = Number((expPerHourCache.get(animalId) || {}).expectedHarvestExp) || 0;
-        if (exp > 0) {
-            out.expPerHour = Number(((exp / cycleSec) * 3600).toFixed(2));
-            out.fertExpPerHour = Number(((exp / fertSec) * 3600).toFixed(2));
-        }
-        const net = (grownValue > 0 && cost > 0) ? grownValue - cost : null;
-        if (net !== null) {
-            out.netProfitPerHour = Number(((net / cycleSec) * 3600).toFixed(2));
-            out.fertProfitPerHour = Number(((net / fertSec) * 3600).toFixed(2));
-        }
-    } catch { /* 指标算不出来就是 null */ }
-    return out;
+        const m = require('./ranch-analytics').getAnimalMetrics(animalId, { cost, grownValue });
+        return {
+            cycleSec: m.cycleSec,
+            cycleSource: m.cycleSource,
+            cycleParts: m.cycleParts,
+            productRoundSec: m.productRoundSec,
+            maxProduceCount: m.maxProduceCount,
+            harvestExp: m.harvestExp,
+            expPerHour: m.expPerHour,
+            fertExpPerHour: m.fertExpPerHour,
+            netProfitPerHour: m.netProfitPerHour,
+            fertProfitPerHour: m.fertProfitPerHour,
+            level: m.level,
+        };
+    } catch {
+        return {
+            cycleSec: null, cycleSource: 'none', cycleParts: null,
+            productRoundSec: null, maxProduceCount: null, harvestExp: 0,
+            expPerHour: null, fertExpPerHour: null,
+            netProfitPerHour: null, fertProfitPerHour: null, level: null,
+        };
+    }
 }
 
 /** 运行时记住的"每只动物的收获经验"(由 GetRanchDetail 样本喂进来) */
@@ -3102,7 +3098,11 @@ const expPerHourCache = new Map();
 function rememberHarvestExp(animalId, exp) {
     const id = toNum(animalId);
     const v = toNum(exp);
-    if (id > 0 && v > 0) expPerHourCache.set(id, { expectedHarvestExp: v });
+    if (id > 0 && v > 0) {
+        expPerHourCache.set(id, { expectedHarvestExp: v });
+        // 同步给分析模块(它会落盘, 重启后 admin 进程也能读到)
+        try { require('./ranch-analytics').rememberHarvestExp(id, v); } catch { /* 旁路 */ }
+    }
 }
 
 /**
@@ -3424,7 +3424,7 @@ async function operateRanch(opts = {}) {
                 try {
                     const cr = await collectProduce(s);
                     const got = ((cr.items || cr.get_items || []).map(it => `${toNum(it.id)}x${toNum(it.count)}`)).join(',');
-                    if (got) collectedText += (collectedText ? '，' : '') + `槽${s}:${got}`;
+                    if (got) collectedText += `${collectedText ? '，' : ''  }槽${s}:${got}`;
                     await sleep(200);
                 } catch (e) {
                     const code = parseRanchErrorCode(e);

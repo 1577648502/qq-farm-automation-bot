@@ -231,48 +231,79 @@ proto.loadProto().then(async () => {
     section('12. 幼崽分析四项指标与农场同构');
     {
         const an = require(`${SB}/src/services/ranch-analytics`);
-        // 用真实抓包里的周期样本喂进去(兔子: 幼崽3600 + 成长3600 + 成熟14400)
+
+        // ⭐ 2026-11-19: 周期的主数据源是**官方 MCAnimalConfig**(28 种全覆盖),
+        //   不是"必须先养一次"。兔子 60004: 幼崽 10800 + 成长 10800 + 成熟 21600 = 43200。
+        const cfg = require(`${SB}/src/config/gameConfig`).getAnimalConfig(60004);
+        check('官方表收录兔子', !!cfg && cfg.infant_sec === 10800, cfg && cfg.infant_sec);
+        check('getConfigCycleSec(兔子) = 10800+10800+21600', an.getConfigCycleSec(60004) === 43200,
+            an.getConfigCycleSec(60004));
+
+        // 抓包样本仍然要能学(官方表改版时的兜底), 且不影响官方表的优先级
         an.recordAnimalCycleSamples([{
             animal_id: 60004,
             infant_ready_at_ms: 1000 * 1000,
             grow_ready_at_ms: 1000 * (1000 + 3600),
             mature_ready_at_ms: 1000 * (1000 + 3600 + 14400),
         }]);
-        // 配置里兔子没有成品价, 服务端 #22 给的 2160 是真实结算价 —— 这里按线上实况喂进去
         an.rememberSellValue(60004, 1007, 2160);
-        const cycle = an.getLearnedCycleSec(60004);
-        check('学到兔子周期 = 3600+3600+14400', cycle === 21600, cycle);
+        check('学到兔子周期(样本) = 3600+3600+14400', an.getLearnedCycleSec(60004) === 21600,
+            an.getLearnedCycleSec(60004));
+        const info = an.getCycleInfo(60004);
+        check('周期来源优先官方表', info.source === 'config' && info.cycleSec === 43200, info);
 
         const rows = an.getCubRankings([
             { goodsId: 1, animalId: 60004, name: '兔子', price: 2034, unlocked: true, remaining: 5,
-                expectedHarvestExp: 360 },
+                expectedHarvestExp: 1260 },
         ], 'exp');
         const r = rows[0];
-        check('cycleSec 与农业指标同构', r.cycleSec === 21600, r.cycleSec);
-        check('expPerHour = 360/21600*3600 = 60', r.expPerHour === 60, r.expPerHour);
-        check('普通肥经验/时 = 360/(21600-3600)*3600 = 72', r.normalFertilizerExpPerHour === 72,
-            r.normalFertilizerExpPerHour);
-        check('净利润/时 = (2160-2034)/21600*3600 = 21', r.profitPerHour === 21, r.profitPerHour);
-        check('普通肥净利润/时 = 126/18000*3600 = 25.2',
-            r.normalFertilizerProfitPerHour === 25.2, r.normalFertilizerProfitPerHour);
+        check('cycleSec 用官方表', r.cycleSec === 43200, r.cycleSec);
+        check('cycleSource = config', r.cycleSource === 'config', r.cycleSource);
+        check('cycleParts = 幼10800/长10800/成21600',
+            r.cycleParts && r.cycleParts.infantSec === 10800
+            && r.cycleParts.growSec === 10800 && r.cycleParts.matureSec === 21600, r.cycleParts);
+        check('expPerHour = 1260/43200*3600 = 105', r.expPerHour === 105, r.expPerHour);
+        check('普通肥经验/时 = 1260/(43200-3600)*3600 = 114.55',
+            r.normalFertilizerExpPerHour === 114.55, r.normalFertilizerExpPerHour);
+        check('净利润/时 = (8136-2034)/43200*3600 = 508.5', r.profitPerHour === 508.5, r.profitPerHour);
+        check('普通肥净利润/时 = 6102/39600*3600 = 554.73',
+            r.normalFertilizerProfitPerHour === 554.73, r.normalFertilizerProfitPerHour);
 
-        // 没有周期样本 → 四项留空, 不编造
-        const noData = an.getCubRankings([
-            { goodsId: 2, animalId: 60999, name: '未知', price: 100, unlocked: true, remaining: 1 },
+        // 官方表没收录的动物 → 用实养样本兜底(source=learned)
+        an.recordAnimalCycleSamples([{
+            animal_id: 60999,
+            infant_ready_at_ms: 1000 * 1000,
+            grow_ready_at_ms: 1000 * (1000 + 1800),
+            mature_ready_at_ms: 1000 * (1000 + 1800 + 5400),
+        }]);
+        const learned = an.getCubRankings([
+            { goodsId: 3, animalId: 60999, name: '新动物', price: 100, unlocked: true,
+                expectedHarvestExp: 180 },
         ], 'exp')[0];
-        check('无周期样本时四项为 null',
+        check('官方表外: 用样本周期 = 1800+1800+5400', learned.cycleSec === 9000, learned.cycleSec);
+        check('官方表外: cycleSource = learned', learned.cycleSource === 'learned', learned.cycleSource);
+
+        // 既没有官方配置、也没有样本 → 四项留空, 不编造
+        const noData = an.getCubRankings([
+            { goodsId: 2, animalId: 60998, name: '未知', price: 100, unlocked: true, remaining: 1 },
+        ], 'exp')[0];
+        check('完全无数据时四项为 null',
             noData.expPerHour === null && noData.profitPerHour === null
             && noData.normalFertilizerExpPerHour === null,
             { e: noData.expPerHour, p: noData.profitPerHour });
-        check('无样本时标记 missing 含 cycle',
+        check('无数据时标记 missing 含 cycle',
             Array.isArray(noData.missing) && noData.missing.includes('cycle'), noData.missing);
 
         // 排序键与农场一致
         const sorted = an.getCubRankings([
-            { goodsId: 1, animalId: 60004, name: '兔子', price: 2034, unlocked: true, expectedHarvestExp: 360 },
-            { goodsId: 2, animalId: 60999, name: '未知', price: 100, unlocked: true },
+            { goodsId: 1, animalId: 60004, name: '兔子', price: 2034, unlocked: true, expectedHarvestExp: 1260 },
+            { goodsId: 2, animalId: 60998, name: '未知', price: 100, unlocked: true },
         ], 'exp');
         check('exp 排序: 有数据的在前', sorted[0].name === '兔子', sorted.map(x => x.name));
+
+        // ⭐ 重启不丢: 样本落盘到 data/ranch-analytics.json
+        const persistPath = require(`${SB}/src/config/runtime-paths`).getDataFile('ranch-analytics.json');
+        check('样本落盘文件已生成', require('node:fs').existsSync(persistPath), persistPath);
     }
 
     section('13. 牧场背包: 产物可卖/罐头可用 (与农场 UI 对齐)');
@@ -432,20 +463,48 @@ proto.loadProto().then(async () => {
                 netProfitPerHour: 540, fertProfitPerHour: 1080, unlocked: true, remaining: null },
         ], 'profit');
         const r = rows[0];
-        check('直接采用候选里的 cycleSec', r.cycleSec === 7200, r.cycleSec);
-        check('直接采用候选里的经验/时', r.expPerHour === 180, r.expPerHour);
-        check('直接采用候选里的净利/时', r.profitPerHour === 540, r.profitPerHour);
-        check('直接采用候选里的普通肥净利/时',
-            r.normalFertilizerProfitPerHour === 1080, r.normalFertilizerProfitPerHour);
+        // ⭐ 2026-11-19 口径变更: 指标统一由 getAnimalMetrics 算,
+        //   不再"直接采用候选里算好的值"(那正是 admin 进程重启后全变 null 的根因)。
+        //   官方表里兔子是 10800+10800+21600 = 43200 秒, 而不是候选里给的 7200。
+        check('周期来自官方表(不是候选里的旧值)', r.cycleSec === 43200, r.cycleSec);
+        check('cycleSource = config', r.cycleSource === 'config', r.cycleSource);
+        check('经验/时 = 1260/43200*3600 = 105', r.expPerHour === 105, r.expPerHour);
+        check('净利/时 = (8136-1080)/43200*3600 = 588', r.profitPerHour === 588, r.profitPerHour);
         check('level 取候选里的值', r.level === 3, r.level);
 
-        // 候选没带指标时, 本进程 cycleTable 为空 → 四项为 null, 不编造
+        // 官方表 + 样本都没有 → 四项为 null, 不编造
         const rows2 = an.getCubRankings([
-            { goodsId: 2, animalId: 60999, name: '未知', price: 100, unlocked: true, remaining: 1 },
+            { goodsId: 2, animalId: 60998, name: '未知', price: 100, unlocked: true, remaining: 1 },
         ], 'profit');
-        check('候选无指标且无周期样本 → 四项为 null',
+        check('官方表外动物无样本 → 四项为 null',
             rows2[0].expPerHour === null && rows2[0].profitPerHour === null,
             { e: rows2[0].expPerHour, p: rows2[0].profitPerHour });
+        check('官方表外动物标 cycleSource = none', rows2[0].cycleSource === 'none', rows2[0].cycleSource);
+    }
+
+    section('18b2. 分析数据必须覆盖全部 28 种(不要求先养过)');
+    {
+        // 线上问题: 分析页只有"已经养过的"有四项指标, 没养过的是 "-", 重启后连养过的也没了。
+        // 根因: 周期只用 worker 内存里的实养样本, 而 admin 进程(分析页)永远拿不到。
+        // 修法: 周期改读官方 MCAnimalConfig(28 种全覆盖), 样本只做兜底并落盘。
+        const an = require(`${SB}/src/services/ranch-analytics`);
+        const shop = an.getOfflineCubShop();
+        check('离线商城快照含全部 28 种', shop.length === 28, shop.length);
+
+        const rows = an.getCubRankings(shop, 'exp');
+        const noCycle = rows.filter(r => !r.hasCycleData);
+        check('全部 28 种都有周期数据', noCycle.length === 0, noCycle.map(r => r.name));
+        const noExp = rows.filter(r => !(r.expPerHour > 0));
+        check('全部 28 种都有经验/时', noExp.length === 0, noExp.map(r => r.name));
+        const fromConfig = rows.filter(r => r.cycleSource === 'config').length;
+        check('全部来自官方表', fromConfig === 28, fromConfig);
+
+        // 数值抽查(与抓包/官方表一致): 鸡 4+4+8=16s; 天竺鼠 14400+14400+28800=57600s
+        const chicken = rows.find(r => r.animalId === 60001);
+        const guinea = rows.find(r => r.animalId === 60006);
+        check('鸡周期 16 秒', chicken.cycleSec === 16, chicken.cycleSec);
+        check('天竺鼠周期 57600 秒', guinea.cycleSec === 57600, guinea.cycleSec);
+        check('天竺鼠收获经验 = 官方表 2040', guinea.harvestExp === 2040, guinea.harvestExp);
     }
 
     section('18c. 幼崽策略必须能保存(spec 表覆盖)');

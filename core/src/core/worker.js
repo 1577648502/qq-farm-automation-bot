@@ -1372,8 +1372,15 @@ async function handleApiCall(msg) {
                 // 设置页预览 —— 与实际执行同一条路径(对齐农场):
                 //   农场 bag_priority 的预览也是"背包有什么 → 背包用完了按第二策略买"
                 //   所以这里先看背包(排外剔除、按优先级排序), 再看商店。
+                //
+                // ⚠ 2026-11-19: 预览必须能反映**界面上还没保存**的选择。
+                //   之前这里不带参数, 只读 store 里已保存的值 → 用户改了下拉框,
+                //   预览纹丝不动(直到点保存), 看起来就是"没有预览"。
+                //   现在接受 {strategy, fallback, priority, exclude, count} 覆盖,
+                //   不传则仍用已保存配置(与自动购买一致)。
                 const ranchSvc = require('../services/ranch');
                 const fns = ranchSvc.__privateRanchFns;
+                const opts = (Array.isArray(args[0]) ? args[0][0] : args[0]) || {};
                 // 1) 背包里可入栏的幼崽(排外已剔除, 已按优先级排序)
                 let fromBag = null;
                 try {
@@ -1386,7 +1393,10 @@ async function handleApiCall(msg) {
                             collected.push({ id: toNum(it.id), count: toNum(it.count), name: info.name || `#${it.id}` });
                         }
                     }
-                    const sortedBag = fns.sortBagCubsForPlacing(collected);
+                    const sortedBag = fns.sortBagCubsForPlacing(collected, {
+                        priority: Array.isArray(opts.priority) ? opts.priority : undefined,
+                        exclude: Array.isArray(opts.exclude) ? opts.exclude : undefined,
+                    });
                     if (sortedBag.length) {
                         const first = sortedBag[0];
                         fromBag = {
@@ -1401,7 +1411,12 @@ async function handleApiCall(msg) {
                 // 2) 商店候选(排外剔除, 按策略排序)
                 const shop = await ranchSvc.getCubShop();
                 const usable = (shop || []).filter(g => g.unlocked && g.price > 0 && g.valueRatio > 0);
-                const sorted = fns.applyCubStrategy(usable);
+                const sorted = fns.applyCubStrategy(usable, {
+                    strategy: opts.strategy || undefined,
+                    fallback: opts.fallback || undefined,
+                    priority: Array.isArray(opts.priority) ? opts.priority : undefined,
+                    exclude: Array.isArray(opts.exclude) ? opts.exclude : undefined,
+                });
                 const best = sorted[0] || null;
                 result = {
                     // 与农场一致: 背包有货时"实际会先做的是入栏", 不显示买谁
@@ -1413,10 +1428,20 @@ async function handleApiCall(msg) {
                         level: best.level ?? null,
                         price: best.price,
                         ratio: best.valueRatio ?? null,
+                        cycleSec: best.cycleSec ?? null,
+                        cycleSource: best.cycleSource ?? null,
+                        expPerHour: best.expPerHour ?? null,
+                        fertExpPerHour: best.fertExpPerHour ?? null,
+                        netProfitPerHour: best.netProfitPerHour ?? null,
+                        fertProfitPerHour: best.fertProfitPerHour ?? null,
                     } : null,
                     candidates: sorted.slice(0, 5).map(g => ({
                         animalId: g.animalId, name: g.name, level: g.level ?? null,
+                        price: g.price ?? null,
+                        expPerHour: g.expPerHour ?? null,
+                        netProfitPerHour: g.netProfitPerHour ?? null,
                     })),
+                    strategy: opts.strategy || null,
                     count: usable.length,
                 };
                 break;
@@ -1885,8 +1910,8 @@ async function handleApiCall(msg) {
                 break;
             case 'buyLimitedPacks': {
                 const r = await require('../services/mall').checkAndBuyLimitedPacks(true);
-                log('商城', `手动购买限时礼包: ${r.bought > 0 ? `成功 ${r.bought} 个(开包 ${r.opened})` : `未购买(${r.skipped || '未知'})`}` +
-                    r.goods.map(g => ` | ${g.name}: ${g.bought ? `买${g.bought}` : (g.skipped || '跳过')}`).join(''), {
+                log('商城', `手动购买限时礼包: ${r.bought > 0 ? `成功 ${r.bought} 个(开包 ${r.opened})` : `未购买(${r.skipped || '未知'})`}${ 
+                    r.goods.map(g => ` | ${g.name}: ${g.bought ? `买${g.bought}` : (g.skipped || '跳过')}`).join('')}`, {
                     module: 'mall', event: '限时礼包', result: r.bought > 0 ? 'ok' : 'warn', manual: true,
                 });
                 result = r;

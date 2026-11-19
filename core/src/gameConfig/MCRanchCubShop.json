@@ -1,0 +1,254 @@
+[
+    {
+        "goodsId": 10002,
+        "animalId": 60001,
+        "name": "鸡",
+        "level": 1,
+        "price": 2,
+        "limit": 0,
+        "husbandryType": "窝"
+    },
+    {
+        "goodsId": 10003,
+        "animalId": 60002,
+        "name": "鸭",
+        "level": 3,
+        "price": 1080,
+        "limit": 0,
+        "husbandryType": "窝"
+    },
+    {
+        "goodsId": 10004,
+        "animalId": 60003,
+        "name": "鹅",
+        "level": 9,
+        "price": 2712,
+        "limit": 0,
+        "husbandryType": "窝"
+    },
+    {
+        "goodsId": 10005,
+        "animalId": 60004,
+        "name": "兔子",
+        "level": 11,
+        "price": 4068,
+        "limit": 0,
+        "husbandryType": "窝"
+    },
+    {
+        "goodsId": 10006,
+        "animalId": 60005,
+        "name": "火鸡",
+        "level": 14,
+        "price": 5640,
+        "limit": 0,
+        "husbandryType": "窝"
+    },
+    {
+        "goodsId": 10007,
+        "animalId": 60006,
+        "name": "天竺鼠",
+        "level": 17,
+        "price": 6768,
+        "limit": 0,
+        "husbandryType": "窝"
+    },
+    {
+        "goodsId": 10010,
+        "animalId": 60007,
+        "name": "乌龟",
+        "level": 25,
+        "price": 8448,
+        "limit": 0,
+        "husbandryType": "窝"
+    },
+    {
+        "goodsId": 10011,
+        "animalId": 60008,
+        "name": "松鼠",
+        "level": 27,
+        "price": 12672,
+        "limit": 0,
+        "husbandryType": "窝"
+    },
+    {
+        "goodsId": 10014,
+        "animalId": 60009,
+        "name": "刺猬",
+        "level": 33,
+        "price": 10560,
+        "limit": 0,
+        "husbandryType": "窝"
+    },
+    {
+        "goodsId": 10015,
+        "animalId": 60010,
+        "name": "鼹鼠",
+        "level": 35,
+        "price": 15840,
+        "limit": 0,
+        "husbandryType": "窝"
+    },
+    {
+        "goodsId": 10018,
+        "animalId": 60011,
+        "name": "考拉",
+        "level": 41,
+        "price": 12672,
+        "limit": 0,
+        "husbandryType": "窝"
+    },
+    {
+        "goodsId": 10019,
+        "animalId": 60012,
+        "name": "狐狸",
+        "level": 43,
+        "price": 19008,
+        "limit": 0,
+        "husbandryType": "窝"
+    },
+    {
+        "goodsId": 10022,
+        "animalId": 60013,
+        "name": "豪猪",
+        "level": 49,
+        "price": 15216,
+        "limit": 0,
+        "husbandryType": "窝"
+    },
+    {
+        "goodsId": 10023,
+        "animalId": 60014,
+        "name": "龙猫",
+        "level": 51,
+        "price": 22824,
+        "limit": 0,
+        "husbandryType": "窝"
+    },
+    {
+        "goodsId": 10026,
+        "animalId": 60015,
+        "name": "孔雀",
+        "level": 58,
+        "price": 18240,
+        "limit": 0,
+        "husbandryType": "窝"
+    },
+    {
+        "goodsId": 10027,
+        "animalId": 60016,
+        "name": "貂",
+        "level": 61,
+        "price": 27360,
+        "limit": 0,
+        "husbandryType": "窝"
+    },
+    {
+        "goodsId": 10008,
+        "animalId": 70001,
+        "name": "羊",
+        "level": 21,
+        "price": 5640,
+        "limit": 0,
+        "husbandryType": "棚"
+    },
+    {
+        "goodsId": 10009,
+        "animalId": 70002,
+        "name": "牛",
+        "level": 23,
+        "price": 10152,
+        "limit": 0,
+        "husbandryType": "棚"
+    },
+    {
+        "goodsId": 10012,
+        "animalId": 70003,
+        "name": "驴",
+        "level": 29,
+        "price": 8448,
+        "limit": 0,
+        "husbandryType": "棚"
+    },
+    {
+        "goodsId": 10013,
+        "animalId": 70004,
+        "name": "迷你猪",
+        "level": 31,
+        "price": 12672,
+        "limit": 0,
+        "husbandryType": "棚"
+    },
+    {
+        "goodsId": 10016,
+        "animalId": 70005,
+        "name": "马",
+        "level": 37,
+        "price": 10560,
+        "limit": 0,
+        "husbandryType": "棚"
+    },
+    {
+        "goodsId": 10017,
+        "animalId": 70006,
+        "name": "水牛",
+        "level": 39,
+        "price": 15840,
+        "limit": 0,
+        "husbandryType": "棚"
+    },
+    {
+        "goodsId": 10020,
+        "animalId": 70007,
+        "name": "骆驼",
+        "level": 45,
+        "price": 12672,
+        "limit": 0,
+        "husbandryType": "棚"
+    },
+    {
+        "goodsId": 10021,
+        "animalId": 70008,
+        "name": "牦牛",
+        "level": 47,
+        "price": 19008,
+        "limit": 0,
+        "husbandryType": "棚"
+    },
+    {
+        "goodsId": 10024,
+        "animalId": 70009,
+        "name": "鸵鸟",
+        "level": 53,
+        "price": 15216,
+        "limit": 0,
+        "husbandryType": "棚"
+    },
+    {
+        "goodsId": 10025,
+        "animalId": 70010,
+        "name": "梅花鹿",
+        "level": 55,
+        "price": 22824,
+        "limit": 0,
+        "husbandryType": "棚"
+    },
+    {
+        "goodsId": 10028,
+        "animalId": 70011,
+        "name": "浣熊",
+        "level": 64,
+        "price": 18240,
+        "limit": 0,
+        "husbandryType": "棚"
+    },
+    {
+        "goodsId": 10029,
+        "animalId": 70012,
+        "name": "羊驼",
+        "level": 67,
+        "price": 27360,
+        "limit": 0,
+        "husbandryType": "棚"
+    }
+]

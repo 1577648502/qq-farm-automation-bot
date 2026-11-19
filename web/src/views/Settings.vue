@@ -679,7 +679,13 @@ watchEffect(() => {
 //   之前预览查 /api/ranch/analytics?sort=xx(独立排序), 购买走 applyCubStrategy,
 //   两边对"指标全缺"处理不同 → 预览显示 Lv3 兔子, 实际却买了鸡。
 //   现在统一走后端 /api/ranch/cub-strategy-pick(内部就是 applyCubStrategy)。
+//
+// ⚠ 2026-11-19 再修: 预览必须跟随**界面上还没保存**的选择。
+//   之前 watchEffect 里只 `void` 了一下(为了建立依赖), 请求却不带任何参数,
+//   后端只能读已保存的值 → 改下拉框后预览纹丝不动, 用户看到的是"没有预览"。
+//   现在把 strategy / fallback / priority / exclude 一起传过去。
 const ranchCubPreviewLabel = ref<string | null>(null)
+const ranchCubPreviewBusy = ref(false)
 
 watchEffect(async (onCleanup) => {
   const accountId = String(currentAccountId.value || '')
@@ -692,15 +698,27 @@ watchEffect(async (onCleanup) => {
     ranchCubPreviewLabel.value = null
     return
   }
-  // 依赖策略/优先级/排外, 任一变化都重新算
-  void localStrategySettings.value.ranchCubStrategy
-  void localStrategySettings.value.ranchCubFallbackStrategy
-  void (localStrategySettings.value.ranchCubPriority || []).length
-  void (localStrategySettings.value.ranchCubExclude || []).length
+  // 依赖策略/优先级/排外, 任一变化都重新算(这里取值是为了建立响应式依赖)
+  const strategy = String(localStrategySettings.value.ranchCubStrategy || '')
+  const fallback = String(localStrategySettings.value.ranchCubFallbackStrategy || '')
+  const priority = [...(localStrategySettings.value.ranchCubPriority || [])]
+  const exclude = [...(localStrategySettings.value.ranchCubExclude || [])]
+  const params: Record<string, string> = {}
+  if (strategy)
+    params.strategy = strategy
+  if (fallback)
+    params.fallback = fallback
+  if (priority.length)
+    params.priority = priority.join(',')
+  if (exclude.length)
+    params.exclude = exclude.join(',')
 
+  ranchCubPreviewBusy.value = true
   try {
     const res = await api.get('/api/ranch/cub-strategy-pick', {
       headers: { 'x-account-id': accountId },
+      params,
+      timeout: 15000,
     })
     if (cancelled)
       return
@@ -712,12 +730,20 @@ watchEffect(async (onCleanup) => {
     }
     const pick = d?.pick
     ranchCubPreviewLabel.value = pick
-      ? `背包无可用幼崽 → 按第二策略买 Lv${pick.level ?? '-'} ${pick.name}`
-      : '暂无可用幼崽'
+      ? `背包无可用幼崽 → 按当前策略买 Lv${pick.level ?? '-'} ${pick.name}`
+      : (d?.count === 0 ? '商店暂无可买幼崽(未解锁/无收益)' : '暂无可用幼崽')
   }
-  catch {
+  catch (e: any) {
+    if (!cancelled) {
+      const st = e?.response?.status
+      ranchCubPreviewLabel.value = e?.response?.data?.error
+        ? `预览失败: ${e.response.data.error}`
+        : (st ? `预览失败(HTTP ${st})` : '预览失败(账号未运行?)')
+    }
+  }
+  finally {
     if (!cancelled)
-      ranchCubPreviewLabel.value = null
+      ranchCubPreviewBusy.value = false
   }
 })
 
@@ -2468,9 +2494,11 @@ async function onBackupFileChange(ev: Event) {
               <div class="flex flex-col gap-1.5">
                 <label class="text-sm text-gray-700 font-medium dark:text-gray-300">
                   {{ localStrategySettings.ranchCubStrategy === 'bag_priority' ? '第二优先策略预览' : '策略选崽预览' }}
+                  <span v-if="ranchCubPreviewBusy" class="ml-1 text-xs text-gray-400">更新中…</span>
                 </label>
                 <div
                   class="w-full flex items-center justify-between border border-gray-200 rounded-lg bg-gray-50 px-3 py-2 text-gray-500 dark:border-gray-600 dark:bg-gray-800/50 dark:text-gray-400"
+                  :class="ranchCubPreviewLabel && ranchCubPreviewLabel.startsWith('预览失败') ? 'border-red-200 bg-red-50 text-red-600 dark:border-red-900/50 dark:bg-red-900/20 dark:text-red-300' : ''"
                 >
                   <span class="truncate">{{ ranchCubPreviewLabel ?? '加载中...' }}</span>
                   <div class="i-carbon-chevron-down shrink-0 text-lg text-gray-400" />

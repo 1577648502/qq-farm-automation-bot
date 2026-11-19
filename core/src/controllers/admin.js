@@ -1563,12 +1563,62 @@ app.use('/api', (req, res, next) => {
     // 幼崽收益排行(对照农场的 /api/analytics) —— 需要账号, 因为要拉实时商城价
     // 牧场幼崽分析(对照 /api/analytics 的 getPlantRankings)
     //   排序键与农场同构: exp / fert_exp / profit / fert_profit (+ ratio/cost/level/name)
-    app.get('/api/ranch/analytics', withAccount(async (accountId, req) => {
+    //
+    // ⭐ 数据来源(2026-11-19):
+    //   周期/经验来自官方 MCAnimalConfig + 服务端 #21 → admin 进程即可算全部 28 种,
+    //   不再依赖 worker 内存(重启后分析页不会变空白)。
+    //   商城价优先实时拉取; 账号没跑/拉取失败时退回离线快照(MCRanchCubShop.json),
+    //   保证"没养过的动物也有分析数据"。
+    app.get('/api/ranch/analytics', async (req, res) => {
         const sortBy = String(req.query.sort || 'ratio');
-        const shop = await provider.getCubShop(accountId);
-        const { getCubRankings } = require('../services/ranch-analytics');
-        return { data: getCubRankings(shop, sortBy), sort: sortBy };
-    }, { softErrors: true }));
+        const { getCubRankings, getOfflineCubShop } = require('../services/ranch-analytics');
+        const accountId = getAccId(req);
+        if (accountId && !checkAccountAccess(req, accountId)) {
+            return res.status(403).json({ ok: false, error: '无权访问此账号' });
+        }
+
+        let shop = null;
+        let source = 'live';
+        let liveError = '';
+        if (accountId && provider) {
+            try {
+                shop = await provider.getCubShop(accountId);
+            } catch (e) {
+                liveError = e.message;
+            }
+        }
+        if (!Array.isArray(shop) || shop.length === 0) {
+            // 实时拉不到 → 用抓包快照兜底; 但同步把 liveError 带出去, 面板据此提示
+            shop = getOfflineCubShop();
+            source = 'offline';
+        } else if (liveError) {
+            // 实时成功但中途有告警(如余额读不到) —— 不影响价格, 照实标注
+            source = 'live';
+        }
+        const rows = getCubRankings(shop, sortBy);
+        // 实时商城只返回"已解锁/未解锁"的完整列表; 若它缺了某些动物(等级不够时
+        // ShopInfo 仍会给全量), 用离线快照补齐, 保证分析页永远覆盖全部 28 种。
+        if (source === 'live') {
+            const have = new Set(rows.map(r => r.animalId));
+            const missing = getOfflineCubShop().filter(g => !have.has(g.animalId));
+            if (missing.length) {
+                const patched = getCubRankings([...shop, ...missing], sortBy);
+                res.json({
+                    ok: true, data: patched, sort: sortBy, source: 'live+snapshot',
+                    count: patched.length, liveError: liveError || null,
+                });
+                return;
+            }
+        }
+        res.json({
+            ok: true,
+            data: rows,
+            sort: sortBy,
+            source,
+            count: rows.length,
+            liveError: liveError || null,
+        });
+    });
 
     // 牧场商城(道具 + 幼崽分类)
     app.get('/api/ranch/shop', withAccount((accountId, req) => provider.getRanchShop(accountId, req.query.category || 'all'), { softErrors: true }));
@@ -1587,8 +1637,27 @@ app.use('/api', (req, res, next) => {
     // 幼崽策略"实际会买哪只" —— 设置页的预览框用它, 保证与自动购买走同一套逻辑。
     // 之前预览走 /api/ranch/analytics?sort=xx(独立排序), 购买走 applyCubStrategy,
     // 两边对"指标全缺"的处理不同 → 预览显示兔子、实际买了鸡(线上 2026-11-19)。
+    //
+    // ⚠ 2026-11-19 再修: 预览必须跟随**界面上还没保存**的选择。
+    //   query 里可带 strategy / fallback / priority / exclude / count,
+    //   不带则读已保存配置(与自动购买完全一致)。
     app.get('/api/ranch/cub-strategy-pick', withAccount(
-        accountId => provider.getCubStrategyPick(accountId),
+        (accountId, req) => {
+            const q = req.query || {};
+            const parseIds = (v) => {
+                if (v === undefined || v === null || v === '') return undefined;
+                const raw = Array.isArray(v) ? v : String(v).split(',');
+                const ids = raw.map(x => Number(x)).filter(n => Number.isFinite(n) && n > 0);
+                return ids;
+            };
+            const opts = {
+                strategy: q.strategy ? String(q.strategy) : '',
+                fallback: q.fallback ? String(q.fallback) : '',
+                priority: parseIds(q.priority),
+                exclude: parseIds(q.exclude),
+            };
+            return provider.getCubStrategyPick(accountId, opts);
+        },
         { softErrors: true },
     ));
 
@@ -3213,8 +3282,8 @@ app.use('/api', (req, res, next) => {
 
     // API: 守护日志
     app.get('/api/pet/guard-logs', withAccount((accountId, req) => {
-        const page = parseInt(req.query.page) || 1;
-        const pageSize = parseInt(req.query.pageSize) || 10;
+        const page = Number.parseInt(req.query.page) || 1;
+        const pageSize = Number.parseInt(req.query.pageSize) || 10;
         return provider.getGuardLogs(accountId, page, pageSize);
     }));
 

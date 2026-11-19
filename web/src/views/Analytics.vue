@@ -29,27 +29,33 @@ const activeTab = ref('crops')
 const cubRows = ref<any[]>([])
 const cubLoading = ref(false)
 const cubError = ref('')
+/** live = 实时商城价; offline = 抓包快照兜底(账号没跑时仍能看全部幼崽) */
+const cubSource = ref<string>('')
+const cubLiveError = ref<string>('')
 // 排序键与农场 /api/analytics 同构(exp / fert_exp / profit / fert_profit)
 const cubSort = ref<'exp' | 'fert_exp' | 'profit' | 'fert_profit' | 'ratio' | 'cost' | 'level'>('exp')
 
 async function loadCubAnalytics() {
   const id = currentAccountId.value
-  if (!id)
-    return
   cubLoading.value = true
   cubError.value = ''
   try {
     const res = await api.get('/api/ranch/analytics', {
-      headers: { 'x-account-id': id },
+      headers: id ? { 'x-account-id': id } : {},
       params: { sort: cubSort.value },
+      timeout: 20000,
     })
     const d = res.data
     if (!d?.ok)
       throw new Error(d?.error || '获取失败')
     // 后端已对齐农场格式(返回 { data: rows }), 兼容旧的 rows
     cubRows.value = (Array.isArray(d.data) ? d.data : (d.data?.rows || d.data?.data)) || []
+    // live = 实时商城价; offline = 账号没跑/商城拉不到, 用抓包快照的兜底价
+    cubSource.value = d.source || 'live'
+    cubLiveError.value = d.liveError || ''
   }
   catch (e: any) {
+    cubSource.value = ''
     cubError.value = e?.response?.data?.error || e?.message || '获取失败'
   }
   finally {
@@ -58,6 +64,12 @@ async function loadCubAnalytics() {
 }
 
 watch(cubSort, () => {
+  if (activeTab.value === 'ranch')
+    void loadCubAnalytics()
+})
+
+// 切账号后重新拉(牧场 tab 默认显示的就是当前账号的实时价/兜底价)
+watch(currentAccountId, () => {
   if (activeTab.value === 'ranch')
     void loadCubAnalytics()
 })
@@ -725,6 +737,20 @@ function formatGrowTime(seconds: any) {
             与「全部作物」同一套指标：经验/时 = 收获经验 ÷ 完整周期；净利润/时 =（整只回收 − 幼崽成本）÷ 周期；
             普通肥 = 周期缩短 3600 秒（普通罐头）
           </span>
+          <span
+            v-if="cubSource === 'offline'"
+            class="rounded bg-amber-50 px-2 py-0.5 text-xs text-amber-600 dark:bg-amber-900/30 dark:text-amber-400"
+            :title="cubLiveError ? `实时商城拉取失败: ${cubLiveError}` : '账号未运行, 使用抓包快照的商城价'"
+          >离线价格快照（账号未运行）</span>
+          <span
+            v-else-if="cubSource === 'live'"
+            class="rounded bg-emerald-50 px-2 py-0.5 text-xs text-emerald-600 dark:bg-emerald-900/30 dark:text-emerald-400"
+          >实时商城价</span>
+          <span
+            v-else-if="cubSource === 'live+snapshot'"
+            class="rounded bg-sky-50 px-2 py-0.5 text-xs text-sky-600 dark:bg-sky-900/30 dark:text-sky-400"
+            title="实时商城缺的动物用抓包快照补齐(价格可能过期)"
+          >实时价 + 快照补齐</span>
         </div>
 
         <div v-if="cubLoading" class="rounded-lg bg-white p-8 text-center text-gray-500 shadow dark:bg-gray-800">
@@ -734,7 +760,7 @@ function formatGrowTime(seconds: any) {
           {{ cubError }}
         </div>
         <div v-else-if="!cubRows.length" class="rounded-lg bg-white p-8 text-center text-gray-500 shadow dark:bg-gray-800">
-          暂无幼崽数据（账号需运行且牧场已解锁）
+          暂无幼崽数据（配置缺失）
         </div>
         <div v-else class="overflow-hidden border border-gray-200 rounded-lg bg-white shadow dark:border-gray-700 dark:bg-gray-800">
           <div class="overflow-x-auto">
@@ -764,7 +790,22 @@ function formatGrowTime(seconds: any) {
                     <span class="text-xs text-gray-400">Lv{{ r.level ?? '-' }}</span>
                   </td>
                   <td class="px-4 py-2 text-gray-500">
-                    {{ r.cycleSec ? formatGrowTime(r.cycleSec) : '—' }}
+                    <span class="inline-flex items-center gap-1">
+                      {{ r.cycleSec ? formatGrowTime(r.cycleSec) : '—' }}
+                      <span
+                        v-if="r.cycleSource === 'config'"
+                        class="rounded bg-emerald-50 px-1 py-0.5 text-[10px] text-emerald-600 dark:bg-emerald-900/30 dark:text-emerald-400"
+                        title="来自官方客户端配置 MCAnimalConfig(幼崽+成长+成熟)"
+                      >官方表</span>
+                      <span
+                        v-else-if="r.cycleSource === 'learned'"
+                        class="rounded bg-amber-50 px-1 py-0.5 text-[10px] text-amber-600 dark:bg-amber-900/30 dark:text-amber-400"
+                        title="官方表未收录, 由实际养过的抓包样本推算"
+                      >实养推算</span>
+                    </span>
+                    <div v-if="r.cycleParts" class="text-[10px] text-gray-400">
+                      幼{{ r.cycleParts.infantSec }}s + 长{{ r.cycleParts.growSec }}s + 成{{ r.cycleParts.matureSec }}s
+                    </div>
                   </td>
                   <td class="px-4 py-2 text-right text-purple-600 font-bold tabular-nums dark:text-purple-400">
                     {{ r.expPerHour ?? '-' }}
@@ -793,7 +834,9 @@ function formatGrowTime(seconds: any) {
             </table>
           </div>
           <div class="border-t border-gray-100 px-4 py-2 text-xs text-gray-400 dark:border-gray-700">
-            周期数据来自服务端 {{ 'infant/grow/mature_ready_at_ms' }} 的实测样本；没有样本时该行指标显示「-」，不编造。
+            周期来自官方客户端配置 <code>mcRes/mcconfig/MCAnimalConfig</code>（幼崽 + 成长 + 成熟三段，全部 28 种动物已收录，无需先养过）；
+            官方表未收录的新动物才用服务端 <code>infant/grow/mature_ready_at_ms</code> 的实养样本推算，两者都没有时显示「-」，不编造。
+            经验取服务端 <code>expected_harvest_exp</code>，缺省时用官方表的 <code>harvest_exp</code>。
           </div>
         </div>
       </div>

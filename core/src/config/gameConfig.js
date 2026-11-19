@@ -297,6 +297,16 @@ const seedItemMap = new Map();  // seed_id -> item(type=5)
 const seedImageMap = new Map(); // seed_id -> image url
 const seedAssetImageMap = new Map(); // asset_name (Crop_xxx) -> image url
 
+// ============ 牧场动物配置 ============
+// 来源: 官方客户端 mcRes bundle 里的 mcconfig/MCAnimalConfig
+//   (https://cdn-resource.nqf.qq.com/release/remote/mcRes/config.<hash>.json → import/....json)
+// 这是**唯一**能拿到"每种动物完整周期"的地方 —— ItemInfo 里没有任何时长字段。
+// 字段(官方原样): infant_sec / grow_sec / mature_sec / product_round_sec /
+//   max_produce_count / harvest_exp / produce_exp / product_item / byproduct_item …
+// 交叉验证: 抓包 GetRanchDetail 的 infant/grow/mature_ready_at_ms 差值
+//   (天竺鼠 14400/14400、松鼠 21600/21600、驴 14400/14400、牛 21600/43200) 与该表逐条吻合。
+const animalConfigMap = new Map(); // animal_id -> MCAnimalConfig row
+
 /**
  * 加载配置文件
  */
@@ -380,6 +390,31 @@ function loadConfigs() {
         }
     } catch (e) {
         console.warn('[配置] 加载 ItemInfo.json 失败:', e.message);
+    }
+
+    // 牧场动物配置(周期/产出/经验) —— 内置一份, 同步目录有更新版时覆盖
+    try {
+        animalConfigMap.clear();
+        const animalPaths = [
+            path.join(configDir, 'MCAnimalConfig.json'),
+            path.join(getDataDir(), 'gameConfig', 'MCAnimalConfig.json'),
+        ];
+        for (const p of animalPaths) {
+            if (!fs.existsSync(p)) continue;
+            let rows;
+            try { rows = JSON.parse(fs.readFileSync(p, 'utf8')); } catch { continue; }
+            if (!Array.isArray(rows)) continue;
+            for (const row of rows) {
+                const id = Number(row && row.id) || 0;
+                if (id <= 0) continue;
+                animalConfigMap.set(id, row);
+            }
+        }
+        if (animalConfigMap.size > 0) {
+            console.warn(`[配置] 已加载牧场动物配置 (${animalConfigMap.size} 种)`);
+        }
+    } catch (e) {
+        console.warn('[配置] 加载 MCAnimalConfig.json 失败:', e.message);
     }
 
     // 物品名覆盖表 (ItemInfo.json 未收录的新物品, 避免界面显示"物品#id")
@@ -868,6 +903,19 @@ function getAllItems() {
     return Array.from(itemInfoMap.values());
 }
 
+/**
+ * 牧场动物配置(官方 MCAnimalConfig 的一行); 未收录返回 null。
+ * 字段: infant_sec / grow_sec / mature_sec / product_round_sec / max_produce_count /
+ *       harvest_exp / produce_exp / product_item{id,count} / byproduct_item{id,count} …
+ */
+function getAnimalConfig(animalId) {
+    return animalConfigMap.get(Number(animalId) || 0) || null;
+}
+
+function getAllAnimalConfigs() {
+    return Array.from(animalConfigMap.values());
+}
+
 // 启动时加载配置
 loadConfigs();
 
@@ -895,6 +943,9 @@ module.exports = {
     getSeedPrice,
     getFruitPrice,
     getSeedImageBySeedId,
+    // 牧场动物配置(周期/产出)
+    getAnimalConfig,
+    getAllAnimalConfigs,
     // 变异配置
     getMutantType,
     getMutantTypesByQuality,
