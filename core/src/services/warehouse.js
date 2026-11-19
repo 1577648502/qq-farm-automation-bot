@@ -68,9 +68,35 @@ function toSellItem(item) {
  * @param {{skipFarmFilter?: boolean}} opts skipFarmFilter=true 时允许非农场果实(牧场产物用)
  */
 async function sellItems(items, opts = {}) {
+    // ⚠ 数量不能超过**单个格子**的实际库存:
+    //   背包 UI 展示的是合并后的总数, 但 Sell 请求里的 uid 指向某一个格子,
+    //   服务端按该格子校验 → 拿合并数量去卖会报 code=1000019「xx不足」。
+    //   这里把 uid 对应格子的真实上限截断, 剩下的由调用方下一轮再卖。
+    let cellCap = null;
+    if (opts.scene === 'ranch') {
+        try {
+            const raw = await getRanchBagItems();
+            cellCap = new Map();
+            for (const it of (raw || [])) {
+                const uid = toNum(it && it.uid);
+                const id = toNum(it && it.id);
+                if (uid > 0 && id > 0) cellCap.set(`${id}:${uid}`, toNum(it.count));
+            }
+        } catch { cellCap = null; }
+    }
+    const clamp = (it) => {
+        if (!cellCap) return it;
+        const key = `${toNum(it && it.id)}:${toNum(it && it.uid)}`;
+        const cap = cellCap.get(key);
+        if (cap === undefined) return it;
+        return { ...it, count: Math.min(toNum(it && it.count), cap) };
+    };
+
     // 默认只允许农场果实(防误卖); 牧场产物走 skipFarmFilter
     const payload = (items || [])
         .filter(it => opts.skipFarmFilter ? toNum(it && it.id) > 0 : isSellableItem(it))
+        .map(clamp)
+        .filter(it => toNum(it && it.count) > 0)
         .map(toSellItem);
     if (!payload.length) {
         throw new Error('没有可出售的物品');

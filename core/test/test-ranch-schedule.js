@@ -322,7 +322,61 @@ proto.loadProto().then(async () => {
         check('页签 8(道具) 不再含 106', !!m && !/8:\s*\[[^\]]*106/.test(m[1]), m && m[1].trim());
     }
 
-    section('15. scheduleRanchFromCountdowns 只认服务端给的时刻字段');
+    section('15. 重复状态不刷屏(对照农场日志做法)');
+    {
+        // 线上问题: 每 20 秒巡查都打一对
+        //   「栏位已满(4/4), 背包里 73 只幼崽暂无法入栏」
+        //   「没有空槽位, 跳过买幼崽」
+        // 农场遇到同类情况只在状态变化时提示一次。
+        ranch.resetLogOnceState();
+        const first = ranch.shouldLogOnce('t_key', '4/4#73');
+        check('第一次提示', first === true, first);
+        let repeats = 0;
+        for (let i = 0; i < 10; i++) if (ranch.shouldLogOnce('t_key', '4/4#73')) repeats++;
+        check('同一状态连续 10 次不再提示', repeats === 0, repeats);
+        check('状态变化时立即提示', ranch.shouldLogOnce('t_key', '3/4#73') === true, true);
+        check('变化后同一状态又不提示', ranch.shouldLogOnce('t_key', '3/4#73') === false, false);
+
+        // 两个提示类别互不影响
+        check('不同 key 独立节流', ranch.shouldLogOnce('t_key2', '4/4#73') === true, true);
+    }
+
+    section('16. 出售按原始格子(uid), 不是合并后的总数');
+    {
+        // 线上: 巨大鸭 x2 在背包里, 出售报 code=1000019「巨大鸭不足」。
+        // 根因: items 按 bagGroupKey 合并了多个格子的数量, 但 uid 只留了第一个格子的;
+        //       拿"合并数量 + 单格 uid"去卖, 服务端按该格子库存校验 → 不足。
+        const w = require(`${SB}/src/services/warehouse`);
+        const build = w.__privateWarehouseFns.buildBagDetailFromItems;
+
+        // 同一物品(2065002 巨大鸭)分布在两个格子里
+        const bag = build([
+            { id: 2065002, count: 1, uid: 900001 },
+            { id: 2065002, count: 1, uid: 900002 },
+        ], { scene: 'ranch' });
+
+        check('展示层合并成 2', bag.items[0].count === 2, bag.items[0].count);
+        check('原始格子保留两条', bag.originalItems.length === 2, bag.originalItems);
+
+        // 按格子出售时, 每条数量都不超过所在格子库存
+        const byCell = bag.originalItems.filter(c => Number(c.id) === 2065002);
+        check('每个格子各自 1 个(不会拿 2 去配单格 uid)',
+            byCell.length === 2 && byCell.every(c => Number(c.count) === 1),
+            byCell.map(c => `${c.uid}:${c.count}`));
+
+        // 源码级校验: 自动出售必须用 originalItems
+        const src = require('node:fs').readFileSync(
+            require('node:path').join(SB, 'src/services/ranch.js'), 'utf8');
+        check('自动出售按 originalItems 拆分格子',
+            src.includes('bag.originalItems'), '未找到 originalItems 用法');
+        check('sellItems 支持按 uid 截断数量',
+            require('node:fs').readFileSync(
+                require('node:path').join(SB, 'src/services/warehouse.js'), 'utf8')
+                .includes("opts.scene === 'ranch'"),
+            '未找到 scene 截断逻辑');
+    }
+
+    section('17. scheduleRanchFromCountdowns 只认服务端给的时刻字段');
     {
         const now = Date.now();
         const view = {

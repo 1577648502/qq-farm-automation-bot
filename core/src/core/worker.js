@@ -1493,7 +1493,9 @@ async function handleApiCall(msg) {
                 const list = Array.isArray(args[0]) ? args[0] : [];
                 result = await _sellRanch(
                     list.map(it => ({ id: it.id, count: it.count, uid: it.uid || 0 })),
-                    { skipFarmFilter: true },
+                    // scene='ranch' 让 sellItems 按 uid 对应格子的真实库存截断数量,
+                    // 否则"合并数量 + 单格 uid"会报 1000019 不足
+                    { skipFarmFilter: true, scene: 'ranch' },
                 );
                 break;
             }

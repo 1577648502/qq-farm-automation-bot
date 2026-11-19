@@ -861,10 +861,13 @@ async function autoPlaceCubs(opts = {}) {
         } catch { /* 收获失败就按原来的 free=0 返回 */ }
     }
     if (free <= 0) {
-        // 明确说明是"没空位", 而不是默默不动
-        log('牧场', `栏位已满(${animals.length}/${capacity}), 背包里 ${cubs.reduce((n, c) => n + c.count, 0)} 只幼崽暂无法入栏`, {
-            module: 'ranch', event: '幼崽入栏', result: 'skip', used: animals.length, capacity,
-        });
+        // 明确说明"没空位", 但**不要每轮都刷**(农场也是状态变化时才提示)。
+        const cubTotal = cubs.reduce((n, c) => n + c.count, 0);
+        if (shouldLogOnce('ranch_place_full', `${animals.length}/${capacity}#${cubTotal}`)) {
+            log('牧场', `栏位已满(${animals.length}/${capacity}), 背包里 ${cubTotal} 只幼崽等待入栏(等收获腾位后自动放)`, {
+                module: 'ranch', event: '幼崽入栏', result: 'skip', used: animals.length, capacity,
+            });
+        }
         return result;
     }
 
@@ -1773,6 +1776,34 @@ async function runRanchCare(opts = {}) {
 
     return result;
 }
+
+/**
+ * 重复状态提示节流 —— 对照农场日志的做法。
+ *
+ * 农场遇到"没有空地/没得种"时, 要么在**状态变化时**才打一条, 要么按分钟级间隔打;
+ * 绝不会每 20 秒巡查都刷一行。牧场之前每轮都无条件 log, 于是
+ * 「栏位已满(4/4) ... 73 只幼崽暂无法入栏」+「没有空槽位, 跳过买幼崽」
+ * 每 20 秒来一对, 日志被刷满。
+ *
+ * @param {string} key       提示类别
+ * @param {string} signature 当前状态签名(相同签名 = 同一状态, 不重复提示)
+ * @param {number} [minIntervalMs] 同一状态最短重复间隔(默认 30 分钟)
+ * @returns {boolean} 本次是否应该打日志
+ */
+const _logOnceState = new Map();
+function shouldLogOnce(key, signature = '', minIntervalMs = 30 * 60 * 1000) {
+    const now = Date.now();
+    const prev = _logOnceState.get(key);
+    // 状态变了 → 立刻提示一次(例如从 4/4 变成 3/4, 或幼崽数量变化)
+    if (!prev || prev.sig !== signature || now - prev.at >= minIntervalMs) {
+        _logOnceState.set(key, { sig: signature, at: now });
+        return true;
+    }
+    return false;
+}
+
+/** 测试/重启用: 清空节流状态 */
+function resetLogOnceState() { _logOnceState.clear(); }
 
 // ============ 牧场巡查(三套独立节奏, 对照农场的 农场/帮助/偷菜) ============
 //
@@ -3092,7 +3123,10 @@ async function autoBuyCubs(opts = {}) {
         } catch { slots = 0; }
     }
     if (slots <= 0) {
-        log('牧场', '没有空槽位, 跳过买幼崽', { module: 'ranch', event: '买幼崽', result: 'skip' });
+        // 与"栏位已满"同因, 不重复刷屏(农场同样只提示一次)
+        if (shouldLogOnce('ranch_buy_no_slot', `slots#${slots}`)) {
+            log('牧场', '没有空槽位, 跳过买幼崽', { module: 'ranch', event: '买幼崽', result: 'skip' });
+        }
         return result;
     }
 
@@ -3190,15 +3224,30 @@ async function autoSellRanchProducts(opts = {}) {
         PRODUCE_ITEM_TYPES.includes(Number(it.itemType)) && Number(it.count) > 0);
     if (products.length === 0) return result;
 
+    // ⚠ 必须按**原始格子**(originalItems)出售, 不能用合并后的 items:
+    //   items 是按 bagGroupKey 合并的(同一物品多个格子 → count 累加),
+    //   但 uid 只保留了第一个格子的。拿"合并数量 + 单个格子 uid"去卖,
+    //   服务端按该格子实际库存校验 → code=1000019「巨大鸭不足」(线上实测)。
+    const productIds = new Set(products.map(it => toNum(it.id)));
+    const cells = (bag.originalItems || []).filter(c =>
+        productIds.has(toNum(c.id)) && toNum(c.count) > 0);
+    // 兜底: 没有 originalItems 时退回合并项(单个格子的情况下行为一致)
+    const sellables = cells.length
+        ? cells.map(c => ({ id: toNum(c.id), count: toNum(c.count), uid: toNum(c.uid) }))
+        : products.map(it => ({ id: toNum(it.id), count: toNum(it.count), uid: toNum(it.uid) }));
+
     const payload = [];
-    for (const it of products) {
-        // ⚠ 必须带 uid: 牧场产物出售接口缺 uid 会返回 1000020 请求参数错误(实测)
-        payload.push({ id: toNum(it.id), count: toNum(it.count), uid: toNum(it.uid) });
-        result.sold += toNum(it.count);
-        result.details.push(`${getAnimalName(toNum(it.id)) || it.id}x${toNum(it.count)}`);
+    const mergedDetails = new Map();
+    for (const it of sellables) {
+        payload.push(it);
+        result.sold += it.count;
+        mergedDetails.set(it.id, (mergedDetails.get(it.id) || 0) + it.count);
+    }
+    for (const [id, n] of mergedDetails) {
+        result.details.push(`${getAnimalName(id) || id}x${n}`);
     }
     try {
-        const reply = await sellItems(payload, { skipFarmFilter: true });   // 牧场产物不走农场果实白名单
+        const reply = await sellItems(payload, { skipFarmFilter: true, scene: 'ranch' });
         for (const it of (reply && reply.get_items) || []) {
             if (toNum(it.id) === 1007) result.earned += toNum(it.count);
         }
@@ -3618,6 +3667,9 @@ module.exports = {
     runRanchDueTick,
     enterRanchSceneForApi,
     useItemWithUid,
+    // 日志节流: 供测试验证"同一状态不重复刷屏"
+    shouldLogOnce,
+    resetLogOnceState,
     planRanchDueActions,
     runRanchDueActions,
     pullRanchGroupForward,
