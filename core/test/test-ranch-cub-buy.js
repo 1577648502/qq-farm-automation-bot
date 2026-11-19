@@ -208,28 +208,47 @@ proto.loadProto().then(async () => {
         check('不修改传入的数组', cubs[0].name === '鸡', cubs.map(c => c.name));
     }
 
-    section('7. 两种罐头: 普通(4)每只一次 / 有机(5,6)不限次数');
+    section('7. FeedAnimal 编码与官方抓包逐字节一致(target#2 = animal_inst_id)');
     {
-        // 抓包 20261116-215723 实测: 请求序列 4 → 6 → 5 → 6 → 5
-        // 4 只出现一次(普通罐头), 5/6 反复出现(有机罐头)
+        // ⭐ 2026-11-19 官方抓包(20261119-091627_罐头)定案, 推翻之前"#2=feed_type"的猜测:
+        //   单独喂: {1:{1:10001, 2:animal_inst_id}, 2:count}
+        //   批量喂: {1:{1:10001},                  2:count}
+        // 之前硬编码 feed_type=4/5/6, 服务端拿 4 去找动物 → 1045207「动物不存在」。
         const calls = installStub({
             FeedAnimal: () => types.FeedAnimalReply.encode(types.FeedAnimalReply.create({})).finish(),
         });
         const ranch = freshRanch();
-        // 普通罐头
-        await ranch.__privateRanchFns.feedAnimal(4, 1);
-        // 有机罐头可以连着喂
-        await ranch.__privateRanchFns.feedAnimal(5, 1);
-        await ranch.__privateRanchFns.feedAnimal(6, 1);
-        await ranch.__privateRanchFns.feedAnimal(5, 1);
-        check('发了 4 次 FeedAnimal', calls.filter(c => c.method === 'FeedAnimal').length === 4,
-            calls.map(c => c.method));
-        // 校验 feed_type 原样透传(不擅自改写)
-        const types2 = calls.filter(c => c.method === 'FeedAnimal').map(c => {
-            const req = types.FeedAnimalRequest.decode(c.body);
-            return Number(req.target.feed_type);
+        const f = ranch.__privateRanchFns;
+
+        // 单独: 槽位动物的实例 1216
+        await f.feedAnimal(2, 10001, 1216);
+        check('单独喂 count=2 → 0a0608914e10c0091002',
+            calls[0].body.toString('hex') === '0a0608914e10c0091002', calls[0].body.toString('hex'));
+
+        const calls2 = installStub({
+            FeedAnimal: () => types.FeedAnimalReply.encode(types.FeedAnimalReply.create({})).finish(),
         });
-        check('feed_type 依次为 4,5,6,5', JSON.stringify(types2) === JSON.stringify([4, 5, 6, 5]), types2);
+        const fresh2 = freshRanch();
+        await fresh2.__privateRanchFns.feedAnimal(1, 10001, 1216);
+        check('单独喂 count=1 → 0a0608914e10c0091001',
+            calls2[0].body.toString('hex') === '0a0608914e10c0091001', calls2[0].body.toString('hex'));
+
+        // 批量: 不带 target#2
+        const calls3 = installStub({
+            FeedAnimal: () => types.FeedAnimalReply.encode(types.FeedAnimalReply.create({})).finish(),
+        });
+        const fresh3 = freshRanch();
+        await fresh3.__privateRanchFns.feedAnimal(2, 10001, 0);
+        check('批量喂 count=2 → 0a0308914e1002',
+            calls3[0].body.toString('hex') === '0a0308914e1002', calls3[0].body.toString('hex'));
+
+        const calls4 = installStub({
+            FeedAnimal: () => types.FeedAnimalReply.encode(types.FeedAnimalReply.create({})).finish(),
+        });
+        const fresh4 = freshRanch();
+        await fresh4.__privateRanchFns.feedAnimal(1, 10001, 0);
+        check('批量喂 count=1 → 0a0308914e1001',
+            calls4[0].body.toString('hex') === '0a0308914e1001', calls4[0].body.toString('hex'));
     }
 
     section('8. 喂食失败给可读提示(区分两种罐头)');
@@ -350,9 +369,10 @@ proto.loadProto().then(async () => {
             FeedAnimal: () => types.FeedAnimalReply.encode(types.FeedAnimalReply.create({})).finish(),
         });
         const fresh = freshRanch();
-        await fresh.__privateRanchFns.feedAnimal(4, 1);
-        const req = types.FeedAnimalRequest.decode(calls[0].body);
-        check('请求 target.host_gid = 10001', Number(req.target.host_gid) === 10001, Number(req.target.host_gid));
+        await fresh.__privateRanchFns.feedAnimal(1, 10001, 0);
+        check('请求 target.host_gid = 10001',
+            calls[0].body.toString('hex').startsWith('0a0308914e'),
+            calls[0].body.toString('hex'));
     }
 
     section('15. 端到端: 线上真帧(协议观察器采集)按新字段解码正确');
