@@ -147,7 +147,43 @@ proto.loadProto().then(async () => {
             [mk(1).stageText, mk(4).stageText]);
     }
 
-    section('8. scheduleRanchFromCountdowns 只认服务端给的时刻字段');
+    section('8. 倒计时到点只做对应动作, 不跑整套巡检');
+    {
+        const P = ranch.planRanchDueActions;
+        const mk = animals => ({ animals });
+
+        check('can_harvest → 收产物 + 收获',
+            JSON.stringify(P(mk([{ stage: 5, canHarvest: true }]))) === JSON.stringify(['collect', 'harvest']),
+            P(mk([{ stage: 5, canHarvest: true }])));
+
+        // 用户明确要求: "催产后触发收获"
+        check('can_deliver → 催产 + 紧接着收获',
+            JSON.stringify(P(mk([{ stage: 4, canDeliver: true }]))) === JSON.stringify(['trigger', 'harvest']),
+            P(mk([{ stage: 4, canDeliver: true }])));
+
+        check('生产期未到点 → 什么都不做',
+            P(mk([{ stage: 3, producing: true, produceInSec: 600 }])).length === 0,
+            P(mk([{ stage: 3, producing: true, produceInSec: 600 }])));
+
+        check('牧草断了 → 补草',
+            JSON.stringify(P(mk([{ stage: 2, grassBlocked: true }]))) === JSON.stringify(['feed']),
+            P(mk([{ stage: 2, grassBlocked: true }])));
+
+        check('这些动作里不含入栏/买幼崽/游商/任务',
+            !P(mk([{ stage: 5, canHarvest: true }, { stage: 4, canDeliver: true }]))
+                .some(a => ['place', 'buy', 'rotation', 'task'].includes(a)),
+            P(mk([{ stage: 5, canHarvest: true }, { stage: 4, canDeliver: true }])));
+
+        // runRanchDueActions 只发计划内的请求
+        calls.length = 0;
+        await ranch.runRanchDueActions(mk([{ stage: 5, canHarvest: true }]), { stepGapMs: 200 });
+        const methods = calls.map(c => c.method);
+        check('执行可收获: 发 HarvestRanch', methods.includes('HarvestRanch'), methods);
+        check('执行可收获: 不发 PlaceAnimal/BuyGoods',
+            !methods.includes('PlaceAnimal') && !methods.includes('BuyGoods'), methods);
+    }
+
+    section('9. scheduleRanchFromCountdowns 只认服务端给的时刻字段');
     {
         const now = Date.now();
         const view = {

@@ -1755,8 +1755,13 @@ function armRanchDeadlineTimer() {
     if (delay > 30 * 60 * 1000) return;   // 太远就不挂精确定时器
     ranchScheduler.setTimeoutTask('ranch_deadline', delay, async () => {
         if (!ranchLoopRunning) return;
-        // 到点就跑这一组, 不等统一 tick
-        await checkRanchGroup(soonestKey);
+        // ⭐ 到点只做对应动作(收产物/催产/收获/补草), 不跑整套巡检。
+        //   用户要求: "倒计时结束后立刻触发收获, 不要再是整个巡检的一套"。
+        if (soonestKey === 'core') {
+            await runRanchDueTick();
+        } else {
+            await checkRanchGroup(soonestKey);
+        }
         if (!ranchLoopRunning) return;
         armRanchDeadlineTimer();
     });
@@ -1771,7 +1776,13 @@ function scheduleRanchGroup(groupKey, delayMs) {
     refreshNextRanchAt();
     ranchScheduler.setTimeoutTask(`ranch_group_${groupKey}`, delay, async () => {
         if (!ranchLoopRunning) return;
-        await checkRanchGroup(groupKey);
+        // core 组: 先尝试"只做到点动作"(轻量), 没到点该做的再退回整组巡检
+        if (groupKey === 'core') {
+            const r = await runRanchDueTick();
+            if (!r.ran) await checkRanchGroup('core');
+        } else {
+            await checkRanchGroup(groupKey);
+        }
         if (!ranchLoopRunning) return;
         scheduleRanchGroup(groupKey, nextRanchDelayMs(groupKey));
     });
@@ -1848,6 +1859,88 @@ async function checkRanchGroup(groupKey) {
     }
 }
 
+/**
+ * 按最新牧场状态算出"现在到点了、该做哪一件具体的事"。
+ *
+ * 用户要求(2026-11-19): 倒计时结束后**只执行对应的那一步**, 不要再把整套巡检
+ * 跑一遍。这里返回动作清单, 由 runRanchDueActions() 逐条执行。
+ *
+ * 判定全部来自服务端字段(不是猜的):
+ *   can_harvest(#7)   → 收获(HarvestRanch)
+ *   can_deliver(#16) / producing 结束 → 催产(TriggerProduce)(催产后会接着收获)
+ *   can_feed(#18)     且 grass_blocked(#12) → 补草
+ *
+ * @param {object} view getRanchOverview() 的返回
+ * @returns {string[]} 形如 ['collect','trigger','harvest','feed']
+ */
+function planRanchDueActions(view) {
+    const animals = (view && view.animals) || [];
+    if (!animals.length) return [];
+    const actions = [];
+    if (animals.some(a => a.canHarvest)) {
+        // 有可收的: 先收架上的产物(CollectProduce), 再一键收获
+        actions.push('collect', 'harvest');
+    }
+    if (animals.some(a => a.canDeliver && !a.canHarvest)) {
+        // 可以开始新一轮生产; 催完之后立刻收一次(用户要求"催产后触发收获")
+        if (!actions.includes('trigger')) actions.push('trigger');
+        if (!actions.includes('harvest')) actions.push('harvest');
+    }
+    if (animals.some(a => a.grassBlocked)) actions.push('feed');
+    return actions;
+}
+
+/**
+ * 执行"到点动作"——只跑 planRanchDueActions 算出来的那几步,
+ * 不碰入栏/买幼崽/游商/任务这些与倒计时无关的东西。
+ * @returns {Promise<{actions:string[], harvested:number, produced:number, details:string[]}>}
+ */
+async function runRanchDueActions(view, opts = {}) {
+    const out = { actions: [], harvested: 0, produced: 0, details: [] };
+    const plan = Array.isArray(opts.plan) && opts.plan.length ? opts.plan : planRanchDueActions(view);
+    if (!plan.length) return out;
+    const gapMs = Math.max(200, toNum(opts.stepGapMs) || 600);
+
+    for (const action of plan) {
+        out.actions.push(action);
+        try {
+            if (action === 'collect') {
+                for (const s of [1, 2, 3, 4, 5, 6]) {
+                    try { await collectProduce(s); await sleep(200); } catch { /* 槽空, 静默 */ }
+                }
+            } else if (action === 'trigger') {
+                if (!isAutomationOn('ranch_produce')) continue;
+                const r = await triggerProduce(0);
+                for (const rc of (r.receipts || [])) out.produced += toNum(rc.count);
+            } else if (action === 'harvest') {
+                if (!isAutomationOn('ranch_harvest')) continue;
+                const reply = await harvestRanch(1);
+                for (const gain of (reply.gains || [])) {
+                    for (const item of (gain.items || [])) {
+                        const itemId = toNum(item.item_id);
+                        if (itemId === 1102) continue;
+                        out.harvested += toNum(item.count);
+                        out.details.push(`${getAnimalName(itemId) || itemId}x${toNum(item.count)}`);
+                    }
+                }
+            } else if (action === 'feed') {
+                if (!isAutomationOn('ranch_feedmachine')) continue;
+                const fm = await autoFeedMachine(opts);
+                if (fm.fed > 0) out.details.push(`牧草机+${fm.fed}`);
+            }
+        } catch (e) {
+            // 单步失败不影响其它步骤, 也不刷 error(这类"状态已变"很常见)
+            if (!isExpectedRanchError(e)) {
+                logWarn('牧场', `到点动作 ${action} 失败: ${e.message}`, {
+                    module: 'ranch', event: '倒计时动作', result: 'error', action,
+                });
+            }
+        }
+        await sleep(gapMs);
+    }
+    return out;
+}
+
 /** 兼容旧入口: 全组跑一遍(手动一键巡牧场 / 老调用方) */
 async function checkRanch() {
     const keys = Object.keys(RANCH_GROUPS);
@@ -1915,6 +2008,11 @@ async function runRanchTick(groupKey = '') {
     if (!ranchLoopRunning) return false;
     if (!groupKey) return checkRanch();
     try {
+        // core 组: 优先只做"到点动作"; 该做的都做完再按正常间隔整组巡检
+        if (groupKey === 'core') {
+            const r = await runRanchDueTick();
+            if (r.ran) return true;
+        }
         return await checkRanchGroup(groupKey);
     } finally {
         // 外部调度模式下没有自己的 timer, 由这里续期下次时刻。
@@ -1999,6 +2097,56 @@ function scheduleRanchFromCountdowns(view) {
     // 牧草断了也要尽快补
     if ((view.animals || []).some(a => a.grassBlocked)) {
         pullRanchGroupForward('core', now + 1500, '牧草断了');
+    }
+    // 记下此刻"到点该做什么", 到点后只跑这几步(不跑整套巡检)
+    dueActionPlan = { at: soonest, actions: planRanchDueActions(view) };
+}
+
+// 倒计时到点时缓存的"具体动作"(见 planRanchDueActions)
+let dueActionPlan = { at: 0, actions: [] };
+
+/**
+ * 倒计时到点的执行入口(worker / deadline timer 用):
+ * **只做与到点相关的那几件事**(收产物/催产/收获/补草), 不跑入栏/买幼崽/游商/任务。
+ *
+ * 用户明确要求: "倒计时结束后会立刻触发收获吗... 不要再是整个巡检的一套"。
+ *
+ * @returns {Promise<{ran:boolean, actions:string[], harvested:number, produced:number, details:string[]}>}
+ */
+async function runRanchDueTick() {
+    if (!ranchLoopRunning) return { ran: false, actions: [], harvested: 0, produced: 0, details: [] };
+    if (!isAutomationOn('ranch_auto')) return { ran: false, actions: [], harvested: 0, produced: 0, details: [] };
+    if (isCheckingRanchGroup.core_due) return { ran: false, actions: [], harvested: 0, produced: 0, details: [] };
+    isCheckingRanchGroup.core_due = true;
+    try {
+        // 1. 用当前状态重新规划(缓存可能已过期 —— 状态会变)
+        let view = null;
+        try { view = await getRanchOverview(); } catch { view = null; }
+        let plan = planRanchDueActions(view);
+        // 2. 数据不可用时退回缓存里的动作(仍只跑那几步)
+        if (!plan.length && dueActionPlan.actions.length) plan = dueActionPlan.actions;
+        if (!plan.length) return { ran: false, actions: [], harvested: 0, produced: 0, details: [] };
+
+        // 3. 只执行这几步
+        const out = await runRanchDueActions(view, { plan });
+        if (out.harvested > 0) recordOperation('ranchHarvest', out.harvested);
+        if (out.produced > 0) recordOperation('ranchProduce', out.produced);
+        if (out.actions.length) {
+            const parts = [];
+            if (out.harvested > 0) parts.push(`收:${out.harvested}`);
+            if (out.produced > 0) parts.push(`产:${out.produced}`);
+            log('牧场', `[到点] ${out.actions.join('→')}${parts.length ? ` [${parts.join(' ')}]` : ''}${out.details.length ? ` ${out.details.slice(0, 6).join('/')}` : ''}`, {
+                module: 'ranch', event: '倒计时动作', result: 'ok', actions: out.actions,
+            });
+        }
+        // 4. 干完立刻按最新状态重排下一次
+        try { await getRanchOverview(); } catch { /* 旁路 */ }
+        return { ran: out.actions.length > 0, ...out };
+    } catch (e) {
+        logWarn('牧场', `到点动作失败: ${e.message}`, { module: 'ranch', event: '倒计时动作', result: 'error' });
+        return { ran: false, actions: [], harvested: 0, produced: 0, details: [] };
+    } finally {
+        isCheckingRanchGroup.core_due = false;
     }
 }
 
@@ -3221,6 +3369,10 @@ module.exports = {
     RANCH_GROUPS,
     getRanchNextRunAt,
     isRanchGroupDue,
+    // 倒计时到点: 只做收产物/催产/收获/补草, 不跑整套巡检
+    runRanchDueTick,
+    planRanchDueActions,
+    runRanchDueActions,
     pullRanchGroupForward,
     scheduleRanchFromCountdowns,
     ranchIntervalRangeSec,
@@ -3264,5 +3416,6 @@ module.exports = {
         feedAnimal, feedFailureHint, FEED_TYPE, resolveRanchHostGid, RANCH_SELF_HOST_GID,
         // 缓存: 供测试验证"写操作后 overview 必须失效"(收获后入栏读到满栏的事故)
         invalidateRanchOverviewCache,
+        planRanchDueActions, runRanchDueActions,
     },
 };
