@@ -429,12 +429,27 @@ function resolveRanchHostGid(hostGid, husbandryType = 0) {
     return RANCH_SELF_HOST_GID;
 }
 
-async function feedAnimal(feedType, count = 1, hostGid = 0) {
+async function feedAnimal(feedType, count = 1, hostGid = 0, animalInstId = 0) {
     const gid = resolveRanchHostGid(hostGid);
-    const body = types.FeedAnimalRequest.encode(types.FeedAnimalRequest.create({
-        target: { host_gid: toLong(gid), feed_type: toLong(feedType) },
-        count: toLong(count),
-    })).finish();
+    // 抓包里 target 只有 #1 host_gid + #2 feed_type; 但对已成熟(stage>=4)的动物,
+    // 服务端会回 1045207「动物不存在」—— 说明它需要更精确的定位。
+    // 提供 animalInstId 时额外写 target#3(与服务端 AnimalInfo#3 同号), 用于区分具体动物。
+    let body;
+    if (toNum(animalInstId) > 0) {
+        const w = protobuf.Writer.create();
+        const tw = w.uint32((1 << 3) | 2).fork();
+        tw.uint32((1 << 3) | 0).int64(toLong(gid));
+        tw.uint32((2 << 3) | 0).int64(toLong(feedType));
+        tw.uint32((3 << 3) | 0).int64(toLong(animalInstId));
+        tw.ldelim();
+        w.uint32((2 << 3) | 0).int64(toLong(count));
+        body = w.finish();
+    } else {
+        body = types.FeedAnimalRequest.encode(types.FeedAnimalRequest.create({
+            target: { host_gid: toLong(gid), feed_type: toLong(feedType) },
+            count: toLong(count),
+        })).finish();
+    }
     const { body: replyBody } = await network.sendMsgAsync('gamepb.animalpb.AnimalService', 'FeedAnimal', body);
     const _reply = types.FeedAnimalReply.decode(replyBody)
     invalidateRanchOverviewCache();
@@ -1032,6 +1047,8 @@ function toRanchView(reply) {
             const harvestInSec = canHarvest ? 0 : (countdownSec !== null ? countdownSec : null);
             animals.push({
                 slot: toNum(a.slot_index),
+                // 服务端给的真实动物实例 ID(不是槽位); 喂食/催产等按它定位
+                animalInstId: toNum(a.animal_inst_id),
                 animalId,
                 name: getAnimalName(animalId),
                 ranchInstId,
@@ -3139,16 +3156,20 @@ async function operateRanch(opts = {}) {
             //   ranch_inst_id 定位栏舍。窝=10001 / 棚=10003, 写死 10001 时
             //   喂棚里的动物就会报"动物不存在"。
             let feedHostGid = 0;
+            let feedAnimalInstId = 0;
             if (slot > 0) {
                 try {
                     const v = await getRanchOverview();
                     const a = (v.animals || []).find(x => toNum(x.slot) === slot);
-                    if (a) feedHostGid = toNum(a.ranchInstId) || 0;
+                    if (a) {
+                        feedHostGid = toNum(a.ranchInstId) || 0;
+                        feedAnimalInstId = toNum(a.animalInstId) || 0;
+                    }
                 } catch { /* 拿不到就回落默认实例 */ }
             }
             // 桶空时先自动灌罐头(80021+ → 容器 7003/7004), 再重试一次。
             // 之前缺这一步: 背包有 72 个罐头, 喂食却一直回 1045234「罐头桶已用完」。
-            const doFeed = async () => feedAnimal(feedType, count, feedHostGid);
+            const doFeed = async () => feedAnimal(feedType, count, feedHostGid, feedAnimalInstId);
             try {
                 await doFeed();
                 return { ok: true, action: '喂食', detail: `${feedLabel} x${count}` };
