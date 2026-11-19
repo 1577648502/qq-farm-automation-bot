@@ -1878,6 +1878,21 @@ app.use('/api', (req, res, next) => {
     // ===== 牧场背包(独立于农场仓库) =====
     app.get('/api/ranch/bag', withAccount(accountId => provider.getRanchBag(accountId), { softErrors: true }));
     app.get('/api/ranch/bag/tabs', withAccount(accountId => provider.getRanchBagTabs(accountId), { softErrors: true }));
+    // 使用牧场道具(与农场 /api/bag/use 同构, 内部先切到牧场场景)
+    app.post('/api/ranch/bag/use', withAccount((accountId, req) => {
+        const body = req.body || {};
+        const itemId = Number(body.itemId) || 0;
+        const count = Math.max(1, Number(body.count) || 1);
+        const uid = Number(body.uid) || 0;
+        if (!itemId) throw new Error('缺少 itemId');
+        return provider.useRanchItem(accountId, itemId, count, uid);
+    }));
+    // 出售牧场产物(skipFarmFilter, 否则农场果实过滤器会把牧场物挡掉)
+    app.post('/api/ranch/bag/sell', withAccount((accountId, req) => {
+        const items = Array.isArray((req.body || {}).items) ? req.body.items : [];
+        if (!items.length) throw new Error('没有可出售的物品');
+        return provider.sellRanchItems(accountId, items);
+    }));
 
     // 牧场任务(独立于农场任务, scene_id=2): 查看 + 手动领取
     app.get('/api/ranch/tasks', withAccount(accountId => provider.getRanchTasks(accountId), { softErrors: true }));

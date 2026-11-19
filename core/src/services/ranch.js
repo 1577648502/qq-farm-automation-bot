@@ -76,6 +76,14 @@ const SCENE_LOCK_RETRY_MS = 60 * 60 * 1000;
 //   旧版 1.14.2.15_20260922 一律被拒; 换成抓包实测的 1.17.0.4_20261117 后,
 //   同一个号「直接 0802」直接成功(见 config.clientVersion)。
 //   所以这里不再做 0801 前置(那是基于抓包顺序的错误推断, 已实测否定)。
+/**
+ * 对外暴露的场景切换(牧场背包用道具前必须先切到牧场场景)。
+ * 与内部 enterRanchScene 相同的语义, 只是给它一个稳定的导出名。
+ */
+async function enterRanchSceneForApi() {
+    return enterRanchScene();
+}
+
 async function enterRanchScene() {
     if (sceneLocked && Date.now() - sceneLockedAt < SCENE_LOCK_RETRY_MS) return false;
     const w = protobuf.Writer.create();
@@ -3168,13 +3176,18 @@ async function autoBuyCubs(opts = {}) {
 // ============ 自动出售牧场产物 ============
 // 抓包: ItemService.Sell {1:{1:1060001, 2:15, 6:uid}} → 金券
 // 产物 = type 107(蛋/崽); 整只(type 106)留不吃(任务要"收获整鸡", 出售整只也行)
-const PRODUCE_ITEM_TYPE = 107;
+// 牧场可出售产物包含两类(实测 ItemInfo):
+//   107 = 蛋/崽等副产物(1060001 鸡蛋 …)
+//   106 = 成品动物(2060001 整鸡 / 2060002 鸭 / 2065002 巨大鸭 …)
+// 之前只卖 107, 于是整鸡/鸭/鹅/巨大鸭在背包里越堆越多(用户实测 x1197)。
+const PRODUCE_ITEM_TYPES = [107, 106];
 
 async function autoSellRanchProducts(opts = {}) {
     const result = { sold: 0, earned: 0, details: [] };
     const { getRanchBagDetail, sellItems } = require('./warehouse');
     const bag = await getRanchBagDetail();
-    const products = bag.items.filter(it => Number(it.itemType) === PRODUCE_ITEM_TYPE && Number(it.count) > 0);
+    const products = bag.items.filter(it =>
+        PRODUCE_ITEM_TYPES.includes(Number(it.itemType)) && Number(it.count) > 0);
     if (products.length === 0) return result;
 
     const payload = [];
@@ -3603,6 +3616,8 @@ module.exports = {
     isRanchGroupDue,
     // 倒计时到点: 只做收产物/催产/收获/补草, 不跑整套巡检
     runRanchDueTick,
+    enterRanchSceneForApi,
+    useItemWithUid,
     planRanchDueActions,
     runRanchDueActions,
     pullRanchGroupForward,

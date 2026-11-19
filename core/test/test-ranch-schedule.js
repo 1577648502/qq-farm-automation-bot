@@ -275,7 +275,54 @@ proto.loadProto().then(async () => {
         check('exp 排序: 有数据的在前', sorted[0].name === '兔子', sorted.map(x => x.name));
     }
 
-    section('13. scheduleRanchFromCountdowns 只认服务端给的时刻字段');
+    section('13. 牧场背包: 产物可卖/罐头可用 (与农场 UI 对齐)');
+    {
+        const w = require(`${SB}/src/services/warehouse`);
+        const build = w.__privateWarehouseFns.buildBagDetailFromItems;
+        const bag = build([
+            { id: 2060001, count: 1197, uid: 11 }, // 整鸡 type=106
+            { id: 2060002, count: 13, uid: 12 },   // 鸭   type=106
+            { id: 2065002, count: 2, uid: 13 },    // 巨大鸭 type=106
+            { id: 1060001, count: 5, uid: 14 },    // 鸡蛋 type=107
+            { id: 80021, count: 3, uid: 15 },      // 罐头 type=109
+            { id: 60001, count: 9, uid: 16 },      // 幼崽 type=105
+        ], { scene: 'ranch' });
+
+        const byId = new Map(bag.items.map(it => [Number(it.id), it]));
+        check('整鸡(106)可出售', byId.get(2060001).sellable === true, byId.get(2060001));
+        check('鸭(106)可出售', byId.get(2060002).sellable === true, byId.get(2060002));
+        check('巨大鸭(106)可出售', byId.get(2065002).sellable === true, byId.get(2065002));
+        check('鸡蛋(107)可出售', byId.get(1060001).sellable === true, byId.get(1060001));
+        check('罐头(109)可使用', byId.get(80021).usable === true, byId.get(80021));
+        check('幼崽(105)既不可卖也不可用',
+            byId.get(60001).sellable === false && byId.get(60001).usable === false,
+            byId.get(60001));
+
+        // 农场背包里这些东西不能被误卖
+        const farm = build([{ id: 2060001, count: 1, uid: 11 }]);
+        check('农场场景下成品动物不可卖(防误卖)',
+            farm.items[0].sellable === false, farm.items[0].sellable);
+    }
+
+    section('14. 自动出售必须包含成品动物(106), 不只是蛋(107)');
+    {
+        const src = require('node:fs').readFileSync(
+            require('node:path').join(SB, 'src/services/ranch.js'), 'utf8');
+        check('PRODUCE_ITEM_TYPES 含 106 和 107',
+            /PRODUCE_ITEM_TYPES = \[107, 106\]/.test(src),
+            (src.match(/PRODUCE_ITEM_TYPES = \[[^\]]*\]/) || [])[0]);
+        check('自动出售按 PRODUCE_ITEM_TYPES 过滤',
+            src.includes('PRODUCE_ITEM_TYPES.includes(Number(it.itemType))'), '未找到过滤逻辑');
+
+        // 页签: 106 必须归到"牧场产物"而不是"道具"
+        const wsrc = require('node:fs').readFileSync(
+            require('node:path').join(SB, 'src/services/warehouse.js'), 'utf8');
+        const m = wsrc.match(/RANCH_TAB_ITEM_TYPES = \{([\s\S]*?)\};/);
+        check('页签 5(产物) 含 106', !!m && /5:\s*\[107, 106\]/.test(m[1]), m && m[1].trim());
+        check('页签 8(道具) 不再含 106', !!m && !/8:\s*\[[^\]]*106/.test(m[1]), m && m[1].trim());
+    }
+
+    section('15. scheduleRanchFromCountdowns 只认服务端给的时刻字段');
     {
         const now = Date.now();
         const view = {

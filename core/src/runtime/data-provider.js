@@ -501,6 +501,8 @@ function createDataProvider(options) {
         getActivityOverview: (accountRef, options) => callWorkerApi(resolveAccountRefId(accountRef), 'getActivityOverview', options),
         getMugeOverview: (accountRef) => callWorkerApi(resolveAccountRefId(accountRef), 'getMugeOverview', {}),
         getRanchBag: (accountRef) => callWorkerApi(resolveAccountRefId(accountRef), 'getRanchBag', {}),
+        useRanchItem: (accountRef, itemId, count, uid) => callWorkerApi(resolveAccountRefId(accountRef), 'useRanchItem', itemId, count, uid),
+        sellRanchItems: (accountRef, items) => callWorkerApi(resolveAccountRefId(accountRef), 'sellRanchItems', items),
         getRanchBagTabs: (accountRef) => callWorkerApi(resolveAccountRefId(accountRef), 'getRanchBagTabs', {}),
         getRanchTasks: (accountRef) => callWorkerApi(resolveAccountRefId(accountRef), 'getRanchTasks', {}),
         claimRanchTasks: (accountRef) => callWorkerApi(resolveAccountRefId(accountRef), 'claimRanchTasks', {}),

@@ -2,18 +2,25 @@
 /**
  * 牧场背包 —— 独立于农场仓库(ItemService.GetBag{global_scene_id:2})
  *
- * 数据来源: GET /api/ranch/bag (返回 items 含 itemType/name/count)
- *           GET /api/ranch/bag/tabs (页签: 牧场产物/幼崽/饲料/道具)
+ * UI 与农场背包(BagPanel)保持一致:
+ *   · 页签分类 + 搜索 + 刷新
+ *   · 卡片右上角「用」/「售」按钮(由后端 usable / sellable 决定, 前端不猜类型)
+ *   · 使用/出售走确认弹窗, 与农场同一套交互
  *
- * 这是一个可嵌入的面板(被「我的背包」页当作一个页签使用, 不再自己渲染标题栏)。
- * mounted 时自动拉一次; 切账号时重拉。
+ * 数据来源: GET /api/ranch/bag       (items 含 itemType/usable/sellable/price/uid)
+ *           GET /api/ranch/bag/tabs  (页签: 牧场产物/幼崽/饲料/道具)
+ *           POST /api/ranch/bag/use  (使用道具)
+ *           POST /api/ranch/bag/sell (出售产物)
  */
 import { computed, onMounted, ref, watch } from 'vue'
-import { useAccountStore } from '@/stores/account'
 import api from '@/api'
+import ConfirmModal from '@/components/ConfirmModal.vue'
 import LoadingState from '@/components/ui/LoadingState.vue'
+import { useAccountStore } from '@/stores/account'
+import { useToastStore } from '@/stores/toast'
 
 const accountStore = useAccountStore()
+const toastStore = useToastStore()
 const currentAccountId = computed(() => accountStore.currentAccountId)
 
 const loading = ref(false)
@@ -22,14 +29,27 @@ const items = ref<any[]>([])
 const tabs = ref<any[]>([])
 const activeTab = ref(0)
 const keyword = ref('')
+const imageErrors = ref<Record<string | number, boolean>>({})
+
+const confirmModal = ref({
+  show: false,
+  title: '',
+  message: '',
+  type: 'primary' as 'primary' | 'danger',
+  loading: false,
+  action: '' as '' | 'use' | 'sell',
+  item: null as any,
+})
 
 const TAB_NAMES: Record<number, string> = {
-  2: '牧场产物', 1: '牧场幼崽', 0: '牧场饲料', 6: '牧场道具',
+  5: '牧场产物',
+  6: '牧场幼崽',
+  7: '牧场饲料',
+  8: '牧场道具',
 }
 
 const filtered = computed(() => {
   let list = items.value
-  // 页签过滤: 用后端给的 itemTypes(页签 id 与物品 itemType 不是同一个数字, 不能直接比)
   if (activeTab.value !== -1) {
     const tab = tabs.value.find(t => toNumId(t.id) === activeTab.value)
     if (tab) {
@@ -38,21 +58,42 @@ const filtered = computed(() => {
     }
   }
   const kw = keyword.value.trim()
-  if (kw) list = list.filter(it => String(it.name || '').includes(kw) || String(it.id).includes(kw))
+  if (kw)
+    list = list.filter(it => String(it.name || '').includes(kw) || String(it.id).includes(kw))
   return list
 })
 
-/** 兼容后端可能返回的 Long 对象 {low, high} 或数字 */
 function toNumId(v: any) {
-  if (v && typeof v === 'object') return Number(v.low) || 0
+  if (v && typeof v === 'object')
+    return Number(v.low) || 0
   return Number(v) || 0
 }
 
 const totalCount = computed(() => items.value.reduce((n, it) => n + Number(it.count || 0), 0))
 
+/** 能否使用 —— 后端 bakes 的 usable(排除容器/礼包/需选目标的类型) */
+function canUse(item: any) {
+  return item?.usable === true && Number(item?.count || 0) > 0
+}
+
+/** 能否出售 —— 后端 bakes 的 sellable */
+function canSell(item: any) {
+  return item?.sellable === true && Number(item?.count || 0) > 0
+}
+
+function getPriceClass(item: any) {
+  const priceId = Number(item?.priceId || 0)
+  if (priceId === 1005)
+    return 'text-amber-400 dark:text-amber-300'
+  if (priceId === 1002)
+    return 'text-sky-400 dark:text-sky-300'
+  return 'text-gray-400'
+}
+
 async function refresh() {
   const id = currentAccountId.value
-  if (!id) return
+  if (!id)
+    return
   loading.value = true
   error.value = ''
   try {
@@ -61,20 +102,91 @@ async function refresh() {
       api.get('/api/ranch/bag/tabs', { headers: { 'x-account-id': id } }).catch(() => null),
     ])
     const d = bagRes.data
-    if (!d?.ok) throw new Error(d?.error || '获取失败')
+    if (!d?.ok)
+      throw new Error(d?.error || '获取失败')
     items.value = d.data?.items || []
     const t = tabRes?.data
-    if (t?.ok) tabs.value = t.data?.tabs || []
-  } catch (e: any) {
+    if (t?.ok)
+      tabs.value = t.data?.tabs || []
+  }
+  catch (e: any) {
     error.value = e?.response?.data?.error || e?.message || '获取失败'
-  } finally {
+  }
+  finally {
     loading.value = false
   }
 }
 
 function tabLabel(id: number) {
-  const t = tabs.value.find(x => x.id === id)
+  const t = tabs.value.find(x => toNumId(x.id) === id)
   return t?.name || TAB_NAMES[id] || `页签${id}`
+}
+
+function openUse(item: any) {
+  confirmModal.value = {
+    show: true,
+    title: '确认使用',
+    message: `确定要使用 ${item.name || `物品${item.id}`} 吗?\n数量：${item.count || 0}`,
+    type: 'primary',
+    loading: false,
+    action: 'use',
+    item,
+  }
+}
+
+function openSell(item: any) {
+  confirmModal.value = {
+    show: true,
+    title: '确认出售',
+    message: `确定要出售全部 ${item.name || `物品${item.id}`} 吗?\n数量：${item.count || 0}`,
+    type: 'danger',
+    loading: false,
+    action: 'sell',
+    item,
+  }
+}
+
+function cancelModal() {
+  confirmModal.value.show = false
+}
+
+async function confirmAction() {
+  const { action, item } = confirmModal.value
+  const id = currentAccountId.value
+  if (!id || !item)
+    return
+  confirmModal.value.loading = true
+  try {
+    if (action === 'use') {
+      const res = await api.post('/api/ranch/bag/use', { itemId: Number(item.id), count: Number(item.count || 1), uid: Number(item.uid || 0) }, { headers: { 'x-account-id': id } })
+      const d = res.data
+      if (d?.ok) {
+        toastStore.success(`已使用 ${item.name || `物品${item.id}`}`)
+        await refresh()
+      }
+      else {
+        toastStore.error(`使用失败: ${d?.error || '未知错误'}`)
+      }
+    }
+    else if (action === 'sell') {
+      const res = await api.post('/api/ranch/bag/sell', { items: [{ id: Number(item.id), count: Number(item.count || 0), uid: Number(item.uid || 0) }] }, { headers: { 'x-account-id': id } })
+      const d = res.data
+      if (d?.ok) {
+        toastStore.success(`已出售 ${item.name || `物品${item.id}`}`)
+        await refresh()
+      }
+      else {
+        toastStore.error(`出售失败: ${d?.error || '未知错误'}`)
+      }
+    }
+  }
+  catch (e: any) {
+    toastStore.error(`操作失败: ${e?.response?.data?.error || e?.message || '未知错误'}`)
+  }
+  finally {
+    confirmModal.value.loading = false
+    confirmModal.value.show = false
+  }
 }
 
 onMounted(refresh)
@@ -86,7 +198,9 @@ watch(currentAccountId, () => refresh())
     <div class="mb-3 flex flex-wrap items-center justify-between gap-2">
       <div class="flex items-center gap-2">
         <div class="i-carbon-archive text-xl text-amber-600" />
-        <h2 class="text-lg font-bold">牧场背包</h2>
+        <h2 class="text-lg font-bold">
+          牧场背包
+        </h2>
         <span class="text-xs text-gray-400">{{ items.length }} 种 · {{ totalCount }} 件</span>
       </div>
       <div class="flex items-center gap-2">
@@ -94,11 +208,11 @@ watch(currentAccountId, () => refresh())
           v-model="keyword"
           type="text"
           placeholder="搜索物品"
-          class="h-9 w-32 border border-gray-300 rounded-lg bg-white px-2 text-sm outline-none dark:border-gray-600 dark:bg-gray-800 sm:w-40"
+          class="h-9 w-32 border border-gray-300 rounded-lg bg-white px-2 text-sm outline-none sm:w-40 dark:border-gray-600 dark:bg-gray-800"
         >
         <button
           type="button"
-          class="h-9 inline-flex items-center gap-1 border border-gray-300 rounded-lg bg-white px-3 text-sm transition hover:bg-gray-50 disabled:opacity-50 dark:border-gray-600 dark:bg-gray-800"
+          class="h-9 inline-flex items-center gap-1 border border-gray-300 rounded-lg bg-white px-3 text-sm transition dark:border-gray-600 dark:bg-gray-800 hover:bg-gray-50 disabled:opacity-50"
           :disabled="loading"
           @click="refresh"
         >
@@ -130,27 +244,85 @@ watch(currentAccountId, () => refresh())
       </button>
     </div>
 
-    <div v-if="!currentAccountId" class="py-10 text-center text-sm text-gray-400">请先选择账号</div>
+    <div v-if="!currentAccountId" class="py-10 text-center text-sm text-gray-400">
+      请先选择账号
+    </div>
     <LoadingState v-else-if="loading && !items.length" text="加载中…" />
-    <div v-else-if="error" class="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-600 dark:border-red-800 dark:bg-red-900/20">
+    <div v-else-if="error" class="border border-red-200 rounded-lg bg-red-50 p-3 text-sm text-red-600 dark:border-red-800 dark:bg-red-900/20">
       {{ error }}
     </div>
-    <div v-else-if="!filtered.length" class="py-10 text-center text-sm text-gray-400">这个页签是空的</div>
-    <div v-else class="grid gap-2 2xl:grid-cols-6 lg:grid-cols-4 md:grid-cols-3 sm:grid-cols-3 grid-cols-2">
+    <div v-else-if="!filtered.length" class="py-10 text-center text-sm text-gray-400">
+      这个页签是空的
+    </div>
+    <div v-else class="grid grid-cols-2 gap-2 2xl:grid-cols-6 lg:grid-cols-4 md:grid-cols-3 sm:grid-cols-3">
       <div
         v-for="it in filtered"
         :key="`${it.id}-${it.uid || 0}`"
-        class="flex flex-col items-center rounded-lg border border-gray-200 bg-white p-2 dark:border-gray-700 dark:bg-gray-800"
+        class="relative flex flex-col items-center border border-gray-200 rounded-lg bg-white p-2 transition dark:border-gray-700 hover:border-amber-300 dark:bg-gray-800 dark:hover:border-amber-700"
       >
-        <div class="mb-1 h-10 w-10 flex items-center justify-center rounded bg-gray-50 dark:bg-gray-900/40">
-          <span class="text-xl">📦</span>
+        <div class="absolute left-2 top-2 text-xs text-gray-400 font-mono">
+          #{{ it.id }}
         </div>
-        <div class="w-full truncate text-center text-[11px] font-medium" :title="it.name">
+
+        <!-- 使用 / 出售(与农场背包同一套按钮) -->
+        <div class="absolute right-1 top-1 flex gap-1">
+          <button
+            v-if="canSell(it)"
+            class="rounded bg-red-500 px-1.5 py-0.5 text-[10px] text-white opacity-70 transition dark:bg-red-600 hover:opacity-100"
+            title="出售全部"
+            @click.stop="openSell(it)"
+          >
+            售
+          </button>
+          <button
+            v-if="canUse(it)"
+            class="rounded bg-green-500 px-1.5 py-0.5 text-[10px] text-white opacity-70 transition dark:bg-green-600 hover:opacity-100"
+            title="使用全部"
+            @click.stop="openUse(it)"
+          >
+            用
+          </button>
+        </div>
+
+        <div class="mb-1 mt-6 h-14 w-14 flex items-center justify-center overflow-hidden rounded-full bg-gray-50 dark:bg-gray-900/40">
+          <img
+            v-if="it.image && !imageErrors[it.id]"
+            :src="it.image"
+            :alt="it.name"
+            class="max-h-full max-w-full object-contain"
+            loading="lazy"
+            @error="imageErrors[it.id] = true"
+          >
+          <span v-else class="text-2xl text-gray-400 font-bold">{{ (it.name || '物').slice(0, 1) }}</span>
+        </div>
+
+        <div class="w-full truncate px-1 text-center text-xs font-bold" :title="it.name">
           {{ it.name || `物品#${it.id}` }}
         </div>
-        <div class="mt-0.5 text-[11px] text-gray-500">x{{ it.count }}</div>
-        <div class="text-[10px] text-gray-300">#{{ it.id }}</div>
+
+        <div class="mb-1 mt-0.5 flex flex-col items-center gap-0.5 text-[10px] text-gray-400">
+          <span>
+            类型 {{ it.itemType || 0 }}
+            <span v-if="it.level > 0"> · Lv{{ it.level }}</span>
+            <span v-if="it.price > 0" :class="getPriceClass(it)"> · {{ it.price }}{{ it.priceUnit || '金' }}</span>
+          </span>
+        </div>
+
+        <div class="mt-auto text-xs font-medium" :class="it.hoursText ? 'text-blue-500' : 'text-gray-600 dark:text-gray-300'">
+          {{ it.hoursText || `x${it.count || 0}` }}
+        </div>
       </div>
     </div>
+
+    <ConfirmModal
+      :show="confirmModal.show"
+      :title="confirmModal.title"
+      :message="confirmModal.message"
+      :type="confirmModal.type"
+      :loading="confirmModal.loading"
+      :confirm-text="confirmModal.action === 'sell' ? '确认出售' : '确认使用'"
+      @confirm="confirmAction"
+      @cancel="cancelModal"
+    />
   </div>
 </template>

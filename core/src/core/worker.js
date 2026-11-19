@@ -1469,6 +1469,34 @@ async function handleApiCall(msg) {
                 result = await _sell(sellList.map(it => ({ id: it.id, count: it.count, uid: it.uid || 0 })));
                 break;
             }
+            // ===== 牧场背包(场景 2, 与农场仓库完全独立) =====
+            case 'useRanchItem': {
+                // 牧场道具使用: 先进牧场场景, 再发 Use(与农场同一 RPC, 靠场景区分)
+                const ranch = require('../services/ranch');
+                try { await ranch.enterRanchSceneForApi(); } catch { /* 场景切不过去就让服务端报 */ }
+                const itemId = Number(args[0]) || 0;
+                const count = Math.max(1, Number(args[1]) || 1);
+                const uid = Number(args[2]) || 0;
+                // 罐头(type=109)必须带 uid 才会灌进罐头桶(与农场 Use 的字段不同)
+                const info = require('../config/gameConfig').getItemById(itemId);
+                if (info && Number(info.type) === 109) {
+                    result = await ranch.useItemWithUid(itemId, count, uid);
+                } else {
+                    const { useItem: _useRanch } = require('../services/warehouse');
+                    result = await _useRanch(itemId, count, []);
+                }
+                break;
+            }
+            case 'sellRanchItems': {
+                // 牧场产物出售: skipFarmFilter=true(否则农场果实过滤器会把牧场物全挡掉)
+                const { sellItems: _sellRanch } = require('../services/warehouse');
+                const list = Array.isArray(args[0]) ? args[0] : [];
+                result = await _sellRanch(
+                    list.map(it => ({ id: it.id, count: it.count, uid: it.uid || 0 })),
+                    { skipFarmFilter: true },
+                );
+                break;
+            }
             case 'setAutomation': {
                 const payload = args && args[0] ? args[0] : {};
                 applyRuntimeConfig({ automation: { [payload.key]: payload.value } }, true);

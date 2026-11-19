@@ -612,7 +612,11 @@ function getMutationGroupKey(item, id, itemMutantTypes) {
     return `${id}:normal`;
 }
 
-function buildBagDetailFromItems(rawItems) {
+function buildBagDetailFromItems(rawItems, opts = {}) {
+    // scene: 'farm'(默认) / 'ranch'
+    //  牧场背包里「罐头(type=109)」是**可以使用**的 —— 用掉就是灌进罐头桶,
+    //  这是牧场唯一的消费方式; 农场背包里 109 不出售也不手动用。
+    const isRanchScene = String(opts.scene || '') === 'ranch';
     const originalItems = [];
     const merged = new Map();
 
@@ -651,7 +655,11 @@ function buildBagDetailFromItems(rawItems) {
         const interactionType = info && info.interaction_type ? String(info.interaction_type) : '';
         const priceId = info ? (Number(info.price_id) || 0) : 0;
         const priceUnit = priceId === 1005 ? '金豆豆' : priceId === 1002 ? '点券' : '金';
-        const sellBlockedReason = getSellBlockReason({ id });
+        // 牧场背包里「产物」可以直接卖(107 蛋/崽 与 106 成品动物),
+        // 农场那套 isFruitItemId 白名单不适用 —— 之前因此"售"按钮永远不出现。
+        const ranchSellable = isRanchScene && [106, 107].includes(Number(info && info.type))
+            && Number(info && info.price) > 0;
+        const sellBlockedReason = ranchSellable ? '' : getSellBlockReason({ id });
         const sellable = sellBlockedReason === '';
         const itemMutantTypes = getItemMutantTypes(it, id);
         const bagGroupKey = getMutationGroupKey(it, id, itemMutantTypes);
@@ -675,7 +683,7 @@ function buildBagDetailFromItems(rawItems) {
                 sellable,
                 sellBlockedReason,
                 // 能否在背包里点"使用": 由后端按 allowlist 判定, 前端不再自己猜类型
-                usable: isManualUsableItemId(id),
+                usable: isManualUsableItemId(id) || (isRanchScene && Number(info && info.type) === 109),
                 level: info ? (Number(info.level) || 0) : 0,
                 interactionType,
                 hoursText: '',
@@ -762,7 +770,7 @@ async function getRanchBagItems() {
 
 /** 牧场背包 → 与 getBagDetail 同形 */
 async function getRanchBagDetail() {
-    return buildBagDetailFromItems(await getRanchBagItems());
+    return buildBagDetailFromItems(await getRanchBagItems(), { scene: 'ranch' });
 }
 
 /** 牧场背包页签 */
@@ -779,11 +787,13 @@ async function getRanchBagDetail() {
  *   8 牧场道具 ← itemType 108(便便) / 106(成品动物)
  * 这里一并把 itemType 算好给前端, 免得前端自己猜。
  */
+// ⭐ 2026-11-19 修正: 106 是**成品动物**(整鸡/鸭/鹅/巨大鸭), 属于"牧场产物", 不是道具。
+//   用户实测背包里整鸡 x1197 全被归到「道具」页, 而且自动出售只认 107 导致越堆越多。
 const RANCH_TAB_ITEM_TYPES = {
-    5: [107],
-    6: [105],
-    7: [109],
-    8: [108, 106],
+    5: [107, 106],   // 牧场产物: 蛋/崽(107) + 成品动物(106)
+    6: [105],        // 牧场幼崽
+    7: [109],        // 牧场饲料(罐头)
+    8: [108],        // 牧场道具(便便)
 };
 
 async function getRanchBagTabs() {
