@@ -256,6 +256,69 @@ proto.loadProto().then(async () => {
         check('容量 = 100', parsed.capacity === 100, parsed);
     }
 
+    section('9. 照顾好友动物 / 使坏: 请求字节必须与抓包逐字节一致');
+    {
+        // 依据: wx-code-grabber/captures/20261120-001457_活动1.decoded.jsonl
+        //   StrokeAnimal C->S 08e18bb1cf04120508914e105e  = {1:好友gid, 2:{1:10001, 2:94}}
+        //   PutHazard   C->S 08914e10e18bb1cf0418fb552001 = {1:10001, 2:好友gid, 3:11003, 4:1}
+        // ⚠ 两个接口的字段顺序**相反**, 之前 putHazard 拼成 {1:{1:gid,2:slot}} 是错的。
+        const stroke = types.StrokeAnimalRequest.encode(types.StrokeAnimalRequest.create({
+            friend_gid: 1240221153,
+            target: { host_gid: 10001, slot: 94 },
+        })).finish().toString('hex');
+        check('StrokeAnimal 字节一致', stroke === '08e18bb1cf04120508914e105e', stroke);
+
+        const hazard = types.PutHazardRequest.encode(types.PutHazardRequest.create({
+            ranch_inst_id: 10001, friend_gid: 1240221153, op_id: 11003, count: 1,
+        })).finish().toString('hex');
+        check('PutHazard 字节一致', hazard === '08914e10e18bb1cf0418fb552001', hazard);
+        check('两个接口字段顺序不同(防回归)',
+            stroke.slice(0, 10) !== hazard.slice(0, 10), { stroke, hazard });
+    }
+
+    section('10. GetRanchOpTimes 字段语义: #2=上限 #3=已用 #4=剩余');
+    {
+        // 抓包时间线: 使坏前 11003 = 100/1/99 → 连发 15 次后 100/16/84
+        //             照顾前 11009 = 10/1/9   → 连发 5 次后 10/6/4
+        const before = types.GetRanchOpTimesReply.decode(Buffer.from(
+            '0a0908fb551064180120630a07088056101420140a09088156100a18012009', 'hex'));
+        const after = types.GetRanchOpTimesReply.decode(Buffer.from(
+            '0a0908fb551064181020540a07088056101420140a09088156100a18062004', 'hex'));
+        const pick = (msg, opId) => {
+            const l = msg.limits.find(x => Number(x.op_id) === opId);
+            return l && { limit: Number(l.limit), used: Number(l.used), remaining: Number(l.remaining) };
+        };
+        check('使坏上限 100', pick(before, 11003).limit === 100, pick(before, 11003));
+        check('使坏前 已用1/剩余99',
+            pick(before, 11003).used === 1 && pick(before, 11003).remaining === 99, pick(before, 11003));
+        check('使坏 15 次后 已用16/剩余84',
+            pick(after, 11003).used === 16 && pick(after, 11003).remaining === 84, pick(after, 11003));
+        check('照顾上限 10', pick(before, 11009).limit === 10, pick(before, 11009));
+        check('照顾 5 次后 已用6/剩余4',
+            pick(after, 11009).used === 6 && pick(after, 11009).remaining === 4, pick(after, 11009));
+        check('剩余递减与次数一致 (99-84=15)', pick(before, 11003).remaining - pick(after, 11003).remaining === 15, null);
+        check('照顾剩余递减 (9-4=5)', pick(before, 11009).remaining - pick(after, 11009).remaining === 5, null);
+    }
+
+    section('11. 收/照顾/使坏的自动化上限必须带预算');
+    {
+        const ranch = require(`${SB}/src/services/ranch`);
+        const f = ranch.__privateRanchFns;
+        check('导出 strokeAnimal', typeof ranch.strokeAnimal === 'function', typeof ranch.strokeAnimal);
+        check('导出 autoStrokeFriendAnimals', typeof ranch.autoStrokeFriendAnimals === 'function', typeof ranch.autoStrokeFriendAnimals);
+        check('导出 autoPutHazardOnFriends', typeof ranch.autoPutHazardOnFriends === 'function', typeof ranch.autoPutHazardOnFriends);
+        check('导出 getFriendOpRemaining', typeof ranch.getFriendOpRemaining === 'function', typeof ranch.getFriendOpRemaining);
+
+        const src = fs.readFileSync(require('node:path').join(SB, 'src/services/ranch.js'), 'utf8');
+        check('op id 常量 11003/11009 已定义',
+            /RANCH_OP_ID_HAZARD\s*=\s*11003/.test(src) && /RANCH_OP_ID_STROKE\s*=\s*11009/.test(src), null);
+        check('照顾受 op 上限预算约束(remaining === 0 直接返回)',
+            /limits\.stroke === 0\) return result/.test(src), null);
+        check('使坏受 op 上限预算约束',
+            /limits\.hazard === 0\) return result/.test(src), null);
+        void f;
+    }
+
     finish();
 }).catch(e => {
     console.log('测试异常:', e && e.message);

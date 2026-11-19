@@ -179,6 +179,8 @@ const DEFAULT_ACCOUNT_CONFIG = {
         ranch_rotation: true, // 自动游商兑换
         ranch_clean: true,     // 自动清理自己的牧场(CleanAllRanch, 产便便)
         ranch_steal: true,     // 自动偷好友牧场产物(StealProduce)
+        ranch_stroke: true,    // 自动照顾好友动物(StrokeAnimal, 每日 10 次)
+        ranch_hazard: false,   // 自动对好友使坏(PutHazard, 每日 100 次; 默认关, 属于骚扰行为)
         ranch_task: true,      // 自动领取牧场任务(scene_id=2, 与农场任务独立)
         ranch_harvest: true,     // 自动收获(全场 HarvestRanch)
         ranch_produce: true,     // 自动催产(全场 TriggerProduce)

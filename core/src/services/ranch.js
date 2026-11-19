@@ -440,6 +440,15 @@ async function useItemWithUid(itemId, count, uid) {
  */
 const RANCH_SELF_HOST_GID = 10001;
 
+/**
+ * GetRanchOpTimes 的三个操作 ID(2026-11-20 抓包定案):
+ *   11003 = 使坏(PutHazard), 每日上限 100
+ *   11009 = 照顾/摸动物(StrokeAnimal), 每日上限 10
+ *   11008 = 上限 20, 本抓包没被消耗, 语义待定(不在自动流程里用)
+ */
+const RANCH_OP_ID_HAZARD = 11003;
+const RANCH_OP_ID_STROKE = 11009;
+
 // ⭐ 2026-11-19: 窝/棚是两个**不同实例**(窝 10001, 棚 10003, 见 GetRanchDetailReply 的
 //   repeated RanchInfo)。所有动物接口(target#1)用的 host_gid 就是 ranch_inst_id。
 //   以前写死 10001, 于是养殖棚动物(羊/牛…)时服务端回"动物不存在" —— 它在 10003 那个栏舍里。
@@ -1042,18 +1051,64 @@ async function cleanRanch(slot = 0, hostGid = 0) {
     return _reply;
 }
 
-/** 放蚊子(使坏好友牧场) */
-async function putHazard(hostGid, slot = 0) {
-    const gid = toNum(hostGid);
+/**
+ * 放蚊子(使坏好友牧场) —— RanchService.PutHazard
+ *
+ * ⭐ 2026-11-20 抓包(20261120-001457)定案, 推翻旧实现:
+ *   请求 = {1: 栏舍实例(10001/10003), 2: 好友gid, 3: 11003, 4: 1}
+ *   旧实现拼成 {1:{1:gid,2:slot}} —— 服务端会当成"给自己的 10001 放蚊子", 必然失败。
+ *   响应 {1:ok, 2:今日剩余次数, 3/4: 物品}。
+ *   ⚠ 每日上限: op 11003 = 100 次(GetRanchOpTimes)。
+ *
+ * @param {number} friendGid 好友 gid
+ * @param {object} [opts] hostGid 栏舍实例(默认 10001 窝); count 次数(默认 1)
+ * @returns {Promise<{ok:boolean, remaining:number|null}>}
+ */
+async function putHazard(friendGid, opts = {}) {
+    const gid = toNum(friendGid);
     if (!gid) throw new Error('缺少好友 gid');
-    // PutHazard 结构与 CleanRanch 对称; 无 proto 定义, 手拼 {1:{1:gid,2:slot}}
-    const w = protobuf.Writer.create();
-    const tw = w.uint32((1 << 3) | 2).fork();
-    tw.uint32((1 << 3) | 0).int64(toLong(gid));
-    tw.uint32((2 << 3) | 0).int64(toLong(toNum(slot)));
-    tw.ldelim();
-    const { body: replyBody } = await network.sendMsgAsync('gamepb.animalpb.RanchService', 'PutHazard', w.finish());
-    return replyBody;
+    const instId = toNum(opts.hostGid) || RANCH_SELF_HOST_GID;
+    const count = Math.max(1, toNum(opts.count) || 1);
+    const body = types.PutHazardRequest.encode(types.PutHazardRequest.create({
+        ranch_inst_id: toLong(instId),
+        friend_gid: toLong(gid),
+        op_id: toLong(RANCH_OP_ID_HAZARD),
+        count: toLong(count),
+    })).finish();
+    const { body: replyBody } = await network.sendMsgAsync('gamepb.animalpb.RanchService', 'PutHazard', body);
+    const reply = types.PutHazardReply.decode(replyBody);
+    return {
+        ok: toNum(reply.ok) === 1,
+        remaining: reply.remaining === undefined ? null : toNum(reply.remaining),
+    };
+}
+
+/**
+ * 照顾(摸一摸)好友的动物 —— RanchService.StrokeAnimal
+ *
+ * ⭐ 2026-11-20 抓包定案:
+ *   请求 = {1: 好友gid, 2:{1: 栏舍实例, 2: 槽位}}
+ *   注意与 PutHazard 相反: 这里外层 #1 是好友 gid, #2 才是栏舍/槽位。
+ *   响应 {1: RanchInfo(该好友牧场全量)}。
+ *   ⚠ 每日上限: op 11009 = 10 次(GetRanchOpTimes)。
+ *
+ * @param {number} friendGid 好友 gid
+ * @param {object} [opts] hostGid 栏舍实例(默认 10001 窝); slot 槽位(必填, 抓包每只单发)
+ * @returns {Promise<{ok:boolean, ranches:Array}>}
+ */
+async function strokeAnimal(friendGid, opts = {}) {
+    const gid = toNum(friendGid);
+    if (!gid) throw new Error('缺少好友 gid');
+    const slot = toNum(opts.slot);
+    if (!slot) throw new Error('需要指定槽位');
+    const instId = toNum(opts.hostGid) || RANCH_SELF_HOST_GID;
+    const body = types.StrokeAnimalRequest.encode(types.StrokeAnimalRequest.create({
+        friend_gid: toLong(gid),
+        target: { host_gid: toLong(instId), slot: toLong(slot) },
+    })).finish();
+    const { body: replyBody } = await network.sendMsgAsync('gamepb.animalpb.RanchService', 'StrokeAnimal', body);
+    const reply = types.StrokeAnimalReply.decode(replyBody);
+    return { ok: true, ranches: reply.ranches || [] };
 }
 
 /** 用罐头桶加速(FeedAnimal) —— 与"喂食"同一接口, 语义是投喂罐头桶 */
@@ -1472,11 +1527,17 @@ async function getRanchOverview(accountId = '') {
                 view.ranchLevelNeeded = lvInfo.needed;
             }
 
+            // ⭐ 2026-11-20 抓包定案: #2=上限, #3=已用, #4=剩余
             view.opLimits = (opTimesReply && opTimesReply.limits || []).map(l => ({
                 opId: toNum(l.op_id),
-                used: toNum(l.used),
                 limit: toNum(l.limit),
+                used: toNum(l.used),
+                remaining: l.remaining === undefined ? null : toNum(l.remaining),
             }));
+            view.opTimes = {
+                hazard: view.opLimits.find(x => x.opId === RANCH_OP_ID_HAZARD) || null,
+                stroke: view.opLimits.find(x => x.opId === RANCH_OP_ID_STROKE) || null,
+            };
             view.facilities = facilities;
             // 建筑升级状态(窝/棚/牧草机): 数据来自 AllCells.buildings,
             // 按实例号 10000/10001/10002 对应到 facilities 上, 面板可显示"升级中"
@@ -1796,6 +1857,34 @@ async function runRanchCare(opts = {}) {
             if (r.cleaned > 0) result.details.push(`偷${r.cleaned}家`);
         } catch (e) {
             logWarn('牧场', `偷好友产物失败: ${e.message}`, { module: 'ranch', event: '偷好友产物', result: 'error' });
+        }
+    }
+
+    await gap();
+
+    // 5.5c 照顾好友动物(StrokeAnimal) —— 牧歌初启"累计照料好友动物 N 次"靠它
+    //   抓包(20261120-001457)定案: {1:好友gid, 2:{1:栏舍实例,2:槽位}}; 每日上限 op 11009 = 10 次
+    if (want('steal') && opts.strokeFriends !== false && isAutomationOn('ranch_stroke')) {
+        try {
+            const r = await autoStrokeFriendAnimals(opts);
+            result.strokedFriends = r.count;
+            if (r.count > 0) result.details.push(`照顾${r.count}只`);
+        } catch (e) {
+            logWarn('牧场', `照顾好友动物失败: ${e.message}`, { module: 'ranch', event: '照顾好友动物', result: 'error' });
+        }
+    }
+
+    await gap();
+
+    // 5.5d 对好友使坏(PutHazard) —— 牧歌初启"累计使坏好友 N 次"靠它
+    //   抓包定案: {1:栏舍实例, 2:好友gid, 3:11003, 4:1}; 每日上限 op 11003 = 100
+    if (want('steal') && opts.hazardFriends !== false && isAutomationOn('ranch_hazard')) {
+        try {
+            const r = await autoPutHazardOnFriends(opts);
+            result.hazardedFriends = r.count;
+            if (r.count > 0) result.details.push(`使坏${r.count}`);
+        } catch (e) {
+            logWarn('牧场', `使坏好友失败: ${e.message}`, { module: 'ranch', event: '使坏好友', result: 'error' });
         }
     }
 
@@ -2618,6 +2707,189 @@ async function autoCleanOwnRanch() {
         // 没有待清理内容 = 正常状态, 静默
         return { cleaned: 0, details: [] };
     }
+}
+
+/**
+ * 好友牧场的 op 次数上限(使坏 11003 / 照顾 11009)。
+ * 抓包: 进好友牧场后客户端先发 GetRanchOpTimes, 用它判断还能不能继续操作。
+ * @returns {Promise<{hazard:number, stroke:number}>} 今日剩余次数(取不到返回 -1 = 未知)
+ */
+async function getFriendOpRemaining() {
+    try {
+        const reply = await getRanchOpTimes();
+        const limits = (reply && reply.limits) || [];
+        const pick = (opId, defaultLimit) => {
+            const row = limits.find(l => toNum(l.op_id) === opId);
+            if (!row) return defaultLimit;
+            // 服务端给了 #4(剩余)就用; 否则用 上限 - 已用
+            if (row.remaining !== undefined) return toNum(row.remaining);
+            return Math.max(0, toNum(row.limit) - toNum(row.used));
+        };
+        return { hazard: pick(RANCH_OP_ID_HAZARD, 100), stroke: pick(RANCH_OP_ID_STROKE, 10) };
+    } catch {
+        return { hazard: -1, stroke: -1 };
+    }
+}
+
+/** 进/出好友牧场的公共包装(EnterHomestead{1:gid,2:2} → ... → LeaveHomestead{1:gid}) */
+async function withFriendHomestead(gid, fn) {
+    const w = protobuf.Writer.create();
+    w.uint32((1 << 3) | 0).int64(toLong(gid));
+    w.uint32((2 << 3) | 0).int64(toLong(2));
+    await network.sendMsgAsync('gamepb.visitpb.VisitService', 'EnterHomestead', w.finish());
+    await sleep(300);
+    try {
+        return await fn();
+    } finally {
+        await sleep(300);
+        const lw = protobuf.Writer.create();
+        lw.uint32((1 << 3) | 0).int64(toLong(gid));
+        await network.sendMsgAsync('gamepb.visitpb.VisitService', 'LeaveHomestead', lw.finish()).catch(() => {});
+    }
+}
+
+/** 从好友牧场详情里挑出可照顾的 (栏舍实例, 槽位) */
+function listFriendAnimals(ranches) {
+    const out = [];
+    for (const r of (ranches || [])) {
+        const instId = toNum(r.ranch_inst_id);
+        for (const a of (r.animals || [])) {
+            const slot = toNum(a.slot_index);
+            if (!instId || !slot) continue;
+            out.push({ instId, slot, animalId: toNum(a.animal_id) });
+        }
+    }
+    return out;
+}
+
+/**
+ * 自动照顾好友的动物(StrokeAnimal) —— 牧歌初启"累计照料好友动物 5 次"靠它。
+ *
+ * 抓包(20261120-001457)实证的客户端节奏:
+ *   EnterHomestead → GetRanchOpTimes(拿剩余) → GetRanchDetail → 逐只 StrokeAnimal → LeaveHomestead
+ * 每日上限 op 11009 = 10 次, 所以一轮最多摸 10 只; 用满就停, 不再空跑。
+ *
+ * @returns {Promise<{count:number, details:string[], remaining:number}>}
+ */
+const _strokeToday = new Map();  // dateKey -> 次数(本地累计, 防重启后又跑满一轮)
+async function autoStrokeFriendAnimals(opts = {}) {
+    const result = { count: 0, details: [], remaining: -1 };
+    const maxTotal = Math.max(1, toNum(opts.maxStrokePerRound) || 10);
+    const todayKey = new Date().toDateString();
+    const already = toNum(_strokeToday.get(todayKey)) || 0;
+
+    const limits = await getFriendOpRemaining();
+    result.remaining = limits.stroke;
+    if (limits.stroke === 0) return result;       // 今天的 10 次已经用满
+    let budget = limits.stroke > 0
+        ? Math.min(maxTotal, limits.stroke)
+        : Math.max(0, maxTotal - already);          // 拿不到剩余时按本地计数兜底
+    if (budget <= 0) return result;
+
+    const { getFriendsList } = require('./friend');
+    const friends = await getFriendsList().catch(() => []);
+    if (!Array.isArray(friends) || friends.length === 0) return result;
+
+    for (const f of friends.slice(0, 20)) {
+        if (budget <= 0) break;
+        const gid = toNum(f && f.gid);
+        if (!gid) continue;
+        try {
+            await withFriendHomestead(gid, async () => {
+                const detail = await getRanchDetail(gid);
+                const targets = listFriendAnimals(detail.ranches);
+                for (const t of targets) {
+                    if (budget <= 0) break;
+                    try {
+                        await strokeAnimal(gid, { hostGid: t.instId, slot: t.slot });
+                        budget -= 1;
+                        result.count += 1;
+                        _strokeToday.set(todayKey, already + result.count);
+                        if (result.details.length < 6) result.details.push(f.name || String(gid));
+                    } catch (e) {
+                        // 单只失败(已摸过/状态不允许)不中断
+                        if (!isExpectedRanchError(e)) {
+                            logWarn('牧场', `照顾动物失败 ${f.name || gid}槽${t.slot}: ${e.message}`, {
+                                module: 'ranch', event: '照顾好友动物', result: 'error',
+                            });
+                        }
+                        budget -= 1;
+                    }
+                    await sleep(600);
+                }
+            });
+            await sleep(400);
+        } catch { /* 这家进不去就换下家 */ }
+    }
+    if (result.count > 0) {
+        log('牧场', `照顾好友动物 x${result.count}`, {
+            module: 'ranch', event: '照顾好友动物', result: 'ok', count: result.count,
+        });
+    }
+    return result;
+}
+
+/**
+ * 自动对好友使坏(放蚊子 PutHazard) —— 牧歌初启"累计使坏好友 3 次"靠它。
+ *
+ * 每日上限 op 11003 = 100 次; 一轮默认只做很少几次(够任务用即可), 避免无谓骚扰。
+ * 请求结构: {1: 栏舍实例, 2: 好友gid, 3: 11003, 4: 1}
+ *
+ * @returns {Promise<{count:number, details:string[], remaining:number}>}
+ */
+async function autoPutHazardOnFriends(opts = {}) {
+    const result = { count: 0, details: [], remaining: -1 };
+    const maxTotal = Math.max(1, toNum(opts.maxHazardPerRound) || 3);
+    const limits = await getFriendOpRemaining();
+    result.remaining = limits.hazard;
+    if (limits.hazard === 0) return result;
+    const budget = limits.hazard > 0 ? Math.min(maxTotal, limits.hazard) : maxTotal;
+    if (budget <= 0) return result;
+
+    const { getFriendsList } = require('./friend');
+    const friends = await getFriendsList().catch(() => []);
+    if (!Array.isArray(friends) || friends.length === 0) return result;
+
+    let left = budget;
+    for (const f of friends.slice(0, 20)) {
+        if (left <= 0) break;
+        const gid = toNum(f && f.gid);
+        if (!gid) continue;
+        try {
+            await withFriendHomestead(gid, async () => {
+                const detail = await getRanchDetail(gid);
+                const animals = listFriendAnimals(detail.ranches);
+                if (animals.length === 0) return;
+                // 抓包: 同一次访问里对同一栏舍连发多次 PutHazard(每次 count=1, 走服务端自选槽位)
+                const instId = animals[0].instId;
+                while (left > 0) {
+                    try {
+                        const r = await putHazard(gid, { hostGid: instId, count: 1 });
+                        left -= 1;
+                        result.count += 1;
+                        if (result.details.length < 6) result.details.push(f.name || String(gid));
+                        if (r.remaining === 0) left = 0;
+                    } catch (e) {
+                        if (!isExpectedRanchError(e)) {
+                            logWarn('牧场', `使坏失败 ${f.name || gid}: ${e.message}`, {
+                                module: 'ranch', event: '使坏好友', result: 'error',
+                            });
+                        }
+                        left = 0;
+                        break;
+                    }
+                    await sleep(500);
+                }
+            });
+            await sleep(400);
+        } catch { /* 进不去就换下家 */ }
+    }
+    if (result.count > 0) {
+        log('牧场', `使坏好友 x${result.count}`, {
+            module: 'ranch', event: '使坏好友', result: 'ok', count: result.count,
+        });
+    }
+    return result;
 }
 
 /**
@@ -3668,9 +3940,50 @@ async function operateRanch(opts = {}) {
         }
         case 'hazard': {
             // 放蚊子(使坏) —— opts.gid 指定好友
+            // 抓包定案: 请求是 {1:栏舍实例, 2:好友gid, 3:11003, 4:1}, 每日上限 100
             if (!opts.gid) throw new Error('需要指定好友 gid');
-            await putHazard(toNum(opts.gid), slot);
-            return { ok: true, action: '放蚊子', detail: `gid=${toNum(opts.gid)}` };
+            const r = await putHazard(toNum(opts.gid), {
+                hostGid: toNum(opts.instId) || RANCH_SELF_HOST_GID,
+                count: toNum(opts.count) || 1,
+            });
+            return {
+                ok: r.ok,
+                action: '放蚊子',
+                detail: r.ok
+                    ? `gid=${toNum(opts.gid)}${r.remaining === null ? '' : `，今日剩余 ${r.remaining} 次`}`
+                    : `gid=${toNum(opts.gid)} 使坏失败`,
+            };
+        }
+        case 'stroke': {
+            // 照顾(摸一摸)好友动物 —— opts.gid 好友, slot 槽位(必填), instId 栏舍实例
+            // 抓包定案: 请求是 {1:好友gid, 2:{1:栏舍实例,2:槽位}}, 每日上限 10
+            if (!opts.gid) throw new Error('需要指定好友 gid');
+            if (!slot) throw new Error('需要指定槽位');
+            await strokeAnimal(toNum(opts.gid), {
+                hostGid: toNum(opts.instId) || RANCH_SELF_HOST_GID,
+                slot,
+            });
+            return { ok: true, action: '照顾动物', detail: `gid=${toNum(opts.gid)} 槽${slot}` };
+        }
+        case 'autostroke': {
+            const r = await autoStrokeFriendAnimals(opts);
+            return {
+                ok: true,
+                action: '自动照顾好友动物',
+                detail: r.count > 0
+                    ? `照顾 ${r.count} 只: ${r.details.join('，')}`
+                    : (r.remaining === 0 ? '今日 10 次已用满' : '没有可照顾的好友动物'),
+            };
+        }
+        case 'autohazard': {
+            const r = await autoPutHazardOnFriends(opts);
+            return {
+                ok: true,
+                action: '自动使坏好友',
+                detail: r.count > 0
+                    ? `使坏 ${r.count} 次: ${r.details.join('，')}`
+                    : (r.remaining === 0 ? '今日次数已用满' : '没有可操作的好友'),
+            };
         }
         case 'batch': {
             // 批量操作(对照农场"整田操作"): harvest/produce/clean/feed
@@ -3852,6 +4165,10 @@ module.exports = {
     donateAnimal,
     cleanRanch,
     putHazard,
+    strokeAnimal,
+    autoStrokeFriendAnimals,
+    autoPutHazardOnFriends,
+    getFriendOpRemaining,
     useFeedBucket,
     cleanOwnRanch,
     stealFriendProduce,

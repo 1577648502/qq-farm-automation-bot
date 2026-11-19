@@ -77,6 +77,11 @@ async function loadProto() {
     types.DonateAnimalReply = root.lookupType('gamepb.animalpb.DonateAnimalReply');
     types.CleanRanchRequest = root.lookupType('gamepb.animalpb.CleanRanchRequest');
     types.CleanRanchReply = root.lookupType('gamepb.animalpb.CleanRanchReply');
+    // 好友牧场: 照顾(StrokeAnimal) / 使坏(PutHazard) —— 2026-11-20 抓包定案
+    types.StrokeAnimalRequest = root.lookupType('gamepb.animalpb.StrokeAnimalRequest');
+    types.StrokeAnimalReply = root.lookupType('gamepb.animalpb.StrokeAnimalReply');
+    types.PutHazardRequest = root.lookupType('gamepb.animalpb.PutHazardRequest');
+    types.PutHazardReply = root.lookupType('gamepb.animalpb.PutHazardReply');
 
     // 牧场建筑/地块(2026-11-17)
     types.GetBuildingListRequest = root.lookupType('gamepb.homesteadpb.GetBuildingListRequest');

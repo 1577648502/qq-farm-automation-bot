@@ -1084,6 +1084,8 @@ function createDefaultAutomation(fertilizer: string = 'none') {
     ranch_rotation: true,
     ranch_task: true,
     ranch_steal: true,
+    ranch_stroke: true,
+    ranch_hazard: false,
     ranch_clean: true,
     ranch_upgrade: true,
     ranch_unlock: true,
@@ -2970,6 +2972,8 @@ async function onBackupFileChange(ev: Event) {
                 <BaseSwitch v-model="localAutomationSettings.automation.ranch_rotation" label="自动游商兑换" />
                 <BaseSwitch v-model="localAutomationSettings.automation.ranch_task" label="自动领牧场任务" />
                 <BaseSwitch v-model="localAutomationSettings.automation.ranch_steal" label="自动偷好友牧场产物" />
+                <BaseSwitch v-model="localAutomationSettings.automation.ranch_stroke" label="自动照顾好友动物（每日 10 次）" />
+                <BaseSwitch v-model="localAutomationSettings.automation.ranch_hazard" label="自动对好友使坏（每日 100 次）" />
                 <BaseSwitch v-model="localAutomationSettings.automation.ranch_clean" label="自动清理牧场" />
                 <BaseSwitch v-model="localAutomationSettings.automation.ranch_upgrade" label="自动建筑升级" />
                 <BaseSwitch v-model="localAutomationSettings.automation.ranch_unlock" label="自动地块解锁" />

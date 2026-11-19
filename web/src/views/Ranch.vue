@@ -1393,6 +1393,26 @@ onUnmounted(() => {
                 <div class="i-carbon-store" />
                 游商兑换
               </button>
+              <!-- 照顾好友动物: 自动流程由 ranch_stroke 开关控制, 这里给手动补跑一次 -->
+              <button
+                type="button"
+                class="min-h-[38px] inline-flex items-center gap-1.5 border border-emerald-300 rounded-lg bg-emerald-50 px-3 py-1.5 text-xs text-emerald-700 font-medium transition dark:border-emerald-700 dark:bg-emerald-900/30 hover:bg-emerald-100 dark:text-emerald-300 disabled:opacity-50"
+                :disabled="opBusy !== ''"
+                @click="runOp('autostroke')"
+              >
+                <div class="i-fas-paw" />
+                照顾好友动物
+              </button>
+              <!-- 使坏好友: 自动流程由 ranch_hazard 开关控制(默认关), 这里给手动补跑一次 -->
+              <button
+                type="button"
+                class="min-h-[38px] inline-flex items-center gap-1.5 border border-rose-300 rounded-lg bg-rose-50 px-3 py-1.5 text-xs text-rose-700 font-medium transition dark:border-rose-700 dark:bg-rose-900/30 hover:bg-rose-100 dark:text-rose-300 disabled:opacity-50"
+                :disabled="opBusy !== ''"
+                @click="runOp('autohazard')"
+              >
+                <div class="i-carbon-warning-alt" />
+                使坏好友
+              </button>
               <!-- 偷好友牧场产物: 自动流程由 ranch_steal 开关控制, 这里给手动补跑一次 -->
               <button
                 type="button"

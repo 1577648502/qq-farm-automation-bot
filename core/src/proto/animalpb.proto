@@ -224,11 +224,46 @@ message EmptyRef {}
 message GetRanchOpTimesReply {
     repeated RanchOpLimit limits = 1;
 }
+// ⭐ 2026-11-20 抓包(20261120-001457_活动1)定案: 三个 op 的字段语义是
+//   #2 = 每日上限, #3 = 今日已用, #4 = 今日剩余。
+//   实测: 使坏前 {11003:#2=100,#3=1,#4=99} → 连发 15 次 PutHazard 后 {#3=16,#4=84} ✓
+//         照顾前 {11009:#2=10,#3=1}        → 连发 5 次 StrokeAnimal 后 {#3=6} ✓
+//   ⚠ 旧注释把 #2 写成"已用"、#4 写成"上限", 正好反了。
 message RanchOpLimit {
-    int64 op_id = 1;                 // 11003 / 11008 / 11009
-    int64 used = 2;                  // 今日已用(抓包=上限值, 即还没用过)
-    // 3 未出现
-    int64 limit = 4;                 // 每日上限
+    int64 op_id = 1;                 // 11003=使坏(PutHazard) / 11009=照顾(StrokeAnimal) / 11008=未知
+    int64 limit = 2;                 // 每日上限(11003=100, 11009=10, 11008=20)
+    int64 used = 3;                  // 今日已用
+    int64 remaining = 4;             // 今日剩余(11008 会回 20/20 且没有 #3, 视为未参与)
+}
+
+// --- 照顾好友动物(摸一摸) AnimalService.RanchService.StrokeAnimal, 20261120 抓包 ---
+// 请求: {1: 好友gid, 2:{1: 栏舍实例, 2: 槽位}}
+//   ⚠ 外层 #1 是**好友 gid**(1240221153 这种), 与 PutHazard 的同构; 不是 host_gid
+// 响应: {1: RanchInfo(该好友牧场全量)}, 可直接用于刷新
+message StrokeAnimalRequest {
+    int64 friend_gid = 1;
+    AnimalTarget target = 2;         // {1: ranch_inst_id(10001/10003), 2: slot}
+}
+message StrokeAnimalReply {
+    repeated RanchInfo ranches = 1;
+}
+
+// --- 使坏(放蚊子) RanchService.PutHazard, 20261120 抓包定案 ---
+// 请求: {1: 栏舍实例(10001/10003), 2: 好友gid, 3: 11003, 4: 1}
+//   ⚠ 与 StrokeAnimal **字段顺序不同**: 这里 #1 是栏舍实例, #2 才是好友 gid。
+//   旧实现拼成 {1:{1:gid,2:slot}}, 服务端只会把它当成"给自己的 10001 放蚊子" → 必然失败。
+// 响应: {1: 1(成功?), 2: 今日剩余次数, 3: Item(便便/蚊子), 4: Item}
+message PutHazardRequest {
+    int64 ranch_inst_id = 1;
+    int64 friend_gid = 2;
+    int64 op_id = 3;                 // 抓包恒 11003
+    int64 count = 4;                 // 抓包恒 1
+}
+message PutHazardReply {
+    int64 ok = 1;
+    int64 remaining = 2;             // 今日剩余
+    repeated corepb.Item gains = 3;
+    repeated corepb.Item items = 4;
 }
 // --- 偷好友牧场产物(AnimalService.StealProduce, 20261117 抓包) ---
 // 请求: {1: 好友gid} (08<gid>); 仅当好友牧场 GetRanchDetail 显示有可偷产物时客户端才发
