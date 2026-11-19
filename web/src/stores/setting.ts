@@ -290,6 +290,14 @@ export const useSettingStore = defineStore('setting', () => {
       const d = data.data
       settings.value.plantingStrategy = d.strategy || 'max_exp'
       settings.value.preferredSeedId = d.preferredSeed || 0
+      // 牧场幼崽策略(独立于农场种植策略) —— 之前漏了这三行,
+      // 于是设置页永远回显默认值, 保存也带不上(2026-11-19)。
+      if (d.ranchCubStrategy !== undefined && d.ranchCubStrategy !== null)
+        settings.value.ranchCubStrategy = d.ranchCubStrategy
+      if (Array.isArray(d.ranchCubPriority))
+        settings.value.ranchCubPriority = d.ranchCubPriority
+      if (d.ranchCubFallbackStrategy !== undefined && d.ranchCubFallbackStrategy !== null)
+        settings.value.ranchCubFallbackStrategy = d.ranchCubFallbackStrategy
       settings.value.intervals = d.intervals || {}
       settings.value.friendQuietHours = d.friendQuietHours || { enabled: false, start: '23:00', end: '07:00' }
       settings.value.automation = d.automation || {}
@@ -388,6 +396,10 @@ export const useSettingStore = defineStore('setting', () => {
         bagSeedPriority: newSettings.bagSeedPriority,
         bagSeedFallbackStrategy: newSettings.bagSeedFallbackStrategy,
         plantSeedExclude: newSettings.plantSeedExclude,
+        // 牧场幼崽策略(独立) —— 漏发就不会保存, 表现为"选了没反应"
+        ranchCubStrategy: newSettings.ranchCubStrategy,
+        ranchCubPriority: newSettings.ranchCubPriority,
+        ranchCubFallbackStrategy: newSettings.ranchCubFallbackStrategy,
         intervals: newSettings.intervals,
         friendQuietHours: newSettings.friendQuietHours,
         stealDelaySeconds: newSettings.stealDelaySeconds,

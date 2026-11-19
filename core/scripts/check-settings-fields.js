@@ -94,7 +94,33 @@ const droppedOnSave = [...saveKeys]
 const canSaveNotRead = [...saveKeys].filter(k => WATCH.test(k) && !isReadable(k)).sort();
 const expectNotRead = [...frontKeys].filter(k => WATCH.test(k) && !readKeys.has(k) && !saveKeys.has(k)).sort();
 
+// ⑤ 前端保存 payload: settings.ts 的 performSaveSettings 里那个大对象。
+//   前端"页面上有输入框、类型里也有字段"但**没放进 payload** → 后端永远收不到,
+//   表现同样是"改了保存不成功"(2026-11-19 牧场幼崽策略就是这样)。
+const settingTs = fs.readFileSync(path.join(WEB, 'src/stores/setting.ts'), 'utf8');
+const payloadMatch = settingTs.match(/const settingsPayload = \{([\s\S]*?)\n      \}/);
+const frontPayloadKeys = new Set();
+if (payloadMatch) {
+    for (const line of payloadMatch[1].split('\n')) {
+        const m = line.match(/^\s*([A-Za-z_$][\w$]*)\s*:/);
+        if (m) frontPayloadKeys.add(m[1]);
+    }
+}
+// 后端能保存的字段(排除只读/仅服务端设置项)都应该能从界面发出去
+// 这些字段界面上没有输入控件(历史遗留 / 由别的接口单独设置), 不算漏发
+const NO_UI_FIELDS = new Set([
+    'milkTeaAutoHire', 'milkTeaAutoTask', 'milkTeaEmployerGid', 'milkTeaHireGids',
+]);
+const frontMissing = [...saveKeys]
+    .filter(k => k !== 'accountId' && !NO_UI_FIELDS.has(k) && !frontPayloadKeys.has(k))
+    .sort();
+
 let bad = 0;
+if (frontMissing.length) {
+    bad += frontMissing.length;
+    console.error('✗ 后端可保存、但前端保存 payload 没带(改了不会生效):');
+    frontMissing.forEach(k => console.error(`  - ${k}  → 加到 web/src/stores/setting.ts 的 settingsPayload`));
+}
 if (droppedOnSave.length) {
     bad += droppedOnSave.length;
     console.error('✗ 保存侧有、applyConfigSnapshot 规格表没有(会被静默丢弃, 表现为"保存不成功"):');

@@ -14,6 +14,17 @@
  *   seedPrice(种子成本)          幼崽商城价
  *   netProfit = income - 成本    整只回收 − 幼崽价
  *
+ * ⚠ 与农场的根本差别(2026-11-19 核实):
+ *   农场分析(`analytics.js` → getPlantRankings)的数据**全部来自本地配置**
+ *   `core/data/gameConfig/Plant.json` —— 324 种作物每种都带 `grow_phases`
+ *   ("种子:30;发芽:30;成熟:0;")、`exp`、`fruit`, 所以**不需要种过**就能算。
+ *   牧场没有对等配置: AnimalInfo / ItemInfo 里**没有任何时长字段**
+ *   (幼崽 60004 的字段只有 price/level/type/desc…), 官方客户端 mcboot 包里
+ *   也搜不到 infant_sec / mature_sec / produce_interval 这类配置。
+ *   所以牧场只能从**实际养过的动物**上报的 *_ready_at_ms 推算周期:
+ *     养过的 → 有四项指标; 没养过 → 显示 "-"(不编造)。
+ *   这也是为什么牧场分析永远只能覆盖"养过的那些", 而农场能覆盖全部。
+ *
  * 周期时长来源(不是编的):
  *   官方 AnimalInfo 的 *_ready_at_ms 三件套在同一帧内相减即可得到各段时长:
  *     infant_ready_at_ms(#14) → grow_ready_at_ms(#10) → mature_ready_at_ms(#25)
@@ -111,23 +122,53 @@ function recordAnimalCycleSamples(view) {
         const infantSec = Math.round((gro - inf) / 1000);
         const matureSec = mat > gro ? Math.round((mat - gro) / 1000) : 0;
         if (infantSec < 0) continue;
-        const prev = cycleTable.get(animalId) || { infantSec: 0, matureSec: 0, n: 0 };
-        // 取见过的最大值: 服务端会给"剩余时间", 中途观察到的差值可能被截短
+        const prev = cycleTable.get(animalId) || { infantHist: {}, matureHist: {}, n: 0 };
+        // ⭐ 取**众数**而不是最大值:
+        //   罐头会直接推进 *_ready_at_ms(抓包: 喂一次普通罐头, 剩余从 7025s → 3600s),
+        //   于是同一只动物在不同帧里会算出不同的"段时长"(鸡的成熟段实测 10/12/14 秒)。
+        //   取最大值会把被罐头拉长的读数固化成"固有周期", 越算越大;
+        //   众数更能代表这批动物的常态周期。
+        const bump = (hist, v) => {
+            if (!(v > 0)) return hist;
+            const key = String(v);
+            return { ...hist, [key]: (hist[key] || 0) + 1 };
+        };
         cycleTable.set(animalId, {
-            infantSec: Math.max(prev.infantSec, infantSec),
-            matureSec: Math.max(prev.matureSec, matureSec),
-            n: prev.n + 1,
+            infantHist: bump(prev.infantHist || {}, infantSec),
+            matureHist: bump(prev.matureHist || {}, matureSec),
+            n: (prev.n || 0) + 1,
         });
     }
 }
 
-/** 取某动物学到的周期(秒); 没有样本返回 null */
+/** 从直方图里取众数(出现次数最多的值); 空/无样本返回 0 */
+function modeOf(hist) {
+    let best = 0;
+    let bestN = -1;
+    for (const [k, n] of Object.entries(hist || {})) {
+        const v = Number(k);
+        if (!(v > 0)) continue;
+        if (n > bestN || (n === bestN && v > best)) {
+            best = v; bestN = n;
+        }
+    }
+    return best;
+}
+
+/**
+ * 取某动物学到的周期(秒); 没有样本返回 null。
+ *
+ * 周期 = 幼崽期 + 成长期 + 成熟期。抓包里幼崽期与成长期等长(兔子 3600/3600),
+ * 所以成长期用幼崽期的众数兜底。
+ */
 function getLearnedCycleSec(animalId) {
     const r = cycleTable.get(Number(animalId) || 0);
     if (!r) return null;
-    // 成长期通常与幼崽期等长(抓包: 兔子 3600/3600); 没有 mature 样本时用它兜底
-    const growSec = r.infantSec;
-    const total = r.infantSec + growSec + (r.matureSec || 0);
+    const infantSec = modeOf(r.infantHist);
+    if (!(infantSec > 0)) return null;
+    const matureSec = modeOf(r.matureHist);
+    const growSec = infantSec;   // 与幼崽期等长(抓包实测)
+    const total = infantSec + growSec + matureSec;
     return total > 0 ? total : null;
 }
 
