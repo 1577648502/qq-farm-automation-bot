@@ -262,6 +262,8 @@ proto.loadProto().then(async () => {
         //   StrokeAnimal C->S 08e18bb1cf04120508914e105e  = {1:好友gid, 2:{1:10001, 2:94}}
         //   PutHazard   C->S 08914e10e18bb1cf0418fb552001 = {1:10001, 2:好友gid, 3:11003, 4:1}
         // ⚠ 两个接口的字段顺序**相反**, 之前 putHazard 拼成 {1:{1:gid,2:slot}} 是错的。
+        // ⚠ target#2 = 94 是该好友牧场里 **animal_inst_id=94** 的动物
+        //   (线上 2026-11-20: 传槽位号一律 1045207「动物不存在」)
         const stroke = types.StrokeAnimalRequest.encode(types.StrokeAnimalRequest.create({
             friend_gid: 1240221153,
             target: { host_gid: 10001, slot: 94 },
@@ -317,6 +319,49 @@ proto.loadProto().then(async () => {
         check('使坏受 op 上限预算约束',
             /limits\.hazard === 0\) return result/.test(src), null);
         void f;
+    }
+
+    section('12. 照顾的 target#2 必须是 animal_inst_id(线上 1045207 的根因)');
+    {
+        // 线上日志(2026-11-20): 照顾动物一直回 1045207「动物不存在」。
+        // 根因: target#2 传的是 slot_index, 而服务端要的是 AnimalInfo#3 animal_inst_id。
+        // 抓包四帧验证(4 个不同好友/栏舍):
+        //   ...105e → 94  = 窝 slot3 inst94     ...1062 → 98  = 窝 slot6 inst98
+        //   ...8802 → 264 = 窝 slot6 inst264    ...bf01 → 191 = 窝 slot6 inst191
+        const ranch = require(`${SB}/src/services/ranch`);
+        const f = ranch.__privateRanchFns;
+
+        // listFriendAnimals 必须把 animal_inst_id 带出来
+        const list = f.listFriendAnimals([{
+            ranch_inst_id: 10001,
+            animals: [
+                { slot_index: 3, animal_inst_id: 94, animal_id: 60007 },
+                { slot_index: 6, animal_inst_id: 98, animal_id: 60007 },
+            ],
+        }]);
+        check('listFriendAnimals 带 animalInstId', list[0] && list[0].animalInstId === 94, list[0]);
+        check('listFriendAnimals 同时保留 slot 仅供展示', list[0] && list[0].slot === 3, list[0]);
+        check('没有 animal_inst_id 的条目被跳过',
+            f.listFriendAnimals([{ ranch_inst_id: 10001, animals: [{ slot_index: 1 }] }]).length === 0,
+            null);
+
+        // 传槽位号 → 抛错(不静默发错请求)
+        let threw = false;
+        try { await ranch.strokeAnimal(1240221153, { hostGid: 10001, slot: 3 }); }
+        catch { threw = true; }
+        check('只给 slot 不给 animalInstId → 直接抛错', threw, threw);
+
+        // 编码口径: {1:好友gid, 2:{1:栏舍, 2:animal_inst_id}}
+        const hex = types.StrokeAnimalRequest.encode(types.StrokeAnimalRequest.create({
+            friend_gid: 1240221153,
+            target: { host_gid: 10001, slot: 94 },
+        })).finish().toString('hex');
+        check('按 animal_inst_id 编码与抓包一致', hex === '08e18bb1cf04120508914e105e', hex);
+
+        // 1045207 / 1045230 必须归为"状态类"(不刷 warn)
+        const src = fs.readFileSync(require('node:path').join(SB, 'src/services/ranch.js'), 'utf8');
+        check('1045207 归入 expected', /ANIMAL_MISSING: 1045207/.test(src), null);
+        check('1045230 归入 expected', /HAZARD_ENOUGH: 1045230/.test(src), null);
     }
 
     finish();

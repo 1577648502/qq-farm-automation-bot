@@ -38,7 +38,17 @@ const RANCH_ERR = {
     FEED_REJECTED: 1045202,      // 喂食被拒(具体原因未知, 见服务端 message)
     SCENE_LOCKED: 1045002,       // 牧场场景未解锁(等级不到 25 级) → 停自动化直到重登
     NOTHING_TO_HARVEST: 1045211, // 当前没有可收取的产物(正常状态)
+    // ⭐ 2026-11-20 线上日志定案(抓包 20261120-001457 + 生产环境):
+    ANIMAL_MISSING: 1045207,     // 动物不存在 —— StrokeAnimal 的 target#2 传了槽位而不是 animal_inst_id
+    HAZARD_ENOUGH: 1045230,      // 这里的蚊子已经够多啦 —— 同一栏舍连放太多次, 要换栏舍/换好友
 };
+
+/** 日志用短错误(去掉 gamepb.xxx 前缀, 超 40 字截断) —— 与 milk-tea 的 shortErr 同款 */
+function shortErr(msg, maxLen = 40) {
+    let t = String(msg || '');
+    t = t.replace(/^gamepb\.[\w.]+\s*错误:\s*/, '').replace(/\s+/g, ' ').trim();
+    return t.length > maxLen ? `${t.slice(0, maxLen)}…` : t;
+}
 
 /** 从错误信息里提取服务端 code= 数字 */
 function parseRanchErrorCode(e) {
@@ -53,7 +63,9 @@ function isExpectedRanchError(e) {
         || code === RANCH_ERR.NOTHING_TO_PRODUCE
         || code === RANCH_ERR.CANS_EMPTY
         || code === RANCH_ERR.FEED_REJECTED
-        || code === RANCH_ERR.NOTHING_TO_HARVEST;
+        || code === RANCH_ERR.NOTHING_TO_HARVEST
+        || code === RANCH_ERR.ANIMAL_MISSING
+        || code === RANCH_ERR.HAZARD_ENOUGH;
 }
 
 // 场景类型(抓包 20261116: PlayerSceneLogin 请求体 {1:1}=农场(0801), {1:2}=牧场(0802))
@@ -1087,24 +1099,31 @@ async function putHazard(friendGid, opts = {}) {
  * 照顾(摸一摸)好友的动物 —— RanchService.StrokeAnimal
  *
  * ⭐ 2026-11-20 抓包定案:
- *   请求 = {1: 好友gid, 2:{1: 栏舍实例, 2: 槽位}}
- *   注意与 PutHazard 相反: 这里外层 #1 是好友 gid, #2 才是栏舍/槽位。
- *   响应 {1: RanchInfo(该好友牧场全量)}。
- *   ⚠ 每日上限: op 11009 = 10 次(GetRanchOpTimes)。
+ *   请求 = {1: 好友gid, 2:{1: 栏舍实例, 2: **animal_inst_id**}}
+ *   注意与 PutHazard 相反: 这里外层 #1 是好友 gid, #2 才是栏舍/动物。
+ *
+ * ⚠ target#2 是 **animal_inst_id, 不是 slot_index**(2026-11-20 线上验证):
+ *   抓包四帧全部对得上实例 ID, 与实际槽位无关:
+ *     08914e105e → 94  = 该好友 窝 slot3 的 inst 94
+ *     08914e1062 → 98  = 该好友 窝 slot6 的 inst 98
+ *     08914e108802 → 264 = 窝 slot6 的 inst 264
+ *     08914e10bf01 → 191 = 窝 slot6 的 inst 191
+ *   传槽位号会一律返回 1045207「动物不存在」(线上实测刷了一整屏),
+ *   与之前 FeedAnimal 踩的是同一个坑(commit 62f2fe9)。
  *
  * @param {number} friendGid 好友 gid
- * @param {object} [opts] hostGid 栏舍实例(默认 10001 窝); slot 槽位(必填, 抓包每只单发)
+ * @param {object} [opts] hostGid 栏舍实例; animalInstId 动物实例 ID(必填)
  * @returns {Promise<{ok:boolean, ranches:Array}>}
  */
 async function strokeAnimal(friendGid, opts = {}) {
     const gid = toNum(friendGid);
     if (!gid) throw new Error('缺少好友 gid');
-    const slot = toNum(opts.slot);
-    if (!slot) throw new Error('需要指定槽位');
-    const instId = toNum(opts.hostGid) || RANCH_SELF_HOST_GID;
+    const instId = toNum(opts.animalInstId);
+    if (!instId) throw new Error('需要指定动物实例 ID(animal_inst_id)');
+    const hostGid = toNum(opts.hostGid) || RANCH_SELF_HOST_GID;
     const body = types.StrokeAnimalRequest.encode(types.StrokeAnimalRequest.create({
         friend_gid: toLong(gid),
-        target: { host_gid: toLong(instId), slot: toLong(slot) },
+        target: { host_gid: toLong(hostGid), slot: toLong(instId) },
     })).finish();
     const { body: replyBody } = await network.sendMsgAsync('gamepb.animalpb.RanchService', 'StrokeAnimal', body);
     const reply = types.StrokeAnimalReply.decode(replyBody);
@@ -2748,15 +2767,19 @@ async function withFriendHomestead(gid, fn) {
     }
 }
 
-/** 从好友牧场详情里挑出可照顾的 (栏舍实例, 槽位) */
+/**
+ * 从好友牧场详情里挑出可操作的动物。
+ * ⚠ 必须带上 animal_inst_id(#3): StrokeAnimal 的 target#2 用的是它, 不是槽位号。
+ */
 function listFriendAnimals(ranches) {
     const out = [];
     for (const r of (ranches || [])) {
         const instId = toNum(r.ranch_inst_id);
         for (const a of (r.animals || [])) {
+            const animalInstId = toNum(a.animal_inst_id);
             const slot = toNum(a.slot_index);
-            if (!instId || !slot) continue;
-            out.push({ instId, slot, animalId: toNum(a.animal_id) });
+            if (!instId || !animalInstId) continue;
+            out.push({ instId, animalInstId, slot, animalId: toNum(a.animal_id) });
         }
     }
     return out;
@@ -2801,7 +2824,7 @@ async function autoStrokeFriendAnimals(opts = {}) {
                 for (const t of targets) {
                     if (budget <= 0) break;
                     try {
-                        await strokeAnimal(gid, { hostGid: t.instId, slot: t.slot });
+                        await strokeAnimal(gid, { hostGid: t.instId, animalInstId: t.animalInstId });
                         budget -= 1;
                         result.count += 1;
                         _strokeToday.set(todayKey, already + result.count);
@@ -2851,6 +2874,10 @@ async function autoPutHazardOnFriends(opts = {}) {
     if (!Array.isArray(friends) || friends.length === 0) return result;
 
     let left = budget;
+    // ⚠ 2026-11-20 线上: code=1045230「这里的蚊子已经够多啦, 换一处试试吧」
+    //   同一栏舍连放会被拒。所以每换一个栏舍(窝 10001 / 棚 10003)就换一处试,
+    //   一处放不进去只放弃这一处, 不影响其它好友。
+    let lastCode = 0;
     for (const f of friends.slice(0, 20)) {
         if (left <= 0) break;
         const gid = toNum(f && f.gid);
@@ -2860,29 +2887,42 @@ async function autoPutHazardOnFriends(opts = {}) {
                 const detail = await getRanchDetail(gid);
                 const animals = listFriendAnimals(detail.ranches);
                 if (animals.length === 0) return;
-                // 抓包: 同一次访问里对同一栏舍连发多次 PutHazard(每次 count=1, 走服务端自选槽位)
-                const instId = animals[0].instId;
-                while (left > 0) {
-                    try {
-                        const r = await putHazard(gid, { hostGid: instId, count: 1 });
-                        left -= 1;
-                        result.count += 1;
-                        if (result.details.length < 6) result.details.push(f.name || String(gid));
-                        if (r.remaining === 0) left = 0;
-                    } catch (e) {
-                        if (!isExpectedRanchError(e)) {
-                            logWarn('牧场', `使坏失败 ${f.name || gid}: ${e.message}`, {
-                                module: 'ranch', event: '使坏好友', result: 'error',
-                            });
+                // 按栏舍分组: 先窝后棚(与客户端抓包一致), 每处最多放 1~2 次就换处
+                const instIds = [...new Set(animals.map(a => a.instId))];
+                for (const instId of instIds) {
+                    if (left <= 0) break;
+                    let placedHere = 0;
+                    const perRanch = 2;   // 同一栏舍放 2 次就换, 避免 1045230
+                    while (left > 0 && placedHere < perRanch) {
+                        try {
+                            const r = await putHazard(gid, { hostGid: instId, count: 1 });
+                            left -= 1;
+                            placedHere += 1;
+                            result.count += 1;
+                            if (result.details.length < 6) result.details.push(f.name || String(gid));
+                            if (r.remaining === 0) { left = 0; break; }
+                        } catch (e) {
+                            const code = parseRanchErrorCode(e);
+                            lastCode = code;
+                            // 1045230 = 这处放满了, 换下一处/下一位好友(不是故障)
+                            if (code !== RANCH_ERR.HAZARD_ENOUGH && !isExpectedRanchError(e)) {
+                                logWarn('牧场', `使坏失败 ${f.name || gid}: ${shortErr(e)}`, {
+                                    module: 'ranch', event: '使坏好友', result: 'error', code,
+                                });
+                            }
+                            break;
                         }
-                        left = 0;
-                        break;
+                        await sleep(500);
                     }
-                    await sleep(500);
                 }
             });
             await sleep(400);
         } catch { /* 进不去就换下家 */ }
+    }
+    if (result.count === 0 && lastCode === RANCH_ERR.HAZARD_ENOUGH) {
+        log('牧场', '使坏: 好友牧场蚊子已满, 换一轮再试', {
+            module: 'ranch', event: '使坏好友', result: 'skip', code: lastCode,
+        });
     }
     if (result.count > 0) {
         log('牧场', `使坏好友 x${result.count}`, {
@@ -3955,15 +3995,17 @@ async function operateRanch(opts = {}) {
             };
         }
         case 'stroke': {
-            // 照顾(摸一摸)好友动物 —— opts.gid 好友, slot 槽位(必填), instId 栏舍实例
-            // 抓包定案: 请求是 {1:好友gid, 2:{1:栏舍实例,2:槽位}}, 每日上限 10
+            // 照顾(摸一摸)好友动物 —— opts.gid 好友, animalInstId 动物实例 ID(必填)
+            // 抓包定案: 请求 {1:好友gid, 2:{1:栏舍实例, 2:animal_inst_id}}; 每日上限 10
+            // ⚠ target#2 是 animal_inst_id, 不是槽位号 —— 传槽位会回 1045207「动物不存在」
             if (!opts.gid) throw new Error('需要指定好友 gid');
-            if (!slot) throw new Error('需要指定槽位');
+            const animalInstId = toNum(opts.animalInstId) || toNum(opts.instId);
+            if (!animalInstId) throw new Error('需要指定动物实例 ID(animalInstId)');
             await strokeAnimal(toNum(opts.gid), {
-                hostGid: toNum(opts.instId) || RANCH_SELF_HOST_GID,
-                slot,
+                hostGid: toNum(opts.hostGid) || RANCH_SELF_HOST_GID,
+                animalInstId,
             });
-            return { ok: true, action: '照顾动物', detail: `gid=${toNum(opts.gid)} 槽${slot}` };
+            return { ok: true, action: '照顾动物', detail: `gid=${toNum(opts.gid)} 动物#${animalInstId}` };
         }
         case 'autostroke': {
             const r = await autoStrokeFriendAnimals(opts);
@@ -4195,5 +4237,7 @@ module.exports = {
         // 栏舍实例: 供测试验证"棚动物要用 10003 而不是写死的 10001"
         rememberRanchInstIds, resolveRanchHostGid,
         planRanchDueActions, runRanchDueActions,
+        // 好友牧场: 照顾 target#2 必须用 animal_inst_id(线上 1045207)
+        listFriendAnimals, strokeAnimal, putHazard,
     },
 };

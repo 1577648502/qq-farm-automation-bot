@@ -73,12 +73,20 @@ function itemName(id: number) {
   return ITEM_NAMES[Number(id)] || `物品#${id}`
 }
 
-/** 任务按页面分组(后端已给 module 字段) */
+/**
+ * 任务按页面分组。
+ *
+ * ⚠ 2026-11-20 修正(用户反馈"成长手册显示不全"):
+ *   活动说明原文:「4. 成长手册：…完成牧场任务获取奖励」，而「3. 牧友同行：…
+ *   拥有一定数量的已经开启牧场的好友，可以获得一定奖励」= **好友数量档位**，
+ *   跟任务无关。所以 2026111704 的 24 条任务**全部属于成长手册**。
+ *   之前按任务描述里有没有"好友/使坏"把 6 条分给牧友同行, 成长手册只剩 18 条。
+ */
 const tasksByModule = computed(() => {
   const tasks = data.value?.tasks || []
   return {
-    growth: tasks.filter((t: any) => (t.module || '成长手册') === '成长手册'),
-    friend: tasks.filter((t: any) => t.module === '牧友同行'),
+    growth: tasks,
+    friend: [] as any[],
   }
 })
 
@@ -229,7 +237,7 @@ watch(currentAccountId, () => refresh())
             · 未开放 {{ lockedCount(tasksByModule.growth) }}
           </span>
           <span class="ml-auto text-xs text-gray-400">
-            批次按天开放，奖励由「一键领取」自动领取
+            共 {{ tasksByModule.growth.length }} 条任务 · 批次按天开放 · 奖励由「一键领取」自动领取
           </span>
         </div>
         <div class="overflow-x-auto">
@@ -299,35 +307,14 @@ watch(currentAccountId, () => refresh())
         </div>
       </section>
 
-      <!-- ===== 牧友同行(好友互动任务 + 邀请助力) ===== -->
+      <!-- ===== 牧友同行(好友数量档位) =====
+           活动说明原文:「拥有一定数量的已经开启牧场的好友，可以获得一定奖励，
+           好友关系解除不影响已计数好友数量」—— 这里**没有任务**, 只有好友数量档位。 -->
       <section v-else-if="activePage === 'friends'" class="space-y-3">
-        <div class="border border-gray-200 rounded-lg bg-white p-3 dark:border-gray-700 dark:bg-gray-800">
-          <h3 class="mb-2 flex items-center gap-1.5 text-sm font-semibold">
-            <div class="i-carbon-user-multiple text-violet-600" />
-            牧友同行 · 好友互动
-            <span class="ml-auto text-xs text-gray-400 font-normal">
-              已完成 {{ doneCount(tasksByModule.friend) }}/{{ tasksByModule.friend.length }}
-            </span>
-          </h3>
-          <div class="space-y-1.5">
-            <div
-              v-for="t in tasksByModule.friend"
-              :key="t.seq"
-              class="flex items-center justify-between border border-gray-100 rounded px-2 py-1.5 text-xs dark:border-gray-700"
-            >
-              <span class="text-gray-600 dark:text-gray-300">{{ t.desc }}</span>
-              <div class="flex items-center gap-2">
-                <span class="text-gray-400">{{ t.progress }}/{{ t.target }}</span>
-                <span :class="statusOf(t.status).cls">{{ statusOf(t.status).text }}</span>
-              </div>
-            </div>
-          </div>
-        </div>
-
         <div v-if="data.invites?.length" class="border border-gray-200 rounded-lg bg-white p-3 dark:border-gray-700 dark:bg-gray-800">
           <h3 class="mb-2 flex items-center gap-1.5 text-sm font-semibold">
             <div class="i-carbon-user-follow text-fuchsia-600" />
-            邀请助力
+            好友数量档位
             <span class="ml-auto text-xs text-gray-400 font-normal">
               {{ data.summary?.invites?.claimed }}/{{ data.summary?.invites?.total }} 已领
             </span>
