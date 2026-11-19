@@ -376,7 +376,34 @@ proto.loadProto().then(async () => {
             '未找到 scene 截断逻辑');
     }
 
-    section('17. scheduleRanchFromCountdowns 只认服务端给的时刻字段');
+    section('17. 牧歌初启: 4 个子页面的任务归属');
+    {
+        const a = require(`${SB}/src/services/activity`);
+        const f = a.classifyMugeTaskModule;
+        check('友好互动 → 牧友同行', f('累计照料好友动物5次') === '牧友同行', f('累计照料好友动物5次'));
+        check('使坏 → 牧友同行', f('累计使坏好友3次') === '牧友同行', f('累计使坏好友3次'));
+        check('偷取 → 牧友同行', f('累计偷取好友副产物10次') === '牧友同行', f('累计偷取好友副产物10次'));
+        check('饲养动物 → 成长手册', f('累计饲养动物5只') === '成长手册', f('累计饲养动物5只'));
+        check('点亮图鉴 → 成长手册', f('累计点亮牧场普通图鉴5种动物') === '成长手册', f('累计点亮牧场普通图鉴5种动物'));
+        check('窝+棚升级 → 成长手册', f('累计牧场窝+棚升级3次') === '成长手册', f('累计牧场窝+棚升级3次'));
+        check('使用罐头 → 成长手册', f('累计使用罐头3次') === '成长手册', f('累计使用罐头3次'));
+        check('牧场等级 → 成长手册', f('牧场等级达到10级') === '成长手册', f('牧场等级达到10级'));
+        check('空描述不丢(归到成长手册)', f('') === '成长手册', f(''));
+    }
+
+    section('18. 牧歌初启: tiers 字段必须按 camelCase 读(keepCase:true)');
+    {
+        // 线上 bug: 代码写 x.required_weight / t.total_weight, 但 proto 是 keepCase:true,
+        // 字段名保持 camelCase → 永远是 undefined → 兴牧庆典的"所需重量"全是 0。
+        const src = require('node:fs').readFileSync(
+            require('node:path').join(SB, 'src/services/activity.js'), 'utf8');
+        check('读 requiredWeight(camelCase)',
+            src.includes('x.requiredWeight') || src.includes('requiredWeight !== undefined'),
+            '未找到 camelCase 读取');
+        check('读 totalWeight(camelCase)', src.includes('t.totalWeight'), '未找到 totalWeight');
+    }
+
+    section('19. scheduleRanchFromCountdowns 只认服务端给的时刻字段');
     {
         const now = Date.now();
         const view = {

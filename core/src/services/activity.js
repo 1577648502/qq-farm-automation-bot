@@ -1355,6 +1355,40 @@ function taskLooksActivityRelated(task, activityItemIds, terms) {
  * 用 GetGroup 拉主组数据, 解析四个子活动的进度。
  * @returns {{tiers, invites, tasks, shares, summary}}
  */
+/**
+ * 牧歌初启的子页面归属。
+ *
+ * 活动说明原文(抓包 MugeMainUI.tips):
+ *   「本活动分为兴牧庆典、牧友同行、成长手册和牧场人格四大模块。」
+ *
+ * 四个页面 ↔ 协议数据的对应(由任务描述 + 档位结构推断):
+ *   兴牧庆典  ← 2026111702 全服饲养重量档位(tiers)
+ *   成长手册  ← 2026111704 里与"自己牧场成长"相关的任务
+ *                 (饲养动物 / 点亮图鉴 / 窝+棚升级 / 使用罐头 / 收获副产物 / 牧场等级)
+ *   牧友同行  ← 2026111703 邀请助力(invites) + 2026111704 里与好友互动相关的任务
+ *                 (照料好友动物 / 使坏 / 偷取)
+ *   牧场人格  ← 2026111705 分享任务(shares)
+ *
+ * 注意: 这是按任务描述做的**展示分组**, 不影响领奖 —— 领奖仍是四个子活动各发一次
+ *       "claim_all", 服务端自己决定哪条能领。
+ */
+const MUGE_MODULES = {
+    TASK_MODULE_RULES: [
+        { module: '牧友同行', terms: ['好友', '使坏', '偷取'] },
+        { module: '成长手册', terms: ['饲养', '图鉴', '窝', '棚', '罐头', '副产物', '等级'] },
+    ],
+};
+
+/** 任务描述 → 所属页面 */
+function classifyMugeTaskModule(desc) {
+    const text = String(desc || '');
+    for (const rule of MUGE_MODULES.TASK_MODULE_RULES) {
+        if (rule.terms.some(t => text.includes(t))) return rule.module;
+    }
+    // 认不出来的归到成长手册(牧场个人成长主线), 避免丢进"未知"
+    return '成长手册';
+}
+
 async function getMugeOverview() {
     const out = { tiers: [], invites: [], tasks: [], shares: [], error: null };
     try {
@@ -1371,11 +1405,16 @@ async function getMugeOverview() {
             const id = toNum(head.id);
             if (id === MUGE_SUB_IDS.TIERS && data.muge_tiers) {
                 const t = data.muge_tiers;
+                // ⚠ proto 是 keepCase:true, 字段名保持 camelCase。
+                //   之前写成 required_weight / total_weight → 永远是 undefined → 全是 0,
+                //   于是兴牧庆典的"所需重量"一直显示 0。
                 out.tiers = (t.tiers || []).map(x => ({
-                    seq: toNum(x.seq), requiredWeight: toNum(x.required_weight),
-                    status: toNum(x.status), reward: x.reward ? { id: toNum(x.reward.id), count: toNum(x.reward.count) } : null,
+                    seq: toNum(x.seq),
+                    requiredWeight: toNum(x.requiredWeight !== undefined ? x.requiredWeight : x.required_weight),
+                    status: toNum(x.status),
+                    reward: x.reward ? { id: toNum(x.reward.id), count: toNum(x.reward.count) } : null,
                 }));
-                out.totalWeight = toNum(t.total_weight);
+                out.totalWeight = toNum(t.totalWeight !== undefined ? t.totalWeight : t.total_weight);
             } else if (id === MUGE_SUB_IDS.INVITE && data.muge_invite) {
                 out.invites = (data.muge_invite.tiers || []).map(x => ({
                     seq: toNum(x.seq), required: toNum(x.required),
@@ -1386,6 +1425,8 @@ async function getMugeOverview() {
                     seq: toNum(x.seq), progress: toNum(x.progress), target: toNum(x.target),
                     status: toNum(x.status), desc: String(x.desc || ''),
                     reward: x.reward ? { id: toNum(x.reward.id), count: toNum(x.reward.count) } : null,
+                    // 归属到游戏内的哪个子页面(用户要求按 4 个页面展示)
+                    module: classifyMugeTaskModule(String(x.desc || '')),
                 }));
             } else if (id === MUGE_SUB_IDS.SHARE && data.muge_share) {
                 out.shares = (data.muge_share.tasks || []).map(x => ({
@@ -1574,6 +1615,7 @@ module.exports = {
     claimActivityTasks,
     claimMugeActivity,
     getMugeOverview,
+    classifyMugeTaskModule,
     claimBattlePassRewards,
     claimDailySignin,
     drawActivity,
