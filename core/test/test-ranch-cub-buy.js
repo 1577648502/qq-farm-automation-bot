@@ -173,36 +173,55 @@ proto.loadProto().then(async () => {
             { coop: view.coopCount, pen: view.penCount });
     }
 
-    section('6. 幼崽策略: 收益比 / 等级 / 优先列表');
+    section('6. 幼崽策略: 与农场六个指标同构');
     {
         const ranch = require(`${SB}/src/services/ranch`);
         const apply = ranch.__privateRanchFns.applyCubStrategy;
-        // 候选: 鸡(收益比3.0, 低价) / 兔(2.0) / 龙猫(3.0, 高价)
+        // 候选带齐农场那套指标(level / expPerHour / fertExpPerHour / netProfitPerHour / fertProfitPerHour)
         const cubs = [
-            { goodsId: 10002, animalId: 60001, name: '鸡', price: 2, valueRatio: 3 },
-            { goodsId: 10003, animalId: 60002, name: '兔', price: 1080, valueRatio: 2 },
-            { goodsId: 10004, animalId: 60006, name: '龙猫', price: 6768, valueRatio: 3 },
+            { goodsId: 10002, animalId: 60001, name: '鸡', price: 2, valueRatio: 3,
+                level: 1, expPerHour: 900, fertExpPerHour: 1200, netProfitPerHour: 90, fertProfitPerHour: 120 },
+            { goodsId: 10003, animalId: 60002, name: '兔', price: 1080, valueRatio: 2,
+                level: 11, expPerHour: 60, fertExpPerHour: 61, netProfitPerHour: 20, fertProfitPerHour: 21 },
+            { goodsId: 10004, animalId: 60006, name: '龙猫', price: 6768, valueRatio: 3,
+                level: 17, expPerHour: 40, fertExpPerHour: 41, netProfitPerHour: 500, fertProfitPerHour: 600 },
         ];
 
-        const byProfit = apply(cubs, { strategy: 'max_profit' });
-        check('max_profit: 收益比最高的排前面',
-            byProfit[0].valueRatio === 3, byProfit.map(c => c.name));
+        check('max_level: 等级高的排前面', apply(cubs, { strategy: 'max_level' })[0].level === 17,
+            apply(cubs, { strategy: 'max_level' }).map(c => `${c.name}Lv${c.level}`));
+        check('max_exp: 经验/时高的排前面', apply(cubs, { strategy: 'max_exp' })[0].expPerHour === 900,
+            apply(cubs, { strategy: 'max_exp' }).map(c => `${c.name}${c.expPerHour}`));
+        check('max_fert_exp: 普通肥经验/时高的排前面',
+            apply(cubs, { strategy: 'max_fert_exp' })[0].fertExpPerHour === 1200,
+            apply(cubs, { strategy: 'max_fert_exp' }).map(c => `${c.name}${c.fertExpPerHour}`));
+        check('max_profit: 净利润/时高的排前面',
+            apply(cubs, { strategy: 'max_profit' })[0].netProfitPerHour === 500,
+            apply(cubs, { strategy: 'max_profit' }).map(c => `${c.name}${c.netProfitPerHour}`));
+        check('max_fert_profit: 普通肥净利润/时高的排前面',
+            apply(cubs, { strategy: 'max_fert_profit' })[0].fertProfitPerHour === 600,
+            apply(cubs, { strategy: 'max_fert_profit' }).map(c => `${c.name}${c.fertProfitPerHour}`));
 
-        const byLevel = apply(cubs, { strategy: 'max_level' });
-        check('max_level: animalId 最大的排前面',
-            byLevel[0].animalId === 60006, byLevel.map(c => c.name));
+        // 指标缺失的排到最后, 不参与比较(与农场一致)
+        const withMissing = [
+            { goodsId: 1, animalId: 60001, name: '有数据', expPerHour: 10 },
+            { goodsId: 2, animalId: 60002, name: '无数据', expPerHour: null },
+        ];
+        check('缺指标的排到最后',
+            apply(withMissing, { strategy: 'max_exp' })[0].name === '有数据',
+            apply(withMissing, { strategy: 'max_exp' }).map(c => c.name));
 
         // 优先列表: 兔排第一
         const byList = apply(cubs, { strategy: 'bag_priority', priority: [60002] });
         check('bag_priority: 列表里的排最前', byList[0].animalId === 60002, byList.map(c => c.name));
 
-        // 优先列表为空 → 回退收益比
-        const noList = apply(cubs, { strategy: 'bag_priority', priority: [] });
-        check('bag_priority 无列表时回退收益比', noList[0].valueRatio === 3, noList.map(c => c.name));
+        // 优先列表为空 → 走第二策略
+        const noList = apply(cubs, { strategy: 'bag_priority', priority: [], fallback: 'max_level' });
+        check('bag_priority 无列表时走第二策略(最高等级)', noList[0].level === 17,
+            noList.map(c => `${c.name}Lv${c.level}`));
 
         // 非法策略 → 回退默认
         const bad = apply(cubs, { strategy: 'not_a_strategy' });
-        check('非法策略回退 max_profit', bad[0].valueRatio === 3, bad.map(c => c.name));
+        check('非法策略回退默认且有结果', bad.length === 3, bad.map(c => c.name));
 
         // 不改原数组
         check('不修改传入的数组', cubs[0].name === '鸡', cubs.map(c => c.name));

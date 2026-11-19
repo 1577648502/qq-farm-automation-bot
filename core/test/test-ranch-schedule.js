@@ -228,7 +228,54 @@ proto.loadProto().then(async () => {
         })(), f.resolveRanchHostGid(0));
     }
 
-    section('12. scheduleRanchFromCountdowns 只认服务端给的时刻字段');
+    section('12. 幼崽分析四项指标与农场同构');
+    {
+        const an = require(`${SB}/src/services/ranch-analytics`);
+        // 用真实抓包里的周期样本喂进去(兔子: 幼崽3600 + 成长3600 + 成熟14400)
+        an.recordAnimalCycleSamples([{
+            animal_id: 60004,
+            infant_ready_at_ms: 1000 * 1000,
+            grow_ready_at_ms: 1000 * (1000 + 3600),
+            mature_ready_at_ms: 1000 * (1000 + 3600 + 14400),
+        }]);
+        // 配置里兔子没有成品价, 服务端 #22 给的 2160 是真实结算价 —— 这里按线上实况喂进去
+        an.rememberSellValue(60004, 1007, 2160);
+        const cycle = an.getLearnedCycleSec(60004);
+        check('学到兔子周期 = 3600+3600+14400', cycle === 21600, cycle);
+
+        const rows = an.getCubRankings([
+            { goodsId: 1, animalId: 60004, name: '兔子', price: 2034, unlocked: true, remaining: 5,
+                expectedHarvestExp: 360 },
+        ], 'exp');
+        const r = rows[0];
+        check('cycleSec 与农业指标同构', r.cycleSec === 21600, r.cycleSec);
+        check('expPerHour = 360/21600*3600 = 60', r.expPerHour === 60, r.expPerHour);
+        check('普通肥经验/时 = 360/(21600-3600)*3600 = 72', r.normalFertilizerExpPerHour === 72,
+            r.normalFertilizerExpPerHour);
+        check('净利润/时 = (2160-2034)/21600*3600 = 21', r.profitPerHour === 21, r.profitPerHour);
+        check('普通肥净利润/时 = 126/18000*3600 = 25.2',
+            r.normalFertilizerProfitPerHour === 25.2, r.normalFertilizerProfitPerHour);
+
+        // 没有周期样本 → 四项留空, 不编造
+        const noData = an.getCubRankings([
+            { goodsId: 2, animalId: 60999, name: '未知', price: 100, unlocked: true, remaining: 1 },
+        ], 'exp')[0];
+        check('无周期样本时四项为 null',
+            noData.expPerHour === null && noData.profitPerHour === null
+            && noData.normalFertilizerExpPerHour === null,
+            { e: noData.expPerHour, p: noData.profitPerHour });
+        check('无样本时标记 missing 含 cycle',
+            Array.isArray(noData.missing) && noData.missing.includes('cycle'), noData.missing);
+
+        // 排序键与农场一致
+        const sorted = an.getCubRankings([
+            { goodsId: 1, animalId: 60004, name: '兔子', price: 2034, unlocked: true, expectedHarvestExp: 360 },
+            { goodsId: 2, animalId: 60999, name: '未知', price: 100, unlocked: true },
+        ], 'exp');
+        check('exp 排序: 有数据的在前', sorted[0].name === '兔子', sorted.map(x => x.name));
+    }
+
+    section('13. scheduleRanchFromCountdowns 只认服务端给的时刻字段');
     {
         const now = Date.now();
         const view = {

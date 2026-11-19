@@ -29,7 +29,8 @@ const activeTab = ref('crops')
 const cubRows = ref<any[]>([])
 const cubLoading = ref(false)
 const cubError = ref('')
-const cubSort = ref<'ratio' | 'profit' | 'price'>('ratio')
+// 排序键与农场 /api/analytics 同构(exp / fert_exp / profit / fert_profit)
+const cubSort = ref<'exp' | 'fert_exp' | 'profit' | 'fert_profit' | 'ratio' | 'cost' | 'level'>('exp')
 
 async function loadCubAnalytics() {
   const id = currentAccountId.value
@@ -45,7 +46,8 @@ async function loadCubAnalytics() {
     const d = res.data
     if (!d?.ok)
       throw new Error(d?.error || '获取失败')
-    cubRows.value = d.data?.rows || []
+    // 后端已对齐农场格式(返回 { data: rows }), 兼容旧的 rows
+    cubRows.value = (Array.isArray(d.data) ? d.data : (d.data?.rows || d.data?.data)) || []
   }
   catch (e: any) {
     cubError.value = e?.response?.data?.error || e?.message || '获取失败'
@@ -702,20 +704,26 @@ function formatGrowTime(seconds: any) {
         </div>
       </div>
 
-      <!-- ===== 牧场幼崽分析 ===== -->
+      <!-- ===== 牧场幼崽分析(与农场"全部作物"同构) ===== -->
       <div v-if="activeTab === 'ranch'" class="space-y-3">
         <div class="flex flex-wrap items-center gap-3">
+          <span class="font-medium text-gray-700 dark:text-gray-300">全部幼崽</span>
           <BaseSelect
             v-model="cubSort"
-            class="w-40"
+            class="w-52"
             :options="[
-              { label: '按收益比', value: 'ratio' },
-              { label: '按单只净赚', value: 'profit' },
-              { label: '按价格', value: 'price' },
+              { label: '最大经验/时', value: 'exp' },
+              { label: '最大普通肥经验/时', value: 'fert_exp' },
+              { label: '最大净利润/时', value: 'profit' },
+              { label: '最大普通肥净利润/时', value: 'fert_profit' },
+              { label: '收益比', value: 'ratio' },
+              { label: '幼崽成本', value: 'cost' },
+              { label: '最高等级', value: 'level' },
             ]"
           />
           <span class="text-xs text-gray-400">
-            收益比 = 整只回收价 ÷ 幼崽成本；净赚 = 整只回收 − 幼崽成本
+            与「全部作物」同一套指标：经验/时 = 收获经验 ÷ 完整周期；净利润/时 =（整只回收 − 幼崽成本）÷ 周期；
+            普通肥 = 周期缩短 3600 秒（普通罐头）
           </span>
         </div>
 
@@ -729,42 +737,64 @@ function formatGrowTime(seconds: any) {
           暂无幼崽数据（账号需运行且牧场已解锁）
         </div>
         <div v-else class="overflow-hidden border border-gray-200 rounded-lg bg-white shadow dark:border-gray-700 dark:bg-gray-800">
-          <table class="w-full text-left text-sm">
-            <thead class="bg-gray-50 text-xs text-gray-500 dark:bg-gray-700/50 dark:text-gray-400">
-              <tr>
-                <th class="px-3 py-2 font-medium">幼崽</th>
-                <th class="px-3 py-2 text-right font-medium">成本</th>
-                <th class="px-3 py-2 text-right font-medium">整只回收</th>
-                <th class="px-3 py-2 text-right font-medium">收益比</th>
-                <th class="px-3 py-2 text-right font-medium">单只净赚</th>
-                <th class="px-3 py-2 text-right font-medium">限购</th>
-                <th class="px-3 py-2 text-center font-medium">状态</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr
-                v-for="r in cubRows"
-                :key="r.goodsId"
-                class="border-t border-gray-100 dark:border-gray-700"
-              >
-                <td class="px-3 py-2 font-medium">{{ r.name }}</td>
-                <td class="px-3 py-2 text-right tabular-nums">{{ r.cost }}</td>
-                <td class="px-3 py-2 text-right tabular-nums">{{ r.grownValue || '-' }}</td>
-                <td class="px-3 py-2 text-right tabular-nums" :class="r.ratio >= 2 ? 'text-emerald-600 dark:text-emerald-400 font-medium' : ''">
-                  {{ r.ratio ? r.ratio.toFixed(2) : '-' }}
-                </td>
-                <td class="px-3 py-2 text-right tabular-nums">{{ r.profit ?? '-' }}</td>
-                <td class="px-3 py-2 text-right text-gray-500">
-                  {{ r.limit > 0 ? `${r.bought}/${r.limit}` : '不限' }}
-                </td>
-                <td class="px-3 py-2 text-center text-xs">
-                  <span v-if="!r.unlocked" class="text-gray-400">未解锁</span>
-                  <span v-else-if="r.remaining !== null && r.remaining <= 0" class="text-red-500">已售罄</span>
-                  <span v-else class="text-emerald-600 dark:text-emerald-400">可购买</span>
-                </td>
-              </tr>
-            </tbody>
-          </table>
+          <div class="overflow-x-auto">
+            <table class="w-full whitespace-nowrap text-left text-sm">
+              <thead class="border-b bg-gray-50 text-xs text-gray-500 uppercase dark:border-gray-700 dark:bg-gray-700/50 dark:text-gray-400">
+                <tr>
+                  <th class="px-4 py-3 font-medium">幼崽 (Lv)</th>
+                  <th class="px-4 py-3 font-medium">周期</th>
+                  <th class="px-4 py-3 text-right font-medium">经验/时</th>
+                  <th class="px-4 py-3 text-right font-medium">普通肥经验/时</th>
+                  <th class="px-4 py-3 text-right font-medium">净利润/时</th>
+                  <th class="px-4 py-3 text-right font-medium">普通肥净利润/时</th>
+                  <th class="px-4 py-3 text-right font-medium">成本</th>
+                  <th class="px-4 py-3 text-right font-medium">整只回收</th>
+                  <th class="px-4 py-3 text-right font-medium">收益比</th>
+                  <th class="px-4 py-3 text-center font-medium">状态</th>
+                </tr>
+              </thead>
+              <tbody class="divide-y divide-gray-100 dark:divide-gray-700">
+                <tr
+                  v-for="r in cubRows"
+                  :key="r.goodsId"
+                  class="transition-colors hover:bg-gray-50 dark:hover:bg-gray-700/50"
+                >
+                  <td class="px-4 py-2 font-medium">
+                    {{ r.name }}
+                    <span class="text-xs text-gray-400">Lv{{ r.level ?? '-' }}</span>
+                  </td>
+                  <td class="px-4 py-2 text-gray-500">
+                    {{ r.cycleSec ? formatGrowTime(r.cycleSec) : '—' }}
+                  </td>
+                  <td class="px-4 py-2 text-right text-purple-600 font-bold tabular-nums dark:text-purple-400">
+                    {{ r.expPerHour ?? '-' }}
+                  </td>
+                  <td class="px-4 py-2 text-right text-blue-600 font-bold tabular-nums dark:text-blue-400">
+                    {{ r.normalFertilizerExpPerHour ?? '-' }}
+                  </td>
+                  <td class="px-4 py-2 text-right text-amber-500 font-bold tabular-nums">
+                    {{ r.profitPerHour ?? '-' }}
+                  </td>
+                  <td class="px-4 py-2 text-right text-green-500 font-bold tabular-nums">
+                    {{ r.normalFertilizerProfitPerHour ?? '-' }}
+                  </td>
+                  <td class="px-4 py-2 text-right tabular-nums">{{ r.cost }}</td>
+                  <td class="px-4 py-2 text-right tabular-nums">{{ r.grownValue || '-' }}</td>
+                  <td class="px-4 py-2 text-right tabular-nums" :class="r.ratio >= 2 ? 'text-emerald-600 font-medium dark:text-emerald-400' : ''">
+                    {{ r.ratio ? r.ratio.toFixed(2) : '-' }}
+                  </td>
+                  <td class="px-4 py-2 text-center text-xs">
+                    <span v-if="!r.unlocked" class="text-gray-400">未解锁</span>
+                    <span v-else-if="r.remaining !== null && r.remaining <= 0" class="text-red-500">已售罄</span>
+                    <span v-else class="text-emerald-600 dark:text-emerald-400">可购买</span>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <div class="border-t border-gray-100 px-4 py-2 text-xs text-gray-400 dark:border-gray-700">
+            周期数据来自服务端 {{ 'infant/grow/mature_ready_at_ms' }} 的实测样本；没有样本时该行指标显示「-」，不编造。
+          </div>
         </div>
       </div>
 

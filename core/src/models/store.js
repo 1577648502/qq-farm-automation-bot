@@ -54,7 +54,8 @@ const ALLOWED_PLANTING_STRATEGIES = ['preferred', 'level', 'max_exp', 'max_fert_
 const ALLOWED_BAG_SEED_FALLBACK_STRATEGIES = ALLOWED_PLANTING_STRATEGIES.filter(s => s !== 'bag_priority');
 // 牧场幼崽购买策略(独立于农场的种植策略)
 // 牧场幼崽主策略(对应农场 ALLOWED_PLANTING_STRATEGIES 的牧场版)
-const ALLOWED_RANCH_CUB_STRATEGIES = ['max_profit', 'max_level', 'bag_priority'];
+// ⭐ 与农场 ALLOWED_PLANTING_STRATEGIES 同构(农场有的牧场都要有)
+const ALLOWED_RANCH_CUB_STRATEGIES = ['max_level', 'max_exp', 'max_fert_exp', 'max_profit', 'max_fert_profit', 'bag_priority'];
 // 第二优先策略: 不能是 bag_priority(背包优先本身没有"回退"语义),
 // 与农场 ALLOWED_BAG_SEED_FALLBACK_STRATEGIES 同一思路
 const ALLOWED_RANCH_CUB_FALLBACK_STRATEGIES = ALLOWED_RANCH_CUB_STRATEGIES.filter(s => s !== 'bag_priority');

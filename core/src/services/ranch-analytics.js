@@ -1,34 +1,45 @@
 /**
- * 牧场分析 —— 幼崽收益排行(对照 analytics.js 的 getPlantRankings)
+ * 牧场分析 —— 幼崽收益排行(完全对照 analytics.js 的 getPlantRankings)
  *
- * 农场按"经验/时、净利润/时"排作物; 牧场没有同样的耕作模型, 能可靠算出来的是:
- *   · 幼崽成本(商城价, 金券)
- *   · 整只回收价(成熟后卖掉的价, 金券)
- *   · 收益比 = 整只回收 / 幼崽成本  ← 买幼崽策略"max_profit"用的就是它
+ * 农场按「经验/时、普通肥经验/时、净利润/时、普通肥净利润/时」给作物排序;
+ * 牧场这边用同样的四个指标, 只是把"生长时间"换成动物的完整周期。
  *
- * ⚠ 没有编造"每小时收益": 协议里没有稳定的产出间隔字段
- *   (#23 produce_interval 只在兔子上出现过, 鸡完全没有), 算不出来就不给。
- *   这一点和农场不同, 农场的 grow_phases 是完整的。
+ * ⭐ 与农场的一一对应关系:
+ *   农场                         牧场
+ *   ────────────────────────────────────────────
+ *   growTime(生长时间)           cycleSec(幼崽期 + 成长期 + 成熟期)
+ *   harvestExp(收获经验)         expected_harvest_exp(#21 服务端直接给)
+ *   reduceSec(化肥减少)          普通罐头减 3600 秒(抓包: FeedAnimal 后 #2=3412/3597)
+ *   income(毛收益)               整只回收价(成品 type=106 的 price)
+ *   seedPrice(种子成本)          幼崽商城价
+ *   netProfit = income - 成本    整只回收 − 幼崽价
+ *
+ * 周期时长来源(不是编的):
+ *   官方 AnimalInfo 的 *_ready_at_ms 三件套在同一帧内相减即可得到各段时长:
+ *     infant_ready_at_ms(#14) → grow_ready_at_ms(#10) → mature_ready_at_ms(#25)
+ *   抓包实测(20261119-091627_罐头 等):
+ *     鸡  : 幼崽 4s  + 成长 4s  + 成熟 10~14s
+ *     兔子: 幼崽 3600s + 成长 3600s + 成熟 14400s
+ *     天竺鼠: 幼崽 14400s + …
+ *   配置里没有这些数值, 所以由运行时采集的样本汇总成一张"周期表",
+ *   采集不到时返回 null(不编造), 与 farm analytics 对缺失价格的处理一致。
  */
 const gameConfig = require('../config/gameConfig');
 const { getItemById } = gameConfig;
 
+/** 普通罐头/桶带来的加速(秒)。抓包: 用 1 个 → 桶剩余 3595~3597, 用 2 个 → 3412~3403 */
+const NORMAL_CAN_ADVANCE_SEC = 3600;
+
 /**
- * 幼崽 id → 成品(可卖) id 的映射。
- *
- * 实测 ItemInfo:
- *   60001 鸡(幼崽, type=105, price=1)   → 2060001 鸡(成品, type=106, price=3)
- *   60002 鸭(幼崽, type=105, price=540) → 2060002 鸭(成品, type=106, price=2160)
- * 规律: 成品 id = 2 + 幼崽 id + 100000 - 40000? 不成立, 所以按名字匹配更稳。
- *
- * 这里用"同名 + type=106"来找成品, 找不到再退回幼崽自身价格。
+ * 幼崽 id → 成品(可卖) id。
+ * 实测 ItemInfo: 60001 鸡 → 2060001(p3); 60002 鸭 → 2060002(p2160)
+ * 规律不统一, 按"同名 + type=106"匹配。
  */
 function findGrownItemId(animalId) {
     const cub = getItemById(Number(animalId) || 0);
     if (!cub) return 0;
     const name = String(cub.name || '');
     if (!name) return 0;
-    // 遍历全部物品找同名且 type=106(成品动物)
     const all = typeof gameConfig.getAllItems === 'function' ? gameConfig.getAllItems() : null;
     if (!Array.isArray(all)) return 0;
     const hit = all.find(it => Number(it.type) === 106 && String(it.name || '') === name);
@@ -37,9 +48,7 @@ function findGrownItemId(animalId) {
 
 /**
  * 成熟动物的整只回收价(金券)。
- * 优先取"成品动物"(type=106) 的 price; 取不到才退回幼崽自身 price。
- * @param {number} animalId 幼崽 id(60001 …)
- * @returns {number}
+ * 优先成品(type=106)的 price; 取不到退回幼崽自身 price。
  */
 function getGrownValue(animalId) {
     const grownId = findGrownItemId(animalId);
@@ -49,16 +58,83 @@ function getGrownValue(animalId) {
         return Number.isFinite(price) && price > 0 ? price : 0;
     };
     const grown = grownId ? pick(grownId) : 0;
-    // 成品价明显更高才用(幼崽价通常远低于整只回收)
     const cub = pick(animalId);
-    return grown > cub ? grown : cub;
+    if (grown > cub) return grown;
+    // 配置里没有成品价的动物(实测兔子 60004 就没有 106 条目),
+    // 用运行时从服务端学到的 expected_harvest_sells(#22) 兜底 —— 那是真实结算价。
+    const learned = Number((learnedSellValue.get(Number(animalId) || 0) || {}).value) || 0;
+    if (learned > 0) return learned;
+    return cub;
+}
+
+// 运行时从 AnimalInfo#22(expected_harvest_sells) 学到的收获所得
+const learnedSellValue = new Map();
+
+/**
+ * 记录服务端给的"收获预计所得"(#22)。
+ * 供配置里缺成品价的动物(如兔子)兜底用。
+ */
+function rememberSellValue(animalId, itemId, amount) {
+    const id = Number(animalId) || 0;
+    const amt = Number(amount) || 0;
+    const cur = Number(itemId) || 1007;
+    if (id > 0 && amt > 0) learnedSellValue.set(id, { itemId: cur, value: amt });
+}
+
+// ============ 周期时长表(运行时采集, 不是硬编码) ============
+/**
+ * animalId → 各段时长(秒)。
+ * 由 recordAnimalCycleSamples(view) 从真实的 *_ready_at_ms 里算出并累加学习。
+ */
+const cycleTable = new Map();
+
+/**
+ * 从一次 GetRanchDetail 快照里学习各动物的阶段时长。
+ *
+ * 同一只动物在一帧里同时带着:
+ *   infant_ready_at_ms(幼崽结束) / grow_ready_at_ms(成长结束) / mature_ready_at_ms(成熟)
+ * 差值就是各段时长 —— 与服务端时钟无关, 所以跨账号/跨时间都可比。
+ *
+ * @param {object} view toRanchView() 的返回
+ */
+function recordAnimalCycleSamples(view) {
+    // worker 模式下 view 里是没有绝对时刻的(已被转成相对秒), 所以这里直接读原始 proto
+    // 由调用方在 toRanchView 之前喂进来(见 ranch.js 的 recordCycleSamplesFromReply)
+    if (!view || !Array.isArray(view)) return;
+    for (const a of view) {
+        const animalId = Number(a.animal_id) || 0;
+        if (!animalId) continue;
+        const inf = Number(a.infant_ready_at_ms) || 0;
+        const gro = Number(a.grow_ready_at_ms) || 0;
+        const mat = Number(a.mature_ready_at_ms) || 0;
+        if (!inf || !gro) continue;
+        const infantSec = Math.round((gro - inf) / 1000);
+        const matureSec = mat > gro ? Math.round((mat - gro) / 1000) : 0;
+        if (infantSec < 0) continue;
+        const prev = cycleTable.get(animalId) || { infantSec: 0, matureSec: 0, n: 0 };
+        // 取见过的最大值: 服务端会给"剩余时间", 中途观察到的差值可能被截短
+        cycleTable.set(animalId, {
+            infantSec: Math.max(prev.infantSec, infantSec),
+            matureSec: Math.max(prev.matureSec, matureSec),
+            n: prev.n + 1,
+        });
+    }
+}
+
+/** 取某动物学到的周期(秒); 没有样本返回 null */
+function getLearnedCycleSec(animalId) {
+    const r = cycleTable.get(Number(animalId) || 0);
+    if (!r) return null;
+    // 成长期通常与幼崽期等长(抓包: 兔子 3600/3600); 没有 mature 样本时用它兜底
+    const growSec = r.infantSec;
+    const total = r.infantSec + growSec + (r.matureSec || 0);
+    return total > 0 ? total : null;
 }
 
 /**
- * 由商城幼崽列表算出收益排行。
- * @param {Array<{goodsId:number, animalId:number, name:string, price:number,
- *                limit:number, bought:number, remaining:number|null, unlocked:boolean}>} shop
- * @param {string} sortBy ratio|price|name
+ * 由商城幼崽列表算出排行(四项指标与农场同构)。
+ * @param {Array} shop getCubShop() 的返回
+ * @param {string} sortBy ratio|exp|fert_exp|profit|fert_profit|cost|name|level
  * @returns {Array<object>}
  */
 function getCubRankings(shop, sortBy = 'ratio') {
@@ -67,30 +143,92 @@ function getCubRankings(shop, sortBy = 'ratio') {
         const cost = Number(g.price) || 0;
         const grownValue = getGrownValue(animalId);
         const ratio = cost > 0 && grownValue > 0 ? grownValue / cost : 0;
+        const netProfit = grownValue > 0 && cost > 0 ? grownValue - cost : null;
+
+        const cubInfo = getItemById(animalId) || {};
+        const level = Number(cubInfo.level) || null;
+
+        // ---- 四个指标(与农场同构) ----
+        const cycleSec = getLearnedCycleSec(animalId);      // 完整周期; 没样本 = null
+        const harvestExp = Number(g.expectedHarvestExp) || 0;
+        let expPerHour = null;
+        let normalFertilizerExpPerHour = null;
+        let profitPerHour = null;
+        let normalFertilizerProfitPerHour = null;
+        if (cycleSec && cycleSec > 0) {
+            // 经验/时 = 收获经验 / 周期
+            if (harvestExp > 0) {
+                expPerHour = Number.parseFloat(((harvestExp / cycleSec) * 3600).toFixed(2));
+            }
+            // 普通肥(普通罐头)缩短周期 3600 秒
+            const fertSec = Math.max(1, cycleSec - NORMAL_CAN_ADVANCE_SEC);
+            if (harvestExp > 0) {
+                normalFertilizerExpPerHour = Number.parseFloat(((harvestExp / fertSec) * 3600).toFixed(2));
+            }
+            if (netProfit !== null) {
+                profitPerHour = Number.parseFloat(((netProfit / cycleSec) * 3600).toFixed(2));
+                normalFertilizerProfitPerHour = Number.parseFloat(((netProfit / fertSec) * 3600).toFixed(2));
+            }
+        }
+
         return {
             goodsId: Number(g.goodsId) || 0,
             animalId,
             name: String(g.name || ''),
+            level,
             cost,
             grownValue,
             ratio,
-            // 净赚 = 整只回收 - 幼崽成本
-            profit: grownValue > 0 && cost > 0 ? grownValue - cost : null,
+            profit: netProfit,
+            // 与农场字段一一对应
+            cycleSec,
+            expPerHour,
+            normalFertilizerExpPerHour,
+            profitPerHour,
+            normalFertilizerProfitPerHour,
+            hasCycleData: cycleSec !== null,
             limit: Number(g.limit) || 0,
             bought: Number(g.bought) || 0,
             remaining: g.remaining === null || g.remaining === undefined ? null : Number(g.remaining),
             unlocked: !!g.unlocked,
+            // 与农场一致: 没有定价/时长数据时明确标出来, 不假装有值
+            missing: [
+                !(grownValue > 0) ? 'price' : null,
+                !(cycleSec > 0) ? 'cycle' : null,
+            ].filter(Boolean),
         };
     });
 
+    const numDesc = (key) => (a, b) => {
+        const av = a[key]; const bv = b[key];
+        if (av === null && bv === null) return 0;
+        if (av === null) return 1;
+        if (bv === null) return -1;
+        return bv - av;
+    };
     const sorters = {
         ratio: (a, b) => (b.ratio - a.ratio) || (a.cost - b.cost),
-        profit: (a, b) => ((b.profit ?? -1) - (a.profit ?? -1)) || (b.ratio - a.ratio),
+        exp: numDesc('expPerHour'),
+        fert_exp: numDesc('normalFertilizerExpPerHour'),
+        profit: numDesc('profitPerHour'),
+        fert_profit: numDesc('normalFertilizerProfitPerHour'),
         cost: (a, b) => a.cost - b.cost,
+        level: (a, b) => (b.level ?? 0) - (a.level ?? 0),
         name: (a, b) => a.name.localeCompare(b.name, 'zh-CN'),
     };
     rows.sort(sorters[sortBy] || sorters.ratio);
     return rows;
 }
 
-module.exports = { getCubRankings, getGrownValue };
+module.exports = {
+    getCubRankings,
+    rememberSellValue,
+    learnedSellValue,
+    getGrownValue,
+    findGrownItemId,
+    // 周期学习: ranch.js 每次拿到 GetRanchDetail 帧就喂一次
+    recordAnimalCycleSamples,
+    getLearnedCycleSec,
+    cycleTable,
+    NORMAL_CAN_ADVANCE_SEC,
+};

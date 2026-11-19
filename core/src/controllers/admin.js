@@ -1561,11 +1561,13 @@ app.use('/api', (req, res, next) => {
     app.post('/api/ranch/operate', withAccount((accountId, req) => provider.operateRanch(accountId, req.body || {})));
 
     // 幼崽收益排行(对照农场的 /api/analytics) —— 需要账号, 因为要拉实时商城价
+    // 牧场幼崽分析(对照 /api/analytics 的 getPlantRankings)
+    //   排序键与农场同构: exp / fert_exp / profit / fert_profit (+ ratio/cost/level/name)
     app.get('/api/ranch/analytics', withAccount(async (accountId, req) => {
         const sortBy = String(req.query.sort || 'ratio');
         const shop = await provider.getCubShop(accountId);
         const { getCubRankings } = require('../services/ranch-analytics');
-        return { rows: getCubRankings(shop, sortBy), sort: sortBy };
+        return { data: getCubRankings(shop, sortBy), sort: sortBy };
     }, { softErrors: true }));
 
     // 牧场商城(道具 + 幼崽分类)

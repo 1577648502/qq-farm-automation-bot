@@ -661,16 +661,24 @@ async function harvestAnimal(slot = 0, hostGid = 0) {
  *   max_level   ↔ level        最高等级
  *   bag_priority↔ bag_priority 背包优先
  */
+// ⭐ 与农场 plantingStrategyOptions **逐项同构**(用户要求: 农场有的牧场都要有)
 const RANCH_CUB_STRATEGY_LABELS = {
-    max_profit: '收益比最高(整只回收 ÷ 幼崽成本)',
-    max_level: '等级最高(优先高级动物)',
+    max_level: '最高等级动物',
+    max_exp: '最大经验/时',
+    max_fert_exp: '最大普通肥经验/时',
+    max_profit: '最大净利润/时',
+    max_fert_profit: '最大普通肥净利润/时',
     bag_priority: '背包幼崽优先',
 };
+const RANCH_CUB_STRATEGY_KEYS = Object.keys(RANCH_CUB_STRATEGY_LABELS);
 
 /** 第二优先策略的标签(不含 bag_priority —— 它没有"回退"语义) */
 const RANCH_CUB_FALLBACK_LABELS = {
-    max_profit: '收益比最高',
-    max_level: '等级最高',
+    max_level: '最高等级动物',
+    max_exp: '最大经验/时',
+    max_fert_exp: '最大普通肥经验/时',
+    max_profit: '最大净利润/时',
+    max_fert_profit: '最大普通肥净利润/时',
 };
 
 /**
@@ -708,9 +716,31 @@ function applyCubStrategy(cubs, opts = {}) {
     if (!RANCH_CUB_STRATEGY_LABELS[strategy]) strategy = 'max_profit';
     if (!RANCH_CUB_FALLBACK_LABELS[fallback]) fallback = 'max_level';
 
-    // 各策略的排序函数(数值小的优先)
-    const byProfit = (a, b) => (b.valueRatio - a.valueRatio) || (a.cost - b.cost);
-    const byLevel = (a, b) => (b.animalId - a.animalId) || (b.valueRatio - a.valueRatio);
+    // 各策略的排序函数(与农场四项指标同构; 数值大的优先)
+    //   没有对应指标的幼崽一律排到最后(null 不参与比较)
+    const bigger = (get) => (a, b) => {
+        const av = get(a); const bv = get(b);
+        if (av === null && bv === null) return 0;
+        if (av === null) return 1;
+        if (bv === null) return -1;
+        return bv - av;
+    };
+    const byProfit = bigger(x => x.ratio ?? null);          // 收益比(整只回收 ÷ 成本)
+    const byLevel = bigger(x => x.level ?? null);           // 动物等级
+    const byExp = bigger(x => x.expPerHour ?? null);        // 经验/时
+    const byFertExp = bigger(x => x.fertExpPerHour ?? null);// 普通肥经验/时
+    const byNetProfit = bigger(x => x.netProfitPerHour ?? null);
+    const byFertProfit = bigger(x => x.fertProfitPerHour ?? null);
+    const pickSorter = (key) => {
+        switch (key) {
+            case 'max_level': return byLevel;
+            case 'max_exp': return byExp;
+            case 'max_fert_exp': return byFertExp;
+            case 'max_profit': return byNetProfit;
+            case 'max_fert_profit': return byFertProfit;
+            default: return byProfit;
+        }
+    };
 
     const list = [...cubs];
 
@@ -722,18 +752,17 @@ function applyCubStrategy(cubs, opts = {}) {
             const bi = indexMap.has(b.animalId) ? indexMap.get(b.animalId) : Number.MAX_SAFE_INTEGER;
             if (ai !== bi) return ai - bi;
             // 都不在列表里 → 第二策略
-            return fallback === 'max_profit' ? byProfit(a, b) : byLevel(a, b);
+            return pickSorter(fallback)(a, b);
         });
         return list;
     }
 
     // 主策略是 bag_priority 但列表为空 → 直接走第二策略(农场也是这个行为)
-    const mainSort = strategy === 'max_level' ? byLevel : byProfit;
     if (strategy === 'bag_priority') {
-        list.sort(fallback === 'max_profit' ? byProfit : byLevel);
+        list.sort(pickSorter(fallback));
         return list;
     }
-    list.sort(mainSort);
+    list.sort(pickSorter(strategy));
     return list;
 }
 
@@ -1030,6 +1059,21 @@ function getStageText(stage) {
 /** 把 proto 的 RanchInfo(repeated: 窝 + 棚)转成面板直接可渲染的对象 */
 function toRanchView(reply) {
     const ranches = (reply && reply.ranches) || [];
+    // ⭐ 每次拿到详情就喂一次"周期学习": 服务端同一帧里给了
+    //   infant/grow/mature_ready_at_ms 三个绝对时刻, 差值就是各阶段时长。
+    //   ranch-analytics 用这些样本算"经验/时、净利润/时"(与农场四个指标同构)。
+    try {
+        const seen = [];
+        for (const r of ranches) for (const a of (r.animals || [])) seen.push(a);
+        require('./ranch-analytics').recordAnimalCycleSamples(seen);
+        // 同时记住每只动物的"收获经验"(#21) 与"收获所得"(#22)
+        const an = require('./ranch-analytics');
+        for (const a of seen) {
+            rememberHarvestExp(a.animal_id, a.expected_harvest_exp);
+            const sells = a.expected_harvest_sells;
+            if (sells && sells[0]) an.rememberSellValue(a.animal_id, sells[0].item_id, sells[0].amount);
+        }
+    } catch { /* 分析是旁路, 不影响视图 */ }
     const nowMs = Date.now();
     const animals = [];
     const coops = [];
@@ -2855,8 +2899,65 @@ async function getCubShop() {
             grownValue: grown,
             valueRatio: grown > 0 ? grown / price : 0,
             profit: grown > 0 ? grown - toNum(g.price) : null,
+            // ⭐ 与农场四项指标同构, 供幼崽策略直接按同一套口径排序
+            ...buildCubPerHourMetrics(animalId, grown, price),
         };
     }).sort((a, b) => b.valueRatio - a.valueRatio);
+}
+
+/**
+ * 幼崽的"每小时"四项指标 —— 与农场 analytics 的口径一一对应。
+ *
+ * 公式(对照 core/src/services/analytics.js):
+ *   经验/时        = 收获经验 / 周期 * 3600
+ *   普通肥经验/时  = 收获经验 / (周期 - 3600) * 3600
+ *   净利润/时      = (整只回收 - 幼崽成本) / 周期 * 3600
+ *   普通肥净利润/时= 同上, 分母换成 (周期 - 3600)
+ *
+ * 周期来自 ranch-analytics 的实测样本表; 没样本时四项都给 null,
+ * 由策略排序统一排到最后(不编造)。
+ */
+function buildCubPerHourMetrics(animalId, grownValue, cost) {
+    const out = {
+        cycleSec: null,
+        expPerHour: null,
+        fertExpPerHour: null,
+        netProfitPerHour: null,
+        fertProfitPerHour: null,
+        level: null,
+    };
+    try {
+        const an = require('./ranch-analytics');
+        const info = require('../config/gameConfig').getItemById(animalId);
+        out.level = Number(info && info.level) || null;
+        const cycleSec = an.getLearnedCycleSec(animalId);
+        if (!cycleSec || cycleSec <= 0) return out;
+        out.cycleSec = cycleSec;
+        const fertSec = Math.max(1, cycleSec - an.NORMAL_CAN_ADVANCE_SEC);
+        // 收获经验: 服务端在 AnimalInfo#21 给的是"每次收获经验", 周期内可收多次,
+        // 这里按单次口径计算(与农场"单次收获/生长时间"一致)
+        const exp = Number((expPerHourCache.get(animalId) || {}).expectedHarvestExp) || 0;
+        if (exp > 0) {
+            out.expPerHour = Number(((exp / cycleSec) * 3600).toFixed(2));
+            out.fertExpPerHour = Number(((exp / fertSec) * 3600).toFixed(2));
+        }
+        const net = (grownValue > 0 && cost > 0) ? grownValue - cost : null;
+        if (net !== null) {
+            out.netProfitPerHour = Number(((net / cycleSec) * 3600).toFixed(2));
+            out.fertProfitPerHour = Number(((net / fertSec) * 3600).toFixed(2));
+        }
+    } catch { /* 指标算不出来就是 null */ }
+    return out;
+}
+
+/** 运行时记住的"每只动物的收获经验"(由 GetRanchDetail 样本喂进来) */
+const expPerHourCache = new Map();
+
+/** 记录某动物的 expected_harvest_exp(#21) —— 策略排序与排行都要用 */
+function rememberHarvestExp(animalId, exp) {
+    const id = toNum(animalId);
+    const v = toNum(exp);
+    if (id > 0 && v > 0) expPerHourCache.set(id, { expectedHarvestExp: v });
 }
 
 /**

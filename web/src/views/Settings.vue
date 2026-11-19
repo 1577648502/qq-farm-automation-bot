@@ -357,16 +357,22 @@ const plantingStrategyOptions = [
 ]
 
 // 牧场幼崽购买策略(独立于农场种植策略)
-// 牧场幼崽策略选项 —— 与农场 plantingStrategyOptions 同构
+// ⭐ 与农场 plantingStrategyOptions **逐项同构**(用户要求: 农场有的牧场都要有)
 const ranchCubStrategyOptions = [
-  { label: '收益比最高', value: 'max_profit' },
   { label: '最高等级动物', value: 'max_level' },
+  { label: '最大经验/时', value: 'max_exp' },
+  { label: '最大普通肥经验/时', value: 'max_fert_exp' },
+  { label: '最大净利润/时', value: 'max_profit' },
+  { label: '最大普通肥净利润/时', value: 'max_fert_profit' },
   { label: '背包幼崽优先', value: 'bag_priority' },
 ]
-// 第二优先策略 —— 与农场 BAG_FALLBACK_STRATEGY_OPTIONS 同构
+// 第二优先策略 —— 与农场 BAG_FALLBACK_STRATEGY_OPTIONS 完全同构
 const ranchCubFallbackStrategyOptions = [
-  { label: '收益比最高', value: 'max_profit' },
   { label: '最高等级动物', value: 'max_level' },
+  { label: '最大经验/时', value: 'max_exp' },
+  { label: '最大普通肥经验/时', value: 'max_fert_exp' },
+  { label: '最大净利润/时', value: 'max_profit' },
+  { label: '最大普通肥净利润/时', value: 'max_fert_profit' },
 ]
 
 const BAG_FALLBACK_STRATEGY_OPTIONS = [
@@ -576,6 +582,56 @@ async function loadRanchCubs() {
   }
   catch { /* 拉不到就只显示已保存的 id */ }
 }
+
+// ===== 幼崽策略预览(对照农场的 strategyPreviewLabel) =====
+// 农场的预览是「130级 薄荷」; 牧场同样显示「Lv 名称」。
+const ranchCubPreviewLabel = ref<string | null>(null)
+
+// 前端本地也要能把策略映射到 /api/ranch/analytics 的排序键
+const RANCH_SORT_BY_MAP: Record<string, string> = {
+  max_level: 'level',
+  max_exp: 'exp',
+  max_fert_exp: 'fert_exp',
+  max_profit: 'profit',
+  max_fert_profit: 'fert_profit',
+  bag_priority: 'exp',
+}
+
+watchEffect(async (onCleanup) => {
+  const accountId = String(currentAccountId.value || '')
+  let cancelled = false
+  onCleanup(() => {
+    cancelled = true
+  })
+
+  let strategy = localStrategySettings.value.ranchCubStrategy
+  if (strategy === 'bag_priority') {
+    // bag_priority: 预览显示"第二优先策略"会选中谁(与农场一致)
+    strategy = localStrategySettings.value.ranchCubFallbackStrategy || 'max_level'
+  }
+  const sortBy = RANCH_SORT_BY_MAP[strategy] || 'level'
+  if (!accountId) {
+    ranchCubPreviewLabel.value = null
+    return
+  }
+  try {
+    const res = await api.get('/api/ranch/analytics', {
+      headers: { 'x-account-id': accountId },
+      params: { sort: sortBy },
+    })
+    if (cancelled)
+      return
+    const rows = res.data?.data
+    const list = Array.isArray(rows) ? rows : (rows?.data || [])
+    const available = list.filter((r: any) => r.unlocked && !(r.remaining !== null && r.remaining <= 0))
+    const best = available[0]
+    ranchCubPreviewLabel.value = best ? `Lv${best.level ?? '-'} ${best.name}` : '暂无可用幼崽'
+  }
+  catch {
+    if (!cancelled)
+      ranchCubPreviewLabel.value = null
+  }
+})
 
 // 优先列表: 按用户设定的顺序展示, 供勾选/排序
 const ranchCubPriorityOptions = computed(() => {
@@ -2336,7 +2392,7 @@ async function onBackupFileChange(ev: Event) {
             </div>
           </div>
 
-          <!-- ===== 牧场幼崽策略(独立于上面的农场种植策略) ===== -->
+          <!-- ===== 牧场幼崽策略(与农场"种植策略"完全同构) ===== -->
           <div class="border border-amber-200 rounded-lg bg-amber-50/40 p-4 space-y-3 dark:border-amber-800/50 dark:bg-amber-900/10">
             <div class="flex flex-wrap items-start justify-between gap-3">
               <div>
@@ -2345,17 +2401,31 @@ async function onBackupFileChange(ev: Event) {
                   牧场幼崽购买策略
                 </h4>
                 <p class="mt-1 text-xs text-amber-700/90 dark:text-amber-300/90">
-                  与上面的农场种植策略相互独立。牧场按此策略决定买哪种幼崽、买多少只。
+                  与上面的农场种植策略相互独立。指标口径与「全部作物」一致：经验/时、普通肥经验/时、净利润/时、普通肥净利润/时。
                 </p>
               </div>
             </div>
 
-            <!-- 与农场"种植策略 + 第二优先策略"一一对应 -->
-            <BaseSelect
-              v-model="localStrategySettings.ranchCubStrategy"
-              label="幼崽策略"
-              :options="ranchCubStrategyOptions"
-            />
+            <div class="grid grid-cols-1 gap-3 md:grid-cols-2">
+              <BaseSelect
+                v-model="localStrategySettings.ranchCubStrategy"
+                label="幼崽策略"
+                :options="ranchCubStrategyOptions"
+              />
+              <div class="flex flex-col gap-1.5">
+                <label class="text-sm text-gray-700 font-medium dark:text-gray-300">
+                  {{ localStrategySettings.ranchCubStrategy === 'bag_priority' ? '第二优先策略预览' : '策略选崽预览' }}
+                </label>
+                <div
+                  class="w-full flex items-center justify-between border border-gray-200 rounded-lg bg-gray-50 px-3 py-2 text-gray-500 dark:border-gray-600 dark:bg-gray-800/50 dark:text-gray-400"
+                >
+                  <span class="truncate">{{ ranchCubPreviewLabel ?? '加载中...' }}</span>
+                  <div class="i-carbon-chevron-down shrink-0 text-lg text-gray-400" />
+                </div>
+              </div>
+            </div>
+
+            <!-- 与农场"背包种子优先 → 第二优先策略"一一对应 -->
             <BaseSelect
               v-if="localStrategySettings.ranchCubStrategy === 'bag_priority'"
               v-model="localStrategySettings.ranchCubFallbackStrategy"
