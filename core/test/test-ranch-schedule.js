@@ -391,7 +391,33 @@ proto.loadProto().then(async () => {
         check('空描述不丢(归到成长手册)', f('') === '成长手册', f(''));
     }
 
-    section('18. 牧歌初启: tiers 字段必须按 camelCase 读(keepCase:true)');
+    section('18. 牧歌初启: status 语义(1/2/3/4)');
+    {
+        // 2026-11-19 抓包时间线定案:
+        //   1 = 已开放进行中 / 2 = 待领取 / 3 = 已领取 / 4 = 本批次未开放(按天解锁)
+        // 关键判据: 4 与进度无关(实测 15/15、20/20 仍是 4), 同批次到点整批 4→1。
+        const src = require('node:fs').readFileSync(
+            require('node:path').join(SB, 'src/services/activity.js'), 'utf8');
+        check('summary 统计了 locked(status=4)',
+            src.includes('locked: list.filter(x => x.status === 4).length'),
+            '未找到 locked 统计');
+        check('死代码 claimableBefore 已删除(不再声明该变量)',
+            !/const\s+claimableBefore\s*=/.test(src),
+            (src.match(/const\s+claimableBefore[^\n]*/) || [''])[0]);
+        // 82/83 两个领取命令都发
+        check('MUGE_TASK_CLAIM2 = 83 已定义', /MUGE_TASK_CLAIM2:\s*83/.test(src),
+            (src.match(/MUGE_TASK_CLAIM2:[^,\n]*/) || [])[0]);
+        check('两个命令都发送',
+            src.includes('ACTIVITY_OPERATE.MUGE_TASK_CLAIM2])'),
+            '未找到双命令循环');
+        // proto 里补了 183
+        const psrc = require('node:fs').readFileSync(
+            require('node:path').join(SB, 'src/proto/activitypb.proto'), 'utf8');
+        check('proto 有 field 183', /muge_task_claim2 = 183/.test(psrc),
+            (psrc.match(/muge_task_claim2[^;]*/) || [])[0]);
+    }
+
+    section('19. 牧歌初启: tiers 字段必须按 camelCase 读(keepCase:true)');
     {
         // 线上 bug: 代码写 x.required_weight / t.total_weight, 但 proto 是 keepCase:true,
         // 字段名保持 camelCase → 永远是 undefined → 兴牧庆典的"所需重量"全是 0。
@@ -403,7 +429,7 @@ proto.loadProto().then(async () => {
         check('读 totalWeight(camelCase)', src.includes('t.totalWeight'), '未找到 totalWeight');
     }
 
-    section('19. scheduleRanchFromCountdowns 只认服务端给的时刻字段');
+    section('20. scheduleRanchFromCountdowns 只认服务端给的时刻字段');
     {
         const now = Date.now();
         const view = {

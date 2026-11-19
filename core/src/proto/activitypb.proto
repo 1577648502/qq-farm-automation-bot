@@ -65,7 +65,14 @@ message ActivityData {
     ActivityBodyMugeShare muge_share = 127;           // 2026111705 分享任务
 }
 
-// 1704 活动任务: 任务 {1:序号, 2:当前进度, 3:目标, 4:状态(1=未达标,2=可领?,3=已领), 5:奖励, 6:描述, 7:类型}
+// 1704 活动任务: 任务 {1:序号, 2:当前进度, 3:目标, 4:状态, 5:奖励, 6:描述, 7:类型(批次)}
+//   状态语义(2026-11-19 抓包时间线定案):
+//     1 = 已开放、进行中(未达标)
+//     2 = 已完成、待领取(达标瞬间 1→2, 全语料实测出现过 8 次)
+//     3 = 已领取(发 cmd=82 后 2→3)
+//     4 = **本批次尚未开放**, 按天分批解锁, 与进度无关
+//         (实测有 15/15、20/20 仍是 4; 同一批次 kind 内全同态, 到点整批翻转)
+//   7 = 批次号(1..8), 每批 3 条任务
 message ActivityBodyMugeTasks {
     repeated MugeTask tasks = 1;
     // 2,3 未确认
@@ -74,7 +81,7 @@ message MugeTask {
     int64 seq = 1;
     int64 progress = 2;          // 当前进度(部分任务缺省)
     int64 target = 3;            // 目标次数
-    int64 status = 4;            // 观察值 3=已领
+    int64 status = 4;            // 1=进行中 2=可领 3=已领 4=本批次未开放
     corepb.Item reward = 5;
     string desc = 6;             // 如 "累计饲养动物5只"
     int64 kind = 7;
@@ -89,7 +96,7 @@ message MugeInviteTier {
     int64 seq = 1;               // 档位
     int64 required = 2;          // 需要助力人数(1/2/3/5/7/10)
     corepb.Item reward = 3;
-    int64 status = 4;            // 3=已领, 1=可领未领
+    int64 status = 4;            // 1=未达标 2=可领 3=已领(4 在助力档位里未出现)
 }
 message MugeInviteFriend {
     int64 gid = 1;               // 好友 gid
@@ -108,7 +115,7 @@ message MugeTier {
     int64 seq = 1;               // 档位 1..N
     int64 requiredWeight = 2;    // 所需重量(2000000/5000000/.../500000000)
     corepb.Item reward = 3;
-    int64 status = 4;            // 1=未达标, 2=可领, 3=已领
+    int64 status = 4;            // 1=未达标 2=可领 3=已领(4 在重量档位里未出现)
 }
 
 // 1705 分享任务: {1:[{1:序号, 2:次数}], 2/3/4: 标志}
@@ -370,6 +377,9 @@ message OperateRequest {
     MugeTierClaimReq muge_tier_claim = 185;          // cmd=85 (2026111702 全服饲养重量档位奖励, {1:0}=领全部可领)
     MugeInviteClaimReq muge_invite_claim = 184;      // cmd=84 (2026111703 邀请好友助力奖励, {1:0}=领全部可领)
     MugeTaskClaimReq muge_task_claim = 182;          // cmd=82 (2026111704 活动任务奖励, {1:0}=领全部可领)
+    // 同一子活动还有 cmd=83(field 183), 请求体同样是 {1:0}。
+    // 抓包 20261118-120230 实测能把任务 status 1→3 —— 只发 82 会漏领一部分。
+    MugeTaskClaimReq muge_task_claim2 = 183;         // cmd=83 (2026111704 备用领取命令)
     MugeShareClaimReq muge_share_claim = 186;        // cmd=86 (2026111705 分享任务逐个领, {1:{1:序号,2:1},2:0})
     MugeShareEmptyReq muge_share_empty = 187;        // cmd=87 (2026111705 分享前置, 空 msg)
     MugeShareEmptyReq muge_share_after = 189;        // cmd=89 (2026111705 分享完成后, 空 msg)

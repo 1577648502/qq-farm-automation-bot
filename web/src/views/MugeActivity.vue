@@ -30,19 +30,19 @@ const data = ref<any>(null)
 const activePage = ref<'handbook' | 'festival' | 'friends' | 'persona'>('handbook')
 
 /**
- * 状态语义(服务端 status 字段):
- *   1 = 进行中(未达标)
- *   2 = 可领取
+ * 状态语义(2026-11-19 抓包时间线定案):
+ *   1 = 已开放、进行中(未达标)
+ *   2 = 已完成、待领取
  *   3 = 已领取
- *   4 = 已解锁但未完成 / 锁定(高难度档位)
- * 说明: 4 在 24 条任务里出现 15 次, 且包含进度已满的条目, 因此不是"已领"。
+ *   4 = 本批次尚未开放 —— 按天分批解锁, **与进度无关**
+ *       (实测有 15/15、20/20 仍是 4; 到点整批 4→1)
  */
 const STATUS_LABEL: Record<number, { text: string, cls: string }> = {
   0: { text: '未解锁', cls: 'text-gray-400' },
   1: { text: '进行中', cls: 'text-gray-500 dark:text-gray-400' },
   2: { text: '可领取', cls: 'text-amber-600 dark:text-amber-400 font-medium' },
   3: { text: '已领取', cls: 'text-green-600 dark:text-green-400' },
-  4: { text: '未完成', cls: 'text-gray-400' },
+  4: { text: '未开放', cls: 'text-gray-300 dark:text-gray-600' },
 }
 
 function statusOf(s: number) {
@@ -82,9 +82,15 @@ const tasksByModule = computed(() => {
   }
 })
 
-/** 已完成(进度达标)数量 —— 用于成长手册的进度条 */
+/** 已完成(进度达标且已开放)数量 —— 用于成长手册的进度条 */
 function doneCount(list: any[]) {
-  return list.filter(t => Number(t.progress) >= Number(t.target) && Number(t.target) > 0).length
+  return list.filter(t => Number(t.status) !== 4
+    && Number(t.target) > 0 && Number(t.progress) >= Number(t.target)).length
+}
+
+/** 本批次尚未开放的数量(status=4, 与进度无关) */
+function lockedCount(list: any[]) {
+  return list.filter(t => Number(t.status) === 4).length
 }
 
 const claimableTotal = computed(() => {
@@ -219,8 +225,11 @@ watch(currentAccountId, () => refresh())
           <span class="text-xs text-gray-400">
             已完成 {{ doneCount(tasksByModule.growth) }}/{{ tasksByModule.growth.length }}
           </span>
+          <span v-if="lockedCount(tasksByModule.growth)" class="text-xs text-gray-300 dark:text-gray-600">
+            · 未开放 {{ lockedCount(tasksByModule.growth) }}
+          </span>
           <span class="ml-auto text-xs text-gray-400">
-            奖励由「一键领取」自动领取
+            批次按天开放，奖励由「一键领取」自动领取
           </span>
         </div>
         <div class="overflow-x-auto">
@@ -242,7 +251,12 @@ watch(currentAccountId, () => refresh())
               </tr>
             </thead>
             <tbody class="divide-y divide-gray-100 dark:divide-gray-700">
-              <tr v-for="t in tasksByModule.growth" :key="t.seq" class="hover:bg-gray-50 dark:hover:bg-gray-700/40">
+              <tr
+                v-for="t in tasksByModule.growth"
+                :key="t.seq"
+                class="hover:bg-gray-50 dark:hover:bg-gray-700/40"
+                :class="{ 'opacity-60': Number(t.status) === 4 }"
+              >
                 <td class="px-2 py-1.5 text-gray-700 dark:text-gray-300">
                   {{ t.desc || `任务${t.seq}` }}
                 </td>

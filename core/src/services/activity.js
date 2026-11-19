@@ -288,7 +288,10 @@ const ACTIVITY_OPERATE = {
     QINGMEI_SELL: 16,
     STAR_LIGHT_UP: 21,   // 观星礼录 点亮/领取当日星宿
     // 「牧歌初启」(2026-11-17 抓包实测 cmd 号)
-    MUGE_TASK_CLAIM: 82,      // 2026111704 活动任务奖励
+    MUGE_TASK_CLAIM: 82,      // 2026111704 活动任务奖励({1:0}=领全部可领)
+    // 同一子活动还有第二个领取命令: 请求体同样是 {1:0}(field 183),
+    // 抓包 20261118-120230 实测能把 status 1→3。只发 82 会漏掉一部分可领任务。
+    MUGE_TASK_CLAIM2: 83,     // 2026111704 活动任务奖励(备用命令)
     MUGE_INVITE_CLAIM: 84,    // 2026111703 邀请好友助力奖励
     MUGE_TIER_CLAIM: 85,      // 2026111702 全服饲养重量档位奖励
     MUGE_SHARE_CLAIM: 86,     // 2026111705 分享任务逐个领
@@ -1434,11 +1437,18 @@ async function getMugeOverview() {
                 }));
             }
         }
-        // 汇总: status 3=已领 / 2=可领 / 1=未达标
+        // 汇总。status 语义(2026-11-19 用抓包时间线定案):
+        //   1 = 已开放、进行中(未达标)
+        //   2 = 已完成、待领取
+        //   3 = 已领取
+        //   4 = **本批次尚未开放**(按天分批解锁, 与进度无关)
+        // 之前只统计 3/2, status=4 既不算已领也不算可领, 三数之和对不上 total,
+        // 面板看起来像"少了 15 条"。
         const stat = (list) => ({
             total: list.length,
             claimed: list.filter(x => x.status === 3).length,
             claimable: list.filter(x => x.status === 2).length,
+            locked: list.filter(x => x.status === 4).length,
         });
         out.summary = { tiers: stat(out.tiers), invites: stat(out.invites), tasks: stat(out.tasks) };
     } catch (e) {
@@ -1461,8 +1471,8 @@ async function claimMugeActivity(options = {}) {
         const body = reply && reply.activity && reply.activity.muge_tiers;
         const tiers = (body && body.tiers) || [];
         const claimed = tiers.filter(t => toNum(t.status) === 3);
-        // 第一次调用后 status=3 的都算本次或之前领过的; 用 details 报告进度
-        const claimableBefore = tiers.filter(t => toNum(t.status) !== 1);
+        // 注意: 这里的 claimed 是**累计已领**(含历史上领过的), 不是"本次新领"。
+        // 之前有个 claimableBefore 变量算出来从没用过, 已删除。
         result.tiers = claimed.length;
         if (tiers.length > 0) {
             const total = toNum(body.totalWeight);
@@ -1489,11 +1499,23 @@ async function claimMugeActivity(options = {}) {
     }
     await sleep(500);
 
-    // ---- 1704 活动任务 (cmd=82) ----
+    // ---- 1704 活动任务 (cmd=82 + cmd=83) ----
+    // 抓包证实 82/83 是两个并存的领取命令(请求体都是 {1:0}),
+    // 只发 82 会漏掉一部分可领任务, 所以两个都发一遍。
     try {
-        const reply = await operateActivity(MUGE_SUB_IDS.TASKS, ACTIVITY_OPERATE.MUGE_TASK_CLAIM, {
-            muge_task_claim: { claim_all: 0 },
-        });
+        // 两个命令各发一次, 用最后一次的响应统计(它带最新的任务状态)。
+        let reply = null;
+        for (const cmd of [ACTIVITY_OPERATE.MUGE_TASK_CLAIM, ACTIVITY_OPERATE.MUGE_TASK_CLAIM2]) {
+            try {
+                reply = await operateActivity(MUGE_SUB_IDS.TASKS, cmd, {
+                    muge_task_claim: { claim_all: 0 },
+                });
+                await sleep(400);
+            } catch (e) {
+                // 主命令(82)失败才算真失败; 备用命令(83)不被支持时忽略
+                if (cmd === ACTIVITY_OPERATE.MUGE_TASK_CLAIM) throw e;
+            }
+        }
         const body = reply && reply.activity && reply.activity.muge_tasks;
         const tasks = (body && body.tasks) || [];
         const done = tasks.filter(t => toNum(t.status) === 3);
