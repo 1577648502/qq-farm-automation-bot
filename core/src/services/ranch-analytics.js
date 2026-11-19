@@ -141,28 +141,34 @@ function getCubRankings(shop, sortBy = 'ratio') {
     const rows = (Array.isArray(shop) ? shop : []).map((g) => {
         const animalId = Number(g.animalId) || 0;
         const cost = Number(g.price) || 0;
-        const grownValue = getGrownValue(animalId);
-        const ratio = cost > 0 && grownValue > 0 ? grownValue / cost : 0;
+        const grownValue = Number(g.grownValue) || getGrownValue(animalId);
+        const ratio = cost > 0 && grownValue > 0
+            ? grownValue / cost
+            : (Number(g.valueRatio) || 0);
         const netProfit = grownValue > 0 && cost > 0 ? grownValue - cost : null;
 
         const cubInfo = getItemById(animalId) || {};
-        const level = Number(cubInfo.level) || null;
+        const level = Number(g.level) || Number(cubInfo.level) || null;
 
-        // ---- 四个指标(与农场同构) ----
-        const cycleSec = getLearnedCycleSec(animalId);      // 完整周期; 没样本 = null
+        // ⚠ 指标优先取 getCubShop() 已经算好并随候选下发的值。
+        //   本模块自己的 cycleTable 只在 **worker 进程**里被喂数据
+        //   (toRanchView 每次拿详情都会 recordAnimalCycleSamples),
+        //   而 admin 进程里的 cycleTable 永远是空的 —— 之前这里重新算一遍,
+        //   于是面板上四项指标全是 "-", 而商城接口(cub-shop)却是有值的。
+        const hasOwnMetrics = g.cycleSec !== undefined || g.expPerHour !== undefined;
+        const cycleSec = hasOwnMetrics ? (g.cycleSec ?? null) : getLearnedCycleSec(animalId);
         const harvestExp = Number(g.expectedHarvestExp) || 0;
-        let expPerHour = null;
-        let normalFertilizerExpPerHour = null;
-        let profitPerHour = null;
-        let normalFertilizerProfitPerHour = null;
-        if (cycleSec && cycleSec > 0) {
-            // 经验/时 = 收获经验 / 周期
-            if (harvestExp > 0) {
-                expPerHour = Number.parseFloat(((harvestExp / cycleSec) * 3600).toFixed(2));
-            }
-            // 普通肥(普通罐头)缩短周期 3600 秒
+
+        let expPerHour = hasOwnMetrics ? (g.expPerHour ?? null) : null;
+        let normalFertilizerExpPerHour = hasOwnMetrics ? (g.fertExpPerHour ?? null) : null;
+        let profitPerHour = hasOwnMetrics ? (g.netProfitPerHour ?? null) : null;
+        let normalFertilizerProfitPerHour = hasOwnMetrics ? (g.fertProfitPerHour ?? null) : null;
+
+        // 没有现成指标时, 本进程若恰好有周期样本就自己算一份(worker 内调用时)
+        if (!hasOwnMetrics && cycleSec && cycleSec > 0) {
             const fertSec = Math.max(1, cycleSec - NORMAL_CAN_ADVANCE_SEC);
             if (harvestExp > 0) {
+                expPerHour = Number.parseFloat(((harvestExp / cycleSec) * 3600).toFixed(2));
                 normalFertilizerExpPerHour = Number.parseFloat(((harvestExp / fertSec) * 3600).toFixed(2));
             }
             if (netProfit !== null) {
@@ -180,7 +186,6 @@ function getCubRankings(shop, sortBy = 'ratio') {
             grownValue,
             ratio,
             profit: netProfit,
-            // 与农场字段一一对应
             cycleSec,
             expPerHour,
             normalFertilizerExpPerHour,
@@ -191,7 +196,6 @@ function getCubRankings(shop, sortBy = 'ratio') {
             bought: Number(g.bought) || 0,
             remaining: g.remaining === null || g.remaining === undefined ? null : Number(g.remaining),
             unlocked: !!g.unlocked,
-            // 与农场一致: 没有定价/时长数据时明确标出来, 不假装有值
             missing: [
                 !(grownValue > 0) ? 'price' : null,
                 !(cycleSec > 0) ? 'cycle' : null,

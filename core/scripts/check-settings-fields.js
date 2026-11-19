@@ -65,10 +65,41 @@ const ALIASES = {
 const isReadable = (key) => readKeys.has(key)
     || (ALIASES[key] || []).some(alias => readKeys.has(alias));
 
+// ④ 保存规格表: data-provider 把字段塞进 snapshot 之后, applyConfigSnapshot 才是
+//   真正写进 store 的地方, 而它**只认 ACCOUNT_CONFIG_NORMALIZERS 规格表**里的字段。
+//   没登记 = 悄悄丢弃(2026-11-19 线上: ranchCubStrategy 选了 max_level 保存不成功)。
+const storeSrc = fs.readFileSync(path.join(ROOT, 'src/models/store.js'), 'utf8');
+const tableMatch = storeSrc.match(/const ACCOUNT_CONFIG_NORMALIZERS = \{([\s\S]*?)\n\};/);
+const normalizerKeys = new Set();
+if (tableMatch) {
+    for (const line of tableMatch[1].split('\n')) {
+        const m = line.match(/^\s{4}([A-Za-z_$][\w$]*)\s*:/);
+        if (m) normalizerKeys.add(m[1]);
+    }
+}
+// 这些字段由 applyConfigSnapshot 的"显式写法"分支单独处理, 不在规格表里也正常
+const EXPLICIT_HANDLED = new Set([
+    'plantingStrategy', 'bagSeedPriority', 'bagSeedFallbackStrategy',
+    'plantBlacklist', 'plantSeedExclude', 'knownFriendGids',
+    'milkTeaStoreName', 'milkTeaEmployerGid', 'milkTeaHireGids',
+    'intervals', 'friendQuietHours', 'ui', 'automation',
+    // 已下线功能: applyConfigSnapshot 里显式强制关闭, 不接受保存值
+    'milkTeaAutoTask',
+]);
+
+const droppedOnSave = [...saveKeys]
+    .filter(k => !EXPLICIT_HANDLED.has(k) && !normalizerKeys.has(k))
+    .sort();
+
 const canSaveNotRead = [...saveKeys].filter(k => WATCH.test(k) && !isReadable(k)).sort();
 const expectNotRead = [...frontKeys].filter(k => WATCH.test(k) && !readKeys.has(k) && !saveKeys.has(k)).sort();
 
 let bad = 0;
+if (droppedOnSave.length) {
+    bad += droppedOnSave.length;
+    console.error('✗ 保存侧有、applyConfigSnapshot 规格表没有(会被静默丢弃, 表现为"保存不成功"):');
+    droppedOnSave.forEach(k => console.error(`  - ${k}  → 加到 store.js 的 ACCOUNT_CONFIG_NORMALIZERS, 或写显式分支`));
+}
 if (canSaveNotRead.length) {
     bad += canSaveNotRead.length;
     console.error('✗ 保存侧有、读取侧没有(会导致"保存了但回显默认值"):');

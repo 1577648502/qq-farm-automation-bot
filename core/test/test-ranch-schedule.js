@@ -417,6 +417,78 @@ proto.loadProto().then(async () => {
             (psrc.match(/muge_task_claim2[^;]*/) || [])[0]);
     }
 
+    section('18b. 分析页必须用 getCubShop 已经算好的指标');
+    {
+        // 线上问题: 面板四项指标全是 "-", 但 /api/ranch/cub-shop 里是有值的。
+        // 根因: getCubRankings 自己用 cycleTable 重算, 而 cycleTable 只在 worker
+        //   进程里被喂数据(toRanchView 记录), admin 进程里永远是空的。
+        const an = require(`${SB}/src/services/ranch-analytics`);
+        an.cycleTable.clear();
+
+        // 候选自带指标(getCubShop 的产出形状)
+        const rows = an.getCubRankings([
+            { goodsId: 1, animalId: 60004, name: '兔子', price: 1080, valueRatio: 2,
+                level: 3, cycleSec: 7200, expPerHour: 180, fertExpPerHour: 360,
+                netProfitPerHour: 540, fertProfitPerHour: 1080, unlocked: true, remaining: null },
+        ], 'profit');
+        const r = rows[0];
+        check('直接采用候选里的 cycleSec', r.cycleSec === 7200, r.cycleSec);
+        check('直接采用候选里的经验/时', r.expPerHour === 180, r.expPerHour);
+        check('直接采用候选里的净利/时', r.profitPerHour === 540, r.profitPerHour);
+        check('直接采用候选里的普通肥净利/时',
+            r.normalFertilizerProfitPerHour === 1080, r.normalFertilizerProfitPerHour);
+        check('level 取候选里的值', r.level === 3, r.level);
+
+        // 候选没带指标时, 本进程 cycleTable 为空 → 四项为 null, 不编造
+        const rows2 = an.getCubRankings([
+            { goodsId: 2, animalId: 60999, name: '未知', price: 100, unlocked: true, remaining: 1 },
+        ], 'profit');
+        check('候选无指标且无周期样本 → 四项为 null',
+            rows2[0].expPerHour === null && rows2[0].profitPerHour === null,
+            { e: rows2[0].expPerHour, p: rows2[0].profitPerHour });
+    }
+
+    section('18c. 幼崽策略必须能保存(spec 表覆盖)');
+    {
+        // 线上 2026-11-19: 设置页选「最高等级动物」保存成功, 但值仍是 max_profit。
+        // 根因: data-provider 把 ranchCubStrategy 塞进 snapshot 了, 但
+        //   applyConfigSnapshot 只认 ACCOUNT_CONFIG_NORMALIZERS 规格表, 没登记的字段
+        //   被整段忽略 —— 保存"成功"但什么也没写进去。
+        const store = require(`${SB}/src/models/store`);
+        const acc = `save-test-${Date.now()}`;
+
+        store.applyConfigSnapshot({ ranchCubStrategy: 'max_level' }, { accountId: acc, persist: false });
+        check('保存 max_level 生效', store.getRanchCubStrategy(acc) === 'max_level',
+            store.getRanchCubStrategy(acc));
+
+        store.applyConfigSnapshot({ ranchCubStrategy: 'max_fert_profit' }, { accountId: acc, persist: false });
+        check('保存 max_fert_profit 生效', store.getRanchCubStrategy(acc) === 'max_fert_profit',
+            store.getRanchCubStrategy(acc));
+
+        store.applyConfigSnapshot({ ranchCubFallbackStrategy: 'max_exp' }, { accountId: acc, persist: false });
+        check('保存第二优先策略生效', store.getRanchCubFallbackStrategy(acc) === 'max_exp',
+            store.getRanchCubFallbackStrategy(acc));
+
+        store.applyConfigSnapshot({ ranchCubPriority: [60004, 60003] }, { accountId: acc, persist: false });
+        check('保存优先列表生效',
+            JSON.stringify(store.getRanchCubPriority(acc)) === JSON.stringify([60004, 60003]),
+            store.getRanchCubPriority(acc));
+
+        // 非法值不该把已有配置冲掉
+        const before = store.getRanchCubStrategy(acc);
+        store.applyConfigSnapshot({ ranchCubStrategy: 'not_a_strategy' }, { accountId: acc, persist: false });
+        check('非法策略保持原值', store.getRanchCubStrategy(acc) === before,
+            { before, after: store.getRanchCubStrategy(acc) });
+
+        // 静态自查: 规格表必须包含这三个字段
+        const src = require('node:fs').readFileSync(
+            require('node:path').join(SB, 'src/models/store.js'), 'utf8');
+        const tbl = src.match(/const ACCOUNT_CONFIG_NORMALIZERS = \{([\s\S]*?)\n\};/);
+        for (const k of ['ranchCubStrategy', 'ranchCubFallbackStrategy', 'ranchCubPriority']) {
+            check(`规格表含 ${k}`, !!tbl && new RegExp(`\\n\\s{4}${k}\\s*:`).test(tbl[1]), k);
+        }
+    }
+
     section('19. 牧歌初启: tiers 字段必须按 camelCase 读(keepCase:true)');
     {
         // 线上 bug: 代码写 x.required_weight / t.total_weight, 但 proto 是 keepCase:true,

@@ -277,6 +277,10 @@ function createDataProvider(options) {
             return {
                 strategy: store.getPlantingStrategy(accountId),
                 preferredSeed: store.getPreferredSeed(accountId),
+                // 牧场幼崽策略(独立) —— 之前保存后不回传, 前端拿不到确认值
+                ranchCubStrategy: store.getRanchCubStrategy(accountId),
+                ranchCubFallbackStrategy: store.getRanchCubFallbackStrategy(accountId),
+                ranchCubPriority: store.getRanchCubPriority(accountId),
                 intervals: store.getIntervals(accountId),
                 friendQuietHours: store.getFriendQuietHours(accountId),
                 stealDelaySeconds: store.getStealDelaySeconds(accountId),

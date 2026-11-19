@@ -1004,6 +1004,23 @@ const asBool = (input) => !!input;
 const ACCOUNT_CONFIG_NORMALIZERS = {
     // 种子与种植
     preferredSeedId: clampInt(0, Number.MAX_SAFE_INTEGER, 0),
+
+    // ⭐ 牧场幼崽策略(与农场独立)。
+    //   ⚠ 2026-11-19 线上 bug: 这三个字段原先只在"读取/归一化"路径处理,
+    //     **没有登记到 applyConfigSnapshot 的规格表**, 于是保存请求里带了也被
+    //     整段忽略 → 设置页选"最高等级动物"保存成功但值仍是 max_profit。
+    //   规格表是保存时的唯一入口, 新增设置项必须两边都加。
+    ranchCubStrategy: (v, cur) => {
+        const next = normalizeRanchCubStrategy(v);
+        return next === DEFAULT_RANCH_CUB_STRATEGY && v !== DEFAULT_RANCH_CUB_STRATEGY && v != null
+            ? (cur || next)   // 非法值保持原值, 不悄悄改成默认
+            : next;
+    },
+    ranchCubFallbackStrategy: (v, cur) => (ALLOWED_RANCH_CUB_FALLBACK_STRATEGIES.includes(String(v))
+        ? String(v)
+        : (cur || 'max_level')),
+    ranchCubPriority: (v) => (Array.isArray(v) ? v : [])
+        .map(Number).filter(n => Number.isFinite(n) && n > 0),
     stealDelaySeconds: clampInt(0, 300, 0),
     plantDelaySeconds: clampInt(0, 60, 0),
     plantOrderRandom: asBool,
