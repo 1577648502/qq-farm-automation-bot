@@ -1674,8 +1674,9 @@ let ranchLoopRunning = false;
 let externalRanchSchedulerMode = false;
 let ranchFailStreak = 0;
 let lastRanchPushAt = 0;
-// 倒计时到期后已经处理过的时刻标记, 避免同一个到期点反复触发
-let lastDeadlineHandledAt = 0;
+// 倒计时到期去重: 用动作指纹 + 冷却时间, 不能用绝对时间戳(会让去重永不生效)
+let lastDueFingerprint = '';
+let lastDueNotBeforeAt = 0;
 
 function randomRanchIntervalMs(groupKey = 'core') {
     const { minSec, maxSec } = ranchIntervalRangeSec(groupKey);
@@ -1776,7 +1777,8 @@ function scheduleRanchGroup(groupKey, delayMs) {
     refreshNextRanchAt();
     ranchScheduler.setTimeoutTask(`ranch_group_${groupKey}`, delay, async () => {
         if (!ranchLoopRunning) return;
-        // core 组: 先尝试"只做到点动作"(轻量), 没到点该做的再退回整组巡检
+        // core 组: 先尝试"只做到点动作"(轻量), 没干成就退回整组巡检。
+        //   "没干成"包括: 没有到点动作 / 有动作但服务端没给东西(可收位失效等)。
         if (groupKey === 'core') {
             const r = await runRanchDueTick();
             if (!r.ran) await checkRanchGroup('core');
@@ -1975,7 +1977,8 @@ function startRanchCheckLoop(options = {}) {
     ranchLoopRunning = true;
     ranchFailStreak = 0;
     isCheckingRanchGroup = {};
-    lastDeadlineHandledAt = 0;
+    lastDueFingerprint = '';
+    lastDueNotBeforeAt = 0;
     sceneLocked = false;        // 场景锁定状态是 per-connection 的, 新连接重新探测
     sceneLockedAt = 0;
     networkEvents.on('ranchFacilitiesChanged', onRanchFacilitiesChanged);
@@ -2008,7 +2011,8 @@ async function runRanchTick(groupKey = '') {
     if (!ranchLoopRunning) return false;
     if (!groupKey) return checkRanch();
     try {
-        // core 组: 优先只做"到点动作"; 该做的都做完再按正常间隔整组巡检
+        // core 组: 优先只做"到点动作"; 没干成就立刻整组巡检接手,
+        // 不等下一轮(入栏/买幼崽/牧草机都挂在整组里)。
         if (groupKey === 'core') {
             const r = await runRanchDueTick();
             if (r.ran) return true;
@@ -2090,9 +2094,18 @@ function scheduleRanchFromCountdowns(view) {
     }
     if (!dueTimes.length) return;
     const soonest = Math.min(...dueTimes);
-    // 同一个到期点只处理一次(每次巡查都会重算, 避免反复提前)
-    if (Math.abs(soonest - lastDeadlineHandledAt) < 1000) return;
-    lastDeadlineHandledAt = soonest;
+    // ⚠ 去重不能用绝对时间戳: 已可收/可催产的动物每次都算出 `now+1000`,
+    //   这个值每秒都不同, 于是"去重"永不生效, core 组被反复提到"现在",
+    //   整组巡检永远轮不到 → 入栏彻底不执行(2026-11-19 线上事故)。
+    // 改成按"动作内容 + 冷却窗口"去重: 同样的动作集合在冷却期内不再重复提前。
+    const plan = planRanchDueActions(view);
+    const fp = plan.join('+');
+    const now2 = Date.now();
+    if (fp && fp === lastDueFingerprint && now2 < lastDueNotBeforeAt) return;
+    lastDueFingerprint = fp;
+    // 真正"已到点"的动作立即执行; 否则按剩余秒数排
+    const hasActionableNow = plan.length > 0 && dueTimes.some(t => t <= now2 + 1500);
+    lastDueNotBeforeAt = hasActionableNow ? now2 + 15 * 1000 : now2 + 5 * 1000;
     pullRanchGroupForward('core', soonest + 1500, '动物倒计时到点');
     // 牧草断了也要尽快补
     if ((view.animals || []).some(a => a.grassBlocked)) {
@@ -2141,7 +2154,11 @@ async function runRanchDueTick() {
         }
         // 4. 干完立刻按最新状态重排下一次
         try { await getRanchOverview(); } catch { /* 旁路 */ }
-        return { ran: out.actions.length > 0, ...out };
+        // ⚠ ran 必须是"真的收到东西了", 不能只看 plan 里有动作:
+        //   可收位还亮着但服务端拒绝/已失效时, 若返回 true 会永久挡住整组巡检,
+        //   入栏/买幼崽/牧草机就再也不执行了(2026-11-19 线上: 一直刷 [到点] collect→harvest)。
+        const didWork = out.harvested > 0 || out.produced > 0 || out.details.length > 0;
+        return { ran: didWork, ...out };
     } catch (e) {
         logWarn('牧场', `到点动作失败: ${e.message}`, { module: 'ranch', event: '倒计时动作', result: 'error' });
         return { ran: false, actions: [], harvested: 0, produced: 0, details: [] };

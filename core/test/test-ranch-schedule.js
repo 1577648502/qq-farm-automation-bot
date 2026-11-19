@@ -183,7 +183,31 @@ proto.loadProto().then(async () => {
             !methods.includes('PlaceAnimal') && !methods.includes('BuyGoods'), methods);
     }
 
-    section('9. scheduleRanchFromCountdowns 只认服务端给的时刻字段');
+    section('9. 到点动作收不到东西时必须让整组接手(否则入栏永不执行)');
+    {
+        // 2026-11-19 线上事故: 可收位亮着, 但 HarvestRanch 回空 →
+        // 旧代码 ran = out.actions.length > 0 恒为 true → 整组巡检被永久跳过 →
+        // 入栏/买幼崽/牧草机再也不执行, 日志一直刷 [到点] collect→harvest。
+        const r = await ranch.runRanchDueTick();
+        check('收不到东西时 ran=false', r.ran === false, r);
+        check('但动作列表照常返回(便于日志)', Array.isArray(r.actions), r.actions);
+    }
+
+    section('10. 倒计时去重不能用绝对时间戳(否则 core 被永久提到"现在")');
+    {
+        const view = { animals: [{ stage: 5, canHarvest: true }] };
+        ranch.scheduleRanchFromCountdowns(view);
+        const first = ranch.getRanchNextRunAt().core;
+        await new Promise(r => setTimeout(r, 1200));
+        // 状态没变, 再排一次不应该把时刻继续往"现在"推
+        ranch.scheduleRanchFromCountdowns(view);
+        const second = ranch.getRanchNextRunAt().core;
+        check('同样的动作/状态不会反复提前', second === first, { first, second });
+        check('core 时刻在合理范围内(不是每次都重置)',
+            Math.abs(second - first) < 50, Math.abs(second - first));
+    }
+
+    section('11. scheduleRanchFromCountdowns 只认服务端给的时刻字段');
     {
         const now = Date.now();
         const view = {
