@@ -207,7 +207,28 @@ proto.loadProto().then(async () => {
             Math.abs(second - first) < 50, Math.abs(second - first));
     }
 
-    section('11. scheduleRanchFromCountdowns 只认服务端给的时刻字段');
+    section('11. host_gid 必须按栏舍实例选(否则棚动物报"动物不存在")');
+    {
+        const f = ranch.__privateRanchFns;
+        // 2026-11-19 线上: 点"有机罐头"报 "动物不存在"。
+        //   根因: FeedAnimal 请求里没有槽位字段, 服务端靠 target#1 = ranch_inst_id
+        //   定位栏舍。窝=10001 / 棚=10003, 代码写死 10001 → 棚动物永远找不到。
+        f.rememberRanchInstIds({
+            coops: [{ ranchInstId: 10001 }],
+            pens: [{ ranchInstId: 10003 }],
+            animals: [],
+        });
+        check('窝用 10001', f.resolveRanchHostGid(0, 1) === 10001, f.resolveRanchHostGid(0, 1));
+        check('棚用 10003(不是写死的 10001)', f.resolveRanchHostGid(0, 2) === 10003,
+            f.resolveRanchHostGid(0, 2));
+        check('显式传入优先', f.resolveRanchHostGid(88888, 2) === 88888, f.resolveRanchHostGid(88888, 2));
+        check('无栏舍缓存时回落 10001', (() => {
+            f.rememberRanchInstIds({ coops: [], pens: [], animals: [] });
+            return f.resolveRanchHostGid(0) === 10001;
+        })(), f.resolveRanchHostGid(0));
+    }
+
+    section('12. scheduleRanchFromCountdowns 只认服务端给的时刻字段');
     {
         const now = Date.now();
         const view = {

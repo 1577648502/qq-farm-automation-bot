@@ -394,10 +394,38 @@ async function useItemWithUid(itemId, count, uid) {
  */
 const RANCH_SELF_HOST_GID = 10001;
 
-/** 解析本次要用的 host_gid: 显式传入优先, 否则用牧场实例 ID(不是 QQ 号) */
-function resolveRanchHostGid(hostGid) {
+// ⭐ 2026-11-19: 窝/棚是两个**不同实例**(窝 10001, 棚 10003, 见 GetRanchDetailReply 的
+//   repeated RanchInfo)。所有动物接口(target#1)用的 host_gid 就是 ranch_inst_id。
+//   以前写死 10001, 于是养殖棚动物(羊/牛…)时服务端回"动物不存在" —— 它在 10003 那个栏舍里。
+//   这里缓存最近一次 GetRanchDetail 拿到的实例, 让 feedAnimal 等接口能选对栏舍。
+let lastRanchInstIds = [];
+
+/** 记录最近一次详情里的栏舍实例(窝/棚) */
+function rememberRanchInstIds(view) {
+    if (!view) return;
+    const ids = [];
+    for (const g of (view.coops || [])) if (toNum(g.ranchInstId) > 0) ids.push(toNum(g.ranchInstId));
+    for (const g of (view.pens || [])) if (toNum(g.ranchInstId) > 0) ids.push(toNum(g.ranchInstId));
+    if (ids.length) lastRanchInstIds = Array.from(new Set(ids));
+}
+
+/**
+ * 解析本次要用的 host_gid: 显式传入优先, 否则按 runtime 记住的栏舍实例。
+ *
+ * @param {number} hostGid 显式 host_gid(0 = 自动)
+ * @param {number} [husbandryType] 1=窝 2=棚; 传了就挑对应类型的实例
+ */
+function resolveRanchHostGid(hostGid, husbandryType = 0) {
     const explicit = toNum(hostGid);
     if (explicit > 0) return explicit;
+    const ht = toNum(husbandryType);
+    if (ht > 0) {
+        // 栏舍实例按大小排序: 窝通常是 10001, 棚是 10003(不写死, 以服务端为准)
+        const ids = lastRanchInstIds.slice().sort((a, b) => a - b);
+        if (ht === 2 && ids.length > 1) return ids[ids.length - 1];
+        if (ids.length) return ids[0];
+    }
+    if (lastRanchInstIds.length) return lastRanchInstIds[0];
     return RANCH_SELF_HOST_GID;
 }
 
@@ -1312,6 +1340,8 @@ async function getRanchOverview(accountId = '') {
             // ⭐ 倒计时到点 → 立即安排下一轮, 不等随机巡查间隔。
             //   服务端给了 infant/grow/produce/mature_ready_at_ms, 到期就能干活的
             //   直接插队; 失败也不影响返回(调度是旁路)。
+            // 记住本次的栏舍实例(窝/棚), 后续 feedAnimal 等要用它当 host_gid
+            try { rememberRanchInstIds(view); } catch { /* 旁路 */ }
             try { scheduleRanchFromCountdowns(view); } catch { /* 旁路, 不影响概览 */ }
             return view;
         } catch (e) {
@@ -3076,7 +3106,16 @@ async function operateRanch(opts = {}) {
         }
         case 'produce': {
             try {
-                const r = await triggerProduce(slot);
+                // 同上: 催产也要按动物所在栏舍选实例, 否则棚里的动物报"动物不存在"
+                let produceGid = 0;
+                if (slot > 0) {
+                    try {
+                        const v = await getRanchOverview();
+                        const a = (v.animals || []).find(x => toNum(x.slot) === slot);
+                        if (a) produceGid = toNum(a.ranchInstId) || 0;
+                    } catch { /* 回落默认 */ }
+                }
+                const r = await triggerProduce(slot, produceGid);
                 let produced = 0;
                 for (const pr of (r.receipts || [])) produced += toNum(pr.count);
                 return { ok: true, action: '催产', detail: `${produced} 个产物` };
@@ -3095,9 +3134,21 @@ async function operateRanch(opts = {}) {
             //   4 普通罐头 —— 每只动物只能用一次, 重复喂会被服务端拒绝
             //   5/6 有机罐头 —— 不限次数
             const feedLabel = FEED_TYPE_LABEL[feedType] || `方式${feedType}`;
+            // ⭐ 2026-11-19 修"动物不存在": 按被操作动物的栏舍实例选 host_gid。
+            //   FeedAnimal 请求里**没有槽位字段**(抓包证实), 服务端按 target#1 的
+            //   ranch_inst_id 定位栏舍。窝=10001 / 棚=10003, 写死 10001 时
+            //   喂棚里的动物就会报"动物不存在"。
+            let feedHostGid = 0;
+            if (slot > 0) {
+                try {
+                    const v = await getRanchOverview();
+                    const a = (v.animals || []).find(x => toNum(x.slot) === slot);
+                    if (a) feedHostGid = toNum(a.ranchInstId) || 0;
+                } catch { /* 拿不到就回落默认实例 */ }
+            }
             // 桶空时先自动灌罐头(80021+ → 容器 7003/7004), 再重试一次。
             // 之前缺这一步: 背包有 72 个罐头, 喂食却一直回 1045234「罐头桶已用完」。
-            const doFeed = async () => feedAnimal(feedType, count);
+            const doFeed = async () => feedAnimal(feedType, count, feedHostGid);
             try {
                 await doFeed();
                 return { ok: true, action: '喂食', detail: `${feedLabel} x${count}` };
@@ -3433,6 +3484,8 @@ module.exports = {
         feedAnimal, feedFailureHint, FEED_TYPE, resolveRanchHostGid, RANCH_SELF_HOST_GID,
         // 缓存: 供测试验证"写操作后 overview 必须失效"(收获后入栏读到满栏的事故)
         invalidateRanchOverviewCache,
+        // 栏舍实例: 供测试验证"棚动物要用 10003 而不是写死的 10001"
+        rememberRanchInstIds, resolveRanchHostGid,
         planRanchDueActions, runRanchDueActions,
     },
 };
