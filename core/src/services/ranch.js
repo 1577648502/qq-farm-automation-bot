@@ -3013,6 +3013,28 @@ const GROWN_VALUE = {
     70001: 1440, 70002: 2160,
 };
 
+/** 幼崽商店的等级门槛: conds 里 type=1 的 param(农场侧 getAvailableSeeds 同款规则) */
+function cubRequiredLevel(g) {
+    let level = 0;
+    for (const cond of (g && g.conds) || []) {
+        if (toNum(cond.type) === 1) level = Math.max(level, toNum(cond.param));
+    }
+    return level;
+}
+
+/**
+ * 玩家当前农场等级(幼崽商店的解锁条件就是它 —— MCGoods 里写的是"最低大农场等级:N")。
+ * 取不到返回 0(表示"不知道", 此时不本地拦截, 交给服务端的 unlocked 判定)。
+ */
+function getPlayerLevel() {
+    try {
+        const { getUserState } = require('../utils/network');
+        return Number((getUserState() || {}).level) || 0;
+    } catch {
+        return 0;
+    }
+}
+
 /** 幼崽商店列表(带收益比) */
 async function getCubShop() {
     const goods = await getShopGoodsList(CUB_SHOP_ID);
@@ -3023,10 +3045,17 @@ async function getCubShop() {
         grownValueOf = require('./ranch-analytics').getGrownValue;
     } catch { /* 拿不到就回退到静态表 */ }
 
+    // ⚠ 2026-11-19: 解锁判定必须和农场一致 —— 用**玩家等级 vs 商品等级门槛**,
+    //   不能只信服务端的 unlocked 位(实测低等级号也能看到 unlocked=true 的高等级幼崽)。
+    const playerLevel = getPlayerLevel();
+
     return goods.map(g => {
         const animalId = toNum(g.item_id);
         const price = Math.max(1, toNum(g.price));
         const grown = grownValueOf ? grownValueOf(animalId) : (GROWN_VALUE[animalId] || 0);
+        const requiredLevel = cubRequiredLevel(g);
+        const serverUnlocked = !!g.unlocked;
+        const levelLocked = playerLevel > 0 && requiredLevel > playerLevel;
         return {
             goodsId: toNum(g.id),
             animalId,
@@ -3038,7 +3067,11 @@ async function getCubShop() {
             remaining: toNum(g.limit_count) > 0
                 ? Math.max(0, toNum(g.limit_count) - toNum(g.bought_num))
                 : null,
-            unlocked: !!g.unlocked,
+            // 玩家等级不够 → 视为未解锁(与农场 getAvailableSeeds 的 locked 同语义)
+            unlocked: serverUnlocked && !levelLocked,
+            requiredLevel,
+            levelLocked,
+            playerLevel: playerLevel || null,
             currencyId: toNum(g.price_id) || 1007,
             // 整只回收价 + 收益比 + 单只净赚(前端排序/展示都用)
             grownValue: grown,

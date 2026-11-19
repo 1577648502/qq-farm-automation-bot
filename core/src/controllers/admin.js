@@ -1580,6 +1580,10 @@ app.use('/api', (req, res, next) => {
         let shop = null;
         let source = 'live';
         let liveError = '';
+        // 幼崽商店的解锁条件 = 大农场等级(MCGoods: "最低大农场等级:N")。
+        // 前端能读到账号状态, 直接把它带下来, 后端据此判定 unlocked;
+        // 不带时退回 worker 里的登录态(离线快照只能这样判)。
+        const levelParam = Number(req.query.playerLevel) || 0;
         if (accountId && provider) {
             try {
                 shop = await provider.getCubShop(accountId);
@@ -1588,19 +1592,19 @@ app.use('/api', (req, res, next) => {
             }
         }
         if (!Array.isArray(shop) || shop.length === 0) {
-            // 实时拉不到 → 用抓包快照兜底; 但同步把 liveError 带出去, 面板据此提示
-            shop = getOfflineCubShop();
+            // 实时拉不到 → 用官方 MCGoods 的快照兜底(同样按等级门槛判定解锁)
+            shop = getOfflineCubShop(levelParam);
             source = 'offline';
         } else if (liveError) {
             // 实时成功但中途有告警(如余额读不到) —— 不影响价格, 照实标注
             source = 'live';
         }
         const rows = getCubRankings(shop, sortBy);
-        // 实时商城只返回"已解锁/未解锁"的完整列表; 若它缺了某些动物(等级不够时
-        // ShopInfo 仍会给全量), 用离线快照补齐, 保证分析页永远覆盖全部 28 种。
+        // 实时商城只返回"已解锁/未解锁"的完整列表; 若它缺了某些动物, 用快照补齐,
+        // 保证分析页永远覆盖全部 28 种(补齐行的 unlocked 同样按等级判定)。
         if (source === 'live') {
             const have = new Set(rows.map(r => r.animalId));
-            const missing = getOfflineCubShop().filter(g => !have.has(g.animalId));
+            const missing = getOfflineCubShop(levelParam).filter(g => !have.has(g.animalId));
             if (missing.length) {
                 const patched = getCubRankings([...shop, ...missing], sortBy);
                 res.json({

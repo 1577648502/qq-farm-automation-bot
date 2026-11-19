@@ -404,6 +404,10 @@ function getCubRankings(shop, sortBy = 'ratio') {
             bought: Number(g.bought) || 0,
             remaining: g.remaining === null || g.remaining === undefined ? null : Number(g.remaining),
             unlocked: !!g.unlocked,
+            // 等级门槛(幼崽商店的解锁条件是大农场等级) —— 前端"为什么不能买"要用
+            requiredLevel: Number(g.requiredLevel) || 0,
+            levelLocked: !!g.levelLocked,
+            playerLevel: g.playerLevel ?? null,
             missing: [
                 !(grownValue > 0) ? 'price' : null,
                 !(m.cycleSec > 0) ? 'cycle' : null,
@@ -434,44 +438,54 @@ function getCubRankings(shop, sortBy = 'ratio') {
 }
 
 /**
- * 离线幼崽商城表(抓包 shop5 全量 28 种的价格快照, 见
- * core/src/gameConfig/MCRanchCubShop.json)。
+ * 离线幼崽商城表(来自官方 MCGoods 的 shop_id=5 全量 28 行, 见
+ * core/src/gameConfig/MCRanchCubShop.json; 抓包 ShopInfo 价格与之逐条一致)。
  *
  * 用途: 账号没在跑 / 商城拉不到时, 分析页仍然能列出全部 28 种并给出四项指标
- * (周期来自官方 MCAnimalConfig, 成本来自这张快照)。
+ * (周期来自官方 MCAnimalConfig, 成本与等级门槛来自这张表)。
  * 一旦拿到实时商城, 价格以实时为准 —— 这张表只是兜底, 不参与购买。
+ *
+ * @param {number} [playerLevel] 玩家农场等级; 传了就按 MCRanchCubShop 的
+ *   requiredLevel 判定 unlocked(与 ranch.getCubShop 的规则一致), 不传视为未知全放行
+ * @returns {Array<object>} 幼崽商城行
  */
 let offlineShopCache = null;
-function getOfflineCubShop() {
-    if (offlineShopCache) return offlineShopCache;
-    try {
-        const p = require('node:path').join(__dirname, '..', 'gameConfig', 'MCRanchCubShop.json');
-        const rows = JSON.parse(fs.readFileSync(p, 'utf8'));
-        const list = (Array.isArray(rows) ? rows : []).map(row => {
-            const animalId = Number(row.animalId) || 0;
-            const price = Number(row.price) || 0;
-            const info = getItemById(animalId) || {};
-            return {
-                // 兜底行: 不参与购买(goodsId 保留仅为展示), unlocked 未知按 true 处理
-                goodsId: Number(row.goodsId) || 0,
-                animalId,
-                name: String(row.name || info.name || ''),
-                price,
-                limit: Number(row.limit) || 0,
-                bought: 0,
-                remaining: null,
-                unlocked: true,
-                level: Number(row.level) || Number(info.level) || null,
-                husbandryType: String(row.husbandryType || ''),
-                offline: true,
-            };
-        }).filter(r => r.animalId > 0 && r.price > 0);
-        offlineShopCache = list;
-        return list;
-    } catch {
-        offlineShopCache = [];
-        return offlineShopCache;
+function getOfflineCubShop(playerLevel = 0) {
+    if (!offlineShopCache) {
+        try {
+            const p = require('node:path').join(__dirname, '..', 'gameConfig', 'MCRanchCubShop.json');
+            const rows = JSON.parse(fs.readFileSync(p, 'utf8'));
+            offlineShopCache = (Array.isArray(rows) ? rows : []).map((row) => {
+                const animalId = Number(row.animalId) || 0;
+                const price = Number(row.price) || 0;
+                const info = getItemById(animalId) || {};
+                return {
+                    // 兜底行: 不参与购买(goodsId 保留仅为展示)
+                    goodsId: Number(row.goodsId) || 0,
+                    animalId,
+                    name: String(row.name || info.name || ''),
+                    price,
+                    limit: 0,
+                    bought: 0,
+                    remaining: null,
+                    requiredLevel: Number(row.requiredLevel) || 0,
+                    level: Number(row.level) || Number(info.level) || null,
+                    husbandryType: String(row.husbandryType || ''),
+                    offline: true,
+                };
+            }).filter(r => r.animalId > 0 && r.price > 0);
+        } catch {
+            offlineShopCache = [];
+        }
     }
+    const lv = Number(playerLevel) || 0;
+    return offlineShopCache.map(r => ({
+        ...r,
+        // 与实时侧同一条规则: 玩家等级不够 = 未解锁; 等级未知(0)则不本地拦截
+        unlocked: !(lv > 0 && r.requiredLevel > lv),
+        levelLocked: lv > 0 && r.requiredLevel > lv,
+        playerLevel: lv || null,
+    }));
 }
 
 module.exports = {

@@ -13,6 +13,7 @@ import BaseSelect from '@/components/ui/BaseSelect.vue'
 import BaseSwitch from '@/components/ui/BaseSwitch.vue'
 import { MILK_TEA_HIRE_DURATION_OPTIONS, normalizeMilkTeaHireDuration } from '@/config/milkTea'
 import { getPlatformClass, getPlatformLabel, useAccountStore } from '@/stores/account'
+import { useStatusStore } from '@/stores/status'
 import { useFarmStore } from '@/stores/farm'
 import { useSettingStore } from '@/stores/setting'
 import { useToastStore } from '@/stores/toast'
@@ -25,6 +26,7 @@ const accountStore = useAccountStore()
 const userStore = useUserStore()
 const settingStore = useSettingStore()
 const farmStore = useFarmStore()
+const statusStore = useStatusStore()
 
 const activeTab = ref<'account' | 'strategy' | 'automation' | 'user'>(
   (localStorage.getItem('settings-active-tab') as 'account' | 'strategy' | 'automation' | 'user') || 'account',
@@ -674,78 +676,207 @@ watchEffect(() => {
     void loadRanchCubs()
 })
 
-// ===== 幼崽策略预览(对照农场的 strategyPreviewLabel) =====
-// ⚠ 2026-11-19: 预览必须与**实际购买**走同一套排序。
-//   之前预览查 /api/ranch/analytics?sort=xx(独立排序), 购买走 applyCubStrategy,
-//   两边对"指标全缺"处理不同 → 预览显示 Lv3 兔子, 实际却买了鸡。
-//   现在统一走后端 /api/ranch/cub-strategy-pick(内部就是 applyCubStrategy)。
+// ===== 幼崽策略预览(完全照农场的 strategyPreviewLabel 写法) =====
+// 农场是怎么做的(参照上面的 strategyPreviewLabel):
+//   ① 先把"可购买的种子列表"拿到本地(seeds);
+//   ② 策略 = 最高等级时,**本地**按 requiredLevel 排, 取第一条;
+//   ③ 指标类策略(经验/时等)查一次 /api/analytics?sort=xx, 再从"可购买"里取第一条;
+//   ④ 切换下拉框 → 只是重新算一遍本地数组, 立刻出结果, 不会去网络往返。
 //
-// ⚠ 2026-11-19 再修: 预览必须跟随**界面上还没保存**的选择。
-//   之前 watchEffect 里只 `void` 了一下(为了建立依赖), 请求却不带任何参数,
-//   后端只能读已保存的值 → 改下拉框后预览纹丝不动, 用户看到的是"没有预览"。
-//   现在把 strategy / fallback / priority / exclude 一起传过去。
-const ranchCubPreviewLabel = ref<string | null>(null)
-const ranchCubPreviewBusy = ref(false)
+// 牧场之前错在: 每次切换都发 /api/ranch/cub-strategy-pick 问 worker,
+// 而那个接口要实时拉商城 + 读背包, 慢的时候十几秒、账号没跑时直接失败,
+// 于是"切了策略预览却不动"。
+//
+// 现在同构: 一次拉 /api/ranch/analytics(返回全部幼崽 + 四项指标 + 可购买状态),
+// 之后所有策略都在**本地**排序, 切换即时生效。
+const ranchCubRows = ref<any[]>([])
+const ranchCubRowsLoading = ref(false)
+const ranchCubRowsError = ref<string | null>(null)
+let ranchCubRowsRequestId = 0
 
-watchEffect(async (onCleanup) => {
+/** 拉一次全量幼崽排行(带四项指标), 供所有策略本地排序 */
+async function loadRanchCubRows() {
   const accountId = String(currentAccountId.value || '')
-  let cancelled = false
-  onCleanup(() => {
-    cancelled = true
-  })
-
+  const requestId = ++ranchCubRowsRequestId
   if (!accountId) {
-    ranchCubPreviewLabel.value = null
+    ranchCubRows.value = []
     return
   }
-  // 依赖策略/优先级/排外, 任一变化都重新算(这里取值是为了建立响应式依赖)
-  const strategy = String(localStrategySettings.value.ranchCubStrategy || '')
-  const fallback = String(localStrategySettings.value.ranchCubFallbackStrategy || '')
-  const priority = [...(localStrategySettings.value.ranchCubPriority || [])]
-  const exclude = [...(localStrategySettings.value.ranchCubExclude || [])]
-  const params: Record<string, string> = {}
-  if (strategy)
-    params.strategy = strategy
-  if (fallback)
-    params.fallback = fallback
-  if (priority.length)
-    params.priority = priority.join(',')
-  if (exclude.length)
-    params.exclude = exclude.join(',')
-
-  ranchCubPreviewBusy.value = true
+  ranchCubRowsLoading.value = true
+  ranchCubRowsError.value = null
   try {
-    const res = await api.get('/api/ranch/cub-strategy-pick', {
+    // 幼崽商店的解锁条件是大农场等级(MCGoods: "最低大农场等级:N"),
+    // 把当前账号等级带下去, 后端据此判定 unlocked —— 与农场种子列表同一条规则。
+    const playerLevel = Number(statusStore.status?.status?.level) || 0
+    // sort 只是初始顺序, 前端会按当前策略重排; 不传账号也应能拿到离线快照
+    const res = await api.get('/api/ranch/analytics', {
       headers: { 'x-account-id': accountId },
-      params,
-      timeout: 15000,
+      params: playerLevel > 0 ? { sort: 'ratio', playerLevel } : { sort: 'ratio' },
+      timeout: 20000,
     })
-    if (cancelled)
+    if (requestId !== ranchCubRowsRequestId)
       return
-    const d = res.data?.data
-    // 农场语义: 背包有可用幼崽 → 实际先做的是入栏, 不是买
-    if (d?.source === 'bag' && d?.bag) {
-      ranchCubPreviewLabel.value = `先入栏: ${d.bag.name}(背包 ${d.bag.count} 只)`
+    const d = res.data
+    if (d?.ok === false) {
+      ranchCubRows.value = []
+      ranchCubRowsError.value = d?.error || '获取失败'
       return
     }
-    const pick = d?.pick
-    ranchCubPreviewLabel.value = pick
-      ? `背包无可用幼崽 → 按当前策略买 Lv${pick.level ?? '-'} ${pick.name}`
-      : (d?.count === 0 ? '商店暂无可买幼崽(未解锁/无收益)' : '暂无可用幼崽')
+    ranchCubRows.value = Array.isArray(d?.data) ? d.data : []
   }
   catch (e: any) {
-    if (!cancelled) {
-      const st = e?.response?.status
-      ranchCubPreviewLabel.value = e?.response?.data?.error
-        ? `预览失败: ${e.response.data.error}`
-        : (st ? `预览失败(HTTP ${st})` : '预览失败(账号未运行?)')
-    }
+    if (requestId !== ranchCubRowsRequestId)
+      return
+    ranchCubRows.value = []
+    ranchCubRowsError.value = e?.response?.data?.error || e?.message || '获取失败'
   }
   finally {
-    if (!cancelled)
-      ranchCubPreviewBusy.value = false
+    if (requestId === ranchCubRowsRequestId)
+      ranchCubRowsLoading.value = false
   }
+}
+
+/** 与后端 applyCubStrategy 的候选过滤保持同语义: 已解锁 + 有价 + 有收益比 */
+function ranchCubIsBuyable(r: any) {
+  if (!r || r.unlocked === false)
+    return false
+  if (!(Number(r.cost) > 0))
+    return false
+  if (!(Number(r.ratio) > 0))
+    return false
+  if (r.remaining !== null && r.remaining !== undefined && Number(r.remaining) <= 0)
+    return false
+  return true
+}
+
+const RANCH_CUB_METRIC: Record<string, string> = {
+  max_exp: 'expPerHour',
+  max_fert_exp: 'normalFertilizerExpPerHour',
+  max_profit: 'profitPerHour',
+  max_fert_profit: 'normalFertilizerProfitPerHour',
+}
+
+/** 按策略给幼崽排序(与后端 applyCubStrategy 同口径); 指标全空时退回收益比 */
+function sortRanchCubsByStrategy(rows: any[], strategy: string) {
+  const ratioOf = (x: any) => {
+    const v = x?.ratio ?? x?.valueRatio
+    return v === undefined || v === null ? 0 : Number(v)
+  }
+  const byRatio = (a: any, b: any) => (ratioOf(b) - ratioOf(a)) || (Number(a.cost) - Number(b.cost))
+  if (strategy === 'max_level') {
+    const hasLevel = rows.some(r => Number(r.level) > 0)
+    if (!hasLevel)
+      return [...rows].sort(byRatio)
+    return [...rows].sort((a, b) => (Number(b.level) || 0) - (Number(a.level) || 0) || byRatio(a, b))
+  }
+  const metric = RANCH_CUB_METRIC[strategy]
+  if (!metric)
+    return [...rows].sort(byRatio)
+  const hasMetric = rows.some(r => r[metric] !== null && r[metric] !== undefined)
+  if (!hasMetric)
+    return [...rows].sort(byRatio)
+  return [...rows].sort((a, b) => {
+    const av = a[metric]
+    const bv = b[metric]
+    if (av === null || av === undefined)
+      return 1
+    if (bv === null || bv === undefined)
+      return -1
+    return (Number(bv) - Number(av)) || byRatio(a, b)
+  })
+}
+
+/** 策略 → 面板上的中文名(与下拉框标签一致) */
+const RANCH_CUB_STRATEGY_TEXT: Record<string, string> = {
+  max_level: '最高等级动物',
+  max_exp: '最大经验/时',
+  max_fert_exp: '最大普通肥经验/时',
+  max_profit: '最大净利润/时',
+  max_fert_profit: '最大普通肥净利润/时',
+  bag_priority: '背包幼崽优先',
+}
+
+/** 指标策略 → 命中值时展示的读数, 让"换了策略"看得见 */
+const RANCH_CUB_METRIC_TEXT: Record<string, string> = {
+  max_exp: '经验/时',
+  max_fert_exp: '普通肥经验/时',
+  max_profit: '净利/时',
+  max_fert_profit: '普通肥净利/时',
+}
+
+/**
+ * 预览文案 —— 纯本地 computed, 切换策略立即变化。
+ * 农场语义: bag_priority 时预览显示"第二优先策略"会选中的那只。
+ */
+const ranchCubPreviewLabel = computed<string | null>(() => {
+  const strategy0 = String(localStrategySettings.value.ranchCubStrategy || '')
+  if (!strategy0)
+    return null
+  const strategy = strategy0 === 'bag_priority'
+    ? String(localStrategySettings.value.ranchCubFallbackStrategy || 'max_level')
+    : strategy0
+
+  // 背包幼崽优先的顺序(排外已剔除), 用户不保存也能立刻反映
+  const excluded = new Set((localStrategySettings.value.ranchCubExclude || []).map(x => Number(x)))
+  const priority = (localStrategySettings.value.ranchCubPriority || []).map(x => Number(x))
+  const indexMap = new Map<number, number>()
+  priority.forEach((id, i) => indexMap.set(id, i))
+
+  const rows = ranchCubRows.value || []
+  if (ranchCubRowsLoading.value && rows.length === 0)
+    return '加载中...'
+  if (ranchCubRowsError.value)
+    return `预览不可用: ${ranchCubRowsError.value}`
+
+  const buyable = rows.filter(r => ranchCubIsBuyable(r) && !excluded.has(Number(r.animalId)))
+  if (buyable.length === 0) {
+    // 全部被等级锁住时要说清楚, 否则用户只看到"没有可买幼崽"却不知道为什么
+    const locked = rows
+      .filter(r => r.levelLocked)
+      .sort((a, b) => (Number(a.requiredLevel) || 0) - (Number(b.requiredLevel) || 0))
+    const lv = locked[0]
+    if (lv) {
+      return `农场等级不足: 需 Lv${lv.requiredLevel} 才能买 ${lv.name}(当前 Lv${lv.playerLevel ?? '?'})`
+    }
+    return '商店暂无可买幼崽(未解锁/无收益)'
+  }
+
+  const pick = sortRanchCubsByStrategy(buyable, strategy)[0]
+  if (!pick)
+    return '暂无可用幼崽'
+
+  // bag_priority: 背包里真有幼崽时, 实际先做的是入栏 —— 与农场"背包优先"一致地提示
+  if (strategy0 === 'bag_priority') {
+    const bagCubs = (ranchCubs.value || [])
+      .filter(c => !excluded.has(Number(c.animalId)))
+      .sort((a, b) => {
+        const ai = indexMap.has(a.animalId) ? indexMap.get(a.animalId)! : Number.MAX_SAFE_INTEGER
+        const bi = indexMap.has(b.animalId) ? indexMap.get(b.animalId)! : Number.MAX_SAFE_INTEGER
+        return ai - bi
+      })
+    const first = bagCubs[0]
+    if (first) {
+      const total = bagCubs.reduce((n, c) => n + (Number(c.count) || 0), 0)
+      return `先入栏: ${first.name}(背包还有 ${total} 只)`
+    }
+  }
+
+  const level = pick.level ?? '-'
+  const metricText = RANCH_CUB_METRIC_TEXT[strategy] || ''
+  // ⚠ 必须把"当前按哪个策略算的"写出来:
+  //   四个指标策略在这套数据下经常选出同一只(孔雀在 经验/普通肥经验/净利/普通肥净利
+  //   四项上都是第一), 只显示动物名会让人以为"切换没生效"。
+  const who = `Lv${level} ${pick.name}`
+  if (strategy0 === 'bag_priority') {
+    return `背包无可用幼崽 → 按${RANCH_CUB_STRATEGY_TEXT[strategy] || strategy}买 ${who}`
+  }
+  return `${RANCH_CUB_STRATEGY_TEXT[strategy0] || strategy0} → ${who}${metricText ? `(${metricText})` : ''}`
 })
+
+// 只在切账号时重拉一次全量排行; 切换策略走上面的 computed, 不发请求(所以是实时的)
+watch(currentAccountId, () => {
+  void loadRanchCubRows()
+}, { immediate: true })
 
 const analyticsSortByMap: Record<string, string> = {
   max_exp: 'exp',
@@ -2494,11 +2625,10 @@ async function onBackupFileChange(ev: Event) {
               <div class="flex flex-col gap-1.5">
                 <label class="text-sm text-gray-700 font-medium dark:text-gray-300">
                   {{ localStrategySettings.ranchCubStrategy === 'bag_priority' ? '第二优先策略预览' : '策略选崽预览' }}
-                  <span v-if="ranchCubPreviewBusy" class="ml-1 text-xs text-gray-400">更新中…</span>
                 </label>
                 <div
                   class="w-full flex items-center justify-between border border-gray-200 rounded-lg bg-gray-50 px-3 py-2 text-gray-500 dark:border-gray-600 dark:bg-gray-800/50 dark:text-gray-400"
-                  :class="ranchCubPreviewLabel && ranchCubPreviewLabel.startsWith('预览失败') ? 'border-red-200 bg-red-50 text-red-600 dark:border-red-900/50 dark:bg-red-900/20 dark:text-red-300' : ''"
+                  :class="ranchCubPreviewLabel && (ranchCubPreviewLabel.startsWith('预览不可用') || ranchCubPreviewLabel.startsWith('加载中')) ? 'border-amber-200 bg-amber-50 text-amber-600 dark:border-amber-800/50 dark:bg-amber-900/20 dark:text-amber-300' : ''"
                 >
                   <span class="truncate">{{ ranchCubPreviewLabel ?? '加载中...' }}</span>
                   <div class="i-carbon-chevron-down shrink-0 text-lg text-gray-400" />

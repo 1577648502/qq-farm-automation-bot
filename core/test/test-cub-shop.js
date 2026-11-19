@@ -200,6 +200,74 @@ proto.loadProto().then(async () => {
         check('买 3 只', r.bought === 3, r.bought);
     }
 
+    section('8. 幼崽解锁条件 = 大农场等级(与农场种子列表同一规则)');
+    {
+        // 官方 MCGoods(shop_id=5) 写的是 "最低大农场等级:N", 对应 GoodsInfo.conds {type:1,param:N}。
+        // 之前只看服务端 unlocked 位 → 低等级号也能看到/买到本该锁住的幼崽。
+        const goodsWithConds = [
+            { id: 5001, itemId: 60001, price: 2, limit: 0, bought: 0, reqLevel: 1 },
+            { id: 5002, itemId: 60004, price: 4068, limit: 0, bought: 0, reqLevel: 11 },
+            { id: 5003, itemId: 60006, price: 6768, limit: 0, bought: 0, reqLevel: 17 },
+        ];
+        const reply = () => types.ShopInfoReply.encode(types.ShopInfoReply.create({
+            goods_list: goodsWithConds.map(g => ({
+                id: g.id, item_id: g.itemId, price: g.price, price_id: 1007,
+                limit_count: g.limit, bought_num: g.bought, unlocked: true,
+                conds: [{ type: 1, param: g.reqLevel }],
+            })),
+        })).finish();
+
+        const install = (level) => {
+            installStub({
+                [`${SHOP_SERVICE}.ShopInfo`]: reply,
+                'gamepb.itempb.ItemService.Bag': () => bagReply(999999),
+                'ItemService.Bag': () => bagReply(999999),
+            });
+            const network = require(`${SB}/src/utils/network`);
+            network.getUserState = () => ({ level });
+            return freshRanch();
+        };
+
+        const low = await install(10).getCubShop();
+        const chicken = low.find(g => g.animalId === 60001);
+        const rabbit = low.find(g => g.animalId === 60004);
+        check('Lv10: 鸡(需1级)可买', chicken.unlocked === true, chicken.animalId);
+        check('Lv10: 兔(需11级)按等级锁住', rabbit.unlocked === false, rabbit.unlocked);
+        check('Lv10: 标记 levelLocked 且带 requiredLevel',
+            rabbit.levelLocked === true && rabbit.requiredLevel === 11, rabbit);
+
+        const high = await install(20).getCubShop();
+        const rabbit2 = high.find(g => g.animalId === 60004);
+        const guinea = high.find(g => g.animalId === 60006);
+        check('Lv20: 兔解锁', rabbit2.unlocked === true, rabbit2.unlocked);
+        check('Lv20: 天竺鼠(需17级)解锁', guinea.unlocked === true, guinea.unlocked);
+
+        // 等级未知(拿不到登录态) → 不本地拦截, 交给服务端 unlocked
+        installStub({
+            [`${SHOP_SERVICE}.ShopInfo`]: reply,
+            'gamepb.itempb.ItemService.Bag': () => bagReply(999999),
+            'ItemService.Bag': () => bagReply(999999),
+        });
+        const network = require(`${SB}/src/utils/network`);
+        network.getUserState = () => ({});
+        const unknown = await freshRanch().getCubShop();
+        check('等级未知: 不拦(unlocked 仍按服务端)', unknown.every(g => g.unlocked === true),
+            unknown.map(g => [g.animalId, g.unlocked]));
+    }
+
+    section('9. 离线快照同样按等级门槛判定');
+    {
+        const an = require(`${SB}/src/services/ranch-analytics`);
+        const lv10 = an.getCubRankings(an.getOfflineCubShop(10), 'ratio');
+        const lv70 = an.getCubRankings(an.getOfflineCubShop(70), 'ratio');
+        check('Lv10 只解锁少数几只', lv10.filter(r => r.unlocked).length === 3,
+            lv10.filter(r => r.unlocked).length);
+        check('Lv10 兔子(需11级)锁住',
+            lv10.find(r => r.animalId === 60004).unlocked === false);
+        check('Lv70 全部解锁', lv70.filter(r => r.unlocked).length === 28,
+            lv70.filter(r => r.unlocked).length);
+    }
+
     finish();
 }).catch((e) => {
     console.error('测试异常:', e);
