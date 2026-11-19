@@ -54,6 +54,20 @@ const readKeys = extractKeys(path.join(ROOT, 'src/controllers/admin.js'), 'res.j
 readKeys.add('intervals');   // 读取侧有若干字段来自局部变量拼接, 这里放宽
 const frontKeys = extractKeys(path.join(WEB, 'src/stores/setting.ts'), 'robTreasureIntervalMinutes: 10,', 2);
 
+// ⑤ worker 下发: 主进程保存后靠 config_sync → buildConfigSnapshotForAccount 把配置推给
+//    worker 进程。漏在这里 = **页面保存成功、store 也写对了, 但 worker 一直用旧值**
+//    (2026-11-19 线上: 账号 1 设了"背包优先", worker 仍按 max_profit 买鸡)。
+const syncKeys = extractKeys(path.join(ROOT, 'src/runtime/runtime-state.js'), 'return {', 12);
+
+// 这些字段在 worker 侧不是从 config_sync 读的:
+//   · 奶茶/夺宝/活动开关等由 worker 自己 require('../models/store') 的 getter 现取
+//     (store 在每个进程各有一份, worker 靠 config_sync 里的同字段值覆盖)
+//   · 间隔/自动化/黑名单等早已显式列出
+// 这里只检查"牧场幼崽策略"这一类必须随 config_sync 走的字段, 全部逐条明确。
+const WORKER_SYNC_REQUIRED = [
+    'ranchCubStrategy', 'ranchCubPriority', 'ranchCubExclude', 'ranchCubFallbackStrategy',
+];
+
 // 只关心这些前缀(避免把 intervals/ui 等历史噪音算进来)
 const WATCH = /^(rob|buyBook|stealth|fertilizer|plant|bagSeed|steal)/;
 
@@ -93,6 +107,7 @@ const droppedOnSave = [...saveKeys]
 
 const canSaveNotRead = [...saveKeys].filter(k => WATCH.test(k) && !isReadable(k)).sort();
 const expectNotRead = [...frontKeys].filter(k => WATCH.test(k) && !readKeys.has(k) && !saveKeys.has(k)).sort();
+const missingInSync = WORKER_SYNC_REQUIRED.filter(k => saveKeys.has(k) && !syncKeys.has(k));
 
 // ⑤ 前端保存 payload: settings.ts 的 performSaveSettings 里那个大对象。
 //   前端"页面上有输入框、类型里也有字段"但**没放进 payload** → 后端永远收不到,
@@ -120,6 +135,11 @@ if (frontMissing.length) {
     bad += frontMissing.length;
     console.error('✗ 后端可保存、但前端保存 payload 没带(改了不会生效):');
     frontMissing.forEach(k => console.error(`  - ${k}  → 加到 web/src/stores/setting.ts 的 settingsPayload`));
+}
+if (missingInSync.length) {
+    bad += missingInSync.length;
+    console.error('✗ 保存侧有、config_sync 没下发(worker 会一直用启动时的旧值, 表现为"保存不生效"):');
+    missingInSync.forEach(k => console.error(`  - ${k}  → 加到 runtime-state.js buildConfigSnapshotForAccount 的返回对象里`));
 }
 if (droppedOnSave.length) {
     bad += droppedOnSave.length;

@@ -1369,13 +1369,44 @@ async function handleApiCall(msg) {
                 result = await require('../services/ranch').operateRanch(Array.isArray(args[0]) ? args[0][0] || {} : args[0] || {});
                 break;
             case 'getCubStrategyPick': {
-                // 设置页预览: 用**购买时同一套** applyCubStrategy 排序, 取第一只
+                // 设置页预览 —— 与实际执行同一条路径(对齐农场):
+                //   农场 bag_priority 的预览也是"背包有什么 → 背包用完了按第二策略买"
+                //   所以这里先看背包(排外剔除、按优先级排序), 再看商店。
                 const ranchSvc = require('../services/ranch');
+                const fns = ranchSvc.__privateRanchFns;
+                // 1) 背包里可入栏的幼崽(排外已剔除, 已按优先级排序)
+                let fromBag = null;
+                try {
+                    const bagItems = await require('../services/warehouse').getRanchBagItems();
+                    const getItemById = require('../config/gameConfig').getItemById;
+                    const collected = [];
+                    for (const it of bagItems) {
+                        const info = getItemById(toNum(it.id));
+                        if (info && Number(info.type) === 105 && toNum(it.count) > 0) {
+                            collected.push({ id: toNum(it.id), count: toNum(it.count), name: info.name || `#${it.id}` });
+                        }
+                    }
+                    const sortedBag = fns.sortBagCubsForPlacing(collected);
+                    if (sortedBag.length) {
+                        const first = sortedBag[0];
+                        fromBag = {
+                            animalId: first.id,
+                            name: first.name,
+                            level: null,
+                            count: sortedBag.reduce((n, c) => n + c.count, 0),
+                        };
+                    }
+                } catch { /* 背包读不到就只看商店 */ }
+
+                // 2) 商店候选(排外剔除, 按策略排序)
                 const shop = await ranchSvc.getCubShop();
                 const usable = (shop || []).filter(g => g.unlocked && g.price > 0 && g.valueRatio > 0);
-                const sorted = ranchSvc.__privateRanchFns.applyCubStrategy(usable);
+                const sorted = fns.applyCubStrategy(usable);
                 const best = sorted[0] || null;
                 result = {
+                    // 与农场一致: 背包有货时"实际会先做的是入栏", 不显示买谁
+                    source: fromBag ? 'bag' : 'shop',
+                    bag: fromBag,
                     pick: best ? {
                         animalId: best.animalId,
                         name: best.name,

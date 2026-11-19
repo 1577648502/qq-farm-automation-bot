@@ -82,7 +82,62 @@ proto.loadProto().then(async () => {
         check('bought = 0', r.bought === 0, r.bought);
     }
 
-    section('2. 背包没幼崽 → 正常买, 但有单轮上限');
+    section('2. 背包优先: 背包里的幼崽全部排外 → 也不买(与农场同语义)');
+    {
+        // 2026-11-19: 农场 bag_priority 的实际语义是
+        //   "背包里有什么就用什么(排外的跳过) → 背包空了才按第二策略去商店买"
+        // 这里锁住牧场跟它一致:
+        //   · 背包有可用幼崽  → 不买
+        //   · 背包里的全部排外 → 同样不该买(那等于用户明确不要这种)
+        const calls = installStub({
+            [`${SHOP}.ShopInfo`]: () => shopReply(),
+            [`${SHOP}.BuyGoods`]: () => { throw new Error('排外后不该再买'); },
+        });
+        const ranch = freshRanch();
+        const warehouse = require(`${SB}/src/services/warehouse`);
+        warehouse.getRanchBagItems = async () => ranchBagWithCubs(3).items;
+
+        // 自动购买读的是 worker 账号(process.env.FARM_ACCOUNT_ID)的配置, 必须写到同一账号
+        const store = require(`${SB}/src/models/store`);
+        const prevAccountId = process.env.FARM_ACCOUNT_ID;
+        const acc = 'ranch-cub-test';
+        process.env.FARM_ACCOUNT_ID = acc;
+        store.applyConfigSnapshot({ ranchCubStrategy: 'bag_priority', ranchCubExclude: [60001] },
+            { accountId: acc, persist: false });
+
+        const r = await ranch.__privateRanchFns.autoBuyCubs({
+            slots: 4,
+            view: { coopCount: 4, penCount: 0, animals: [] },
+        });
+        check('全部排外 → 没有发购买请求', calls.filter(c => c.method === 'BuyGoods').length === 0,
+            calls.map(c => c.method));
+        check('全部排外 → bought = 0', r.bought === 0, r.bought);
+
+        // 取消排外后, 背包里又变成"有可用幼崽" → 仍不买
+        store.applyConfigSnapshot({ ranchCubExclude: [] }, { accountId: acc, persist: false });
+        const calls2 = installStub({
+            [`${SHOP}.ShopInfo`]: () => shopReply(),
+            [`${SHOP}.BuyGoods`]: () => { throw new Error('背包有可用幼崽时不该再买'); },
+        });
+        // ⚠ freshRanch() 会清掉 warehouse 的 require.cache, 之前桩的 getRanchBagItems 会丢,
+        //   必须在 freshRanch() 之后重新桩, 否则读背包失败 → bagUsableCubs 恒为 0 → 照买
+        const ranch2 = freshRanch();
+        require(`${SB}/src/services/warehouse`).getRanchBagItems = async () => ranchBagWithCubs(3).items;
+        const r2 = await ranch2.__privateRanchFns.autoBuyCubs({
+            slots: 4,
+            view: { coopCount: 4, penCount: 0, animals: [] },
+        });
+        check('背包有可用幼崽 → 不买', calls2.filter(c => c.method === 'BuyGoods').length === 0,
+            calls2.map(c => c.method));
+        check('背包有可用幼崽 → bought = 0', r2.bought === 0, r2.bought);
+
+        // 复原: 后续用例依赖默认策略(max_profit)
+        store.applyConfigSnapshot({ ranchCubStrategy: 'max_profit', ranchCubExclude: [] },
+            { accountId: acc, persist: false });
+        process.env.FARM_ACCOUNT_ID = prevAccountId;
+    }
+
+    section('2b. 背包没幼崽 → 正常买, 但有单轮上限');
     {
         const calls = installStub({
             [`${SHOP}.ShopInfo`]: () => shopReply(),
@@ -177,7 +232,7 @@ proto.loadProto().then(async () => {
     {
         const ranch = require(`${SB}/src/services/ranch`);
         const apply = ranch.__privateRanchFns.applyCubStrategy;
-        // 候选带齐农场那套指标(level / expPerHour / fertExpPerHour / netProfitPerHour / fertProfitPerHour)
+        const fns = ranch.__privateRanchFns;
         const cubs = [
             { goodsId: 10002, animalId: 60001, name: '鸡', price: 2, valueRatio: 3,
                 level: 1, expPerHour: 900, fertExpPerHour: 1200, netProfitPerHour: 90, fertProfitPerHour: 120 },
@@ -210,9 +265,35 @@ proto.loadProto().then(async () => {
             apply(withMissing, { strategy: 'max_exp' })[0].name === '有数据',
             apply(withMissing, { strategy: 'max_exp' }).map(c => c.name));
 
-        // 优先列表: 兔排第一
-        const byList = apply(cubs, { strategy: 'bag_priority', priority: [60002] });
-        check('bag_priority: 列表里的排最前', byList[0].animalId === 60002, byList.map(c => c.name));
+        // 优先列表: 与农场一致 —— 优先级是**背包顺序**, 不是"商店买谁"
+        // ⚠ 2026-11-19 改正: 旧断言认为 applyCubStrategy 会把 priority 里的幼崽排到买的第一位,
+        //   那是把农场 bag_priority 语义做错了。农场 plantFromBagSeeds 的顺序是:
+        //   背包里有就用背包(按 priority 顺序), 背包空了才按第二策略去商店买。
+        //   所以这里传 priority 也不影响"买谁" —— 只有背包为空时才会走购买。
+        const byList = apply(cubs, { strategy: 'bag_priority', priority: [60002], fallback: 'max_level' });
+        check('bag_priority 买谁由第二策略决定(priority 只作用于背包)',
+            byList[0].level === 17, byList.map(c => `${c.name}Lv${c.level}`));
+
+        // 背包顺序: 按 priority 排, 其余按等级兜底, 排外剔除
+        const bagCubs = [
+            { id: 60001, count: 5, name: '鸡' },
+            { id: 60002, count: 3, name: '鸭' },
+            { id: 60004, count: 1, name: '兔子' },
+        ];
+        const sortedBag = fns.sortBagCubsForPlacing(bagCubs, { priority: [60004], exclude: [] });
+        check('背包入栏顺序: 优先级列表内的排最前', sortedBag[0].id === 60004,
+            sortedBag.map(c => c.name));
+        check('背包入栏顺序: 其余按等级(鸭 Lv3 > 鸡 Lv1)',
+            sortedBag[1].id === 60002 && sortedBag[2].id === 60001,
+            sortedBag.map(c => c.name));
+
+        const excludedBag = fns.sortBagCubsForPlacing(bagCubs, { priority: [], exclude: [60001] });
+        check('排外的幼崽被剔除', excludedBag.every(c => c.id !== 60001),
+            excludedBag.map(c => c.name));
+        check('排外后数量正确', excludedBag.length === 2, excludedBag.length);
+
+        const allExcluded = fns.sortBagCubsForPlacing(bagCubs, { priority: [], exclude: [60001, 60002, 60004] });
+        check('全部排外 → 空列表(不入栏)', allExcluded.length === 0, allExcluded.length);
 
         // 优先列表为空 → 走第二策略
         const noList = apply(cubs, { strategy: 'bag_priority', priority: [], fallback: 'max_level' });

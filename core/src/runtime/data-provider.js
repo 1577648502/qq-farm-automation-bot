@@ -211,6 +211,7 @@ function createDataProvider(options) {
                 // 牧场幼崽策略(独立于农场种植策略)
                 ranchCubStrategy: body.ranchCubStrategy,
                 ranchCubPriority: body.ranchCubPriority,
+                ranchCubExclude: body.ranchCubExclude,
                 ranchCubFallbackStrategy: body.ranchCubFallbackStrategy,
                 intervals: body.intervals,
                 friendQuietHours: body.friendQuietHours,
@@ -281,6 +282,7 @@ function createDataProvider(options) {
                 ranchCubStrategy: store.getRanchCubStrategy(accountId),
                 ranchCubFallbackStrategy: store.getRanchCubFallbackStrategy(accountId),
                 ranchCubPriority: store.getRanchCubPriority(accountId),
+                ranchCubExclude: store.getRanchCubExclude(accountId),
                 intervals: store.getIntervals(accountId),
                 friendQuietHours: store.getFriendQuietHours(accountId),
                 stealDelaySeconds: store.getStealDelaySeconds(accountId),

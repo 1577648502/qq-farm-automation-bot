@@ -338,6 +338,7 @@ const localStrategySettings = ref({
   // 牧场幼崽策略(独立于农场种植策略)
   ranchCubStrategy: 'max_profit',
   ranchCubPriority: [] as number[],
+  ranchCubExclude: [] as number[],
   ranchCubFallbackStrategy: 'max_level',
   stealDelaySeconds: 0,
   plantOrderRandom: false,
@@ -561,27 +562,117 @@ const preferredSeedOptions = computed(() => {
   return options
 })
 
-// 牧场幼崽选项(从牧场商城拉, 复用 /api/ranch/cub-shop)
-const ranchCubs = ref<Array<{ goodsId: number, animalId: number, name: string, price: number, unlocked: boolean }>>([])
+// 牧场幼崽选项 —— ⭐ 与农场"背包种子优先顺序"同构:
+//   列表展示的是**牧场背包里实际有的幼崽**(itemType 105), 不是商店列表。
+//   用户可以拖拽排序(入栏顺序)、点"排外"(不买也不入栏)。
+const ranchCubs = ref<Array<{ animalId: number, name: string, count: number }>>([])
+const ranchCubsLoading = ref(false)
+const ranchCubsError = ref<string | null>(null)
 
 async function loadRanchCubs() {
   const id = currentAccountId.value
-  if (!id)
+  if (!id) {
+    ranchCubs.value = []
     return
-  try {
-    const res = await api.get('/api/ranch/cub-shop', { headers: { 'x-account-id': id } })
-    if (res.data?.ok) {
-      ranchCubs.value = (res.data.data?.shop || []).map((g: any) => ({
-        goodsId: g.goodsId,
-        animalId: g.animalId,
-        name: g.name,
-        price: g.price,
-        unlocked: !!g.unlocked,
-      }))
-    }
   }
-  catch { /* 拉不到就只显示已保存的 id */ }
+  ranchCubsLoading.value = true
+  ranchCubsError.value = null
+  try {
+    const res = await api.get('/api/ranch/bag', { headers: { 'x-account-id': id } })
+    if (res.data?.ok === false) {
+      ranchCubs.value = []
+      ranchCubsError.value = res.data?.error || '加载失败'
+      return
+    }
+    // 牧场的幼崽页签对应 itemType=105(/api/ranch/bag 已经按背包分组返回)
+    const items: any[] = res.data?.data?.items || []
+    const merged = new Map<number, { animalId: number, name: string, count: number }>()
+    for (const it of items) {
+      if (Number(it.itemType) !== 105)
+        continue
+      const animalId = Number(it.id)
+      const cur = merged.get(animalId) || {
+        animalId,
+        name: String(it.name || `#${animalId}`),
+        count: 0,
+      }
+      cur.count += Number(it.count) || 0
+      merged.set(animalId, cur)
+    }
+    ranchCubs.value = Array.from(merged.values())
+  }
+  catch (e: any) {
+    ranchCubs.value = []
+    ranchCubsError.value = e?.message || '加载失败'
+  }
+  finally {
+    ranchCubsLoading.value = false
+  }
 }
+
+// 排外集合(与农场 excludedSeedIds 同名同义)
+const excludedCubIds = computed(() => new Set((localStrategySettings.value.ranchCubExclude || []).map(x => Number(x))))
+
+// 展示顺序: 用户设的优先级在前, 其余按等级/ID 兜底(与后端 sortBagCubsForPlacing 一致)
+const sortedRanchCubs = computed(() => {
+  const priority = localStrategySettings.value.ranchCubPriority || []
+  const indexMap = new Map<number, number>()
+  priority.forEach((animalId, i) => indexMap.set(Number(animalId), i))
+  return [...ranchCubs.value].sort((a, b) => {
+    const ai = indexMap.has(a.animalId) ? indexMap.get(a.animalId)! : Number.MAX_SAFE_INTEGER
+    const bi = indexMap.has(b.animalId) ? indexMap.get(b.animalId)! : Number.MAX_SAFE_INTEGER
+    if (ai !== bi)
+      return ai - bi
+    return a.animalId - b.animalId
+  })
+})
+
+function resetRanchCubPriority() {
+  localStrategySettings.value.ranchCubPriority = []
+}
+
+function getVisibleRanchCubOrder() {
+  return sortedRanchCubs.value.map(c => c.animalId)
+}
+
+function materializeRanchCubPriority() {
+  const visibleOrder = getVisibleRanchCubOrder()
+  const visibleSet = new Set(visibleOrder)
+  const savedOrder = (localStrategySettings.value.ranchCubPriority || []).filter(x => visibleSet.has(Number(x)))
+  const missing = visibleOrder.filter(x => !savedOrder.includes(x))
+  return [...savedOrder, ...missing]
+}
+
+function moveRanchCub(animalId: number, direction: -1 | 1) {
+  const nextOrder = materializeRanchCubPriority()
+  const index = nextOrder.indexOf(animalId)
+  const targetIndex = index + direction
+  if (index < 0 || targetIndex < 0 || targetIndex >= nextOrder.length)
+    return
+  const tmp = nextOrder[index]!
+  nextOrder[index] = nextOrder[targetIndex]!
+  nextOrder[targetIndex] = tmp
+  localStrategySettings.value.ranchCubPriority = nextOrder
+}
+
+function isRanchCubExcluded(animalId: number) {
+  return excludedCubIds.value.has(Number(animalId))
+}
+
+function toggleRanchCubExcluded(animalId: number) {
+  const next = [...(localStrategySettings.value.ranchCubExclude || [])]
+  const index = next.indexOf(Number(animalId))
+  if (index >= 0)
+    next.splice(index, 1)
+  else
+    next.push(Number(animalId))
+  localStrategySettings.value.ranchCubExclude = next
+}
+
+watchEffect(() => {
+  if (localStrategySettings.value.ranchCubStrategy === 'bag_priority' && currentAccountId.value)
+    void loadRanchCubs()
+})
 
 // ===== 幼崽策略预览(对照农场的 strategyPreviewLabel) =====
 // ⚠ 2026-11-19: 预览必须与**实际购买**走同一套排序。
@@ -601,10 +692,11 @@ watchEffect(async (onCleanup) => {
     ranchCubPreviewLabel.value = null
     return
   }
-  // 依赖策略/优先级/回退, 任一变化都重新算
+  // 依赖策略/优先级/排外, 任一变化都重新算
   void localStrategySettings.value.ranchCubStrategy
   void localStrategySettings.value.ranchCubFallbackStrategy
   void (localStrategySettings.value.ranchCubPriority || []).length
+  void (localStrategySettings.value.ranchCubExclude || []).length
 
   try {
     const res = await api.get('/api/ranch/cub-strategy-pick', {
@@ -612,10 +704,15 @@ watchEffect(async (onCleanup) => {
     })
     if (cancelled)
       return
-    const d = res.data
-    const pick = d?.data?.pick
+    const d = res.data?.data
+    // 农场语义: 背包有可用幼崽 → 实际先做的是入栏, 不是买
+    if (d?.source === 'bag' && d?.bag) {
+      ranchCubPreviewLabel.value = `先入栏: ${d.bag.name}(背包 ${d.bag.count} 只)`
+      return
+    }
+    const pick = d?.pick
     ranchCubPreviewLabel.value = pick
-      ? `Lv${pick.level ?? '-'} ${pick.name}`
+      ? `背包无可用幼崽 → 按第二策略买 Lv${pick.level ?? '-'} ${pick.name}`
       : '暂无可用幼崽'
   }
   catch {
@@ -623,42 +720,6 @@ watchEffect(async (onCleanup) => {
       ranchCubPreviewLabel.value = null
   }
 })
-
-// 优先列表: 按用户设定的顺序展示, 供勾选/排序
-const ranchCubPriorityOptions = computed(() => {
-  const opts = ranchCubs.value.map(g => ({
-    label: `${g.name}${g.unlocked ? '' : '(未解锁)'} · ${g.price} 金券`,
-    value: g.animalId,
-  }))
-  // 已保存但不在商城里的 id 也要能显示出来
-  for (const id of (localStrategySettings.value.ranchCubPriority || [])) {
-    if (!opts.some(o => o.value === id))
-      opts.push({ label: `动物#${id}`, value: id })
-  }
-  return opts
-})
-
-function toggleRanchCubPriority(animalId: number) {
-  const list = localStrategySettings.value.ranchCubPriority || []
-  const idx = list.indexOf(animalId)
-  if (idx >= 0)
-    localStrategySettings.value.ranchCubPriority = list.filter(x => x !== animalId)
-  else
-    localStrategySettings.value.ranchCubPriority = [...list, animalId]
-}
-
-/** 把某个幼崽在优先列表里上移/下移一位 */
-function moveRanchCubPriority(animalId: number, delta: number) {
-  const list: number[] = [...(localStrategySettings.value.ranchCubPriority || [])]
-  const idx = list.indexOf(animalId)
-  const next = idx + delta
-  if (idx < 0 || next < 0 || next >= list.length)
-    return
-  const tmp = list[idx] as number
-  list[idx] = list[next] as number
-  list[next] = tmp
-  localStrategySettings.value.ranchCubPriority = list
-}
 
 const analyticsSortByMap: Record<string, string> = {
   max_exp: 'exp',
@@ -767,6 +828,7 @@ function syncLocalStrategySettings(submitted?: any) {
     // 牧场幼崽策略
     ranchCubStrategy: settings.value.ranchCubStrategy ?? 'max_profit',
     ranchCubPriority: settings.value.ranchCubPriority ?? [],
+    ranchCubExclude: settings.value.ranchCubExclude ?? [],
     ranchCubFallbackStrategy: settings.value.ranchCubFallbackStrategy ?? 'max_level',
     stealDelaySeconds: settings.value.stealDelaySeconds ?? 0,
     plantOrderRandom: !!settings.value.plantOrderRandom,
@@ -2424,55 +2486,82 @@ async function onBackupFileChange(ev: Event) {
               :options="ranchCubFallbackStrategyOptions"
             />
 
-            <!-- 优先列表: 仅 bag_priority 时生效 -->
-            <div v-if="localStrategySettings.ranchCubStrategy === 'bag_priority'" class="space-y-2">
-              <div class="flex flex-wrap items-center justify-between gap-2">
-                <span class="text-sm text-gray-600 font-medium dark:text-gray-300">购买优先级（点选 + 上下调整顺序）</span>
+            <!-- 背包幼崽优先顺序 —— 与农场"背包种子优先顺序"逐项同构:
+                 列表内容 = 背包里实际有的幼崽; 拖拽/上下调整入栏顺序; 可排外(不买也不入栏) -->
+            <div v-if="localStrategySettings.ranchCubStrategy === 'bag_priority'" class="border border-amber-200 rounded-lg bg-amber-50/70 p-3 space-y-3 dark:border-amber-800/50 dark:bg-amber-900/20">
+              <div class="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <div class="text-sm text-amber-900 font-semibold dark:text-amber-200">
+                    背包幼崽优先顺序
+                  </div>
+                  <p class="mt-1 text-xs text-amber-700/90 dark:text-amber-300/90">
+                    背包里有多少就按下方顺序入栏多少；背包用完才按第二优先策略从商店购买。标记排外的幼崽不买也不入栏。
+                  </p>
+                </div>
                 <button
-                  class="rounded bg-amber-100 px-2 py-1 text-xs text-amber-700 transition dark:bg-amber-900/50 hover:bg-amber-200 dark:text-amber-300"
-                  @click="localStrategySettings.ranchCubPriority = []"
+                  class="rounded bg-amber-100 px-2 py-1 text-xs text-amber-700 transition dark:bg-amber-900/50 hover:bg-amber-200 dark:text-amber-300 dark:hover:bg-amber-900/70"
+                  @click="resetRanchCubPriority"
                 >
-                  清空
+                  重置顺序
                 </button>
               </div>
-              <div v-if="!ranchCubs.length" class="py-3 text-center text-xs text-amber-700/80 dark:text-amber-300/80">
-                暂无幼崽数据（账号需运行且牧场已解锁）
+              <div v-if="ranchCubsLoading" class="py-4 text-center text-sm text-amber-700 dark:text-amber-300">
+                加载中...
               </div>
-              <div v-else class="space-y-1.5">
+              <div v-else-if="ranchCubsError" class="py-4 text-center text-sm text-red-600 dark:text-red-400">
+                {{ ranchCubsError }}
+              </div>
+              <div v-else-if="ranchCubs.length === 0" class="py-4 text-center text-sm text-amber-700 dark:text-amber-300">
+                背包中暂无幼崽（背包用完后将按第二优先策略从商店购买）
+              </div>
+              <div v-else class="grid gap-2 lg:grid-cols-3 sm:grid-cols-2">
                 <div
-                  v-for="opt in ranchCubPriorityOptions"
-                  :key="opt.value"
-                  class="flex items-center justify-between border border-amber-200 rounded-lg bg-white px-2.5 py-1.5 text-sm dark:border-amber-800/50 dark:bg-gray-800"
+                  v-for="(cub, index) in sortedRanchCubs"
+                  :key="cub.animalId"
+                  class="flex items-center gap-2 border border-amber-200 rounded-lg bg-white p-2 dark:border-amber-700/50 dark:bg-gray-800"
+                  :class="isRanchCubExcluded(cub.animalId) ? 'opacity-70' : ''"
                 >
-                  <label class="min-w-0 flex flex-1 items-center gap-2">
-                    <input
-                      type="checkbox"
-                      :checked="(localStrategySettings.ranchCubPriority || []).includes(opt.value)"
-                      class="h-4 w-4"
-                      @change="toggleRanchCubPriority(opt.value)"
-                    >
-                    <span class="truncate">{{ opt.label }}</span>
-                  </label>
-                  <div class="flex shrink-0 items-center gap-1">
-                    <span class="mr-1 rounded bg-amber-100 px-1.5 text-[10px] text-amber-700 dark:bg-amber-900/40 dark:text-amber-300">
-                      #{{ (localStrategySettings.ranchCubPriority || []).includes(opt.value)
-                        ? (localStrategySettings.ranchCubPriority || []).indexOf(opt.value) + 1
-                        : '—' }}
-                    </span>
+                  <div class="h-8 w-8 flex shrink-0 items-center justify-center rounded bg-amber-100 text-xs text-amber-700 font-bold dark:bg-amber-900/50 dark:text-amber-300">
+                    {{ index + 1 }}
+                  </div>
+                  <div class="min-w-0 flex-1">
+                    <div class="min-w-0 flex items-center gap-1.5">
+                      <span class="truncate text-sm text-gray-800 font-medium dark:text-gray-200">
+                        {{ cub.name }}
+                      </span>
+                      <span v-if="isRanchCubExcluded(cub.animalId)" class="shrink-0 rounded bg-rose-100 px-1.5 py-0.5 text-[10px] text-rose-700 dark:bg-rose-900/40 dark:text-rose-300">
+                        已排外
+                      </span>
+                    </div>
+                    <div class="text-xs text-gray-500 dark:text-gray-400">
+                      数量: {{ cub.count }}
+                    </div>
+                  </div>
+                  <button
+                    class="h-8 flex shrink-0 items-center gap-1 rounded px-2 text-xs transition"
+                    :class="isRanchCubExcluded(cub.animalId)
+                      ? 'bg-rose-100 text-rose-700 hover:bg-rose-200 dark:bg-rose-900/40 dark:text-rose-300 dark:hover:bg-rose-900/60'
+                      : 'bg-gray-100 text-gray-600 hover:bg-gray-200 dark:bg-gray-700 dark:text-gray-300 dark:hover:bg-gray-600'"
+                    :title="isRanchCubExcluded(cub.animalId) ? '取消入栏排外' : '加入入栏排外'"
+                    @click.stop="toggleRanchCubExcluded(cub.animalId)"
+                  >
+                    <div :class="isRanchCubExcluded(cub.animalId) ? 'i-carbon-checkmark text-sm' : 'i-carbon-subtract-alt text-sm'" />
+                    <span>{{ isRanchCubExcluded(cub.animalId) ? '取消' : '排外' }}</span>
+                  </button>
+                  <div class="flex shrink-0 flex-col gap-1">
                     <button
-                      class="rounded px-1 text-gray-500 hover:bg-gray-100 disabled:opacity-30 dark:hover:bg-gray-700"
-                      :disabled="(localStrategySettings.ranchCubPriority || []).indexOf(opt.value) <= 0"
-                      @click="moveRanchCubPriority(opt.value, -1)"
+                      class="rounded p-1 text-gray-400 transition hover:bg-gray-100 hover:text-gray-600 dark:hover:bg-gray-700"
+                      :disabled="index === 0"
+                      @click="moveRanchCub(cub.animalId, -1)"
                     >
-                      ↑
+                      <div class="i-carbon-arrow-up text-sm" />
                     </button>
                     <button
-                      class="rounded px-1 text-gray-500 hover:bg-gray-100 disabled:opacity-30 dark:hover:bg-gray-700"
-                      :disabled="!(localStrategySettings.ranchCubPriority || []).includes(opt.value)
-                        || (localStrategySettings.ranchCubPriority || []).indexOf(opt.value) >= (localStrategySettings.ranchCubPriority || []).length - 1"
-                      @click="moveRanchCubPriority(opt.value, 1)"
+                      class="rounded p-1 text-gray-400 transition hover:bg-gray-100 hover:text-gray-600 dark:hover:bg-gray-700"
+                      :disabled="index === sortedRanchCubs.length - 1"
+                      @click="moveRanchCub(cub.animalId, 1)"
                     >
-                      ↓
+                      <div class="i-carbon-arrow-down text-sm" />
                     </button>
                   </div>
                 </div>

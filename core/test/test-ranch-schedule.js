@@ -489,6 +489,28 @@ proto.loadProto().then(async () => {
         }
     }
 
+    section('18d. 牧场幼崽策略必须随 config_sync 下发到 worker');
+    {
+        // 线上 2026-11-19: 账号 1 设成"背包优先", 页面保存成功、主进程 store.json 也对,
+        //   但 worker 依然按 max_profit 每 1.5 分钟买鸡 x4。
+        // 根因: 主进程靠 broadcastConfigToWorkers → buildConfigSnapshotForAccount 把配置
+        //   推给 worker, 而那个返回对象里**没有 ranchCub* 四个字段** ——
+        //   worker 只能用启动时读到的旧值(容器 21:00 重启那一刻的 max_profit)。
+        //   农场那边 bagSeedPriority/plantSeedExclude 都在, 唯独牧场这三个漏了。
+        //
+        // 这里做静态断言: buildConfigSnapshotForAccount 的返回对象必须列出这四个字段。
+        const fs = require('node:fs');
+        const src = fs.readFileSync(
+            require('node:path').join(SB, 'src/runtime/runtime-state.js'), 'utf8');
+        for (const k of ['ranchCubStrategy', 'ranchCubPriority', 'ranchCubExclude', 'ranchCubFallbackStrategy']) {
+            check(`config_sync 快照含 ${k}`,
+                new RegExp(`\\b${k}\\s*:\\s*store\\.get`).test(src), k);
+        }
+        // 农场同名字段作为对照: 它们本来就存在, 说明这是"牧场漏做"而非机制问题
+        check('config_sync 快照含 bagSeedPriority(农场同款)',
+            /bagSeedPriority\s*:\s*store\.get/.test(src), 'bagSeedPriority');
+    }
+
     section('19. 牧歌初启: tiers 字段必须按 camelCase 读(keepCase:true)');
     {
         // 线上 bug: 代码写 x.required_weight / t.total_weight, 但 proto 是 keepCase:true,

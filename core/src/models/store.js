@@ -216,6 +216,8 @@ const DEFAULT_ACCOUNT_CONFIG = {
     ranchCubStrategy: 'max_profit',
     // 背包优先顺序(animalId 列表), 对应农场 bagSeedPriority
     ranchCubPriority: [],
+    // 幼崽排外列表(animalId), 对应农场 plantSeedExclude —— 排外的幼崽不买也不入栏
+    ranchCubExclude: [],
     // 第二优先策略: 背包用完/主策略选不出时的回退, 对应农场 bagSeedFallbackStrategy
     ranchCubFallbackStrategy: 'max_level',
     intervals: {
@@ -460,6 +462,8 @@ function cloneAccountConfig(base = DEFAULT_ACCOUNT_CONFIG) {
         ranchCubStrategy: normalizeRanchCubStrategy(base.ranchCubStrategy),
         ranchCubPriority: (Array.isArray(base.ranchCubPriority) ? base.ranchCubPriority : [])
             .map(Number).filter(n => Number.isFinite(n) && n > 0),
+        ranchCubExclude: (Array.isArray(base.ranchCubExclude) ? base.ranchCubExclude : [])
+            .map(Number).filter(n => Number.isFinite(n) && n > 0),
         ranchCubFallbackStrategy: ALLOWED_RANCH_CUB_FALLBACK_STRATEGIES.includes(String(base.ranchCubFallbackStrategy || ''))
             ? String(base.ranchCubFallbackStrategy) : 'max_level',
         plantBlacklist: rawPlantBlacklist.map(Number).filter(n => Number.isFinite(n) && n > 0),
@@ -524,6 +528,10 @@ function normalizeAccountConfig(input, fallback = accountFallbackConfig) {
     }
     if (src.ranchCubPriority !== undefined && src.ranchCubPriority !== null) {
         cfg.ranchCubPriority = (Array.isArray(src.ranchCubPriority) ? src.ranchCubPriority : [])
+            .map(Number).filter(n => Number.isFinite(n) && n > 0);
+    }
+    if (src.ranchCubExclude !== undefined && src.ranchCubExclude !== null) {
+        cfg.ranchCubExclude = (Array.isArray(src.ranchCubExclude) ? src.ranchCubExclude : [])
             .map(Number).filter(n => Number.isFinite(n) && n > 0);
     }
     if (src.ranchCubFallbackStrategy !== undefined && src.ranchCubFallbackStrategy !== null) {
@@ -924,6 +932,7 @@ function getConfigSnapshot(accountId) {
         // 牧场幼崽策略(独立于农场)
         ranchCubStrategy: cfg.ranchCubStrategy,
         ranchCubPriority: [...(cfg.ranchCubPriority || [])],
+        ranchCubExclude: [...(cfg.ranchCubExclude || [])],
         ranchCubFallbackStrategy: cfg.ranchCubFallbackStrategy,
         intervals: { ...cfg.intervals },
         friendQuietHours: { ...cfg.friendQuietHours },
@@ -1020,6 +1029,8 @@ const ACCOUNT_CONFIG_NORMALIZERS = {
         ? String(v)
         : (cur || 'max_level')),
     ranchCubPriority: (v) => (Array.isArray(v) ? v : [])
+        .map(Number).filter(n => Number.isFinite(n) && n > 0),
+    ranchCubExclude: (v) => (Array.isArray(v) ? v : [])
         .map(Number).filter(n => Number.isFinite(n) && n > 0),
     stealDelaySeconds: clampInt(0, 300, 0),
     plantDelaySeconds: clampInt(0, 60, 0),
@@ -1205,6 +1216,9 @@ function getRanchCubStrategy(accountId) {
 }
 function getRanchCubPriority(accountId) {
     return [...(getAccountConfigSnapshot(accountId).ranchCubPriority || [])];
+}
+function getRanchCubExclude(accountId) {
+    return [...(getAccountConfigSnapshot(accountId).ranchCubExclude || [])];
 }
 function getRanchCubFallbackStrategy(accountId) {
     const v = String(getAccountConfigSnapshot(accountId).ranchCubFallbackStrategy || '');
@@ -1777,6 +1791,7 @@ module.exports = {
     getBagSeedFallbackStrategy,
     getRanchCubStrategy,
     getRanchCubPriority,
+    getRanchCubExclude,
     getRanchCubFallbackStrategy,
     getIntervals,
     getFriendQuietHours,

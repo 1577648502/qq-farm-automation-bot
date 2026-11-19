@@ -689,22 +689,97 @@ const RANCH_CUB_FALLBACK_LABELS = {
     max_fert_profit: '最大普通肥净利润/时',
 };
 
+// ============ 背包幼崽排外 + 入栏顺序(对齐农场) ============
+// 农场: plantSeedExclude(排外) + bagSeedPriority(顺序) + plantFromBagSeeds(按序种)
+// 牧场: ranchCubExclude(排外) + ranchCubPriority(顺序) + autoPlaceCubs(按序入栏)
+function getRanchCubExcludeSet() {
+    try {
+        const store = require('../models/store');
+        if (typeof store.getRanchCubExclude === 'function') {
+            return new Set((store.getRanchCubExclude(process.env.FARM_ACCOUNT_ID || '') || [])
+                .map(Number).filter(n => n > 0));
+        }
+    } catch { /* 读不到就当没有排外 */ }
+    return new Set();
+}
+
 /**
- * 按"主策略 + 第二策略"给候选幼崽排序 —— 结构对齐农场的 applyPlantingStrategy:
- *   1) 先按主策略(max_profit / max_level / bag_priority)排出优先顺序
- *   2) 主策略选不出来的(比如 bag_priority 列表里没有的), 用第二策略排
+ * 按农场 plantFromBagSeeds 的规则给**背包幼崽**排入栏顺序:
+ *   1) 用户在优先级列表里排过的按列表顺序
+ *   2) 其余(列表里没有的)排在后面, 等级高的优先(农场用 plantSize/requiredLevel 做同类兜底)
+ *   3) 排外的一律剔除
  *
- * 农场的实现里, bag_priority 的"第二优先策略"就是靠 bagSeedFallbackStrategy 完成的;
- * 这里保持一致, 不自己发明"背包优先开关"那种另一套东西。
+ * 与农场唯一的形式差异: 农场作物有"2x2 占地"的合并约束, 牧场一只幼崽占一个栏位,
+ * 所以兜底排序用"等级 + animalId", 落点与农场一致(等级高的先占位)。
+ *
+ * @param {Array<{id:number,count:number,name:string}>} bagCubs
+ * @param {{priority?:number[], exclude?:number[]}} [opts]
+ */
+function sortBagCubsForPlacing(bagCubs, opts = {}) {
+    let priority = Array.isArray(opts.priority) ? opts.priority : null;
+    let exclude = Array.isArray(opts.exclude) ? opts.exclude : null;
+    if (!priority || !exclude) {
+        try {
+            const store = require('../models/store');
+            const accountId = process.env.FARM_ACCOUNT_ID || '';
+            if (!priority && typeof store.getRanchCubPriority === 'function') {
+                priority = store.getRanchCubPriority(accountId) || [];
+            }
+            if (!exclude && typeof store.getRanchCubExclude === 'function') {
+                exclude = store.getRanchCubExclude(accountId) || [];
+            }
+        } catch { /* 读不到就用默认 */ }
+    }
+    const ex = new Set((exclude || []).map(Number).filter(n => n > 0));
+    const indexMap = new Map();
+    (priority || []).forEach((id, i) => {
+        const n = Number(id);
+        if (n > 0) indexMap.set(n, i);
+    });
+    const getItemById = (() => {
+        try { return require('../config/gameConfig').getItemById; } catch { return null; }
+    })();
+    const levelOf = (id) => {
+        const info = getItemById ? getItemById(Number(id)) : null;
+        return Number(info && info.level) || 0;
+    };
+
+    return [...(Array.isArray(bagCubs) ? bagCubs : [])]
+        .filter(c => !ex.has(Number(c.id)))
+        .sort((a, b) => {
+            const ai = indexMap.has(a.id) ? indexMap.get(a.id) : Number.MAX_SAFE_INTEGER;
+            const bi = indexMap.has(b.id) ? indexMap.get(b.id) : Number.MAX_SAFE_INTEGER;
+            if (ai !== bi) return ai - bi;
+            const al = levelOf(a.id);
+            const bl = levelOf(b.id);
+            if (al !== bl) return bl - al;
+            return Number(a.id) - Number(b.id);
+        });
+}
+
+/**
+ * 按"主策略 + 第二策略"给**商店候选**幼崽排序。
+ *
+ * ⚠ 2026-11-19 对齐农场重做:
+ *   农场 bag_priority 的语义是"**背包里有什么就用什么**, 按用户拖拽的顺序,
+ *   排外的跳过; 背包用完了, 剩下的空地才按第二优先策略去商店买"
+ *   (farm.js plantFromBagSeeds → fallbackAllowed → plantFromShop)。
+ *   牧场之前把这条做成了"拿商店幼崽列表当优先级直接买", 是错的 ——
+ *   用户设的优先级是**背包顺序**, 不是购买顺序。
+ *
+ * 因此这里的 bag_priority 分支只负责"没有背包幼崽可用时, 用第二策略挑买哪只":
+ *   · 背包幼崽的取用/入栏顺序在 sortBagCubsForPlacing() 里, 与农场同构
+ *   · 排外列表 ranchCubExclude 在两侧都生效(不买、也不入栏)
  *
  * @param {Array<object>} cubs 已过滤过(解锁/有价/收益比>0)的候选
- * @param {object} [opts] strategy / priority / fallback(测试或手动覆盖)
+ * @param {object} [opts] strategy / priority / fallback / exclude(测试或手动覆盖)
  * @returns {Array<object>} 排序后的候选
  */
 function applyCubStrategy(cubs, opts = {}) {
     let strategy = String(opts.strategy || '').trim();
     let priority = Array.isArray(opts.priority) ? opts.priority : null;
     let fallback = String(opts.fallback || '').trim();
+    const exclude = Array.isArray(opts.exclude) ? opts.exclude : null;
 
     if (!strategy || !priority || !fallback) {
         try {
@@ -772,20 +847,16 @@ function applyCubStrategy(cubs, opts = {}) {
 
     const list = [...cubs];
 
-    // 主策略是 bag_priority: 列表内的按顺序在前, 列表外的用第二策略排
-    if (strategy === 'bag_priority' && Array.isArray(priority) && priority.length) {
-        const indexMap = new Map(priority.map((id, i) => [Number(id), i]));
-        list.sort((a, b) => {
-            const ai = indexMap.has(a.animalId) ? indexMap.get(a.animalId) : Number.MAX_SAFE_INTEGER;
-            const bi = indexMap.has(b.animalId) ? indexMap.get(b.animalId) : Number.MAX_SAFE_INTEGER;
-            if (ai !== bi) return ai - bi;
-            // 都不在列表里 → 第二策略
-            return pickSorter(fallback)(a, b);
-        });
-        return list;
+    // 排外: 与农场 plantSeedExclude 同语义 —— 不买、也不参与排序
+    if (exclude && exclude.length) {
+        const ex = new Set(exclude.map(Number).filter(n => n > 0));
+        const kept = list.filter(c => !ex.has(Number(c.animalId)));
+        kept.sort(pickSorter(strategy === 'bag_priority' ? fallback : strategy));
+        return kept;
     }
 
-    // 主策略是 bag_priority 但列表为空 → 直接走第二策略(农场也是这个行为)
+    // 主策略是 bag_priority: 商店候选没有"背包顺序"可言,
+    // 直接按第二策略挑(背包里确实有幼崽时, 根本不会走到买这一步)。
     if (strategy === 'bag_priority') {
         list.sort(pickSorter(fallback));
         return list;
@@ -818,16 +889,31 @@ async function autoPlaceCubs(opts = {}) {
     } catch {
         return result;
     }
-    const cubs = [];
+    const collected = [];
     let getItemById = null;
     try { getItemById = require('../config/gameConfig').getItemById; } catch { /* 没配置就跳过类型判断 */ }
     for (const it of bag) {
         const info = getItemById ? getItemById(toNum(it.id)) : null;
         if (info && Number(info.type) === 105 && toNum(it.count) > 0) {
-            cubs.push({ id: toNum(it.id), count: toNum(it.count), name: info.name || `#${it.id}` });
+            collected.push({ id: toNum(it.id), count: toNum(it.count), name: info.name || `#${it.id}` });
         }
     }
-    if (!cubs.length) return result;
+    if (!collected.length) return result;
+
+    // ⭐ 对齐农场 plantFromBagSeeds: 排外的幼崽不入栏, 其余按用户设的优先级顺序放。
+    //   之前这里用道具在背包里的顺序(cubs[i % cubs.length]), 用户的优先级顺序形同虚设。
+    const excludeSet = getRanchCubExcludeSet();
+    const cubs = sortBagCubsForPlacing(collected);
+    if (!cubs.length) {
+        // 背包里全是排外的: 与农场"背包种子均已排外"同处理, 一句话说明, 不刷屏
+        const total = collected.reduce((n, c) => n + c.count, 0);
+        if (shouldLogOnce('ranch_place_all_excluded', `excluded#${total}`)) {
+            log('牧场', `背包里的 ${total} 只幼崽全部已排外, 跳过入栏`, {
+                module: 'ranch', event: '幼崽入栏', result: 'skip', excluded: excludeSet.size,
+            });
+        }
+        return result;
+    }
 
     // 2. 找空栏位(窝/棚的容量 - 在养数)
     //    ⚠ 必须读**最新**数据: 调用方(巡查)通常刚收获过, 若拿到收获前的缓存,
@@ -3126,7 +3212,8 @@ async function autoBuyCubs(opts = {}) {
     }
 
     // 按用户配置的策略挑幼崽(对照农场 plantingStrategy, 但牧场完全独立)
-    usable = applyCubStrategy(usable);
+    // ⭐ 排外(ranchCubExclude) 与农场 plantSeedExclude 同语义: 不买、也不排序
+    usable = applyCubStrategy(usable, { exclude: [...getRanchCubExcludeSet()] });
     if (usable.length === 0) {
         log('牧场', '按当前幼崽策略没有可选目标', { module: 'ranch', event: '买幼崽', result: 'skip' });
         return result;
@@ -3158,22 +3245,28 @@ async function autoBuyCubs(opts = {}) {
     const MAX_CUBS_PER_ROUND = 4;
     const buyBudget = Math.min(slots, MAX_CUBS_PER_ROUND);
 
-    // 背包里已有的幼崽: 如果买来没入栏, 先别买了 —— 应该去"放置", 不是继续买
-    // (幼崽 itemType=105, 每只 uid 不同, 这里只统计数量)
-    let bagCubs = 0;
+    // 背包里已有的幼崽: 与农场 plantFromBagSeeds 同语义 ——
+    //   **背包里还有可用(未排外)幼崽, 就先别买**, 把它们放完再说;
+    //   排外的幼崽不算 "可用", 等于用户明确表示不养这种。
+    // ⚠ 2026-11-19 改正: 原来只统计"数量", 不看排外, 也不看用户设的 pet 优先级。
+    let bagUsableCubs = 0;
+    let bagTotalCubs = 0;
     try {
         const warehouse = require('./warehouse');
         const bag = await warehouse.getRanchBagItems();
+        const excludeSet = getRanchCubExcludeSet();
+        const getItemById = (() => {
+            try { return require('../config/gameConfig').getItemById; } catch { return null; }
+        })();
         for (const it of bag) {
-            const info = (() => {
-                try { return require('../config/gameConfig').getItemById(toNum(it.id)); } catch { return null; }
-            })();
-            if (info && Number(info.type) === 105) bagCubs += toNum(it.count);
+            const id = toNum(it.id);
+            const info = getItemById ? getItemById(id) : null;
+            if (!(info && Number(info.type) === 105)) continue;
+            bagTotalCubs += toNum(it.count);
+            if (!excludeSet.has(id)) bagUsableCubs += toNum(it.count);
         }
     } catch { /* 读不到背包就不做这个保护, 交给上限兜底 */ }
 
-    // 背包优先 = 主策略里的 bag_priority(与农场一致), 不是另设一个开关。
-    // 该策略下"买"让位给入栏, 由 autoPlaceCubs 负责。
     const strategyNow = (() => {
         try {
             const store = require('../models/store');
@@ -3183,10 +3276,22 @@ async function autoBuyCubs(opts = {}) {
         } catch { return 'max_profit'; }
     })();
 
-    if (bagCubs > 0 && (strategyNow === 'bag_priority' || bagCubs >= buyBudget)) {
-        log('牧场', `背包里已有 ${bagCubs} 只幼崽未入栏, 暂停买幼崽(应先入栏, 不是继续买)`, {
-            module: 'ranch', event: '买幼崽', result: 'skip', bagCubs, strategy: strategyNow,
-        });
+    // 农场语义: bag_priority 下背包有可用幼崽 → 完全不买, 交给 autoPlaceCubs 按顺序入栏;
+    // 其他策略下, 背包里堆着没入栏的幼崽同样先不买(否则会无限买)。
+    if (bagUsableCubs > 0 && (strategyNow === 'bag_priority' || bagUsableCubs >= buyBudget)) {
+        log('牧场', `背包里已有 ${bagUsableCubs} 只可用幼崽未入栏, 暂停买幼崽(应先入栏, 不是继续买)`,
+            {
+                module: 'ranch', event: '买幼崽', result: 'skip',
+                bagCubs: bagUsableCubs, bagExcluded: bagTotalCubs - bagUsableCubs, strategy: strategyNow,
+            });
+        return result;
+    }
+    // 剩下的全是排外的 → 不买(与农场"背包种子均已排外"同一处理)
+    if (bagTotalCubs > 0 && bagUsableCubs === 0) {
+        if (shouldLogOnce('ranch_buy_all_excluded', `excluded#${bagTotalCubs}`)) {
+            log('牧场', `背包里的 ${bagTotalCubs} 只幼崽全部已排外, 不自动购买也不入栏`,
+                { module: 'ranch', event: '买幼崽', result: 'skip', bagCubs: bagTotalCubs });
+        }
         return result;
     }
 
@@ -3729,6 +3834,8 @@ module.exports = {
         calcRanchLevel, parseRotationShopReply, parseFeedMachineReply, walkWire, isEmptyRanchView,
         // 幼崽: 供测试验证"背包已有幼崽就不再买 + 单轮上限"
         autoBuyCubs, autoPlaceCubs, applyCubStrategy,
+        // 幼崽背包: 排外 + 入栏顺序(对齐农场 plantSeedExclude / bagSeedPriority)
+        sortBagCubsForPlacing, getRanchCubExcludeSet,
         // 游商: 供测试验证"等级不够就不发购买请求 + 不刷 error 日志"
         autoBuyRotationShop, isRotationNotPurchasable, rotationErrorHint,
         // 喂食: 供测试验证两种罐头的 feed_type 与失败提示

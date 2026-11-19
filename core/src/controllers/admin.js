@@ -2222,6 +2222,7 @@ app.use('/api', (req, res, next) => {
             // 牧场幼崽策略(独立于农场种植策略)
             const ranchCubStrategy = id && (typeof store.getRanchCubStrategy === 'function') ? store.getRanchCubStrategy(id) : 'max_profit';
             const ranchCubPriority = id && (typeof store.getRanchCubPriority === 'function') ? store.getRanchCubPriority(id) : [];
+            const ranchCubExclude = id && (typeof store.getRanchCubExclude === 'function') ? store.getRanchCubExclude(id) : [];
             const ranchCubFallbackStrategy = id && (typeof store.getRanchCubFallbackStrategy === 'function') ? store.getRanchCubFallbackStrategy(id) : 'max_level';
             const plantSeedExclude = id && (typeof store.getPlantSeedExclude === 'function') ? store.getPlantSeedExclude(id) : [];
             // 防封号(低调)模式(按账号)
@@ -2279,6 +2280,7 @@ app.use('/api', (req, res, next) => {
                     bagSeedFallbackStrategy,
                     ranchCubStrategy,
                     ranchCubPriority,
+                    ranchCubExclude,
                     ranchCubFallbackStrategy,
                     plantSeedExclude,
                     // 防封号(低调)模式

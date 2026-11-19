@@ -69,6 +69,7 @@ export interface SettingsState {
   // 牧场幼崽策略(独立于农场)
   ranchCubStrategy: string
   ranchCubPriority: number[]
+  ranchCubExclude: number[]
   ranchCubFallbackStrategy: string
   intervals: IntervalsConfig
   friendQuietHours: FriendQuietHoursConfig
@@ -125,6 +126,7 @@ function createDefaultSettings(): SettingsState {
     preferredSeedId: 0,
     ranchCubStrategy: 'max_profit',
     ranchCubPriority: [],
+    ranchCubExclude: [],
     ranchCubFallbackStrategy: 'max_level',
     bagSeedPriority: [],
     bagSeedFallbackStrategy: 'level',
@@ -296,6 +298,8 @@ export const useSettingStore = defineStore('setting', () => {
         settings.value.ranchCubStrategy = d.ranchCubStrategy
       if (Array.isArray(d.ranchCubPriority))
         settings.value.ranchCubPriority = d.ranchCubPriority
+      if (Array.isArray(d.ranchCubExclude))
+        settings.value.ranchCubExclude = d.ranchCubExclude
       if (d.ranchCubFallbackStrategy !== undefined && d.ranchCubFallbackStrategy !== null)
         settings.value.ranchCubFallbackStrategy = d.ranchCubFallbackStrategy
       settings.value.intervals = d.intervals || {}
@@ -399,6 +403,7 @@ export const useSettingStore = defineStore('setting', () => {
         // 牧场幼崽策略(独立) —— 漏发就不会保存, 表现为"选了没反应"
         ranchCubStrategy: newSettings.ranchCubStrategy,
         ranchCubPriority: newSettings.ranchCubPriority,
+        ranchCubExclude: newSettings.ranchCubExclude,
         ranchCubFallbackStrategy: newSettings.ranchCubFallbackStrategy,
         intervals: newSettings.intervals,
         friendQuietHours: newSettings.friendQuietHours,

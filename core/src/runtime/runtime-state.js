@@ -53,6 +53,15 @@ function createRuntimeState(options) {
             knownFriendGidSyncCooldownSec: store.getKnownFriendGidSyncCooldownSec(accountId),
             bagSeedPriority: store.getBagSeedPriority(accountId),
             bagSeedFallbackStrategy: store.getBagSeedFallbackStrategy(accountId),
+            // 牧场幼崽策略(独立于农场种植策略)
+            // ⚠ 2026-11-19 线上: 保存成 bag_priority 后 worker 仍按 max_profit 买鸡。
+            //   主进程 store.json 已写对, 但 worker 靠 config_sync 拿配置, 而这里没下发
+            //   这三个字段 → worker 里 applyCubStrategy 一直读旧值(启动时的 max_profit)。
+            //   与 saveSettings 的快照、worker 的 store 读接口保持同一份字段, 少一个就会"保存不生效"。
+            ranchCubStrategy: store.getRanchCubStrategy(accountId),
+            ranchCubPriority: store.getRanchCubPriority(accountId),
+            ranchCubExclude: store.getRanchCubExclude(accountId),
+            ranchCubFallbackStrategy: store.getRanchCubFallbackStrategy(accountId),
             __revision: configRevision,
         };
     }
