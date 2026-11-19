@@ -108,7 +108,46 @@ proto.loadProto().then(async () => {
             { before, after });
     }
 
-    section('6. scheduleRanchFromCountdowns 只认服务端给的时刻字段');
+    section('6. 收获后 overview 缓存必须失效(否则入栏读到满栏)');
+    {
+        // 2026-11-19 线上事故:
+        //   [牧场巡查] [收:4] 整鸡x1 x4   ← 收获成功
+        //   幼崽入栏: 栏位已满(4/4)        ← 读到的却是收获前的缓存
+        // 修法: 所有会改状态的 RPC 之后都调 invalidateRanchOverviewCache()。
+        const inv = ranch.__privateRanchFns && ranch.__privateRanchFns.invalidateRanchOverviewCache;
+        check('暴露了 invalidateRanchOverviewCache', typeof inv === 'function', typeof inv);
+
+        // 源码级校验: 收获/入栏/催产/收蛋/喂食 这些写操作都必须调它
+        const src = require('node:fs').readFileSync(
+            require('node:path').join(SB, 'src/services/ranch.js'), 'utf8');
+        for (const fn of ['harvestRanch', 'placeAnimal', 'triggerProduce', 'collectProduce', 'feedAnimal']) {
+            const idx = src.indexOf(`async function ${fn}(`);
+            check(`${fn} 定义存在`, idx >= 0, idx);
+            if (idx < 0) continue;
+            const body = src.slice(idx, src.indexOf('\n}', idx));
+            check(`${fn} 之后让 overview 缓存失效`,
+                body.includes('invalidateRanchOverviewCache'), fn);
+        }
+    }
+
+    section('7. stage 是 1..5(入栏抓包实测), 不是 1..4');
+    {
+        // 实测时间线: 入栏 stage=1 → 催产 stage=3 → 收产物 stage=4 → 成熟 stage=5(can_harvest=1)
+        const mk = (stage, extra = {}) => ranch.toRanchView({
+            ranches: [{ husbandry_type: 1, capacity: 4, animal_count: 1,
+                animals: [{ slot_index: 1, animal_id: 60001, stage, ...extra }] }],
+        }).animals[0];
+        check('stage=5 → 可收获文案', mk(5, { can_harvest: true }).stageText === '可收获',
+            mk(5, { can_harvest: true }).stageText);
+        check('stage=5 且 can_harvest=1 → harvestable', mk(5, { can_harvest: true }).harvestable === true,
+            mk(5, { can_harvest: true }).harvestable);
+        check('stage<=4 的文案不再是"阶段N"',
+            ['幼崽期', '成长期', '生产期', '成熟期'].includes(mk(1).stageText)
+            && ['幼崽期', '成长期', '生产期', '成熟期'].includes(mk(4).stageText),
+            [mk(1).stageText, mk(4).stageText]);
+    }
+
+    section('8. scheduleRanchFromCountdowns 只认服务端给的时刻字段');
     {
         const now = Date.now();
         const view = {

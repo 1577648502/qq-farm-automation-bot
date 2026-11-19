@@ -255,11 +255,12 @@ proto.loadProto().then(async () => {
             ranches: [{ husbandry_type: 1, animals: [{ slot_index: 1, animal_id: 60001, stage, ...extra }] }],
         }).animals[0];
 
-        check('stage=1 → 幼崽', mk(1).stageText === '幼崽', mk(1).stageText);
-        check('stage=2 → 成长', mk(2).stageText === '成长', mk(2).stageText);
-        check('stage=3 → 生产', mk(3).stageText === '生产', mk(3).stageText);
-        check('stage=4 → 成熟', mk(4).stageText === '成熟', mk(4).stageText);
-        check('can_feed(#18)=1 不等于"成年"', mk(3, { can_feed: 1 }).stageText === '生产',
+        check('stage=1 → 幼崽期', mk(1).stageText === '幼崽期', mk(1).stageText);
+        check('stage=2 → 成长期', mk(2).stageText === '成长期', mk(2).stageText);
+        check('stage=3 → 生产期', mk(3).stageText === '生产期', mk(3).stageText);
+        check('stage=4 → 成熟期', mk(4).stageText === '成熟期', mk(4).stageText);
+        check('stage=5 → 可收获(入栏抓包实测的第五阶段)', mk(5).stageText === '可收获', mk(5).stageText);
+        check('can_feed(#18)=1 不等于"成年"', mk(3, { can_feed: 1 }).stageText === '生产期',
             mk(3, { can_feed: 1 }).stageText);
         check('can_deliver(#16) 映射到 canProduce', mk(3, { can_deliver: 1 }).canProduce === true,
             mk(3, { can_deliver: 1 }).canProduce);
@@ -377,7 +378,7 @@ proto.loadProto().then(async () => {
         };
         const v = ranch.toRanchView(types.GetRanchDetailReply.fromObject(coopFrame));
         check('3 只鹅都解出来', v.animals.length === 3, v.animals.length);
-        check('stage=4 → 成熟', v.animals[0].stageText === '成熟', v.animals[0].stageText);
+        check('stage=4 → 成熟期', v.animals[0].stageText === '成熟期', v.animals[0].stageText);
         check('成熟期倒计时约 1 小时', Math.abs(v.animals[0].matureInSec - 3600) <= 5, v.animals[0].matureInSec);
         check('can_harvest 未置位 → 不可收', v.animals[0].harvestable === false, v.animals[0].harvestable);
 

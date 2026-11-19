@@ -154,8 +154,10 @@ proto.loadProto().then(async () => {
         //     stage 1..4 = 幼崽/成长/生产/成熟
         //     #10 grow_ready_at_ms  #11 produce_ready_at_ms  #14 infant_ready_at_ms
         //     #25 mature_ready_at_ms  #7 can_harvest  #15 producing  #16 can_deliver
-        check('动物阶段是 1..4', a.stage >= 1 && a.stage <= 4, a.stage);
-        check('阶段文案取自四阶段', ['幼崽', '成长', '生产', '成熟'].includes(a.stageText), a.stageText);
+        // stage 实测是 1..5(入栏抓包: 1 幼崽 → 3 催产 → 4 收产物 → 5 成熟可收)
+        check('动物阶段是 1..5', a.stage >= 1 && a.stage <= 5, a.stage);
+        check('阶段文案来自官方五阶段',
+            ['幼崽期', '成长期', '生产期', '成熟期', '可收获'].includes(a.stageText), a.stageText);
         check('harvestable 直接等于服务端 can_harvest',
             a.harvestable === !!Number(a.canHarvest ?? 0) || a.harvestable === false, a.harvestable);
         check('倒计时字段都是秒或 null', [a.infantInSec, a.growInSec, a.produceInSec, a.matureInSec]

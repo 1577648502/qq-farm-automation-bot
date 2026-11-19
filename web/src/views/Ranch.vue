@@ -1501,8 +1501,10 @@ onUnmounted(() => {
                          2 成长期 → grow_ready_at_ms    剩余
                          3 生产期 → produce_ready_at_ms 剩余(或交付倒计时)
                          4 成熟期 → mature_ready_at_ms  剩余, 到点可收获
+                         5 已长成 → 产物已好, 等 can_harvest(入栏抓包实测 stage=5)
                          can_harvest 是服务端权威可收位, 优先于任何倒计时 -->
                     <span v-if="isHarvestable(a)" class="text-amber-600 font-medium dark:text-amber-400">可收获</span>
+                    <span v-else-if="a.stage === 5" class="text-gray-400" title="产物已长好，等服务端置可收获">已长成·待收</span>
                     <span v-else-if="a.stage === 4 && remain(a.matureInSec) > 0" class="text-emerald-600 dark:text-emerald-400" title="成熟期：到点即可收获">成熟期 {{ formatTime(remain(a.matureInSec)) }}</span>
                     <span v-else-if="a.stage === 3 && remain(a.producing ? a.produceInSec : a.deliveringInSec) > 0" class="text-orange-500" title="生产期：蛋/崽产出中（#11 produce_ready_at_ms）">生产期 {{ formatTime(remain(a.producing ? a.produceInSec : a.deliveringInSec)) }}</span>
                     <span v-else-if="a.stage === 2 && remain(a.growInSec) > 0" class="text-sky-600 dark:text-sky-400" title="成长期：幼崽长大后开始生产">成长期 {{ formatTime(remain(a.growInSec)) }}</span>

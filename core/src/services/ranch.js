@@ -408,7 +408,9 @@ async function feedAnimal(feedType, count = 1, hostGid = 0) {
         count: toLong(count),
     })).finish();
     const { body: replyBody } = await network.sendMsgAsync('gamepb.animalpb.AnimalService', 'FeedAnimal', body);
-    return types.FeedAnimalReply.decode(replyBody);
+    const _reply = types.FeedAnimalReply.decode(replyBody)
+    invalidateRanchOverviewCache();
+    return _reply;
 }
 
 /**
@@ -420,7 +422,9 @@ async function triggerProduce(slot = 0, hostGid = 0) {
     if (slot > 0) payload.target = { host_gid: toLong(gid), slot: toLong(slot) };
     const body = types.TriggerProduceRequest.encode(types.TriggerProduceRequest.create(payload)).finish();
     const { body: replyBody } = await network.sendMsgAsync('gamepb.animalpb.AnimalService', 'TriggerProduce', body);
-    return types.TriggerProduceReply.decode(replyBody);
+    const _reply = types.TriggerProduceReply.decode(replyBody)
+    invalidateRanchOverviewCache();
+    return _reply;
 }
 
 /**
@@ -435,7 +439,9 @@ async function harvestRanch(flag = 1, hostGid = 0) {
         flag: toLong(flag),
     })).finish();
     const { body: replyBody } = await network.sendMsgAsync('gamepb.animalpb.AnimalService', 'HarvestRanch', body);
-    return types.HarvestRanchReply.decode(replyBody);
+    const _reply = types.HarvestRanchReply.decode(replyBody)
+    invalidateRanchOverviewCache();
+    return _reply;
 }
 
 /**
@@ -534,7 +540,9 @@ async function placeAnimal(cubItemId, hostGid = 0) {
         target: { host_gid: toLong(gid), slot: toLong(toNum(cubItemId)) },
     })).finish();
     const { body: replyBody } = await network.sendMsgAsync('gamepb.animalpb.AnimalService', 'PlaceAnimal', body);
-    return types.PlaceAnimalReply.decode(replyBody);
+    const _reply = types.PlaceAnimalReply.decode(replyBody)
+    invalidateRanchOverviewCache();
+    return _reply;
 }
 
 /** 收取副产品(单槽, 动物留栏) */
@@ -545,7 +553,9 @@ async function collectProduce(slot = 0, hostGid = 0) {
         count: toLong(1),
     })).finish();
     const { body: replyBody } = await network.sendMsgAsync('gamepb.animalpb.AnimalService', 'CollectProduce', body);
-    return types.CollectProduceReply.decode(replyBody);
+    const _reply = types.CollectProduceReply.decode(replyBody)
+    invalidateRanchOverviewCache();
+    return _reply;
 }
 
 /** 收获出栏(成熟动物整只收走, 栏位空出) */
@@ -681,32 +691,53 @@ async function autoPlaceCubs(opts = {}) {
     if (!cubs.length) return result;
 
     // 2. 找空栏位(窝/棚的容量 - 在养数)
+    //    ⚠ 必须读**最新**数据: 调用方(巡查)通常刚收获过, 若拿到收获前的缓存,
+    //      会把"刚清空的栏位"判成 4/4 已满, 于是 317 只幼崽一只都放不进去。
+    //      所以这里**忽略 opts.view**(调用方传的可能是几分钟前的快照),
+    //      一律重拉; getRanchOverview 自身有 10s 缓存, 但写操作都会让它失效。
     let view;
     try {
-        view = opts.view || await getRanchOverview();
+        view = await getRanchOverview();
     } catch {
         return result;
     }
-    const animals = view.animals || [];
-    const capacity = (toNum(view.coopCount) || 0) + (toNum(view.penCount) || 0);
+    const countAnimals = (v) => (v && v.animals ? v.animals.length : 0);
+    const countCapacity = (v) => (toNum(v && v.coopCount) || 0) + (toNum(v && v.penCount) || 0);
+    let animals = view.animals || [];
+    let capacity = countCapacity(view);
     let free = Math.max(0, capacity - animals.length);
     // 没有空槽时不直接放弃: 背包里堆着幼崽却进不来, 通常是因为**成熟的动物还没收**。
     // 先收获一次(全场 HarvestRanch)腾位置, 再重新算空槽。
     if (free <= 0 && opts.harvestFirst !== false) {
         try {
             await harvestRanch(1);
-            const fresh = await getRanchOverview();
-            const freshAnimals = fresh.animals || [];
-            const freshCap = (toNum(fresh.coopCount) || 0) + (toNum(fresh.penCount) || 0);
-            free = Math.max(0, freshCap - freshAnimals.length);
+            // ⚠ 2026-11-19 线上事故: "收获完成: 整鸡x1 x4" 之后仍报 "栏位已满(4/4)"。
+            //   两个原因叠加:
+            //     ① getRanchOverview 有 10 秒缓存, 读到的是收获前的快照 → 已修(harvestRanch 里失效)
+            //     ② 服务端出栏状态有短暂延迟, 立刻重查仍可能是满的
+            //   所以这里**轮询重查**几次, 而不是读一次就下结论。
+            let fresh = null;
+            for (let attempt = 0; attempt < 4; attempt++) {
+                await sleep(attempt === 0 ? 500 : 800);
+                try {
+                    fresh = await getRanchOverview();
+                } catch {
+                    continue;
+                }
+                const n = countAnimals(fresh);
+                const cap = countCapacity(fresh);
+                free = Math.max(0, cap - n);
+                if (free > 0) {
+                    animals = fresh.animals || [];
+                    capacity = cap;
+                    break;
+                }
+            }
             if (free > 0) {
                 log('牧场', `收获后腾出 ${free} 个空栏位, 准备入栏背包里的幼崽`, {
                     module: 'ranch', event: '幼崽入栏', result: 'ok', free,
                 });
-                // 用最新视图继续往下走
                 view = fresh;
-                animals.length = 0;
-                animals.push(...freshAnimals);
             }
         } catch { /* 收获失败就按原来的 free=0 返回 */ }
     }
@@ -766,7 +797,9 @@ async function donateAnimal(slot, hostGid = 0) {
         target: { host_gid: toLong(gid), slot: toLong(toNum(slot)) },
     })).finish();
     const { body: replyBody } = await network.sendMsgAsync('gamepb.animalpb.AnimalService', 'DonateAnimal', body);
-    return types.DonateAnimalReply.decode(replyBody);
+    const _reply = types.DonateAnimalReply.decode(replyBody)
+    invalidateRanchOverviewCache();
+    return _reply;
 }
 
 /** 清理单个 hazard(蚊子等); CleanAllRanch 是全场版 */
@@ -776,7 +809,9 @@ async function cleanRanch(slot = 0, hostGid = 0) {
         target: { host_gid: toLong(gid), slot: toLong(toNum(slot)) },
     })).finish();
     const { body: replyBody } = await network.sendMsgAsync('gamepb.animalpb.RanchService', 'CleanRanch', body);
-    return types.CleanRanchReply.decode(replyBody);
+    const _reply = types.CleanRanchReply.decode(replyBody)
+    invalidateRanchOverviewCache();
+    return _reply;
 }
 
 /** 放蚊子(使坏好友牧场) */
@@ -894,7 +929,13 @@ function getAnimalName(animalId) {
  *   生产期  grow_ready_at_ms   已到, producing=true
  *   成熟期  其余(can_harvest=true 时可收)
  */
-const STAGE_TEXT = ['', '幼崽', '成长', '生产', '成熟'];
+// ⭐ 2026-11-19 用入栏抓包时间线实测修正: stage 是 **1..5**, 不是 1..4。
+//   t+0.3s 入栏   stage=1  infant=+4s grow=+8s
+//   t+11s  催产   stage=3  deliver=+1s mature=+9s
+//   t+16s  收产物 stage=4  mature=+3s
+//   t+22s  成熟   stage=5  can_harvest=1 mature=-2s
+// 之前只写 1..4, 于是 stage=5 落到 fallback, 面板显示"阶段5"。
+const STAGE_TEXT = ['', '幼崽期', '成长期', '生产期', '成熟期', '可收获'];
 
 function getStageText(stage) {
     const s = Number(toNum(stage)) || 0;
@@ -949,6 +990,12 @@ function toRanchView(reply) {
                 }
             } else if (stage === 4 && matureInSec !== null && matureInSec > 0) {
                 countdownSec = matureInSec; countdownKind = '成熟期';
+            } else if (stage === 5) {
+                // stage=5 是"产物已长好、等成熟出栏"(抓包: can_harvest=1, mature 已过)。
+                // 若服务端还没置 can_harvest, 用 mature_ready_at_ms 兜底显示。
+                if (!canHarvest && matureInSec !== null && matureInSec > 0) {
+                    countdownSec = matureInSec; countdownKind = '可收获';
+                }
             }
             // 兼容旧前端的字段名, 语义重新对齐:
             //   harvestInSec  = 距"可收获"的秒数
@@ -992,7 +1039,8 @@ function toRanchView(reply) {
                     : (producing ? 'producing'
                         : (stage === 1 ? 'infant'
                             : (stage === 2 ? 'growing'
-                                : (grassBlocked ? 'hungry' : 'idle')))),
+                                : (stage === 5 ? 'awaiting_harvest'
+                                    : (grassBlocked ? 'hungry' : 'idle'))))),
                 // 预计收获所得(#22 expected_harvest_sells) — 旧代码当成 sell_cost
                 expectedHarvestExp: toNum(a.expected_harvest_exp),
                 expectedProduceExp: toNum(a.expected_produce_exp),
@@ -1069,6 +1117,17 @@ async function getRanchWeightScore() {
 // 背景: 面板挂载/切账号/操作后都会 refresh, 叠加后台自动化时会把连接打掉线。
 const OVERVIEW_THROTTLE_MS = 10 * 1000;
 let overviewCache = { at: 0, accountId: '', promise: null };
+
+/**
+ * 让 overview 缓存失效。
+ *
+ * ⚠ 2026-11-19 线上事故: 收获后紧接着入栏, autoPlaceCubs 里 `await getRanchOverview()`
+ *   拿到的还是**收获前**的 10 秒缓存 → 判定 "栏位已满(4/4)" → 317 只幼崽一只都放不进去。
+ *   凡是会改变牧场状态的 RPC 之后都必须调用它, 否则后续读到的都是旧快照。
+ */
+function invalidateRanchOverviewCache() {
+    overviewCache = { at: 0, accountId: '', promise: null };
+}
 
 /**
  * 拉取牧场建筑列表(窝/棚/牧草机)。
@@ -1494,6 +1553,8 @@ async function runRanchCare(opts = {}) {
     await gap();
 
     // 5.6 建筑升级 / 地块解锁(2026-11-17 官方文档)
+    //   归属 daily 组: 与农场的"每日任务"同层 —— 建筑/地块是长周期操作,
+    //   不该跟着 core 巡查每 20 秒打一遍。
     let facility;
     try {
         facility = require('./ranch-facility');
@@ -3201,5 +3262,7 @@ module.exports = {
         autoBuyRotationShop, isRotationNotPurchasable, rotationErrorHint,
         // 喂食: 供测试验证两种罐头的 feed_type 与失败提示
         feedAnimal, feedFailureHint, FEED_TYPE, resolveRanchHostGid, RANCH_SELF_HOST_GID,
+        // 缓存: 供测试验证"写操作后 overview 必须失效"(收获后入栏读到满栏的事故)
+        invalidateRanchOverviewCache,
     },
 };
