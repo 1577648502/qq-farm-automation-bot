@@ -27,6 +27,31 @@ export const useBagStore = defineStore('bag', () => {
     return allItems.value.filter((it: any) => targetIds.has(Number(it.id || 0)))
   })
 
+  /**
+   * 牧场罐头桶(7003 普通 / 7004 有机)。
+   * ⚠ 它们只出现在**牧场背包**(GetBag{scene:2}), 农场背包(/api/bag)里没有,
+   *   所以要单独拉 /api/ranch/bag。count 就是桶里剩余秒数。
+   */
+  const ranchBucketItems = ref<any[]>([])
+  const ranchBucketLoading = ref(false)
+
+  async function fetchRanchBuckets(accountId: string) {
+    if (!accountId)
+      return
+    ranchBucketLoading.value = true
+    try {
+      const res = await api.get('/api/ranch/bag', { headers: { 'x-account-id': accountId } })
+      const items = Array.isArray(res.data?.data?.items) ? res.data.data.items : []
+      ranchBucketItems.value = items.filter((it: any) => [7003, 7004].includes(Number(it.id || 0)))
+    }
+    catch {
+      ranchBucketItems.value = []
+    }
+    finally {
+      ranchBucketLoading.value = false
+    }
+  }
+
   async function fetchBag(accountId: string) {
     if (!accountId)
       return
@@ -77,5 +102,18 @@ export const useBagStore = defineStore('bag', () => {
     return res.data
   }
 
-  return { items, allItems, originalItems, dashboardItems, loading, fetchBag, clearBag, useItem, sellItems }
+  return {
+    items,
+    allItems,
+    originalItems,
+    dashboardItems,
+    ranchBucketItems,
+    ranchBucketLoading,
+    loading,
+    fetchBag,
+    fetchRanchBuckets,
+    clearBag,
+    useItem,
+    sellItems,
+  }
 })

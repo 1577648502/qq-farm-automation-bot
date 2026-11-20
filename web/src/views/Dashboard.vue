@@ -94,7 +94,7 @@ const {
   realtimeConnected,
 } = storeToRefs(statusStore)
 const { currentAccountId, currentAccount } = storeToRefs(accountStore)
-const { dashboardItems } = storeToRefs(bagStore)
+const { dashboardItems, ranchBucketItems } = storeToRefs(bagStore)
 const logContainer = ref<HTMLElement | null>(null)
 const autoScroll = ref(true)
 const lastBagFetchAt = ref(0)
@@ -259,6 +259,9 @@ const timeToLevel = computed(() => {
 
 // Fertilizer & Collection
 const fertilizerNormal = computed(() => dashboardItems.value.find((i: any) => Number(i.id) === 1011))
+// 罐头桶: 普通 7003 / 有机 7004(牧场背包, count=剩余秒数)
+const canNormal = computed(() => ranchBucketItems.value.find((i: any) => Number(i.id) === 7003))
+const canOrganic = computed(() => ranchBucketItems.value.find((i: any) => Number(i.id) === 7004))
 const fertilizerOrganic = computed(() => dashboardItems.value.find((i: any) => Number(i.id) === 1012))
 const collectionNormal = computed(() => dashboardItems.value.find((i: any) => Number(i.id) === 3001))
 const collectionRare = computed(() => dashboardItems.value.find((i: any) => Number(i.id) === 3002))
@@ -529,6 +532,8 @@ async function refreshBag(force = false) {
     return
   lastBagFetchAt.value = now
   await bagStore.fetchBag(currentAccountId.value)
+  // 罐头桶(7003/7004)只在牧场背包里, 单独拉一次
+  void bagStore.fetchRanchBuckets(currentAccountId.value)
 }
 
 async function refresh(forceReloadLogs = false) {
@@ -869,6 +874,31 @@ useIntervalFn(() => void fetchRanchOverview(), 60000)
             </div>
             <div class="break-all font-bold tabular-nums">
               {{ formatBucketTime(fertilizerOrganic) }}
+            </div>
+          </div>
+        </div>
+        <div class="my-2 border-t border-gray-100 dark:border-gray-700" />
+        <div class="mb-1 flex items-center gap-1.5 text-sm text-gray-500">
+          <div class="i-fas-box-open text-orange-400" />
+          罐头容器
+        </div>
+        <div class="grid grid-cols-2 min-w-0 gap-2">
+          <div class="min-w-0">
+            <div class="flex items-center gap-1 text-xs text-gray-400">
+              <div class="i-fas-box text-orange-400" />
+              普通
+            </div>
+            <div class="break-all font-bold tabular-nums">
+              {{ formatBucketTime(canNormal) }}
+            </div>
+          </div>
+          <div class="min-w-0">
+            <div class="flex items-center gap-1 text-xs text-gray-400">
+              <div class="i-fas-box-open text-orange-400" />
+              有机
+            </div>
+            <div class="break-all font-bold tabular-nums">
+              {{ formatBucketTime(canOrganic) }}
             </div>
           </div>
         </div>
