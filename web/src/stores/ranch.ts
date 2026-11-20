@@ -209,7 +209,7 @@ export const useRanchStore = defineStore('ranch', () => {
     return data.data as { open: boolean, refreshAt: number, goods: RotationShopGoods[] }
   }
 
-  async function operate(accountId: string, opts: { op: string, slot?: number, feedType?: number, count?: number, maxSpend?: number, batch?: string, goodsId?: number, cubItemId?: number, gid?: number, instId?: number, complete?: boolean, price?: number }) {
+  async function operate(accountId: string, opts: { op: string, slot?: number, feedType?: number, count?: number, maxSpend?: number, batch?: string, goodsId?: number, cubItemId?: number, gid?: number, instId?: number, complete?: boolean, price?: number, uid?: number, animalInstId?: number, hostGid?: number }) {
     const { data } = await api.post('/api/ranch/operate', opts, {
       headers: { 'x-account-id': accountId },
     })

@@ -33,7 +33,7 @@ const { currentAccountId, currentAccount } = storeToRefs(accountStore)
 const { status, loading: statusLoading, realtimeConnected } = storeToRefs(statusStore)
 void currentAccount
 
-const currentTab = ref<'overview' | 'cubShop' | 'tiers' | 'tasks' | 'buildings'>('overview')
+const currentTab = ref<'overview' | 'cubShop' | 'rotation' | 'tiers' | 'tasks' | 'buildings'>('overview')
 const cubShopLoading = ref(false)
 const cubShopError = ref('')
 const cubShopList = ref<any[]>([])
@@ -704,6 +704,74 @@ async function claimRanchTasks() {
 
 const ranchClaimableCount = computed(() => ranchTasks.value.filter(t => t.canClaim).length)
 
+// ============ 游商(兑换集市) ============
+// 之前只有"一键自动兑换"按钮, 没有界面 —— 用户看不到卖什么、也没法手动挑。
+const rotationOpen = ref(false)
+const rotationRefreshAt = ref(0)
+const rotationGoods = ref<Array<{ group: number, seq: number, itemId: number, currencyId: number, price: number, discountPrice?: number, limit: number, uid: number }>>([])
+const rotationLoading = ref(false)
+const rotationError = ref('')
+const rotationBusy = ref(0)
+
+const ROTATION_CURRENCY: Record<number, string> = {
+  7002: '便便',
+  1007: '金券',
+  1008: '松果币',
+  1005: '金豆豆',
+  1001: '金币',
+}
+
+function rotationCurrencyName(id: number) {
+  return ROTATION_CURRENCY[Number(id)] || `#${id}`
+}
+
+async function openRotation() {
+  currentTab.value = 'rotation'
+  await reloadRotation()
+}
+
+async function reloadRotation() {
+  const id = currentAccountId.value
+  if (!id)
+    return
+  rotationLoading.value = true
+  rotationError.value = ''
+  try {
+    const r = await ranchStore.fetchRotationShop(id)
+    rotationOpen.value = !!r.open
+    rotationRefreshAt.value = Number(r.refreshAt) || 0
+    rotationGoods.value = Array.isArray(r.goods) ? r.goods : []
+  }
+  catch (e: any) {
+    rotationError.value = e?.response?.data?.error || e?.message || '获取游商失败'
+  }
+  finally {
+    rotationLoading.value = false
+  }
+}
+
+/** 手动兑换某一件(数量固定 1, 与游戏内单件购买一致) */
+async function buyRotationGood(g: any) {
+  const id = currentAccountId.value
+  if (!id || rotationBusy.value)
+    return
+  rotationBusy.value = Number(g.uid) || 0
+  try {
+    const r = await ranchStore.operate(id, { op: 'rotationbuy', uid: Number(g.uid), count: 1 })
+    if (r && r.ok === false)
+      toast.error(r.error || '兑换失败')
+    else
+      toast.success(`${r?.action || '兑换'}成功${r?.detail ? `（${r.detail}）` : ''}`)
+  }
+  catch (e: any) {
+    toast.error(e?.response?.data?.error || e?.message || '兑换失败')
+  }
+  finally {
+    rotationBusy.value = 0
+    await reloadRotation()
+  }
+}
+
 // ============ 牧场建筑 & 地块 ============
 // 数据就在 overview 里(toRanchView 已经带 buildings/cells/regionQuota), 不再单独拉一次
 const buildingsLoading = ref(false)
@@ -782,6 +850,16 @@ onUnmounted(() => {
       <button
         class="flex items-center rounded-lg font-medium transition-colors space-x-2"
         :class="[embedded ? 'min-h-[36px] px-3 py-1.5 text-sm' : 'min-h-[44px] px-4 py-2',
+                 currentTab === 'rotation' ? 'text-white shadow-md' : 'bg-white text-gray-600 hover:bg-gray-100 dark:bg-gray-800 dark:text-gray-300 dark:hover:bg-gray-700']"
+        :style="currentTab === 'rotation' ? { backgroundColor: 'var(--theme-primary)' } : {}"
+        @click="openRotation"
+      >
+        <div class="i-carbon-store text-lg" />
+        <span>游商兑换</span>
+      </button>
+      <button
+        class="flex items-center rounded-lg font-medium transition-colors space-x-2"
+        :class="[embedded ? 'min-h-[36px] px-3 py-1.5 text-sm' : 'min-h-[44px] px-4 py-2',
                  currentTab === 'tiers' ? 'text-white shadow-md' : 'bg-white text-gray-600 hover:bg-gray-100 dark:bg-gray-800 dark:text-gray-300 dark:hover:bg-gray-700']"
         :style="currentTab === 'tiers' ? { backgroundColor: 'var(--theme-primary)' } : {}"
         @click="openTiers"
@@ -813,6 +891,80 @@ onUnmounted(() => {
         <div class="i-carbon-building text-lg" />
         <span>建筑与地块</span>
       </button>
+    </div>
+
+    <!-- ===== 游商兑换(仓鼠驿站) =====
+         官方规则(MCRotationShop.tips): 每天 6:00-23:59 出摊, 每次出摊换一批货。
+         这里给出手动兑换界面 —— 之前只有"一键自动兑换", 用户看不到卖什么。 -->
+    <div v-if="currentTab === 'rotation'" class="rounded-lg bg-white shadow dark:bg-gray-800">
+      <div class="border-b border-gray-100 p-3 dark:border-gray-700 sm:p-4">
+        <div class="flex flex-wrap items-center justify-between gap-2">
+          <h3 class="flex items-center gap-2 text-lg font-bold">
+            <div class="i-carbon-store text-xl text-violet-500" />
+            游商兑换
+            <span v-if="rotationGoods.length" class="text-xs text-gray-400 font-normal">
+              共 {{ rotationGoods.length }} 件
+            </span>
+          </h3>
+          <BaseButton variant="secondary" size="sm" :loading="rotationLoading" @click="reloadRotation">
+            <span class="i-carbon-renew mr-1" />刷新
+          </BaseButton>
+        </div>
+        <p class="mt-1 text-xs text-gray-400">
+          仓鼠驿站每天 6:00-23:59 出摊，每次出摊换一批货。便便(7002)可兑换牧场道具。
+          <span v-if="rotationRefreshAt" class="ml-1">
+            下次刷新 {{ new Date(rotationRefreshAt).toLocaleString() }}
+          </span>
+        </p>
+      </div>
+      <div class="p-3 sm:p-4">
+        <LoadingState v-if="rotationLoading" />
+        <div v-else-if="rotationError" class="py-8 text-center text-sm text-red-500">
+          {{ rotationError }}
+        </div>
+        <div v-else-if="!rotationOpen" class="flex flex-col items-center justify-center gap-2 py-10 text-center">
+          <div class="i-carbon-store text-4xl text-gray-300" />
+          <div class="text-sm text-gray-600 dark:text-gray-300">
+            仓鼠驿站未营业
+          </div>
+          <div class="text-xs text-gray-400">
+            每天 6:00-23:59 出摊，其它时间仓鼠会去进货。
+          </div>
+        </div>
+        <div v-else-if="!rotationGoods.length" class="py-8 text-center text-sm text-gray-500">
+          当前没有可兑换的商品
+        </div>
+        <div v-else class="grid grid-cols-1 gap-2 md:grid-cols-2 xl:grid-cols-3">
+          <div
+            v-for="g in rotationGoods"
+            :key="g.uid || `${g.group}-${g.seq}`"
+            class="flex items-center justify-between gap-2 border border-gray-200 rounded-lg px-3 py-2 dark:border-gray-700"
+          >
+            <div class="min-w-0 flex items-center gap-2">
+              <span class="h-9 w-9 flex shrink-0 items-center justify-center rounded bg-violet-50 text-xs text-violet-600 dark:bg-violet-900/30 dark:text-violet-300">
+                {{ itemLabel(g.itemId).slice(0, 2) }}
+              </span>
+              <div class="min-w-0">
+                <div class="truncate text-sm text-gray-700 font-medium dark:text-gray-200">
+                  {{ itemLabel(g.itemId) }}
+                </div>
+                <div class="text-xs text-gray-400">
+                  {{ rotationCurrencyName(g.currencyId) }} {{ g.discountPrice || g.price }}
+                  <span v-if="Number(g.limit) > 0" class="ml-1">· 限购 {{ g.limit }}</span>
+                </div>
+              </div>
+            </div>
+            <BaseButton
+              size="sm"
+              :loading="rotationBusy === Number(g.uid)"
+              :disabled="rotationBusy !== 0 || !g.uid"
+              @click="buyRotationGood(g)"
+            >
+              兑换
+            </BaseButton>
+          </div>
+        </div>
+      </div>
     </div>
 
     <div v-if="currentTab === 'tiers'" class="rounded-lg bg-white shadow dark:bg-gray-800">

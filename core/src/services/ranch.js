@@ -374,15 +374,28 @@ function ids_contains(onlyIds, id) {
 }
 
 async function fillCanBuckets(kind = 'normal', opts = {}) {
-    const result = { used: 0, details: [] };
+    const result = { used: 0, details: [], bucketSec: null };
     // 普通罐头 80021~80024 / 有机罐头 80031~80034
     const isNormal = kind !== 'organic';
     const ids = isNormal ? [80021, 80022, 80023, 80024] : [80031, 80032, 80033, 80034];
+    const bucketId = isNormal ? CAN_BUCKET_NORMAL : CAN_BUCKET_ORGANIC;
 
     let bag;
     try {
         bag = await require('./warehouse').getRanchBagItems();
     } catch {
+        return result;
+    }
+
+    // 桶当前余量(秒)。7003/7004 会作为背包条目下发, count 就是剩余秒数。
+    const bucket = bag.find(it => toNum(it.id) === bucketId);
+    const bucketSec = bucket ? Math.max(0, toNum(bucket.count)) : 0;
+    result.bucketSec = bucketSec;
+
+    // ⭐ onlyIfBucketEmpty: 只在目标桶**没有余量**时才灌。
+    //   FeedAnimal 请求不带罐头类型, 服务端按"哪桶有剩余"扣 ——
+    //   目标桶还有余量时再灌只是浪费(桶还有上限)。
+    if (opts.onlyIfBucketEmpty && bucketSec > 0) {
         return result;
     }
     // 按"大的先灌"排序(12h → 8h → 4h → 1h): 少的次数灌进更多时长
@@ -464,6 +477,15 @@ const RANCH_SELF_HOST_GID = 10001;
  */
 const RANCH_OP_ID_HAZARD = 11003;
 const RANCH_OP_ID_STROKE = 11009;
+
+/**
+ * 罐头桶: 7003 普通(无机) / 7004 有机。
+ * 它们会作为**背包条目**下发, count = 桶里剩余秒数。
+ * FeedAnimal 请求只带 host_gid/animal_inst_id/count, **不带罐头类型**,
+ * 服务端按"哪个桶有剩余时长"扣(抓包回包 #5.#11={1:7003,2:3596} 证实)。
+ */
+const CAN_BUCKET_NORMAL = 7003;
+const CAN_BUCKET_ORGANIC = 7004;
 
 // ⭐ 2026-11-19: 窝/棚是两个**不同实例**(窝 10001, 棚 10003, 见 GetRanchDetailReply 的
 //   repeated RanchInfo)。所有动物接口(target#1)用的 host_gid 就是 ranch_inst_id。
@@ -3865,6 +3887,28 @@ async function operateRanch(opts = {}) {
             }
             // 桶空时先自动灌罐头(80021+ → 容器 7003/7004), 再重试一次。
             // 之前缺这一步: 背包有 72 个罐头, 喂食却一直回 1045234「罐头桶已用完」。
+            //
+            // ⭐ 2026-11-20 线上问题「普通罐头还有很多, 却提示没有了」:
+            //   FeedAnimal 请求里**没有罐头类型字段**(只有 host_gid/animal_inst_id/count),
+            //   服务端按"哪个桶里有剩余时长"扣 —— 抓包回包 #5.#11 = {1:7003, 2:3596} 证实。
+            //   所以 feedType 想生效, 必须**喂之前就把对应桶灌好**:
+            //     · 普通罐头(4) → 必须有 7003 的余量
+            //     · 有机罐头(5/6) → 必须有 7004 的余量
+            //   旧逻辑只在"服务端报桶空"之后才灌, 而且灌的是 feedType 对应的桶 ——
+            //   于是当另一个桶还有余量时, 服务端一直扣那个桶, 目标桶永远轮不到,
+            //   表现为"背包里普通罐头一堆, 却说没有普通罐头了"。
+            //   现在: 先按 feedType **预灌**目标桶(该桶没余量时才灌), 再喂。
+            const wantKind = Number(feedType) === FEED_TYPE.NORMAL_CAN ? 'normal' : 'organic';
+            const targetBucketId = wantKind === 'normal' ? 7003 : 7004;
+            if (opts.autoFillCans !== false) {
+                const pre = await fillCanBuckets(wantKind, { maxItems: 1, onlyIfBucketEmpty: true })
+                    .catch(() => ({ used: 0 }));
+                if (pre.used > 0) {
+                    log('牧场', `喂食前把 1 个${wantKind === 'normal' ? '普通' : '有机'}罐头灌进桶(${targetBucketId})`, {
+                        module: 'ranch', event: '灌罐头', result: 'ok', kind: wantKind,
+                    });
+                }
+            }
             const doFeed = async () => feedAnimal(count, feedHostGid, feedAnimalInstId);
             try {
                 await doFeed();
@@ -3872,7 +3916,7 @@ async function operateRanch(opts = {}) {
             } catch (e) {
                 const code = parseRanchErrorCode(e);
                 if (code === RANCH_ERR.CANS_EMPTY && opts.autoFillCans !== false) {
-                    const kind = Number(feedType) === FEED_TYPE.NORMAL_CAN ? 'normal' : 'organic';
+                    const kind = wantKind;
                     const filled = await fillCanBuckets(kind, { maxItems: 2 });
                     if (filled.used > 0) {
                         try {
@@ -3935,6 +3979,23 @@ async function operateRanch(opts = {}) {
                 ok: true,
                 action: '买幼崽',
                 detail: r.bought > 0 ? `${r.details.join('，')} / 花 ${r.spent} 金券` : '没有空槽或可买幼崽',
+            };
+        }
+        case 'rotationbuy': {
+            // 手动买游商某一格(面板用): opts.uid 商品 uid, count 数量
+            if (!opts.uid) throw new Error('需要指定商品 uid');
+            const shop = await getRotationShop();
+            const r = await purchaseRotationGoods(
+                toNum(opts.uid),
+                Math.max(1, toNum(opts.count) || 1),
+                toNum(shop.refreshAt) || 0,
+            );
+            return {
+                ok: r.ok,
+                action: '游商兑换',
+                detail: r.items.length
+                    ? r.items.map(i => `#${i.id}x${i.count}`).join('，')
+                    : `已兑换 x${Math.max(1, toNum(opts.count) || 1)}`,
             };
         }
         case 'rotation': {
