@@ -41,6 +41,8 @@ const RANCH_ERR = {
     // ⭐ 2026-11-20 线上日志定案(抓包 20261120-001457 + 生产环境):
     ANIMAL_MISSING: 1045207,     // 动物不存在 —— StrokeAnimal 的 target#2 传了槽位而不是 animal_inst_id
     HAZARD_ENOUGH: 1045230,      // 这里的蚊子已经够多啦 —— 同一栏舍连放太多次, 要换栏舍/换好友
+    STROKE_ALREADY: 1045246,     // 你已经照料过这只动物啦 —— 每只动物每天只能照料一次
+    STROKE_MUTANT: 1045244,      // 已经巨大化的动物不能再照料啦 —— 变异/巨大化不可照料
 };
 
 /** 日志用短错误(去掉 gamepb.xxx 前缀, 超 40 字截断) —— 与 milk-tea 的 shortErr 同款 */
@@ -65,7 +67,9 @@ function isExpectedRanchError(e) {
         || code === RANCH_ERR.FEED_REJECTED
         || code === RANCH_ERR.NOTHING_TO_HARVEST
         || code === RANCH_ERR.ANIMAL_MISSING
-        || code === RANCH_ERR.HAZARD_ENOUGH;
+        || code === RANCH_ERR.HAZARD_ENOUGH
+        || code === RANCH_ERR.STROKE_ALREADY
+        || code === RANCH_ERR.STROKE_MUTANT;
 }
 
 // 场景类型(抓包 20261116: PlayerSceneLogin 请求体 {1:1}=农场(0801), {1:2}=牧场(0802))
@@ -2795,11 +2799,20 @@ function listFriendAnimals(ranches) {
  * @returns {Promise<{count:number, details:string[], remaining:number}>}
  */
 const _strokeToday = new Map();  // dateKey -> 次数(本地累计, 防重启后又跑满一轮)
+/**
+ * 已经照料过 / 不可照料的动物(按日期+好友+实例)。
+ * 线上 2026-11-20 实测两个状态码, 都意味着**这一轮不必再试这只**:
+ *   1045246 你已经照料过这只动物啦  (每只每天一次)
+ *   1045244 已经巨大化的动物不能再照料啦
+ * 记下来后本次进程内直接跳过, 避免每轮把同样的动物重试一遍刷屏。
+ */
+const _strokeSkip = new Map();   // `${dateKey}:${gid}:${animalInstId}` -> true
 async function autoStrokeFriendAnimals(opts = {}) {
     const result = { count: 0, details: [], remaining: -1 };
     const maxTotal = Math.max(1, toNum(opts.maxStrokePerRound) || 10);
     const todayKey = new Date().toDateString();
     const already = toNum(_strokeToday.get(todayKey)) || 0;
+    const skipKey = (gid, inst) => `${todayKey}:${toNum(gid)}:${toNum(inst)}`;
 
     const limits = await getFriendOpRemaining();
     result.remaining = limits.stroke;
@@ -2823,20 +2836,29 @@ async function autoStrokeFriendAnimals(opts = {}) {
                 const targets = listFriendAnimals(detail.ranches);
                 for (const t of targets) {
                     if (budget <= 0) break;
+                    // 今天已经照料过 / 巨大化不可照料 → 本次进程内直接跳过, 不再发请求
+                    if (_strokeSkip.has(skipKey(gid, t.animalInstId))) continue;
                     try {
                         await strokeAnimal(gid, { hostGid: t.instId, animalInstId: t.animalInstId });
                         budget -= 1;
                         result.count += 1;
                         _strokeToday.set(todayKey, already + result.count);
+                        _strokeSkip.set(skipKey(gid, t.animalInstId), true);
                         if (result.details.length < 6) result.details.push(f.name || String(gid));
                     } catch (e) {
-                        // 单只失败(已摸过/状态不允许)不中断
-                        if (!isExpectedRanchError(e)) {
-                            logWarn('牧场', `照顾动物失败 ${f.name || gid}槽${t.slot}: ${e.message}`, {
-                                module: 'ranch', event: '照顾好友动物', result: 'error',
+                        // ⚠ "已照料过 / 巨大化" 是**正常状态**, 不是故障:
+                        //   记下来跳过, 且**不消耗预算**(没真正照料成功)
+                        const code = parseRanchErrorCode(e);
+                        if (code === RANCH_ERR.STROKE_ALREADY || code === RANCH_ERR.STROKE_MUTANT) {
+                            _strokeSkip.set(skipKey(gid, t.animalInstId), true);
+                        } else if (!isExpectedRanchError(e)) {
+                            logWarn('牧场', `照顾动物失败 ${f.name || gid}动物#${t.animalInstId}: ${shortErr(e)}`, {
+                                module: 'ranch', event: '照顾好友动物', result: 'error', code,
                             });
+                            budget -= 1;   // 真失败才消耗预算, 防止无限重试
+                        } else {
+                            _strokeSkip.set(skipKey(gid, t.animalInstId), true);
                         }
-                        budget -= 1;
                     }
                     await sleep(600);
                 }

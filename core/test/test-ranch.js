@@ -364,6 +364,31 @@ proto.loadProto().then(async () => {
         check('1045230 归入 expected', /HAZARD_ENOUGH: 1045230/.test(src), null);
     }
 
+    section('13. 照料的状态码: 已照料过 / 巨大化 属正常(线上 2026-11-20)');
+    {
+        // 线上日志: 修好 instId 之后又冒出两个码, 都是"这只动物今天不能摸", 不是故障:
+        //   1045246 你已经照料过这只动物啦
+        //   1045244 已经巨大化的动物不能再照料啦
+        const ranch = require(`${SB}/src/services/ranch`);
+        const src = fs.readFileSync(require('node:path').join(SB, 'src/services/ranch.js'), 'utf8');
+        check('1045246 有常量', /STROKE_ALREADY: 1045246/.test(src), null);
+        check('1045244 有常量', /STROKE_MUTANT: 1045244/.test(src), null);
+        check('两个码都归入 expected(不刷 warn)',
+            /code === RANCH_ERR\.STROKE_ALREADY/.test(src) && /code === RANCH_ERR\.STROKE_MUTANT/.test(src),
+            null);
+
+        // 已照料过的动物要记下来跳过, 避免每轮重复请求
+        check('有 _strokeSkip 记忆表', /_strokeSkip = new Map\(\)/.test(src), null);
+        check('成功/已照料/巨大化都会写入跳过表',
+            (src.match(/_strokeSkip\.set\(/g) || []).length >= 3, (src.match(/_strokeSkip\.set\(/g) || []).length);
+        check('循环里会先查跳过表', /_strokeSkip\.has\(skipKey\(gid, t\.animalInstId\)\)\) continue/.test(src), null);
+
+        // 状态类失败不消耗预算(没真正照料, 不该算进 10 次里)
+        check('已照料/巨大化不消耗预算',
+            /STROKE_ALREADY \|\| code === RANCH_ERR\.STROKE_MUTANT\) \{\s*\n\s*_strokeSkip\.set/.test(src), null);
+        void ranch;
+    }
+
     finish();
 }).catch(e => {
     console.log('测试异常:', e && e.message);
