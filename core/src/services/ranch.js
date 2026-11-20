@@ -929,6 +929,23 @@ async function autoPlaceCubs(opts = {}) {
     // 场景被锁(1045002)时不要再发请求, 否则只会刷错误
     if (sceneLocked && Date.now() - sceneLockedAt < SCENE_LOCK_RETRY_MS) return result;
 
+    // ⭐ 2026-11-20 用户要求: **只有「背包优先」策略才自动把背包幼崽入栏**。
+    //   其他策略(最大净利润/时等)下, 用户不选背包 → 不碰背包,
+    //   由 autoBuyCubs 按商店策略买新幼崽。
+    //   否则: 栏位有空, 背包里有 1 只, 却因为"应先入栏"卡住不买, 也不放(策略不是背包优先),
+    //   陷入"入栏被拒 → 暂停买"的死循环刷屏。
+    const strategyNow = (() => {
+        try {
+            const store = require('../models/store');
+            return typeof store.getRanchCubStrategy === 'function'
+                ? store.getRanchCubStrategy(process.env.FARM_ACCOUNT_ID || '')
+                : 'max_profit';
+        } catch { return 'max_profit'; }
+    })();
+    if (strategyNow !== 'bag_priority') {
+        return result;
+    }
+
     // 1. 找出背包里的幼崽(itemType=105)与它们的数量
     let bag;
     try {
@@ -1044,10 +1061,15 @@ async function autoPlaceCubs(opts = {}) {
             const code = parseRanchErrorCode(e);
             // 1045205 = 服务端拒绝(栏满/动物状态不允许)。栏满时反复尝试只会刷这个错,
             // 所以记一条 skip 而不是 error —— 等收获腾出位置后下一轮自然成功。
+            // ⚠ 2026-11-20 线上刷屏: 这条日志没走节流, 每轮巡查都打, 10 分钟刷几十条。
+            //   同状态 30 分钟内只提示一次(状态变化时立刻提示)。
             if (code === 1045205) {
-                log('牧场', `入栏被拒(栏位满或动物状态不允许): 背包还有 ${cubs.reduce((n, c) => n + c.count, 0)} 只未入栏`, {
-                    module: 'ranch', event: '幼崽入栏', result: 'skip', code,
-                });
+                const cubLeft = cubs.reduce((n, c) => n + c.count, 0);
+                if (shouldLogOnce('ranch_place_reject', `${animals.length}/${capacity}#${cubLeft}`)) {
+                    log('牧场', `入栏被拒(栏位满或动物状态不允许): 背包还有 ${cubLeft} 只未入栏`, {
+                        module: 'ranch', event: '幼崽入栏', result: 'skip', code,
+                    });
+                }
             } else if (!isExpectedRanchError(e)) {
                 logWarn('牧场', `幼崽入栏失败 ${cub.name}: ${e.message}`, {
                     module: 'ranch', event: '幼崽入栏', result: 'error', itemId: cub.id,
@@ -3686,10 +3708,11 @@ async function autoBuyCubs(opts = {}) {
         } catch { return 'max_profit'; }
     })();
 
-    // 农场语义: bag_priority 下背包有可用幼崽 → 完全不买, 交给 autoPlaceCubs 按顺序入栏;
-    // 其他策略下, 背包里堆着没入栏的幼崽同样先不买(否则会无限买)。
-    if (bagUsableCubs > 0 && (strategyNow === 'bag_priority' || bagUsableCubs >= buyBudget)) {
-        log('牧场', `背包里已有 ${bagUsableCubs} 只可用幼崽未入栏, 暂停买幼崽(应先入栏, 不是继续买)`,
+    // ⭐ 2026-11-20 用户要求: **只有背包优先时才用背包**。
+    //   其他策略(最大净利润/时等)下, 背包里堆着的幼崽不影响购买 ——
+    //   按商店策略买新的, 背包里的留着用户自己处理(不自动入栏、不拦购买)。
+    if (bagUsableCubs > 0 && strategyNow === 'bag_priority') {
+        log('牧场', `背包优先模式: 背包里已有 ${bagUsableCubs} 只可用幼崽未入栏, 暂停买幼崽(应先入栏)`,
             {
                 module: 'ranch', event: '买幼崽', result: 'skip',
                 bagCubs: bagUsableCubs, bagExcluded: bagTotalCubs - bagUsableCubs, strategy: strategyNow,

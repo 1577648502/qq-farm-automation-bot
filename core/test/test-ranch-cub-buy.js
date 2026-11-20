@@ -62,14 +62,23 @@ function ranchBagWithCubs(count) {
 }
 
 proto.loadProto().then(async () => {
-    section('1. 背包里已有幼崽 → 不再买(阻断无限购买)');
+    section('1. 非背包优先策略: 背包里有幼崽也不拦购买(用户 2026-11-20 要求)');
     {
+        // ⭐ 用户要求: 只有「背包优先」才用背包; 其他策略(最大净利润/时等)下,
+        //   背包里堆着的幼崽不自动入栏、也不拦购买 —— 按商店策略买新的。
+        const store = require(`${SB}/src/models/store`);
+        const acc = 'ranch-cub-test';
+        const prevAccountId = process.env.FARM_ACCOUNT_ID;
+        process.env.FARM_ACCOUNT_ID = acc;
+        store.applyConfigSnapshot({ ranchCubStrategy: 'max_profit', ranchCubExclude: [] },
+            { accountId: acc, persist: false });
+
+        // 背包里有 100 只幼崽, 但策略不是背包优先 → 不该拦购买
         const calls = installStub({
             [`${SHOP}.ShopInfo`]: () => shopReply(),
-            [`${SHOP}.BuyGoods`]: () => { throw new Error('背包已有幼崽时不该再买'); },
+            [`${SHOP}.BuyGoods`]: () => types.BuyGoodsReply.encode(types.BuyGoodsReply.create({})).finish(),
         });
         const ranch = freshRanch();
-        // 桩掉背包: 直接返回 100 只幼崽
         const warehouse = require(`${SB}/src/services/warehouse`);
         warehouse.getRanchBagItems = async () => ranchBagWithCubs(100).items;
 
@@ -77,9 +86,30 @@ proto.loadProto().then(async () => {
             slots: 4,
             view: { coopCount: 4, penCount: 4, animals: [] },
         });
-        check('没有发购买请求', calls.filter(c => c.method === 'BuyGoods').length === 0,
+        check('非背包优先: 照常发购买请求',
+            calls.filter(c => c.method === 'BuyGoods').length === 1,
             calls.map(c => c.method));
-        check('bought = 0', r.bought === 0, r.bought);
+        check('非背包优先: bought > 0', r.bought > 0, r.bought);
+
+        // 换成背包优先 → 才拦购买
+        store.applyConfigSnapshot({ ranchCubStrategy: 'bag_priority' },
+            { accountId: acc, persist: false });
+        const calls2 = installStub({
+            [`${SHOP}.ShopInfo`]: () => shopReply(),
+            [`${SHOP}.BuyGoods`]: () => { throw new Error('背包优先时不该再买'); },
+        });
+        const ranch2 = freshRanch();
+        require(`${SB}/src/services/warehouse`).getRanchBagItems = async () => ranchBagWithCubs(100).items;
+        const r2 = await ranch2.__privateRanchFns.autoBuyCubs({
+            slots: 4,
+            view: { coopCount: 4, penCount: 4, animals: [] },
+        });
+        check('背包优先: 背包有幼崽 → 不买',
+            calls2.filter(c => c.method === 'BuyGoods').length === 0,
+            calls2.map(c => c.method));
+        check('背包优先: bought = 0', r2.bought === 0, r2.bought);
+
+        process.env.FARM_ACCOUNT_ID = prevAccountId;
     }
 
     section('2. 背包优先: 背包里的幼崽全部排外 → 也不买(与农场同语义)');
@@ -191,6 +221,67 @@ proto.loadProto().then(async () => {
         // 默认不再有 5000 金券预算上限(用户 2026-11-20 要求移除),
         // 空槽 4 个就买 4 只(单轮上限也是 4)
         check('数量填满空槽(4 只)', r.bought === 4, r.bought);
+    }
+
+    section('1b. 非背包优先时, autoPlaceCubs 不入栏(不碰背包)');
+    {
+        // 与 section 1 配套: 策略不是背包优先时, 背包里有幼崽也不自动入栏。
+        const store = require(`${SB}/src/models/store`);
+        const acc = 'ranch-cub-test-place';
+        const prevAccountId = process.env.FARM_ACCOUNT_ID;
+        process.env.FARM_ACCOUNT_ID = acc;
+        store.applyConfigSnapshot({ ranchCubStrategy: 'max_profit', ranchCubExclude: [] },
+            { accountId: acc, persist: false });
+
+        const calls = installStub({
+            [`${SHOP}.ShopInfo`]: () => shopReply(),
+            // PlaceAnimal 走 AnimalService, 这里显式拒绝: 非背包优先时不该调
+            'gamepb.animalpb.AnimalService.PlaceAnimal': () => {
+                throw new Error('非背包优先时不该入栏');
+            },
+        });
+        const ranch = freshRanch();
+        const warehouse = require(`${SB}/src/services/warehouse`);
+        warehouse.getRanchBagItems = async () => ranchBagWithCubs(10).items;
+
+        const r = await ranch.__privateRanchFns.autoPlaceCubs({ view: { coopCount: 2, penCount: 0, animals: [] } });
+        check('非背包优先: 不入栏', r.placed === 0, r.placed);
+        check('非背包优先: 没发 PlaceAnimal',
+            calls.filter(c => c.method === 'PlaceAnimal').length === 0,
+            calls.map(c => c.method));
+
+        // 换成背包优先 → 才入栏
+        store.applyConfigSnapshot({ ranchCubStrategy: 'bag_priority' },
+            { accountId: acc, persist: false });
+        // 非背包优先那轮用例的桩要补上 overview 需要的接口;
+        // 背包优先这轮还要喂 placeAnimal 的入栏回包
+        const placeReply = () => types.PlaceAnimalReply.encode(
+            types.PlaceAnimalReply.create({ ranches: [{
+                ranch_inst_id: 10001, husbandry_type: 1, capacity: 2, animal_count: 1, animals: [{ animal_id: 60001, slot_index: 1, animal_inst_id: 5, stage: 1 }],
+            }] }),
+        ).finish();
+        const calls2 = installStub({
+            'gamepb.animalpb.AnimalService.GetRanchDetail': () => types.GetRanchDetailReply.encode(
+                types.GetRanchDetailReply.create({ ranches: [{
+                    ranch_inst_id: 10001, husbandry_type: 1, capacity: 2, animal_count: 0, animals: [],
+                }] }),
+            ).finish(),
+            'gamepb.globalscenepb.GlobalSceneService.PlayerSceneLogin': () => Buffer.from([]),
+            'gamepb.animalpb.RanchService.GetRanchOpTimes': () => types.GetRanchOpTimesReply.encode(
+                types.GetRanchOpTimesReply.create({ limits: [] }),
+            ).finish(),
+            'gamepb.itempb.ItemService.GetBag': () => Buffer.from([]),
+            'gamepb.animalpb.AnimalService.PlaceAnimal': () => placeReply(),
+        });
+        const ranch2 = freshRanch();
+        require(`${SB}/src/services/warehouse`).getRanchBagItems = async () => ranchBagWithCubs(10).items;
+        const r2 = await ranch2.__privateRanchFns.autoPlaceCubs({ view: { coopCount: 2, penCount: 0, animals: [] } });
+        check('背包优先: 入栏', r2.placed > 0, r2.placed);
+        check('背包优先: 发了 PlaceAnimal',
+            calls2.filter(c => c.method === 'PlaceAnimal').length > 0,
+            calls2.map(c => c.method));
+
+        process.env.FARM_ACCOUNT_ID = prevAccountId;
     }
 
     section('3. 四阶段倒计时: 幼崽/成长/生产/成熟 各自用服务端时刻');
