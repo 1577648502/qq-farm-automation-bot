@@ -380,15 +380,32 @@ async function fillCanBuckets(kind = 'normal', opts = {}) {
     const ids = isNormal ? [80021, 80022, 80023, 80024] : [80031, 80032, 80033, 80034];
     const bucketId = isNormal ? CAN_BUCKET_NORMAL : CAN_BUCKET_ORGANIC;
 
-    let bag;
-    try {
-        bag = await require('./warehouse').getRanchBagItems();
-    } catch {
-        return result;
-    }
+    // ⭐ 2026-11-20 线上修复: 桶(7003/7004)在**农场背包**(ItemService.Bag)里,
+    //   不在牧场背包。之前从牧场背包读 → 永远读不到 → 永远认为桶空 → 报错。
+    //   罐头(80021+)两个背包都找(实测可能落在任意一侧)。
+    const wh = require('./warehouse');
 
-    // 桶当前余量(秒)。7003/7004 会作为背包条目下发, count 就是剩余秒数。
-    const bucket = bag.find(it => toNum(it.id) === bucketId);
+    // 农场背包: 桶(7003/7004) + 罐头(80021~80034)
+    let farmItems = [];
+    try {
+        const farmReply = await wh.getBag();
+        farmItems = wh.getBagItems(farmReply) || [];
+    } catch { farmItems = []; }
+
+    // 牧场背包: 罐头可能也在这(与农场背包不重复)
+    let ranchItems = [];
+    try {
+        ranchItems = await wh.getRanchBagItems();
+    } catch { ranchItems = []; }
+
+    // 合并两处物品, 取桶和罐头
+    const all = [
+        ...farmItems.map(it => ({ id: toNum(it.id), count: toNum(it.count), uid: toNum(it.uid) })),
+        ...ranchItems.map(it => ({ id: toNum(it.id), count: toNum(it.count), uid: toNum(it.uid) })),
+    ];
+
+    // 桶当前余量(秒)。7003/7004 的 count 就是剩余秒数。
+    const bucket = all.find(it => toNum(it.id) === bucketId);
     const bucketSec = bucket ? Math.max(0, toNum(bucket.count)) : 0;
     result.bucketSec = bucketSec;
 
@@ -399,7 +416,7 @@ async function fillCanBuckets(kind = 'normal', opts = {}) {
         return result;
     }
     // 按"大的先灌"排序(12h → 8h → 4h → 1h): 少的次数灌进更多时长
-    const cans = bag
+    const cans = all
         .filter(it => ids.includes(toNum(it.id)) && toNum(it.count) > 0 && toNum(it.uid) > 0)
         .sort((a, b) => ids.indexOf(toNum(a.id)) - ids.indexOf(toNum(b.id)));
 
