@@ -30,6 +30,8 @@ interface MallGoods {
   source: 'mall' | 'shop'
   shopId: number
   shopName: string
+  /** farm = 农场商城(slot 1/5), ranch = 牧场商城(slot 6/7) —— 依据请求体 #3(1/2) */
+  scene?: 'farm' | 'ranch'
   slotType: number
   name: string
   type: number
@@ -58,6 +60,21 @@ const { status } = storeToRefs(statusStore)
 const goods = ref<MallGoods[]>([])
 const loading = ref(false)
 const error = ref('')
+/**
+ * 商城分场景(农场 / 牧场)。
+ * 牧场商城是**独立的 slot 6/7**(请求体 #3=2), 商品是罐头/沙漏;
+ * 农场是 slot 1/5, 商品是化肥/礼包。之前全混在一个列表里。
+ */
+type Scene = 'farm' | 'ranch'
+const activeScene = ref<Scene>('farm')
+const ranchGoods = ref<MallGoods[]>([])
+const ranchLoading = ref(false)
+const ranchError = ref('')
+
+const sceneGoods = computed(() => (activeScene.value === 'ranch' ? ranchGoods.value : goods.value))
+const sceneLoading = computed(() => (activeScene.value === 'ranch' ? ranchLoading.value : loading.value))
+const sceneError = computed(() => (activeScene.value === 'ranch' ? ranchError.value : error.value))
+
 const activeCategory = ref<Category>('all')
 const quantities = reactive<Record<string, number>>({})
 const selectedGoods = ref<MallGoods | null>(null)
@@ -83,16 +100,18 @@ function categoryOf(item: MallGoods): Exclude<Category, 'all'> {
 }
 
 const categoryCounts = computed(() => {
-  const counts: Record<Category, number> = { 'all': goods.value.length, 'fertilizer': 0, 'dog-food': 0, 'gift': 0, 'other': 0 }
-  for (const item of goods.value)
+  const src = sceneGoods.value
+  const counts: Record<Category, number> = { 'all': src.length, 'fertilizer': 0, 'dog-food': 0, 'gift': 0, 'other': 0 }
+  for (const item of src)
     counts[categoryOf(item)] += 1
   return counts
 })
 
 const filteredGoods = computed(() => {
+  const src = sceneGoods.value
   if (activeCategory.value === 'all')
-    return goods.value
-  return goods.value.filter(item => categoryOf(item) === activeCategory.value)
+    return src
+  return src.filter(item => categoryOf(item) === activeCategory.value)
 })
 
 const accountReady = computed(() => !!currentAccountId.value && !!currentAccount.value?.running)
@@ -208,6 +227,47 @@ async function fetchCatalog() {
   }
 }
 
+/** 拉牧场商城(slot 6/7, 请求体 #3=2) */
+async function fetchRanchCatalog() {
+  const accountId = currentAccountId.value
+  if (!accountId || !currentAccount.value?.running) {
+    ranchError.value = '当前账号未运行，请先启动账号后再进入商城。'
+    return
+  }
+  ranchLoading.value = true
+  ranchError.value = ''
+  try {
+    const res = await api.get('/api/mall/goods', {
+      params: { scene: 'ranch' },
+      headers: { 'x-account-id': accountId },
+    })
+    if (accountId !== String(currentAccountId.value || ''))
+      return
+    if (apiError(res, res.data?.data))
+      throw new Error(apiError(res, res.data?.data) || '获取牧场商城失败')
+    ranchGoods.value = (Array.isArray(res.data.data) ? res.data.data : [])
+      .filter((g: MallGoods) => g.scene === 'ranch' || Number(g.slotType) >= 6)
+    for (const item of ranchGoods.value) {
+      if (!quantities[goodsKey(item)])
+        quantities[goodsKey(item)] = 1
+      normalizeQuantity(item)
+    }
+  }
+  catch (e: any) {
+    ranchError.value = e?.response?.data?.error || e?.message || '获取牧场商城失败'
+  }
+  finally {
+    ranchLoading.value = false
+  }
+}
+
+async function switchScene(scene: Scene) {
+  activeScene.value = scene
+  activeCategory.value = 'all'
+  if (scene === 'ranch' && ranchGoods.value.length === 0)
+    await fetchRanchCatalog()
+}
+
 function openPurchase(item: MallGoods) {
   normalizeQuantity(item)
   if (item.unlocked === false) {
@@ -316,10 +376,28 @@ onMounted(async () => {
           <span class="text-gray-500 dark:text-gray-400">金豆豆</span>
           <strong class="ml-2 text-violet-500">{{ formatCurrencyNumber(status?.status?.goldBean) }}</strong>
         </div>
-        <BaseButton variant="secondary" :loading="loading" :disabled="!accountReady" @click="fetchCatalog">
+        <BaseButton variant="secondary" :loading="sceneLoading" :disabled="!accountReady" @click="activeScene === 'ranch' ? fetchRanchCatalog() : fetchCatalog()">
           <span class="i-carbon-renew mr-1" />刷新
         </BaseButton>
       </div>
+    </div>
+
+    <!-- 场景页签: 农场商城 / 牧场商城
+         依据抓包: 牧场是独立 slot 6/7(请求体 #3=2), 商品为罐头/沙漏;
+         农场是 slot 1/5, 商品为化肥/礼包。 -->
+    <div class="flex gap-2">
+      <button
+        v-for="sc in ([{ key: 'farm', label: '农场商城' }, { key: 'ranch', label: '牧场商城' }] as const)"
+        :key="sc.key"
+        class="rounded-xl px-4 py-2 text-sm font-semibold transition"
+        :class="activeScene === sc.key
+          ? 'text-white shadow-sm'
+          : 'border border-gray-200 bg-white text-gray-600 hover:bg-gray-50 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-300 dark:hover:bg-gray-700'"
+        :style="activeScene === sc.key ? { background: 'var(--theme-primary)' } : {}"
+        @click="switchScene(sc.key)"
+      >
+        {{ sc.label }}
+      </button>
     </div>
 
     <div class="flex flex-nowrap gap-2 overflow-x-auto pb-1 snap-x snap-mandatory scrollbar-none sm:flex-wrap sm:overflow-visible sm:pb-0">
@@ -336,17 +414,17 @@ onMounted(async () => {
       </button>
     </div>
 
-    <div v-if="loading" class="border border-gray-200 rounded-2xl bg-white py-20 text-center shadow-sm dark:border-gray-700 dark:bg-gray-800">
+    <div v-if="sceneLoading" class="border border-gray-200 rounded-2xl bg-white py-20 text-center shadow-sm dark:border-gray-700 dark:bg-gray-800">
       <div class="i-svg-spinners-ring-resize mx-auto text-4xl" style="color: var(--theme-primary)" />
       <p class="mt-3 text-gray-500 dark:text-gray-400">
         正在同步官方商城...
       </p>
     </div>
 
-    <div v-else-if="error" class="border border-amber-200 rounded-2xl bg-amber-50 px-6 py-12 text-center dark:border-amber-800 dark:bg-amber-900/20">
+    <div v-else-if="sceneError" class="border border-amber-200 rounded-2xl bg-amber-50 px-6 py-12 text-center dark:border-amber-800 dark:bg-amber-900/20">
       <div class="i-carbon-warning-alt mx-auto text-4xl text-amber-500" />
       <p class="mt-3 text-amber-800 dark:text-amber-300">
-        {{ error }}
+        {{ sceneError }}
       </p>
     </div>
 

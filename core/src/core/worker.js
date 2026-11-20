@@ -1631,10 +1631,15 @@ async function handleApiCall(msg) {
                 break;
 
             case 'getMallCatalog': {
-                // provider 传的是 { slotType }; 之前直接把对象当 slotType 用导致永远按 1 查
+                // provider 传的是 { slotType, scene }; 之前直接把对象当 slotType 用导致永远按 1 查
                 const options = args[0] || {};
                 const slot = Number(options && typeof options === 'object' ? options.slotType : options);
-                result = await getMallCatalog(Number.isFinite(slot) && slot > 0 ? slot : 1);
+                // scene=farm|ranch: 牧场商城是独立 slot 6/7(请求体 #3=2), 与农场 1/5 分开拉
+                const scene = String((options && options.scene) || '');
+                result = await getMallCatalog(
+                    Number.isFinite(slot) && slot > 0 ? slot : (scene === 'ranch' ? 6 : 1),
+                    { scene },
+                );
                 break;
             }
             case 'purchaseMallGoods': {

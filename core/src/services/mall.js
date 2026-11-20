@@ -514,8 +514,10 @@ function normalizeMallGoods(goods, slotType) {
         goodsId: Number(goods && goods.goods_id) || 0,
         source: 'mall',
         shopId: 0,
-        shopName: '道具商城',
+        shopName: isRanchMallSlot(slotType) ? '牧场商城' : '道具商城',
         slotType: Number(slotType) || 1,
+        // farm|ranch —— 前端用来分页签(依据请求体 #3: 1=农场, 2=牧场)
+        scene: isRanchMallSlot(slotType) ? 'ranch' : 'farm',
         name: String(goods && goods.name || (primary && primary.name) || '未知商品'),
         type: Number(goods && goods.type) || 0,
         isFree,
@@ -554,6 +556,8 @@ function normalizeShopGoods(goods, shopId) {
         shopId: Number(shopId) || 0,
         shopName: Number(shopId) === 3 ? '宠物商店' : '道具商店',
         slotType: 0,
+        // ShopInfo(1=道具商店 / 3=宠物商店) 都属于农场侧
+        scene: 'farm',
         name: item.name,
         type: 0,
         isFree,
@@ -573,9 +577,39 @@ function normalizeShopGoods(goods, shopId) {
     };
 }
 
-async function getMallCatalog(slotType = 1) {
+/**
+ * 商城场景: 农场 / 牧场。
+ *
+ * 依据(不是猜的, 见 getMallListBySlotType 的注释与抓包):
+ *   · 请求体 #3 恒为 1 = 农场类商城, 恒为 2 = 牧场类商城
+ *     (20261117 抓包: slot5 → #3=1; slot6/7 → #3=2)
+ *   · slot 1 = 农场: 每日福利/化肥/时装礼包
+ *   · slot 5 = 农场活动: 奶茶礼包/藏品礼包/化肥
+ *   · slot 6 = 牧场: 每日福利 2001 / 罐头 2002~2011 / 沙漏 2012
+ *   · slot 7 = 牧场: 20·40 小时罐头 20001~20004
+ *   所以牧场的判断是 **slot >= 6**, 不是"slot 5 叫牧场"。
+ */
+const MALL_SCENE_SLOTS = {
+    farm: [1, 2, 3, 4, 5],
+    ranch: [6, 7],
+};
+
+function isRanchMallSlot(slotType) {
+    return Number(slotType) >= 6;
+}
+
+async function getMallCatalog(slotType = 1, options = {}) {
+    const scene = String(options.scene || '').trim();
     const normalizedSlotType = Math.max(1, Math.min(20, Number(slotType) || 1));
-    const mallSlotTypes = Array.from(new Set([normalizedSlotType, 1, 2, 3, 4, 5]));
+    // scene 明确时只拉该场景的槽位; 否则保持历史行为(拉全部农场槽位 + 传入的那个)
+    const slotsForScene = scene === 'ranch'
+        ? MALL_SCENE_SLOTS.ranch
+        : scene === 'farm'
+            ? MALL_SCENE_SLOTS.farm
+            : null;
+    const mallSlotTypes = Array.from(new Set(
+        slotsForScene ? [...slotsForScene, normalizedSlotType] : [normalizedSlotType, 1, 2, 3, 4, 5],
+    ));
     const mallResults = await Promise.allSettled(mallSlotTypes.map(type => getMallGoodsList(type)));
     const [itemShopResult, petShopResult] = await Promise.allSettled([
         getShopGoodsList(1),
@@ -590,8 +624,10 @@ async function getMallCatalog(slotType = 1) {
         if (result.status !== 'fulfilled') continue;
         mallGoods.push(...result.value.map(goods => normalizeMallGoods(goods, mallSlotTypes[i])));
     }
-    const itemShopGoods = itemShopResult.status === 'fulfilled' ? itemShopResult.value : [];
-    const petShopGoods = petShopResult.status === 'fulfilled' ? petShopResult.value : [];
+    // 牧场场景不混入农场商店(ShopInfo 1/3 都是农场侧)
+    const includeShops = scene !== 'ranch';
+    const itemShopGoods = includeShops && itemShopResult.status === 'fulfilled' ? itemShopResult.value : [];
+    const petShopGoods = includeShops && petShopResult.status === 'fulfilled' ? petShopResult.value : [];
     const merged = new Map();
     for (const goods of [
         ...mallGoods,
@@ -1434,6 +1470,7 @@ async function checkAndBuyFertilizerBoth(options) {
 
 module.exports = {
     getMallCatalog,
+    isRanchMallSlot,
     purchaseCatalogGoods,
     getShopGoodsList,
     purchaseShopGoods,

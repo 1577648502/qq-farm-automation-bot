@@ -3244,7 +3244,9 @@ app.use('/api', (req, res, next) => {
     // ============ Mall (商域) API ============
     app.get('/api/mall/goods', withAccount((accountId, req) => {
         const slotType = req.query.slotType ? Number(req.query.slotType) : undefined;
-        return provider.getMallCatalog(accountId, slotType);
+        // scene=farm|ranch: 牧场商城是独立的 slot 6/7(请求体 #3=2), 与农场 slot 1/5 分开拉
+        const scene = req.query.scene ? String(req.query.scene) : '';
+        return provider.getMallCatalog(accountId, slotType, scene);
     }, { softErrors: false }));
 
     app.post('/api/mall/purchase', withAccount((accountId, req) => {

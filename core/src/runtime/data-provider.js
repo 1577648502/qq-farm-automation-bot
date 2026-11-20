@@ -486,7 +486,7 @@ function createDataProvider(options) {
 
 
         // 继承链
-        getMallCatalog: (accountRef, slotType) => callWorkerApi(resolveAccountRefId(accountRef), 'getMallCatalog', { slotType }),
+        getMallCatalog: (accountRef, slotType, scene) => callWorkerApi(resolveAccountRefId(accountRef), 'getMallCatalog', { slotType, scene }),
         purchaseMallGoods: (accountRef, goodsId, count, slotType, source, shopId) => callWorkerApi(resolveAccountRefId(accountRef), 'purchaseMallGoods', goodsId, count, slotType, source, shopId),
 
 
