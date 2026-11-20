@@ -2018,6 +2018,9 @@ async function runRanchCare(opts = {}) {
     await gap();
 
     // 手册(图鉴)领奖: 之前只在手动 API 里有, 巡检从不调用 → "手册的领奖没加"
+    // ⚠ 图鉴分两类(2026-11-20 抓包定案):
+    //   普通页签 = 植物图鉴(#2=1), 牧场「巨大」页签 = 牧场动物图鉴(#2=101)
+    //   claimIllustratedRewards 内部会两类都查一遍再领, 这里不用额外区分。
     if (want('daily') && opts.illustrated !== false && isAutomationOn('ranch_task')) {
         try {
             const ill = require('./illustrated');

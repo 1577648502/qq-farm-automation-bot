@@ -389,6 +389,31 @@ proto.loadProto().then(async () => {
         void ranch;
     }
 
+    section('14. 图鉴分两类: 植物(#2=1) / 牧场动物即「巨大」页签(#2=101)');
+    {
+        // 依据: wx-code-grabber/captures/20261118-085510_牧场经验等级.decoded.jsonl
+        //   请求 08001001 → 222 条植物图鉴
+        //   请求 1065     → 28 条牧场动物图鉴(id 2060001~2070012)
+        // 旧 proto 把 #2 写成 bool, 发 101 会被编码成 1 → 永远只能拿到植物图鉴,
+        // 「巨大」页签的奖励也就永远领不到。
+        const plant = types.GetIllustratedListV2Request.encode(
+            types.GetIllustratedListV2Request.create({ refresh: false, list_type: 1 }),
+        ).finish().toString('hex');
+        check('植物图鉴请求 = 08001001(与抓包一致, 允许省略 refresh)', plant === '08001001', plant);
+
+        const ranchAnimal = types.GetIllustratedListV2Request.encode(
+            types.GetIllustratedListV2Request.create({ refresh: false, list_type: 101 }),
+        ).finish().toString('hex');
+        check('牧场动物图鉴 #2 能编成 101(不再是 bool 1)',
+            ranchAnimal.endsWith('1065'), ranchAnimal);
+
+        const ill = require(`${SB}/src/services/illustrated`);
+        check('导出 LIST_TYPE', !!ill.LIST_TYPE, ill.LIST_TYPE);
+        check('LIST_TYPE.PLANT = 1', ill.LIST_TYPE.PLANT === 1, ill.LIST_TYPE.PLANT);
+        check('LIST_TYPE.RANCH_ANIMAL = 101', ill.LIST_TYPE.RANCH_ANIMAL === 101,
+            ill.LIST_TYPE.RANCH_ANIMAL);
+    }
+
     finish();
 }).catch(e => {
     console.log('测试异常:', e && e.message);

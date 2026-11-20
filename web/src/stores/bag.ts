@@ -23,7 +23,8 @@ export const useBagStore = defineStore('bag', () => {
   })
 
   const dashboardItems = computed(() => {
-    const targetIds = new Set([1011, 1012, 3001, 3002])
+    // 1011/1012 化肥桶, 3001/3002 收藏点, 1007 金券 / 1008 松果币(牧场货币, 存在农场背包里)
+    const targetIds = new Set([1011, 1012, 3001, 3002, 1007, 1008])
     return allItems.value.filter((it: any) => targetIds.has(Number(it.id || 0)))
   })
 

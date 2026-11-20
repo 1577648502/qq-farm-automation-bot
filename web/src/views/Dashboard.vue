@@ -262,6 +262,9 @@ const fertilizerNormal = computed(() => dashboardItems.value.find((i: any) => Nu
 // 罐头桶: 普通 7003 / 有机 7004(牧场背包, count=剩余秒数)
 const canNormal = computed(() => ranchBucketItems.value.find((i: any) => Number(i.id) === 7003))
 const canOrganic = computed(() => ranchBucketItems.value.find((i: any) => Number(i.id) === 7004))
+// 牧场货币(存在**农场背包**里, 1007 金券 / 1008 松果币)
+const voucherBalance = computed(() => dashboardItems.value.find((i: any) => Number(i.id) === 1007))
+const pineconeBalance = computed(() => dashboardItems.value.find((i: any) => Number(i.id) === 1008))
 const fertilizerOrganic = computed(() => dashboardItems.value.find((i: any) => Number(i.id) === 1012))
 const collectionNormal = computed(() => dashboardItems.value.find((i: any) => Number(i.id) === 3001))
 const collectionRare = computed(() => dashboardItems.value.find((i: any) => Number(i.id) === 3002))
@@ -826,6 +829,25 @@ useIntervalFn(() => void fetchRanchOverview(), 60000)
             </div>
             <div class="break-all text-xl text-amber-500 font-bold leading-tight tabular-nums sm:text-2xl dark:text-amber-400">
               {{ formatCurrencyNumber(status?.status?.goldBean) }}
+            </div>
+          </div>
+          <!-- 牧场货币: 金券(1007) / 松果币(1008), 存在农场背包里 -->
+          <div class="min-w-0">
+            <div class="flex items-center gap-1.5 text-xs text-gray-500">
+              <div class="i-fas-ticket-alt text-teal-500" />
+              金券
+            </div>
+            <div class="break-all text-xl text-teal-600 font-bold leading-tight tabular-nums sm:text-2xl dark:text-teal-400">
+              {{ formatCurrencyNumber(voucherBalance?.count) }}
+            </div>
+          </div>
+          <div class="min-w-0">
+            <div class="flex items-center gap-1.5 text-xs text-gray-500">
+              <div class="i-fas-tree text-lime-600" />
+              松果币
+            </div>
+            <div class="break-all text-xl text-lime-700 font-bold leading-tight tabular-nums sm:text-2xl dark:text-lime-500">
+              {{ formatCurrencyNumber(pineconeBalance?.count) }}
             </div>
           </div>
         </div>
