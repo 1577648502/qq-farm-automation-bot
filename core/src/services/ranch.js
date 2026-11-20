@@ -3700,6 +3700,10 @@ async function autoBuyCubs(opts = {}) {
         return result;
     }
 
+    // ⭐ 2026-11-20 用户要求: **只买收益最高的那一种**, 空槽全填同一种。
+    //   之前是"按策略排名依次各买几只直到填满空槽", 于是 max_profit 下会买
+    //   鹅x1 + 兔子x2 + 鸡x1 —— 用户要的是"选崽策略只有一个答案"。
+    //   现在: 取排序后的第一名; 只有它买不到(限购已满/钱不够)时才轮到第二名。
     let spend = 0;
     for (const g of usable) {
         if (result.bought >= buyBudget || spend >= maxSpend) break;
@@ -3707,6 +3711,7 @@ async function autoBuyCubs(opts = {}) {
         const remain = g.limit > 0 ? Math.max(0, g.limit - g.bought) : 99;
         if (remain <= 0) continue;
         const affordable = Math.floor((maxSpend - spend) / g.price);
+        // 只买这一种, 一次买满剩余空槽(受限购/预算约束)
         const count = Math.min(buyBudget - result.bought, remain, affordable);
         if (count <= 0) continue;
         try {
@@ -3726,7 +3731,8 @@ async function autoBuyCubs(opts = {}) {
             });
             break;
         }
-        await sleep(300);
+        // 只买第一名这一种: 买完就停, 不再换下一种(除非它买不到, 由上面的 continue/break 兜)
+        break;
     }
     result.spent = spend;
     if (result.bought > 0) {

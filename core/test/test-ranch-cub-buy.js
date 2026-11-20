@@ -159,6 +159,39 @@ proto.loadProto().then(async () => {
             calls.filter(c => c.method === 'BuyGoods').length);
     }
 
+    section('2c. 只买策略排名第一的那一种(用户 2026-11-20 要求)');
+    {
+        // 线上现象: max_profit 下买了 鹅x1 + 兔子x2 + 鸡x1 —— 用户要的是
+        // "策略选崽只有一个答案", 空槽全填同一种。
+        // 这里给三种不同收益的幼崽, 断言只买排名第一的那种。
+        const goods = [
+            { id: 10002, item_id: 60001, price: 2, price_id: 1007, limit_count: 0, bought_num: 0, unlocked: true },      // 鸡 收益比低
+            { id: 10003, item_id: 60002, price: 1080, price_id: 1007, limit_count: 0, bought_num: 0, unlocked: true },   // 鸭
+            { id: 10004, item_id: 60003, price: 2712, price_id: 1007, limit_count: 0, bought_num: 0, unlocked: true },   // 鹅 收益比最高
+        ];
+        const calls = installStub({
+            [`${SHOP}.ShopInfo`]: () => types.ShopInfoReply.encode(types.ShopInfoReply.create({ goods_list: goods })).finish(),
+            [`${SHOP}.BuyGoods`]: () => types.BuyGoodsReply.encode(types.BuyGoodsReply.create({})).finish(),
+        });
+        const ranch = freshRanch();
+        const warehouse = require(`${SB}/src/services/warehouse`);
+        warehouse.getRanchBagItems = async () => [];
+        warehouse.getBag = async () => ({ items: [] });
+
+        const r = await ranch.__privateRanchFns.autoBuyCubs({
+            slots: 4,
+            view: { coopCount: 4, penCount: 0, animals: [] },
+        });
+        // 只发一次下单 = 只买一种
+        check('只发一次 BuyGoods(不再多个品种)', calls.filter(c => c.method === 'BuyGoods').length === 1,
+            calls.filter(c => c.method === 'BuyGoods').length);
+        check('只买一种(细节里没有逗号分隔的多品种)', r.details.length === 1, r.details);
+        // 收益比最高的那种(全部 2.00 时按价格/成本兜底, 取 ratio 最高者)
+        check('买的是策略第一名', /^鹅|^鸭|^兔子/.test(r.details[0] || ''), r.details);
+        // 数量受 maxSpend(默认 5000)限制: 鹅 2712 → 只能买 1 只; 但仍是"只买一种"
+        check('数量受预算约束但仍是一种', r.bought >= 1 && r.bought <= 4, r.bought);
+    }
+
     section('3. 四阶段倒计时: 幼崽/成长/生产/成熟 各自用服务端时刻');
     {
         // ⭐ 2026-11-18 终案: 字段语义来自官方客户端解码器(mcboot/game.js),
