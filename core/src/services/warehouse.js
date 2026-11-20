@@ -719,8 +719,18 @@ function buildBagDetailFromItems(rawItems, opts = {}) {
         row.count += count;
     }
 
+    // 容器道具的 count 是**剩余秒数**, 统一换算成"N.N小时"。
+    // ⚠ 2026-11-20 补: 罐头桶(7003 无机 / 7004 有机)的 interaction_type 是
+    //   feedbucket / feedbucketpro, 不是 fertilizerbucket ——
+    //   旧代码只认 fertilizerbucket, 于是罐头桶永远没有 hoursText,
+    //   首页就显示 0.0h(数据其实取到了)。
+    const CONTAINER_INTERACTION_TYPES = new Set([
+        'fertilizerbucket',   // 1011/1012 化肥桶
+        'feedbucket',         // 7003 无机罐头桶
+        'feedbucketpro',      // 7004 有机罐头桶
+    ]);
     const items = Array.from(merged.values()).map((row) => {
-        if (row.interactionType === 'fertilizerbucket' && row.count > 0) {
+        if (CONTAINER_INTERACTION_TYPES.has(String(row.interactionType || '').toLowerCase()) && row.count > 0) {
             const hoursFloor1 = Math.floor((row.count / 3600) * 10) / 10;
             row.hoursText = `${hoursFloor1.toFixed(1)}小时`;
         } else {

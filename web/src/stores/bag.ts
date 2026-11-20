@@ -23,35 +23,16 @@ export const useBagStore = defineStore('bag', () => {
   })
 
   const dashboardItems = computed(() => {
-    // 1011/1012 化肥桶, 3001/3002 收藏点, 1007 金券 / 1008 松果币(牧场货币, 存在农场背包里)
-    const targetIds = new Set([1011, 1012, 3001, 3002, 1007, 1008])
+    // 1011/1012 化肥桶, 3001/3002 收藏点,
+    // 1007 金券 / 1008 松果币(牧场货币),
+    // 7003/7004 罐头桶(普通/有机) —— 全部都在**农场背包**(ItemService.Bag)里。
+    // ⚠ 2026-11-20 抓包核对(20261119-091627_罐头):
+    //   Bag 回包 89 项里明确带 {7003: 507411, 7004: 345665}(秒) = 140.9h / 96.0h;
+    //   而牧场背包(GetBag{scene:2}, 只有 9 项)里**没有** 7003/7004。
+    //   之前接到 /api/ranch/bag 上, 所以首页一直显示 0.0h。
+    const targetIds = new Set([1011, 1012, 3001, 3002, 1007, 1008, 7003, 7004])
     return allItems.value.filter((it: any) => targetIds.has(Number(it.id || 0)))
   })
-
-  /**
-   * 牧场罐头桶(7003 普通 / 7004 有机)。
-   * ⚠ 它们只出现在**牧场背包**(GetBag{scene:2}), 农场背包(/api/bag)里没有,
-   *   所以要单独拉 /api/ranch/bag。count 就是桶里剩余秒数。
-   */
-  const ranchBucketItems = ref<any[]>([])
-  const ranchBucketLoading = ref(false)
-
-  async function fetchRanchBuckets(accountId: string) {
-    if (!accountId)
-      return
-    ranchBucketLoading.value = true
-    try {
-      const res = await api.get('/api/ranch/bag', { headers: { 'x-account-id': accountId } })
-      const items = Array.isArray(res.data?.data?.items) ? res.data.data.items : []
-      ranchBucketItems.value = items.filter((it: any) => [7003, 7004].includes(Number(it.id || 0)))
-    }
-    catch {
-      ranchBucketItems.value = []
-    }
-    finally {
-      ranchBucketLoading.value = false
-    }
-  }
 
   async function fetchBag(accountId: string) {
     if (!accountId)
@@ -108,11 +89,8 @@ export const useBagStore = defineStore('bag', () => {
     allItems,
     originalItems,
     dashboardItems,
-    ranchBucketItems,
-    ranchBucketLoading,
     loading,
     fetchBag,
-    fetchRanchBuckets,
     clearBag,
     useItem,
     sellItems,

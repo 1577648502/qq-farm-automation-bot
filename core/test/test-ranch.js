@@ -414,6 +414,35 @@ proto.loadProto().then(async () => {
             ill.LIST_TYPE.RANCH_ANIMAL);
     }
 
+    section('15. 罐头桶(7003/7004)必须在农场背包里算小时数(首页 0.0h 的根因)');
+    {
+        // 线上 2026-11-20: 首页「罐头容器」一直 0.0h。
+        // 抓包(20261119-091627_罐头)核对:
+        //   农场背包 ItemService.Bag 回包 89 项, 明确带 {7003: 507411, 7004: 345665}(秒)
+        //   牧场背包 GetBag{scene:2} 只有 9 项, **没有** 7003/7004
+        // 且这两个的 interaction_type 是 feedbucket / feedbucketpro,
+        // 旧代码 hoursText 只认 fertilizerbucket → 永远空。
+        const w = require(`${SB}/src/services/warehouse`);
+        const build = w.__privateWarehouseFns.buildBagDetailFromItems;
+        const bag = build([
+            { id: 7003, count: 507411, uid: 1 },
+            { id: 7004, count: 345665, uid: 2 },
+            { id: 1011, count: 7200, uid: 3 },
+        ], { scene: 'farm' });
+        const byId = new Map(bag.items.map(i => [Number(i.id), i]));
+        check('7003 无机罐头桶给出小时数', byId.get(7003) && byId.get(7003).hoursText === '140.9小时',
+            byId.get(7003) && byId.get(7003).hoursText);
+        check('7004 有机罐头桶给出小时数', byId.get(7004) && byId.get(7004).hoursText === '96.0小时',
+            byId.get(7004) && byId.get(7004).hoursText);
+        check('1011 化肥桶仍然正常', byId.get(1011) && byId.get(1011).hoursText === '2.0小时',
+            byId.get(1011) && byId.get(1011).hoursText);
+
+        const src = fs.readFileSync(require('node:path').join(SB, 'src/services/warehouse.js'), 'utf8');
+        check('hoursText 覆盖 feedbucket/feedbucketpro',
+            /CONTAINER_INTERACTION_TYPES/.test(src) && /'feedbucket'/.test(src) && /'feedbucketpro'/.test(src),
+            null);
+    }
+
     finish();
 }).catch(e => {
     console.log('测试异常:', e && e.message);

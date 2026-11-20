@@ -94,7 +94,7 @@ const {
   realtimeConnected,
 } = storeToRefs(statusStore)
 const { currentAccountId, currentAccount } = storeToRefs(accountStore)
-const { dashboardItems, ranchBucketItems } = storeToRefs(bagStore)
+const { dashboardItems } = storeToRefs(bagStore)
 const logContainer = ref<HTMLElement | null>(null)
 const autoScroll = ref(true)
 const lastBagFetchAt = ref(0)
@@ -259,9 +259,10 @@ const timeToLevel = computed(() => {
 
 // Fertilizer & Collection
 const fertilizerNormal = computed(() => dashboardItems.value.find((i: any) => Number(i.id) === 1011))
-// 罐头桶: 普通 7003 / 有机 7004(牧场背包, count=剩余秒数)
-const canNormal = computed(() => ranchBucketItems.value.find((i: any) => Number(i.id) === 7003))
-const canOrganic = computed(() => ranchBucketItems.value.find((i: any) => Number(i.id) === 7004))
+// 罐头桶: 普通 7003 / 有机 7004 —— 在**农场背包**里(count=剩余秒数)
+// 抓包核对: Bag 回包 {7003: 507411, 7004: 345665} = 140.9h / 96.0h
+const canNormal = computed(() => dashboardItems.value.find((i: any) => Number(i.id) === 7003))
+const canOrganic = computed(() => dashboardItems.value.find((i: any) => Number(i.id) === 7004))
 // 牧场货币(存在**农场背包**里, 1007 金券 / 1008 松果币)
 const voucherBalance = computed(() => dashboardItems.value.find((i: any) => Number(i.id) === 1007))
 const pineconeBalance = computed(() => dashboardItems.value.find((i: any) => Number(i.id) === 1008))
@@ -535,8 +536,6 @@ async function refreshBag(force = false) {
     return
   lastBagFetchAt.value = now
   await bagStore.fetchBag(currentAccountId.value)
-  // 罐头桶(7003/7004)只在牧场背包里, 单独拉一次
-  void bagStore.fetchRanchBuckets(currentAccountId.value)
 }
 
 async function refresh(forceReloadLogs = false) {
