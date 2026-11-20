@@ -1381,6 +1381,22 @@ function toRanchView(reply) {
                 deliverInSec: harvestInSec,
                 stageEndInSec: countdownSec,
                 countdownKind,
+                // 当前阶段的总时长(秒) —— 面板画进度条要分母。
+                // 来源: 官方 MCAnimalConfig 的 infant_sec / grow_sec / mature_sec;
+                // 生产期用 product_round_sec。取不到给 null(前端不画进度条, 不编造)。
+                stageTotalSec: (() => {
+                    try {
+                        const cfg = require('../config/gameConfig').getAnimalConfig(animalId);
+                        if (!cfg) return null;
+                        const pick = stage === 1 ? cfg.infant_sec
+                            : stage === 2 ? cfg.grow_sec
+                                : stage === 3 ? (cfg.product_round_sec || cfg.mature_sec)
+                                    : (stage === 4 || stage === 5) ? cfg.mature_sec
+                                        : 0;
+                        const v = Number(pick) || 0;
+                        return v > 0 ? v : null;
+                    } catch { return null; }
+                })(),
                 produceUnknownReason: canHarvest
                     ? ''
                     : (producing ? 'producing'

@@ -445,6 +445,49 @@ function formatTime(sec: number) {
   return `${h > 0 ? `${h}:` : ''}${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`
 }
 
+/**
+ * 当前阶段的进度(0~100) —— 与农场 LandCard 的彩虹进度条同款。
+ * 分母来自服务端下发的 stageTotalSec(官方 MCAnimalConfig), 取不到就不画(不编造)。
+ */
+function stageProgress(a: any) {
+  const total = Number(a?.stageTotalSec) || 0
+  if (!(total > 0))
+    return null
+  const sec = stageRemainSec(a)
+  if (sec === null)
+    return null
+  const done = total - Math.max(0, sec)
+  return Math.min(100, Math.max(0, Math.round((done / total) * 100)))
+}
+
+/** 当前阶段剩余秒数(与卡片上的倒计时同源) */
+function stageRemainSec(a: any): number | null {
+  const stage = Number(a?.stage) || 0
+  const pick = stage === 1 ? a.infantInSec
+    : stage === 2 ? a.growInSec
+      : stage === 3 ? (a.producing ? a.produceInSec : a.deliveringInSec)
+        : (stage === 4 || stage === 5) ? a.matureInSec
+          : null
+  return typeof pick === 'number' ? pick : null
+}
+
+/**
+ * 待办徽标(对照农场 LandCard 的 alerts): 让用户一眼看到哪只动物要处理,
+ * 不用逐个点开。返回空数组时不渲染。
+ */
+function animalAlerts(a: any) {
+  const list: Array<{ key: string, label: string, icon: string, tone: string }> = []
+  if (isHarvestable(a))
+    list.push({ key: 'harvest', label: '可收', icon: 'i-carbon-wheat', tone: 'bg-amber-500/90 text-white' })
+  if (a.grassBlocked)
+    list.push({ key: 'hungry', label: '缺草', icon: 'i-carbon-warning-alt', tone: 'bg-rose-500/90 text-white' })
+  if (a.canProduce)
+    list.push({ key: 'produce', label: '可催产', icon: 'i-carbon-lightning', tone: 'bg-sky-500/90 text-white' })
+  if (a.mutant)
+    list.push({ key: 'mutant', label: '变异', icon: 'i-carbon-star', tone: 'bg-fuchsia-500/90 text-white' })
+  return list
+}
+
 const careSummary = computed(() => {
   const ov = overview.value
   if (!ov)
@@ -1520,25 +1563,26 @@ onUnmounted(() => {
              批量操作条和建筑网格必须包在同一个 v-else 里 —— 它们之间不能再插
              独立 v-if 节点, 否则会把上面那条 "空态 v-else-if" 链切断。 -->
           <div v-else class="space-y-4">
-            <!-- 批量操作(对照农场"整田操作") -->
-            <div class="flex flex-wrap gap-2 border-b border-gray-100 pb-2.5 dark:border-gray-700">
+            <!-- 批量操作 —— 与农场 "整田操作" 同一套排布:
+                 手机上 3 列网格(不横向滚动), 桌面自动展开; 图标 + 文字居中。 -->
+            <div class="grid grid-cols-3 gap-2 border-b border-gray-100 pb-2.5 dark:border-gray-700 sm:flex sm:flex-wrap">
               <button
                 v-for="op in BATCH_OPS"
                 :key="op.key"
                 type="button"
-                class="min-h-[38px] inline-flex items-center gap-1.5 border rounded-lg px-3 py-1.5 text-xs font-medium transition disabled:opacity-50"
+                class="min-h-[44px] inline-flex items-center justify-center gap-1.5 border rounded-lg px-2 py-2 text-sm font-medium transition active:scale-[0.98] disabled:cursor-not-allowed sm:px-3 disabled:opacity-50"
                 :class="op.tone"
                 :disabled="opBusy !== ''"
                 @click="op.key === 'feed' ? runBatch('feed', { feedType: 5 }) : runBatch(op.key)"
               >
-                <div :class="op.icon" />
+                <div :class="op.icon" class="shrink-0 text-base" />
                 {{ op.label }}
               </button>
               <!-- 游商兑换: 用便便向流动商贩换物, 是牧场唯一的"便便变现"路径。
                    autoBuyRotationShop 会自己判断是否营业/有没有便便。 -->
               <button
                 type="button"
-                class="min-h-[38px] inline-flex items-center gap-1.5 border border-violet-300 rounded-lg bg-violet-50 px-3 py-1.5 text-xs text-violet-700 font-medium transition dark:border-violet-700 dark:bg-violet-900/30 hover:bg-violet-100 dark:text-violet-300 disabled:opacity-50"
+                class="min-h-[44px] inline-flex items-center justify-center gap-1.5 border border-violet-300 rounded-lg bg-violet-50 px-2 py-2 text-sm text-violet-700 font-medium transition active:scale-[0.98] disabled:cursor-not-allowed sm:px-3 disabled:opacity-50 dark:border-violet-700 dark:bg-violet-900/30 hover:bg-violet-100 dark:text-violet-300"
                 :disabled="opBusy !== ''"
                 @click="runOp('rotation')"
               >
@@ -1548,7 +1592,7 @@ onUnmounted(() => {
               <!-- 照顾好友动物: 自动流程由 ranch_stroke 开关控制, 这里给手动补跑一次 -->
               <button
                 type="button"
-                class="min-h-[38px] inline-flex items-center gap-1.5 border border-emerald-300 rounded-lg bg-emerald-50 px-3 py-1.5 text-xs text-emerald-700 font-medium transition dark:border-emerald-700 dark:bg-emerald-900/30 hover:bg-emerald-100 dark:text-emerald-300 disabled:opacity-50"
+                class="min-h-[44px] inline-flex items-center justify-center gap-1.5 border border-emerald-300 rounded-lg bg-emerald-50 px-2 py-2 text-sm text-emerald-700 font-medium transition active:scale-[0.98] disabled:cursor-not-allowed sm:px-3 disabled:opacity-50 dark:border-emerald-700 dark:bg-emerald-900/30 hover:bg-emerald-100 dark:text-emerald-300"
                 :disabled="opBusy !== ''"
                 @click="runOp('autostroke')"
               >
@@ -1558,7 +1602,7 @@ onUnmounted(() => {
               <!-- 使坏好友: 自动流程由 ranch_hazard 开关控制(默认关), 这里给手动补跑一次 -->
               <button
                 type="button"
-                class="min-h-[38px] inline-flex items-center gap-1.5 border border-rose-300 rounded-lg bg-rose-50 px-3 py-1.5 text-xs text-rose-700 font-medium transition dark:border-rose-700 dark:bg-rose-900/30 hover:bg-rose-100 dark:text-rose-300 disabled:opacity-50"
+                class="min-h-[44px] inline-flex items-center justify-center gap-1.5 border border-rose-300 rounded-lg bg-rose-50 px-2 py-2 text-sm text-rose-700 font-medium transition active:scale-[0.98] disabled:cursor-not-allowed sm:px-3 disabled:opacity-50 dark:border-rose-700 dark:bg-rose-900/30 hover:bg-rose-100 dark:text-rose-300"
                 :disabled="opBusy !== ''"
                 @click="runOp('autohazard')"
               >
@@ -1568,7 +1612,7 @@ onUnmounted(() => {
               <!-- 偷好友牧场产物: 自动流程由 ranch_steal 开关控制, 这里给手动补跑一次 -->
               <button
                 type="button"
-                class="min-h-[38px] inline-flex items-center gap-1.5 border border-pink-300 rounded-lg bg-pink-50 px-3 py-1.5 text-xs text-pink-700 font-medium transition dark:border-pink-700 dark:bg-pink-900/30 hover:bg-pink-100 dark:text-pink-300 disabled:opacity-50"
+                class="min-h-[44px] inline-flex items-center justify-center gap-1.5 border border-pink-300 rounded-lg bg-pink-50 px-2 py-2 text-sm text-pink-700 font-medium transition active:scale-[0.98] disabled:cursor-not-allowed sm:px-3 disabled:opacity-50 dark:border-pink-700 dark:bg-pink-900/30 hover:bg-pink-100 dark:text-pink-300"
                 :disabled="opBusy !== ''"
                 @click="stealConfirming = true"
               >
@@ -1642,9 +1686,10 @@ onUnmounted(() => {
                   v-for="a in pen.animals"
                   :key="a.slot"
                   class="relative min-h-[150px] flex flex-col items-center border rounded-lg p-2 transition sm:min-h-[170px]"
-                  :class="a.mutant
+                  :class="[a.mutant
                     ? 'border-fuchsia-300 bg-fuchsia-50/80 dark:border-fuchsia-700 dark:bg-fuchsia-900/20'
-                    : 'border-gray-200 bg-white dark:border-gray-700 dark:bg-gray-800'"
+                    : 'border-gray-200 bg-white dark:border-gray-700 dark:bg-gray-800',
+                  animalAlerts(a).length ? 'animal-tile--active' : '']"
                 >
                   <div class="absolute left-1 top-1 text-[10px] text-gray-400 font-mono">
                     槽{{ a.slot }}
@@ -1685,6 +1730,14 @@ onUnmounted(() => {
                     <span v-else class="text-gray-400" title="等待服务端刷新状态">{{ a.stageText }}·待定</span>
                   </div>
 
+                  <!-- 阶段进度条(对照农场 LandCard 的 rainbow-progress-bar):
+                       分母是服务端 stageTotalSec(官方 MCAnimalConfig), 取不到就不画 -->
+                  <div v-if="stageProgress(a) !== null" class="mb-0.5 mt-1 w-full shrink-0 px-1">
+                    <div class="animal-progress-bar">
+                      <div class="animal-progress-fill" :style="{ width: `${stageProgress(a)}%` }" />
+                    </div>
+                  </div>
+
                   <div
                     v-if="a.sellCost"
                     class="mt-0.5 text-[10px] text-gray-400"
@@ -1695,6 +1748,19 @@ onUnmounted(() => {
 
                   <!-- 单只收获: 服务端未提供该接口(CollectProduce/HarvestAnimal 实测不存在),
                        收获由设置里的「自动收获」开关统一执行, 这里只显示状态 -->
+                  <!-- 待办徽标(对照农场 LandCard 的 alerts): 一眼看出该处理哪只 -->
+                  <div v-if="animalAlerts(a).length" class="mt-1 w-full flex flex-wrap items-center justify-center gap-0.5">
+                    <span
+                      v-for="al in animalAlerts(a)"
+                      :key="al.key"
+                      class="inline-flex items-center gap-0.5 rounded px-1 py-0.5 text-[9px] font-medium"
+                      :class="al.tone"
+                    >
+                      <i :class="al.icon" class="text-[10px]" aria-hidden="true" />
+                      {{ al.label }}
+                    </span>
+                  </div>
+
                   <div class="mt-auto w-full flex gap-1 pt-2">
                     <button
                       v-if="a.canProduce"
@@ -1826,3 +1892,24 @@ onUnmounted(() => {
     />
   </div>
 </template>
+<style scoped>
+.animal-tile--active {
+  box-shadow: 0 0 0 2px rgb(251 191 36 / 0.55);
+}
+
+.animal-progress-bar {
+  width: 100%;
+  height: 6px;
+  background: linear-gradient(145deg, #f0f0f0, #e6e6e6);
+  border-radius: 10px;
+  overflow: hidden;
+  box-shadow: inset 2px 2px 4px rgb(0 0 0 / 0.1);
+}
+
+.animal-progress-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #4ade80, #facc15, #fb923c);
+  border-radius: 10px;
+  transition: width 0.3s ease;
+}
+</style>
