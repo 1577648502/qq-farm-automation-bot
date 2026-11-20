@@ -953,6 +953,18 @@ function analyzeFriendLands(lands, myGid, friendName = '', options = {}) {
 /**
  * 获取好友列表 (供面板)
  */
+/**
+ * 好友列表日志节流(2026-11-20 线上刷屏):
+ *   各服务(牧场三连/天气/奶茶/夺宝…)都会调 getFriendsList, 而缓存 TTL 60s
+ *   恰好比它们的调用节奏(70~80s)短一点 → 每次都是真的重拉。
+ *   4 个账号 × 每次 2 行 info = 观感上"一直在刷"。
+ *   缓存逻辑本身是对的, 所以这里只处理**日志**: 同一账号 5 分钟内最多打一条,
+ *   好友数变化时立刻打一条(这样真有异常仍然看得见)。
+ */
+let friendsListLogAt = 0;
+let friendsListLogCount = -1;
+const FRIENDS_LIST_LOG_INTERVAL_MS = 5 * 60 * 1000;
+
 async function getFriendsList(forceSync = false) {
     try {
         // 检查缓存
@@ -962,10 +974,6 @@ async function getFriendsList(forceSync = false) {
             return friendsListCache;
         }
 
-        log('好友', '开始获取好友列表', {
-            module: 'friend',
-            event: '获取好友列表',
-        });
         const reply = await getAllFriends(forceSync);
         const friends = reply.game_friends || [];
         const state = getUserState();
@@ -997,12 +1005,19 @@ async function getFriendsList(forceSync = false) {
         friendsListCache = result;
         friendsListCacheTime = now;
         
-        log('好友', `获取好友列表成功，共 ${result.length} 位好友`, {
-            module: 'friend',
-            event: '获取好友列表',
-            result: 'ok',
-            count: result.length,
-        });
+        // 只在"数量变了"或"距上次日志超过 5 分钟"时打一条(见上方注释)
+        const countChanged = result.length !== friendsListLogCount;
+        if (countChanged || now - friendsListLogAt >= FRIENDS_LIST_LOG_INTERVAL_MS) {
+            log('好友', `好友列表已更新，共 ${result.length} 位好友`, {
+                module: 'friend',
+                event: '获取好友列表',
+                result: 'ok',
+                count: result.length,
+                forceSync: !!forceSync,
+            });
+            friendsListLogAt = now;
+            friendsListLogCount = result.length;
+        }
         return result;
     } catch (e) {
         log('好友', `获取好友列表失败: ${e.message}`, {

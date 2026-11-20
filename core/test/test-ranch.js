@@ -443,6 +443,20 @@ proto.loadProto().then(async () => {
             null);
     }
 
+    section('16. 好友列表日志节流(线上刷屏)');
+    {
+        // 线上 2026-11-20: 好友列表日志 5 分钟刷了几十条。
+        // 实测原因不是缓存坏了 —— 日志间隔 70~80s, 而缓存 TTL 是 60s,
+        // 各服务(牧场三连/天气/奶茶)刚好每轮都跨过 TTL, 于是真的重拉;
+        // 4 个账号 × 每次 2 行 info = 刷屏观感。
+        // 修法: 合并成 1 行 + 5 分钟节流(好友数变化时立刻打)。
+        const src = fs.readFileSync(require('node:path').join(SB, 'src/services/friend.js'), 'utf8');
+        check('有日志节流常量', /FRIENDS_LIST_LOG_INTERVAL_MS/.test(src), null);
+        check('不再每次打"开始获取好友列表"', !/log\('好友', '开始获取好友列表'/.test(src), null);
+        check('好友数变化时仍会打日志', /countChanged \|\|/.test(src), null);
+        check('节流间隔 5 分钟', /FRIENDS_LIST_LOG_INTERVAL_MS = 5 \* 60 \* 1000/.test(src), null);
+    }
+
     finish();
 }).catch(e => {
     console.log('测试异常:', e && e.message);
