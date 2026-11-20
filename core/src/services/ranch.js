@@ -3955,9 +3955,18 @@ async function operateRanch(opts = {}) {
                             return { ok: false, action: '喂食', error: feedFailureHint(feedType, e2) };
                         }
                     }
+                    // ⚠ 2026-11-20: 这里必须带上**服务端原文** —— 我们的文案会掩盖真实原因。
+                    //   线上实测: 农场背包里 7003 明明有 707513(≈196.5h), 服务端却回 1045234,
+                    //   只显示"桶已空"会让人以为是数据问题。
+                    const rawMsg = String(e.message || '').replace(/^[^:]*:\s*/, '').trim();
+                    logWarn('牧场', `喂食失败(桶空分支) feedType=${feedType} code=${code} 背包无${kind}罐头; 服务端原文: ${rawMsg || '(空)'}`, {
+                        module: 'ranch', event: '喂食', result: 'rejected',
+                        feedType, code, kind, raw: rawMsg,
+                    });
                     return {
                         ok: false, action: '喂食',
-                        error: `罐头桶已空，且背包里没有${kind === 'normal' ? '普通' : '有机'}罐头可灌。请在商城购买罐头(80021~80034)`,
+                        error: `罐头桶已空，且背包里没有${kind === 'normal' ? '普通' : '有机'}罐头可灌。`
+                            + `(服务端 code=${code}${rawMsg ? `：${rawMsg}` : ''})`,
                     };
                 }
                 if (code === RANCH_ERR.FEED_REJECTED) {
