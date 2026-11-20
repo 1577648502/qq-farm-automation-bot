@@ -457,6 +457,25 @@ proto.loadProto().then(async () => {
         check('节流间隔 5 分钟', /FRIENDS_LIST_LOG_INTERVAL_MS = 5 \* 60 \* 1000/.test(src), null);
     }
 
+    section('17. 自动偷取: 按冷却重复执行 + 只认 shelf.can_steal');
+    {
+        // 线上 2026-11-21: 牧场自动偷取一条日志都没有。
+        // 根因: 旧实现每个好友**每天只偷一次**, 当天一轮就标记完 → 一整天不执行。
+        // 抓包(20261117-162604)定案可偷判定: shelves.can_steal=1,
+        //   同帧里 animals.can_harvest 全是 0(can_harvest 是"自己家可收获", 与偷无关)。
+        const src = fs.readFileSync(require('node:path').join(SB, 'src/services/ranch.js'), 'utf8');
+        check('冷却按毫秒记时刻(不再是 dateKey)',
+            /gid -> 下次可偷的时刻/.test(src), null);
+        check('有 stealCooldownMin', /stealCooldownMin/.test(src), null);
+        check('有 stealEmptyCooldownMin', /stealEmptyCooldownMin/.test(src), null);
+        check('不再按"每天一次"跳过', !/=== todayKey\) continue/.test(src), null);
+        check('可偷只认 shelf.can_steal',
+            /shelves\.some\(s => toNum\(s\.can_steal\) === 1 && toNum\(s\.remain_num\) > 0\)/.test(src),
+            null);
+        check('不再用 animals.can_harvest 判定可偷',
+            !/\|\| animals\.some\(a => toNum\(a\.can_harvest\) === 1\)/.test(src), null);
+    }
+
     finish();
 }).catch(e => {
     console.log('测试异常:', e && e.message);

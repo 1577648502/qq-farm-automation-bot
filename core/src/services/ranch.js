@@ -646,8 +646,10 @@ async function stealFriendProduce(hostGid) {
         const ranches = detail.ranches || [];
         const animals = ranches.flatMap(r => r.animals || []);
         const shelves = ranches.flatMap(r => r.shelves || []);
-        const hasStealable = shelves.some(s => toNum(s.can_steal) === 1)
-            || animals.some(a => toNum(a.can_harvest) === 1);
+        // ⭐ 2026-11-21 抓包(20261117-162604)定案: 可偷 = **产物架 can_steal=1**。
+        //   同一份抓包里动物的 can_harvest 全是 0 —— can_harvest 是"自己家动物可收获",
+        //   跟"能不能偷好友的"无关。旧实现把它也算作可偷, 会误判。
+        const hasStealable = shelves.some(s => toNum(s.can_steal) === 1 && toNum(s.remain_num) > 0);
         if (!hasStealable) return { ok: false, reason: 'nothing_to_steal', gid };
         const stealBody = types.StealProduceRequest.encode(types.StealProduceRequest.create({
             host_gid: toLong(gid),
@@ -3060,11 +3062,21 @@ async function autoPutHazardOnFriends(opts = {}) {
  * 节流: 每个好友每天偷一次(内存记录; 偷过的产物有冷却, 服务端也有每日上限)。
  * @returns {{cleaned: number, details: string[]}} cleaned = 偷到的次数(沿用字段名)
  */
-const _stealToday = new Map();   // gid -> dateKey
+const _stealToday = new Map();   // gid -> 下次可偷的时刻(ms)
 async function autoStealFriendProduce(opts = {}) {
     const result = { cleaned: 0, details: [] };
     const maxPerRound = Math.max(1, toNum(opts.maxStealPerRound) || 10);
-    const todayKey = new Date().toDateString();
+
+    // ⭐ 2026-11-21 修复「自动偷从来没跑」:
+    //   旧实现每个好友**每天只偷一次**(_stealToday 按 gid 记日期),
+    //   当天早上一轮就把所有好友标记完 → 之后一整天一条日志都没有。
+    //   实际上好友的产物架会持续产出(ShelfInfo.remain_num 会回升),
+    //   应该按**冷却时间**反复检查, 而不是一天一次。
+    //   现在: 成功偷到的记 cooldown(默认 30 分钟), 没得偷的记短 cooldown(10 分钟),
+    //   避免每轮都去撞同一个没货的好友。
+    const now = Date.now();
+    const cooldownOk = Math.max(1, toNum(opts.stealCooldownMin) || 30) * 60 * 1000;
+    const cooldownEmpty = Math.max(1, toNum(opts.stealEmptyCooldownMin) || 10) * 60 * 1000;
 
     const { getFriendsList } = require('./friend');
     const friends = await getFriendsList().catch(() => []);
@@ -3074,18 +3086,22 @@ async function autoStealFriendProduce(opts = {}) {
         if (result.cleaned >= maxPerRound) break;
         const gid = toNum(f && f.gid);
         if (!gid) continue;
-        if (_stealToday.get(gid) === todayKey) continue;
+        const nextAt = _stealToday.get(gid) || 0;
+        if (now < nextAt) continue;
         try {
             const r = await stealFriendProduce(gid);
-            _stealToday.set(gid, todayKey);
             if (r.ok) {
                 result.cleaned += 1;
                 result.details.push(f.name || gid);
+                _stealToday.set(gid, Date.now() + cooldownOk);
+            } else {
+                // nothing_to_steal: 稍后再看(产物架会回涨)
+                _stealToday.set(gid, Date.now() + cooldownEmpty);
             }
             await sleep(800);
         } catch (e) {
-            // 偷失败(没得偷/权限不足)也标记今天, 别每轮都撞
-            _stealToday.set(gid, todayKey);
+            // 失败(进不去/权限)也退避, 别每轮都撞
+            _stealToday.set(gid, Date.now() + cooldownEmpty);
             await sleep(500);
         }
     }
