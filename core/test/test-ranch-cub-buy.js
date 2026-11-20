@@ -188,8 +188,9 @@ proto.loadProto().then(async () => {
         check('只买一种(细节里没有逗号分隔的多品种)', r.details.length === 1, r.details);
         // 收益比最高的那种(全部 2.00 时按价格/成本兜底, 取 ratio 最高者)
         check('买的是策略第一名', /^鹅|^鸭|^兔子/.test(r.details[0] || ''), r.details);
-        // 数量受 maxSpend(默认 5000)限制: 鹅 2712 → 只能买 1 只; 但仍是"只买一种"
-        check('数量受预算约束但仍是一种', r.bought >= 1 && r.bought <= 4, r.bought);
+        // 默认不再有 5000 金券预算上限(用户 2026-11-20 要求移除),
+        // 空槽 4 个就买 4 只(单轮上限也是 4)
+        check('数量填满空槽(4 只)', r.bought === 4, r.bought);
     }
 
     section('3. 四阶段倒计时: 幼崽/成长/生产/成熟 各自用服务端时刻');

@@ -3603,7 +3603,7 @@ async function buyCubByGoods(goodsId, count, opts = {}) {
 /**
  * 自动买幼崽: 按收益比从高到低, 优先买还有空槽能养、收益比最高的。
  * @param {object} [opts]
- * @param {number} [opts.maxSpend] 本次最多花多少金券(默认 5000)
+ * @param {number} [opts.maxSpend] 可选的金券上限(默认不限; 用户明确要求移除默认 5000 上限)
  * @param {number} [opts.slots] 空槽位数(默认从牧场详情算)
  * @returns {Promise<{bought:number, spent:number, details:string[]}>} 本次购买结果
  */
@@ -3642,7 +3642,9 @@ async function autoBuyCubs(opts = {}) {
         return result;
     }
 
-    const maxSpend = Math.max(0, toNum(opts.maxSpend) || 5000);
+    // ⭐ 2026-11-20 用户要求: 移除单轮预算上限(默认 5000 金券)。
+    //   空槽有几个就买几只(仍受单轮 4 只与限购约束); 只有显式传 maxSpend 时才限制。
+    const maxSpend = toNum(opts.maxSpend) > 0 ? toNum(opts.maxSpend) : Infinity;
     // ⚠ 单轮购买上限: 线上事故(2026-11-18)里机器人每轮都买 4 只,
     //   因为 buyGoods 的 auto_add 没把幼崽放进栏舍, 幼崽堆在背包里(实测 1242 只鸡),
     //   下一轮 slots 仍然是 4 → 又买 4 只 → 无限购买。
@@ -3710,9 +3712,8 @@ async function autoBuyCubs(opts = {}) {
         // 限购余量
         const remain = g.limit > 0 ? Math.max(0, g.limit - g.bought) : 99;
         if (remain <= 0) continue;
-        const affordable = Math.floor((maxSpend - spend) / g.price);
-        // 只买这一种, 一次买满剩余空槽(受限购/预算约束)
-        const count = Math.min(buyBudget - result.bought, remain, affordable);
+        // 只买这一种, 一次买满剩余空槽(只受限购与单轮上限约束)
+        const count = Math.min(buyBudget - result.bought, remain);
         if (count <= 0) continue;
         try {
             const reply = await purchaseShopGoods(g.goodsId, count, g.price);
@@ -3996,7 +3997,8 @@ async function operateRanch(opts = {}) {
                 };
             }
             // 买幼崽(利益最大: 按 整只回收/幼崽成本 收益比排序)
-            const r = await autoBuyCubs({ maxSpend: toNum(opts.maxSpend) || 5000 });
+            // 默认不限预算(用户要求移除); 只有显式传了才透传
+            const r = await autoBuyCubs(toNum(opts.maxSpend) > 0 ? { maxSpend: toNum(opts.maxSpend) } : {});
             return {
                 ok: true,
                 action: '买幼崽',
