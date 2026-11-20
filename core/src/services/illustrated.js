@@ -39,12 +39,18 @@ async function getIllustratedList({ refresh = false, listType = LIST_TYPE.PLANT,
 
 /**
  * 领取全部图鉴奖励
- * @param {boolean} onlyClaimable 只领取可领取的, 默认 true
+ *
+ * ⭐ 2026-11-20 抓包定案: 请求 #1 是**图鉴类别**(list_type), 不是 only_claimable:
+ *   官方客户端领牧场动物图鉴发 0865 = {1:101}。
+ *   旧实现发 true → 编码 {1:1} = 植物图鉴 —— 能领但只领植物那类,
+ *   牧场动物图鉴(「巨大」页签)从来没领过。
+ *
+ * @param {number} [listType=1] 1=农场植物图鉴; 101=牧场动物图鉴
  * @returns {Promise<object>} ClaimAllRewardsV2Reply 明文对象
  */
-async function claimAllRewards(onlyClaimable = true) {
+async function claimAllRewards(listType = LIST_TYPE.PLANT) {
     const body = types.ClaimAllRewardsV2Request.encode(
-        types.ClaimAllRewardsV2Request.create({ only_claimable: !!onlyClaimable }),
+        types.ClaimAllRewardsV2Request.create({ list_type: Number(listType) || LIST_TYPE.PLANT }),
     ).finish();
     const { body: replyBody } = await sendMsgAsync(SERVICE, 'ClaimAllRewardsV2', body);
     return types.ClaimAllRewardsV2Reply.decode(replyBody);
@@ -129,7 +135,8 @@ async function claimIllustratedRewards() {
                 && Number(it.planted_count) > 0
                 && Number(it.harvest_count) >= Number(it.planted_count));
             if (claimable.length === 0) continue;
-            const reply = await claimAllRewards(true);
+            // ⭐ 领奖请求也要带类别(抓包: 领牧场动物图鉴发 {1:101})
+            const reply = await claimAllRewards(listType);
             all.push(
                 ...(Array.isArray(reply && reply.items) ? reply.items : []),
                 ...(Array.isArray(reply && reply.bonus_items) ? reply.bonus_items : []),

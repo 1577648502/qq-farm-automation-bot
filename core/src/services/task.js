@@ -63,12 +63,18 @@ async function claimDailyReward(type, pointIds) {
     return types.ClaimDailyRewardReply.decode(replyBody);
 }
 
-async function claimAllIllustratedRewards() {
+/**
+ * 按类别领图鉴奖励。
+ * ⭐ 2026-11-20 抓包定案: 请求 #1 是图鉴类别(1=植物, 101=牧场动物「巨大」页签),
+ *   不是 only_claimable —— 旧实现发 true 只领到植物类。
+ * @param {number} listType 1=植物图鉴(默认); 101=牧场动物图鉴
+ */
+async function claimAllIllustratedRewards(listType = 1) {
     if (!types.ClaimAllRewardsV2Request || !types.ClaimAllRewardsV2Reply) {
         return { items: [], bonus_items: [] };
     }
     const body = types.ClaimAllRewardsV2Request.encode(types.ClaimAllRewardsV2Request.create({
-        only_claimable: true,
+        list_type: Number(listType) || 1,
     })).finish();
     const { body: replyBody } = await sendMsgAsync('gamepb.illustratedpb.IllustratedService', 'ClaimAllRewardsV2', body);
     return types.ClaimAllRewardsV2Reply.decode(replyBody);
@@ -196,11 +202,18 @@ async function checkAndClaimActives(actives) {
 async function checkAndClaimIllustratedRewards() {
     try {
         const beforeTicket = await getTicketBalanceFromBag();
-        const reply = await claimAllIllustratedRewards();
-        const items = [
-            ...(Array.isArray(reply && reply.items) ? reply.items : []),
-            ...(Array.isArray(reply && reply.bonus_items) ? reply.bonus_items : []),
-        ];
+        // ⭐ 两类图鉴都要领(抓包: 领奖请求 #1 = 类别, 1=植物 / 101=牧场动物「巨大」页签)
+        const allItems = [];
+        for (const listType of [1, 101]) {
+            try {
+                const reply = await claimAllIllustratedRewards(listType);
+                allItems.push(
+                    ...(Array.isArray(reply && reply.items) ? reply.items : []),
+                    ...(Array.isArray(reply && reply.bonus_items) ? reply.bonus_items : []),
+                );
+            } catch { /* 单类失败不影响另一类 */ }
+        }
+        const items = allItems;
         const afterTicket = await getTicketBalanceFromBag();
         const gainTicket = Math.max(0, afterTicket - beforeTicket);
         if (gainTicket < 200) return false;

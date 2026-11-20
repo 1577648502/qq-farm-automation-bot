@@ -39,7 +39,13 @@ message GetIllustratedListV2Reply {
 }
 
 message ClaimAllRewardsV2Request {
-    bool only_claimable = 1;
+    // ⭐ 2026-11-20 抓包(20261120-232455_领奖励)定案: #1 不是 bool, 是**图鉴类别**!
+    //   官方客户端领「巨大」页签(牧场动物图鉴)发的是 0865 = {1:101};
+    //   领植物图鉴应是 {1:1}。旧定义 bool only_claimable 是错的 ——
+    //   发 true 编码成 {1:1} 恰好等于 list_type=1, 所以植物图鉴能领,
+    //   而牧场动物图鉴(101)从来没被领过。
+    //   (服务端按类别领取; 只有可领的会返回奖励, 无需单独的 only_claimable 位)
+    int64 list_type = 1;   // 1=农场植物图鉴(默认); 101=牧场动物图鉴
 }
 
 message ClaimAllRewardsV2Reply {

@@ -2698,6 +2698,26 @@ async function getRotationShop() {
     return parseRotationShopReply(replyBody);
 }
 
+/**
+ * 松果币/便便商品的折扣是否生效。
+ * 抓包(20261120-232455): #7=折后价, #8=折扣开始秒, #9=折扣结束秒(0=无窗口);
+ * 窗口外按原价。折扣优先买是用户明确要求。
+ */
+function isDiscountActive(g) {
+    const from = Number(g.discountFrom) || 0;
+    const to = Number(g.discountTo) || 0;
+    if (!g.discountPrice || !(to > 0)) return false;
+    const now = Date.now();
+    if (from > 0 && now < from) return false;
+    if (to > 0 && now > to) return false;
+    return Number(g.discountPrice) < Number(g.price);
+}
+
+/** 商品实付价: 折扣生效用折后价, 否则原价 */
+function effectiveRotationPrice(g) {
+    return isDiscountActive(g) ? Number(g.discountPrice) : Number(g.price);
+}
+
 /** 通用解析 RotationShopInfoReply(等抓包补齐 proto 后再换强类型) */
 function parseRotationShopReply(bodyBytes) {
     const buf = Buffer.isBuffer(bodyBytes) ? bodyBytes : Buffer.from(bodyBytes || []);
@@ -3085,10 +3105,25 @@ async function autoBuyRotationShop(opts = {}) {
         log('游商', '兑换集市未营业, 跳过', { module: 'ranch', event: '游商', result: 'skip' });
         return result;
     }
-    // 只考虑便便计价的商品
-    const targets = shop.goods.filter(g => g.currencyId === 7002 && g.price > 0);
+    // 计价货币: 便便(7002, 主) + 松果币(1008, 2026-11-20 用户要求加)
+    // ⭐ 松果币商品**优先买折扣的**(抓包: #7=折后价, #8/#9=折扣时间窗;
+    //    折扣窗口外的按原价, 仍可买但排后面)
+    const poopGoods = shop.goods.filter(g => g.currencyId === 7002 && g.price > 0);
+    const pineGoods = shop.goods.filter(g => g.currencyId === 1008 && g.price > 0)
+        .map(g => ({
+            ...g,
+            // 实付价 = 折后价(在折扣窗口内)或原价
+            effectivePrice: effectiveRotationPrice(g),
+            discounted: isDiscountActive(g),
+        }))
+        .sort((a, b) => {
+            // 折扣中的排前面; 同为折扣按单价低优先
+            if (a.discounted !== b.discounted) return a.discounted ? -1 : 1;
+            return a.effectivePrice - b.effectivePrice;
+        });
+    const targets = [...poopGoods, ...pineGoods];
     if (targets.length === 0) {
-        result.reason = '游商没有便便计价的商品';
+        result.reason = '游商没有可兑换的商品';
         return result;
     }
 
@@ -3125,22 +3160,35 @@ async function autoBuyRotationShop(opts = {}) {
         return result;
     }
 
-    // 背包里的便便数量
+    // 余额: 便便(7002)在牧场背包; 松果币(1008)在农场背包(与金券同处)
     const { getRanchBagDetail } = require('./warehouse');
-    const bag = await getRanchBagDetail();
-    const poop = bag.items.find(it => Number(it.id) === 7002);
-    let poopCount = poop ? Number(poop.count) : 0;
-    if (poopCount <= 0) {
-        result.reason = '没有便便可兑换';
-        log('游商', '没有便便可兑换', { module: 'ranch', event: '游商', result: 'skip' });
+    const ranchBag = await getRanchBagDetail();
+    const poopItem = ranchBag.items.find(it => Number(it.id) === 7002);
+    let poopCount = poopItem ? Number(poopItem.count) : 0;
+
+    let pineCount = 0;
+    try {
+        const wh = require('./warehouse');
+        const farmItems = wh.getBagItems(await wh.getBag()) || [];
+        const pine = farmItems.find(it => toNum(it.id) === 1008);
+        pineCount = pine ? Math.max(0, toNum(pine.count)) : 0;
+    } catch { pineCount = 0; }
+
+    if (poopCount <= 0 && pineCount <= 0) {
+        result.reason = '没有便便/松果币可兑换';
+        log('游商', '没有便便/松果币可兑换', { module: 'ranch', event: '游商', result: 'skip' });
         return result;
     }
 
     for (const g of eligible) {
-        if (poopCount < g.price) continue;
+        const isPine = Number(g.currencyId) === 1008;
+        // 松果币商品按折扣实付价; 便便商品按原价
+        const unitPrice = isPine ? effectiveRotationPrice(g) : Number(g.price);
+        const balance = isPine ? pineCount : poopCount;
+        if (balance < unitPrice) continue;
         // 限购次数
-        const maxByLimit = g.limit > 0 ? g.limit : 99;
-        const affordable = Math.floor(poopCount / g.price);
+        const maxByLimit = Number(g.limit) > 0 ? Number(g.limit) : 99;
+        const affordable = Math.floor(balance / unitPrice);
         const count = Math.min(maxByLimit, affordable);
         if (count <= 0) continue;
         try {
@@ -3148,9 +3196,14 @@ async function autoBuyRotationShop(opts = {}) {
             //   请求 {1:uid, 2:数量, 3:刷新时间戳, 4:1} —— 不是 MallService.Purchase
             const r = await purchaseRotationGoods(g.uid, count, shop.refreshAt);
             if (r && (r.ok !== false)) {
-                poopCount -= g.price * count;
+                const spent = unitPrice * count;
+                if (isPine) pineCount -= spent;
+                else poopCount -= spent;
                 result.bought += count;
-                result.details.push(`#${g.itemId}x${count}(便便${g.price * count})`);
+                const priceNote = isPine
+                    ? `松果币${spent}${g.discounted ? '(折扣价)' : ''}`
+                    : `便便${spent}`;
+                result.details.push(`#${g.itemId}x${count}(${priceNote})`);
             }
         } catch (e) {
             // 1004012 等"当前买不了"(等级/限购/已过期)属正常业务状态, 不是故障:

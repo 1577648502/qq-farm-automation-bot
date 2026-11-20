@@ -48,6 +48,39 @@ function realShopReply() {
     return null;
 }
 
+/** 手拼 RotationShopInfoReply(通用 wire 编码, 与 parseRotationShopReply 对称) */
+function varint(n) {
+    const out = [];
+    let v = n;
+    while (v > 127) { out.push((v & 0x7f) | 0x80); v >>>= 7; }
+    out.push(v);
+    return Buffer.from(out);
+}
+function tag(field, wire) { return varint((field << 3) | wire); }
+function vfield(field, value) { return Buffer.concat([tag(field, 0), varint(value)]); }
+function lenfield(field, buf) {
+    return Buffer.concat([tag(field, 2), varint(buf.length), buf]);
+}
+function goodsEntry(g) {
+    const parts = [];
+    if (g.group !== undefined) parts.push(vfield(1, g.group));
+    if (g.seq !== undefined) parts.push(vfield(2, g.seq));
+    if (g.item_id !== undefined) parts.push(vfield(3, g.item_id));
+    if (g.currency_id !== undefined) parts.push(vfield(5, g.currency_id));
+    if (g.price !== undefined) parts.push(vfield(6, g.price));
+    if (g.discount_price !== undefined) parts.push(vfield(7, g.discount_price));
+    if (g.discount_from !== undefined) parts.push(vfield(8, g.discount_from));
+    if (g.discount_to !== undefined) parts.push(vfield(9, g.discount_to));
+    if (g.limit !== undefined) parts.push(vfield(10, g.limit));
+    if (g.uid !== undefined) parts.push(vfield(13, g.uid));
+    return lenfield(6, Buffer.concat(parts));
+}
+function buildShopReply(goods) {
+    const parts = [vfield(1, 1), vfield(3, Math.floor(Date.now() / 1000) + 3600)];
+    for (const g of goods) parts.push(goodsEntry(g));
+    return Buffer.concat(parts);
+}
+
 /** 装一个可编程网络层, 记录发出的请求 */
 function installStub(handlers) {
     const calls = [];
@@ -161,6 +194,42 @@ proto.loadProto().then(async () => {
             isRotationNotPurchasable(new Error('请求超时: RotationBuyGoods')) === false);
         check('连接未打开不算"不可购买"',
             isRotationNotPurchasable(new Error('连接未打开: RotationBuyGoods')) === false);
+    }
+
+    section('5. 松果币(1008)商品 + 折扣优先(用户 2026-11-20 要求)');
+    {
+        // 抓包(20261120-232455): group2 是松果币商品
+        //   80011 价750 无折扣 | 80012 价2850 折后2280(80%) | 80013 价5400
+        // 要求: 松果币商品也自动兑换, 且**折扣中的排最前**。
+        // 折扣窗口用"未来 1 小时", 保证 isDiscountActive 为真
+        const winTo = Math.floor(Date.now() / 1000) + 3600;
+        const goods = [
+            { group: 2, seq: 3, item_id: 80011, currency_id: 1008, price: 750, limit: 4, uid: 305 },
+            { group: 2, seq: 1, item_id: 80012, currency_id: 1008, price: 2850, discount_price: 2280, discount_to: winTo, limit: 2, uid: 308 },
+            { group: 2, seq: 2, item_id: 80013, currency_id: 1008, price: 5400, limit: 2, uid: 315 },
+        ];
+        const shopHex = buildShopReply(goods);
+        const calls = installStub({
+            RotationShopInfo: () => shopHex,
+            RotationBuyGoods: () => types.RotationBuyGoodsReply.encode(types.RotationBuyGoodsReply.create({})).finish(),
+            // 农场背包(ItemService.Bag): 只有松果币(1008), 没便便
+            Bag: () => types.BagReply.encode(types.BagReply.create({
+                item_bag: { items: [{ id: 1008, count: 2500 }] },
+            })).finish(),
+            // 牧场背包(ItemService.GetBag, scene 2): 空的, 没便便
+            'gamepb.itempb.ItemService.GetBag': () => types.GetBagReply.encode(types.GetBagReply.create({ items: [] })).finish(),
+        });
+        const userState = require(`${SB}/src/utils/network`).getUserState();
+        userState.level = 50;
+
+        const ranch = freshRanch();
+        const r = await ranch.__privateRanchFns.autoBuyRotationShop({});
+
+        check('松果币商品被购买', r.bought > 0, r.bought);
+        // 折扣中的 80012(实付 2280)应第一个买: 2500 只够买 1 件
+        check('第一个买的是折扣商品 80012', r.details[0] && /80012/.test(r.details[0]), r.details);
+        check('detail 标注折扣', r.details[0] && /折扣/.test(r.details[0]), r.details);
+        check('购买按折扣价记账(2280 而非 2850)', /2280/.test(r.details[0] || ''), r.details);
     }
 
     finish();
