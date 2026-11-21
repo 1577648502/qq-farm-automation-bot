@@ -2159,23 +2159,8 @@ async function runRanchCare(opts = {}) {
 
     await gap();
 
-    // 3b. 自动购买罐头(与化肥自动购买同构): 桶余量低于阈值 → 牧场商城买 N 次并顺手灌桶。
-    //     挂在喂罐头之后 —— 刚喂完扣了桶, 这时判定"要不要补货"最准。
-    if (want('core') && isAutomationOn('ranch_auto')) {
-        try {
-            const br = await checkAndBuyCansIfLow(opts);
-            if (br.boughtNormal > 0 || br.boughtOrganic > 0) {
-                const parts = [];
-                if (br.boughtNormal > 0) parts.push(`普通罐头x${br.boughtNormal}`);
-                if (br.boughtOrganic > 0) parts.push(`有机罐头x${br.boughtOrganic}`);
-                result.details.push(`买罐头${parts.join('+')}`);
-            }
-        } catch (e) {
-            if (!isExpectedRanchError(e)) {
-                logWarn('牧场', `罐头自动购买失败: ${e.message}`, { module: 'ranch', event: '买罐头', result: 'error' });
-            }
-        }
-    }
+    // 3b. 罐头自动购买已改为独立检测定时器(startCanBuyCheckTimer, 与农场化肥定时器同构),
+    //     不再挂在巡查轮 —— 以前 core 组每 20~25 秒读一次背包算桶余量, 太频繁。
 
     await gap();
 
@@ -2761,6 +2746,50 @@ function onRanchFacilitiesChanged() {
     });
 }
 
+// ============ 罐头自动购买检测定时器(与农场化肥 fertilizerBuyCheckTimer 完全同构) ============
+// 2026-11-21 对齐: 罐头购买原来挂在巡查轮(20~25 秒读一次桶, 太频繁)且不可配间隔;
+// 化肥是独立 setInterval(默认 60 分钟, UI 可配)。现在两边同构: 独立定时器 + 可配间隔。
+let canBuyCheckTimer = null;
+
+async function checkCanBuyOnce() {
+    if (!isAutomationOn('ranch_can_buy_organic') && !isAutomationOn('ranch_can_buy_normal')) return;
+    try {
+        const br = await checkAndBuyCansIfLow();
+        if (br.boughtNormal > 0 || br.boughtOrganic > 0) {
+            const parts = [];
+            if (br.boughtNormal > 0) parts.push(`普通罐头x${br.boughtNormal}`);
+            if (br.boughtOrganic > 0) parts.push(`有机罐头x${br.boughtOrganic}`);
+            log('牧场', `罐头桶余量低于阈值, 已自动购买 ${parts.join(' + ')}`, {
+                module: 'ranch', event: '买罐头', result: 'ok',
+                boughtNormal: br.boughtNormal, boughtOrganic: br.boughtOrganic,
+            });
+        }
+    } catch (e) {
+        logWarn('牧场', `罐头自动购买检测失败: ${e.message}`, { module: 'ranch', event: '买罐头', result: 'error' });
+    }
+}
+
+function startCanBuyCheckTimer() {
+    if (!isAutomationOn('ranch_can_buy_organic') && !isAutomationOn('ranch_can_buy_normal')) return;
+    let intervalMinutes = 10;
+    try {
+        const automation = require('../models/store').getAutomation(process.env.FARM_ACCOUNT_ID || '') || {};
+        intervalMinutes = Math.max(1, Math.min(1440, toNum(automation.ranch_can_buy_check_interval_minutes) || 10));
+    } catch { /* 读不到用默认 */ }
+    const intervalMs = intervalMinutes * 60 * 1000;
+    canBuyCheckTimer = setInterval(() => { checkCanBuyOnce(); }, intervalMs);
+    log('牧场', `罐头自动购买检测定时器已启动，间隔 ${intervalMinutes} 分钟`, {
+        module: 'ranch', event: '买罐头计时器', result: 'start', intervalMinutes,
+    });
+}
+
+function stopCanBuyCheckTimer() {
+    if (canBuyCheckTimer) {
+        clearInterval(canBuyCheckTimer);
+        canBuyCheckTimer = null;
+    }
+}
+
 function startRanchCheckLoop(options = {}) {
     if (ranchLoopRunning) return;
     externalRanchSchedulerMode = !!options.externalScheduler;
@@ -2772,6 +2801,8 @@ function startRanchCheckLoop(options = {}) {
     sceneLocked = false;        // 场景锁定状态是 per-connection 的, 新连接重新探测
     sceneLockedAt = 0;
     networkEvents.on('ranchFacilitiesChanged', onRanchFacilitiesChanged);
+    // 启动罐头自动购买检测定时器(与农场化肥定时器同构)
+    startCanBuyCheckTimer();
     for (const k of Object.keys(RANCH_GROUPS)) {
         // 外部调度模式也要把各组的下次时刻设出来, 否则 worker 永远判不到期
         if (externalRanchSchedulerMode) {
@@ -2791,6 +2822,8 @@ function stopRanchCheckLoop() {
     for (const k of Object.keys(nextRanchGroupAt)) nextRanchGroupAt[k] = 0;
     nextRanchCheckAt = 0;
     networkEvents.removeListener('ranchFacilitiesChanged', onRanchFacilitiesChanged);
+    // 停止罐头自动购买检测定时器
+    stopCanBuyCheckTimer();
 }
 
 /**

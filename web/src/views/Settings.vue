@@ -1107,6 +1107,7 @@ function createDefaultAutomation(fertilizer: string = 'none') {
     ranch_can_buy_organic: false,
     ranch_can_buy_organic_count: 10,
     ranch_can_buy_organic_threshold_hours: 10,
+    ranch_can_buy_check_interval_minutes: 10,
   }
 }
 const fertilizerLandTypeOptions = computed(() =>
@@ -1180,16 +1181,16 @@ const localAutomationSettings = ref({
   stealthOfflineMinMinutes: 20,
   stealthOfflineMaxMinutes: 60,
   stealthWakeForRipe: true,
-  fertilizerBuyOrganicCount: 10,
+  fertilizerBuyOrganicCount: 1,
   fertilizerBuyOrganicThresholdHours: 10,
-  fertilizerBuyNormalCount: 10,
+  fertilizerBuyNormalCount: 1,
   fertilizerBuyNormalThresholdHours: 10,
-  fertilizerBuyCheckIntervalMinutes: 30,
+  fertilizerBuyCheckIntervalMinutes: 60,
 })
 
 const fertilizerOptions = [
-  { label: '普通 + 有机', value: 'both' },
   { label: '普通 + 快成熟有机', value: 'smart' },
+  { label: '普通 + 有机', value: 'both' },
   { label: '仅普通化肥', value: 'normal' },
   { label: '仅有机化肥', value: 'organic' },
   { label: '不施肥', value: 'none' },
@@ -1525,11 +1526,11 @@ function syncLocalAutomationSettings(submitted?: any) {
     localAutomationSettings.value.milkTeaInteractType = settings.value.milkTeaInteractType ?? 2
     localAutomationSettings.value.sellGoldenFruit = settings.value.sellGoldenFruit ?? false
     localAutomationSettings.value.adGiftEnabled = settings.value.adGiftEnabled ?? true
-    localAutomationSettings.value.fertilizerBuyOrganicCount = settings.value.fertilizerBuyOrganicCount ?? 10
+    localAutomationSettings.value.fertilizerBuyOrganicCount = settings.value.fertilizerBuyOrganicCount ?? 1
     localAutomationSettings.value.fertilizerBuyOrganicThresholdHours = settings.value.fertilizerBuyOrganicThresholdHours ?? 10
-    localAutomationSettings.value.fertilizerBuyNormalCount = settings.value.fertilizerBuyNormalCount ?? 10
+    localAutomationSettings.value.fertilizerBuyNormalCount = settings.value.fertilizerBuyNormalCount ?? 1
     localAutomationSettings.value.fertilizerBuyNormalThresholdHours = settings.value.fertilizerBuyNormalThresholdHours ?? 10
-    localAutomationSettings.value.fertilizerBuyCheckIntervalMinutes = settings.value.fertilizerBuyCheckIntervalMinutes ?? 30
+    localAutomationSettings.value.fertilizerBuyCheckIntervalMinutes = settings.value.fertilizerBuyCheckIntervalMinutes ?? 60
     applyActivityGate()
 
     if (currentDraft) {
@@ -3052,7 +3053,7 @@ async function onBackupFileChange(ev: Event) {
                   class="col-span-full rounded bg-green-50 p-3 text-sm space-y-3 dark:bg-green-900/20"
                 >
                   <p class="text-xs text-green-700/80 dark:text-green-400/80">
-                    罐头桶(普通 7003 / 有机 7004)剩余时长低于阈值时，自动去牧场商城购买对应罐头并灌进桶。判定每轮巡查(5~8 分钟)执行一次。
+                    罐头桶(普通 7003 / 有机 7004)剩余时长低于阈值时，自动去牧场商城购买对应罐头并灌进桶。按设定的检测间隔定时检测，保存设置后会立即检测一次。同时开启两种罐头购买时，优先购买有机罐头。
                   </p>
                   <div v-if="localAutomationSettings.automation.ranch_can_buy_organic" class="space-y-2">
                     <div class="text-green-700 font-medium dark:text-green-400">
@@ -3061,7 +3062,7 @@ async function onBackupFileChange(ev: Event) {
                     <div class="flex flex-wrap gap-4">
                       <BaseInput
                         v-model.number="localAutomationSettings.automation.ranch_can_buy_organic_count"
-                        label="购买次数"
+                        label="购买数量"
                         type="number"
                         min="1"
                         max="99"
@@ -3082,7 +3083,7 @@ async function onBackupFileChange(ev: Event) {
                     <div class="flex flex-wrap gap-4">
                       <BaseInput
                         v-model.number="localAutomationSettings.automation.ranch_can_buy_normal_count"
-                        label="购买次数"
+                        label="购买数量"
                         type="number"
                         min="1"
                         max="99"
@@ -3095,6 +3096,15 @@ async function onBackupFileChange(ev: Event) {
                         max="990"
                       />
                     </div>
+                  </div>
+                  <div class="flex flex-wrap gap-4">
+                    <BaseInput
+                      v-model.number="localAutomationSettings.automation.ranch_can_buy_check_interval_minutes"
+                      label="检测间隔 (分钟)"
+                      type="number"
+                      min="1"
+                      max="1440"
+                    />
                   </div>
                 </div>
                 <BaseSwitch v-model="localAutomationSettings.automation.ranch_feedmachine" label="自动牧草机补草" />

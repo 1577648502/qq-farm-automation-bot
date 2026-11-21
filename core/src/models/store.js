@@ -214,6 +214,9 @@ const DEFAULT_ACCOUNT_CONFIG = {
         ranch_can_buy_organic: false,
         ranch_can_buy_organic_count: 10,
         ranch_can_buy_organic_threshold_hours: 10,
+        // 罐头自动购买检测间隔(分钟) —— 与化肥 fertilizerBuyCheckIntervalMinutes 同构,
+        // 独立 setInterval 定时检测(不再挂牧场巡查轮)
+        ranch_can_buy_check_interval_minutes: 10,
         skip_own_weed_bug: true,  // 不除自己草虫
         rob_treasure: false,      // 夺宝: 自动遍历好友可夺宝藏并用挑战书抢夺
     },
@@ -531,6 +534,8 @@ function normalizeAccountConfig(input, fallback = accountFallbackConfig) {
                 cfg.automation[k] = Math.max(1, Math.min(99, Number(v) || 10));
             } else if (k === 'ranch_can_buy_normal_threshold_hours' || k === 'ranch_can_buy_organic_threshold_hours') {
                 cfg.automation[k] = Math.max(0, Math.min(990, Number(v) || 10));
+            } else if (k === 'ranch_can_buy_check_interval_minutes') {
+                cfg.automation[k] = Math.max(1, Math.min(1440, Number(v) || 10));
             } else {
                 cfg.automation[k] = !!v;
             }
@@ -1141,6 +1146,8 @@ function applyConfigSnapshot(snapshot, options = {}) {
                 next.automation[k] = Math.max(1, Math.min(99, Number(v) || 10));
             } else if (k === 'ranch_can_buy_normal_threshold_hours' || k === 'ranch_can_buy_organic_threshold_hours') {
                 next.automation[k] = Math.max(0, Math.min(990, Number(v) || 10));
+            } else if (k === 'ranch_can_buy_check_interval_minutes') {
+                next.automation[k] = Math.max(1, Math.min(1440, Number(v) || 10));
             } else {
                 next.automation[k] = !!v;
             }

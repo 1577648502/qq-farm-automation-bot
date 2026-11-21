@@ -869,6 +869,33 @@ proto.loadProto().then(async () => {
             }, [mallGoodsBytes({ goodsId: 20001, itemId: 80031, price: 300 })]);
             check('有机桶 0h<5h → slot7 买 1 次', r.organicBought === 1, JSON.stringify(r));
         }
+
+        // 5) 与化肥自动购买完全同构(2026-11-21 对齐):
+        //    独立 setInterval 定时器(不再挂巡查轮) + 可配检测间隔
+        {
+            const fs = require('node:fs');
+            const ranchSrc = fs.readFileSync(`${SB}/src/services/ranch.js`, 'utf8');
+            const storeSrc = fs.readFileSync(`${SB}/src/models/store.js`, 'utf8');
+            const settingsSrc = fs.readFileSync(require('node:path').join(__dirname, '../../web/src/views/Settings.vue'), 'utf8');
+            check('ranch 有独立罐头购买定时器(仿化肥 fertilizerBuyCheckTimer)',
+                /function startCanBuyCheckTimer/.test(ranchSrc) && /function stopCanBuyCheckTimer/.test(ranchSrc), null);
+            check('定时器挂载到牧场循环启停(与化肥定时器挂 farm 循环同构)',
+                /startCanBuyCheckTimer\(\);/.test(ranchSrc)
+                && /stopCanBuyCheckTimer\(\);/.test(ranchSrc), null);
+            check('巡查轮不再调 checkAndBuyCansIfLow(已移入定时器)',
+                !/await checkAndBuyCansIfLow\(opts\)/.test(ranchSrc), null);
+            check('store 默认 ranch_can_buy_check_interval_minutes=10',
+                /ranch_can_buy_check_interval_minutes: 10/.test(storeSrc), null);
+            check('store merge 对检测间隔做 clamp(1..1440)',
+                /ranch_can_buy_check_interval_minutes'\) \{\s*\n\s*(cfg|next)\.automation\[k\] = Math\.max\(1, Math\.min\(1440/.test(storeSrc), null);
+            check('Settings.vue 罐头参数卡有检测间隔输入',
+                /ranch_can_buy_check_interval_minutes"\s*\n?\s*label="检测间隔 \(分钟\)"/.test(settingsSrc)
+                    || /ranch_can_buy_check_interval_minutes"/.test(settingsSrc), null);
+            check('罐头 label 与化肥一致(购买数量, 非"购买次数")',
+                !/购买次数/.test(settingsSrc), null);
+            check('施肥策略下拉顺序与罐头一致(smart 排第一)',
+                settingsSrc.indexOf("value: 'smart'") < settingsSrc.indexOf("value: 'both'"), null);
+        }
     }
 
     finish();
