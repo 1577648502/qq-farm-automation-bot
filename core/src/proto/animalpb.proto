@@ -58,15 +58,28 @@ message GrassStorage {
     int64 grass_count = 1;           // 牧草数量
 }
 
-// 产物架(可收获 / 可偷)
+// 产物架
+// ⭐ 2026-11-21 抓包(20261117-162604)逐字段定案, 推翻旧推测:
+//   真实 wire: {1:item槽位, 2:嵌套StealDetail(len23), 3:remain, 4:?, 5:animal}
+//   旧定义把 #2 当 varint base_num / #6 当 bool can_steal —— wire type 不匹配,
+//   protobufjs decode 直接整字段跳过 → can_steal 永远 undefined → 偷取 gate 永假。
+//   且抓包里外层根本没有 #6/#7: 官方客户端看到 remain>0 就直接发 StealProduce。
+message ShelfStealDetail {
+    int64 item_id = 1;               // 1060002 类产物模板
+    int64 capacity = 2;              // 架容量(抓包 30)
+    int64 remain_num = 3;            // 剩余(与外层 #3 同值)
+    int64 stolen_today = 4;          // 已被偷数(抓包 3/1)
+    int64 animal_tpl_id = 5;         // 动物模板 60002
+    int64 flag = 6;                  // 抓包恒 1
+    bytes last_stealer = 7;          // 最近偷取者(wire 为 length-delim, 5B)
+}
+
 message ShelfInfo {
-    int64 item_id = 1;               // 产物物品 ID
-    int64 base_num = 2;              // 基础数量
-    int64 remain_num = 3;            // 剩余可收数量
+    int64 item_id = 1;               // 架槽位序号(1/2/3...)
+    ShelfStealDetail detail = 2;     // 嵌套详情(偷取者/容量)
+    int64 remain_num = 3;            // 剩余可偷数量 —— 偷取判定的唯一依据
     int64 stolen_num = 4;            // 已被偷数量
     int64 animal_id = 5;             // 对应动物
-    bool can_steal = 6;              // 可偷
-    repeated int64 stealers = 7;     // 偷过的 gid(packed/非 packed 两种编码)
 }
 
 // 待清理物(蚊子/便便)

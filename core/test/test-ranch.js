@@ -457,23 +457,29 @@ proto.loadProto().then(async () => {
         check('节流间隔 5 分钟', /FRIENDS_LIST_LOG_INTERVAL_MS = 5 \* 60 \* 1000/.test(src), null);
     }
 
-    section('17. 自动偷取: 按冷却重复执行 + 只认 shelf.can_steal');
+    section('17. 自动偷取: 按冷却重复执行 + 只认 shelf.remain_num');
     {
         // 线上 2026-11-21: 牧场自动偷取一条日志都没有。
-        // 根因: 旧实现每个好友**每天只偷一次**, 当天一轮就标记完 → 一整天不执行。
-        // 抓包(20261117-162604)定案可偷判定: shelves.can_steal=1,
-        //   同帧里 animals.can_harvest 全是 0(can_harvest 是"自己家可收获", 与偷无关)。
+        // 根因1: 旧实现每个好友**每天只偷一次**, 当天一轮就标记完 → 一整天不执行。
+        // 根因2(抓包逐字段定案, 20261117-162604): 可偷判定旧代码 gate =
+        //   `can_steal===1`, 但真实协议 ShelfInfo 根本不下发 can_steal 字段,
+        //   官方客户端看到 remain_num>0 直接发 StealProduce(err=0 成功)。
+        //   旧 proto 还把 #2 当 varint(wire 实为 length-delim 嵌套)整字段被跳过。
         const src = fs.readFileSync(require('node:path').join(SB, 'src/services/ranch.js'), 'utf8');
         check('冷却按毫秒记时刻(不再是 dateKey)',
             /gid -> 下次可偷的时刻/.test(src), null);
         check('有 stealCooldownMin', /stealCooldownMin/.test(src), null);
         check('有 stealEmptyCooldownMin', /stealEmptyCooldownMin/.test(src), null);
         check('不再按"每天一次"跳过', !/=== todayKey\) continue/.test(src), null);
-        check('可偷只认 shelf.can_steal',
-            /shelves\.some\(s => toNum\(s\.can_steal\) === 1 && toNum\(s\.remain_num\) > 0\)/.test(src),
-            null);
+        check('可偷只认 shelf.remain_num(抓包: 无 can_steal 字段)',
+            /shelves\.some\(s => toNum\(s\.remain_num\) > 0\)/.test(src), null);
+        check('不再依赖不存在的 can_steal(gate 代码里没有)', !/s\.can_steal/.test(src), null);
         check('不再用 animals.can_harvest 判定可偷',
             !/\|\| animals\.some\(a => toNum\(a\.can_harvest\) === 1\)/.test(src), null);
+        check('空手轮有诊断日志(偷取巡检)', /偷取巡检/.test(src), null);
+        const protoSrc = fs.readFileSync(require('node:path').join(SB, 'src/proto/animalpb.proto'), 'utf8');
+        check('proto ShelfInfo #2 是嵌套消息(非 varint base_num)',
+            /ShelfStealDetail detail = 2/.test(protoSrc) && !/int64 base_num = 2/.test(protoSrc), null);
     }
 
     finish();

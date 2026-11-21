@@ -757,16 +757,15 @@ async function stealFriendProduce(hostGid) {
     await sleep(300);
     try {
         const detail = await getRanchDetail(gid);
-        // 可偷判定: 用**服务端给的权威位**, 不再自己从 stage 猜。
-        //   动物级: can_harvest(#7)
-        //   产物架: ShelfInfo.can_steal(#6) —— 这才是"这家的产物可偷"的直接信号
+        // ⭐ 2026-11-21 抓包(20261117-162604)根因修复, 推翻旧判定:
+        //   旧代码 gate = `can_steal===1 && remain_num>0`, 但真实协议里 ShelfInfo
+        //   **根本不下发 can_steal 字段**(旧 proto 还把 #2 wire type 弄错导致整字段
+        //   被 decode 跳过) → gate 永假 → 偷牧场一次都没成功过。
+        //   官方客户端的判定就是看到架上有货(remain_num>0)直接发 StealProduce
+        //   (抓包: remain 27/29/27, 无任何 can_steal 位, StealProduce 返回 err=0)。
         const ranches = detail.ranches || [];
-        const animals = ranches.flatMap(r => r.animals || []);
         const shelves = ranches.flatMap(r => r.shelves || []);
-        // ⭐ 2026-11-21 抓包(20261117-162604)定案: 可偷 = **产物架 can_steal=1**。
-        //   同一份抓包里动物的 can_harvest 全是 0 —— can_harvest 是"自己家动物可收获",
-        //   跟"能不能偷好友的"无关。旧实现把它也算作可偷, 会误判。
-        const hasStealable = shelves.some(s => toNum(s.can_steal) === 1 && toNum(s.remain_num) > 0);
+        const hasStealable = shelves.some(s => toNum(s.remain_num) > 0);
         if (!hasStealable) return { ok: false, reason: 'nothing_to_steal', gid };
         const stealBody = types.StealProduceRequest.encode(types.StealProduceRequest.create({
             host_gid: toLong(gid),
@@ -3386,7 +3385,7 @@ async function autoPutHazardOnFriends(opts = {}) {
  */
 const _stealToday = new Map();   // gid -> 下次可偷的时刻(ms)
 async function autoStealFriendProduce(opts = {}) {
-    const result = { cleaned: 0, details: [] };
+    const result = { cleaned: 0, details: [], checked: 0, skipped: 0, empty: 0, errors: 0 };
     const maxPerRound = Math.max(1, toNum(opts.maxStealPerRound) || 10);
 
     // ⭐ 2026-11-21 修复「自动偷从来没跑」:
@@ -3409,7 +3408,8 @@ async function autoStealFriendProduce(opts = {}) {
         const gid = toNum(f && f.gid);
         if (!gid) continue;
         const nextAt = _stealToday.get(gid) || 0;
-        if (now < nextAt) continue;
+        if (now < nextAt) { result.skipped += 1; continue; }
+        result.checked += 1;
         try {
             const r = await stealFriendProduce(gid);
             if (r.ok) {
@@ -3418,14 +3418,24 @@ async function autoStealFriendProduce(opts = {}) {
                 _stealToday.set(gid, Date.now() + cooldownOk);
             } else {
                 // nothing_to_steal: 稍后再看(产物架会回涨)
+                result.empty += 1;
                 _stealToday.set(gid, Date.now() + cooldownEmpty);
             }
             await sleep(800);
         } catch (e) {
             // 失败(进不去/权限)也退避, 别每轮都撞
+            result.errors += 1;
             _stealToday.set(gid, Date.now() + cooldownEmpty);
             await sleep(500);
         }
+    }
+    // ⭐ 诊断: 旧实现偷不到时完全静默, "从未偷成功过"排查了一轮才发现是 gate 永假。
+    //   每轮只要有实际检查就打一条 summary, 让空手轮可见。
+    if (result.checked > 0 || result.skipped > 0) {
+        log('牧场', `偷取巡检: 查${result.checked}家 偷${result.cleaned} 空货${result.empty} 冷却${result.skipped} 失败${result.errors}`, {
+            module: 'ranch', event: '偷取巡检', result: result.cleaned > 0 ? 'ok' : 'skip',
+            checked: result.checked, stolen: result.cleaned,
+        });
     }
     if (result.cleaned > 0) {
         log('牧场', `偷好友产物 x${result.cleaned}: ${result.details.slice(0, 6).join('，')}`, {
