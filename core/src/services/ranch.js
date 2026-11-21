@@ -418,7 +418,15 @@ async function fillCanBuckets(kind = 'normal', opts = {}) {
     // 按"大的先灌"排序(12h → 8h → 4h → 1h): 少的次数灌进更多时长
     const cans = all
         .filter(it => ids.includes(toNum(it.id)) && toNum(it.count) > 0 && toNum(it.uid) > 0)
-        .sort((a, b) => ids.indexOf(toNum(a.id)) - ids.indexOf(toNum(b.id)));
+        .sort((a, b) => {
+            // preferUid: 用户点"使用"的那个格子排最前(语义: 用我点的这罐)
+            const pu = toNum(opts.preferUid) || 0;
+            if (pu > 0) {
+                if (toNum(a.uid) === pu && toNum(b.uid) !== pu) return -1;
+                if (toNum(b.uid) === pu && toNum(a.uid) !== pu) return 1;
+            }
+            return ids.indexOf(toNum(a.id)) - ids.indexOf(toNum(b.id));
+        });
 
     if (!cans.length) {
         return result;
@@ -452,6 +460,65 @@ async function fillCanBuckets(kind = 'normal', opts = {}) {
         });
     }
     return result;
+}
+
+/**
+ * 一键把罐头用到动物上(牧场背包「使用」入口)。
+ *
+ * 背景: 服务端没有"罐头直达动物"的接口 —— 官方流程是两步:
+ *   背包点罐头 = 装填桶(BatchUse/Use, 桶余量+)
+ *   喂动物    = FeedAnimal(从桶扣)
+ * 用户期望点一下就直接生效到动物, 所以这里把两步串起来:
+ *   1. 按罐头类型(80021~24=普通/无机, 80031~34=有机)确定目标桶
+ *   2. 桶没余量 → 先灌 1 个
+ *   3. 挑一只可喂的动物(can_feed=1 优先)发 FeedAnimal
+ *
+ * @param {number} itemId 罐头物品 id(80021~80034)
+ * @param {number} count  数量(当前固定 1, 与官方单次喂一致)
+ * @param {number} uid    道具格 uid
+ */
+async function useCanOnAnimal(itemId, count = 1, uid = 0) {
+    const id = toNum(itemId);
+    const isNormal = id >= 80021 && id <= 80024;
+    const isOrganic = id >= 80031 && id <= 80034;
+    if (!isNormal && !isOrganic) {
+        return { ok: false, error: `不是罐头道具(${id})` };
+    }
+    const kind = isNormal ? 'normal' : 'organic';
+    const feedType = isNormal ? FEED_TYPE.NORMAL_CAN : FEED_TYPE.ORGANIC_A;
+
+    // 1. 桶没余量 → 先灌(与喂食按钮同一套预灌逻辑)
+    const pre = await fillCanBuckets(kind, { maxItems: 1, onlyIfBucketEmpty: true, preferUid: uid })
+        .catch(() => ({ used: 0 }));
+    if (pre.used > 0) {
+        log('牧场', `使用罐头: 先把 1 个${isNormal ? '普通' : '有机'}罐头灌进桶`, {
+            module: 'ranch', event: '灌罐头', result: 'ok', kind,
+        });
+    }
+
+    // 2. 挑一只可喂的动物(can_feed=1 优先, 其次任意在场动物)
+    const view = await getRanchOverview();
+    const animals = view.animals || [];
+    if (!animals.length) {
+        return { ok: false, error: '牧场里没有动物可喂' };
+    }
+    const target = animals.find(a => a.canFeed) || animals[0];
+    const hostGid = toNum(target.ranchInstId) || RANCH_SELF_HOST_GID;
+    const instId = toNum(target.animalInstId) || 0;
+
+    // 3. FeedAnimal
+    try {
+        await feedAnimal(Math.max(1, toNum(count) || 1), hostGid, instId);
+        invalidateRanchOverviewCache();
+        return {
+            ok: true,
+            action: '喂食',
+            detail: `${target.name}(槽${target.slot})${pre.used > 0 ? '，已自动灌桶' : ''}`,
+        };
+    } catch (e) {
+        const code = parseRanchErrorCode(e);
+        return { ok: false, error: feedFailureHint(feedType, e), code };
+    }
 }
 
 /**
@@ -4408,6 +4475,7 @@ module.exports = {
     runRanchDueTick,
     enterRanchSceneForApi,
     useItemWithUid,
+    useCanOnAnimal,
     // 日志节流: 供测试验证"同一状态不重复刷屏"
     shouldLogOnce,
     resetLogOnceState,

@@ -1555,10 +1555,12 @@ async function handleApiCall(msg) {
                 const itemId = Number(args[0]) || 0;
                 const count = Math.max(1, Number(args[1]) || 1);
                 const uid = Number(args[2]) || 0;
-                // 罐头(type=109)必须带 uid 才会灌进罐头桶(与农场 Use 的字段不同)
                 const info = require('../config/gameConfig').getItemById(itemId);
                 if (info && Number(info.type) === 109) {
-                    result = await ranch.useItemWithUid(itemId, count, uid);
+                    // ⭐ 2026-11-21 用户要求: 点罐头要**直接喂到动物**, 不是"入桶"。
+                    //   服务端没有罐头直达动物的接口(官方两步: Use/BatchUse 装桶 → FeedAnimal 扣桶),
+                    //   所以这里串起来: 必要时先灌桶 → 自动挑可喂动物 → FeedAnimal。
+                    result = await ranch.useCanOnAnimal(itemId, count, uid);
                 } else {
                     const { useItem: _useRanch } = require('../services/warehouse');
                     result = await _useRanch(itemId, count, []);

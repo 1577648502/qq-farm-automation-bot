@@ -123,10 +123,14 @@ function tabLabel(id: number) {
 }
 
 function openUse(item: any) {
+  // 罐头(80021~80034): 点"使用"= 直接喂给牧场里的动物(桶没余量会自动灌)
+  const isCan = Number(item.id) >= 80021 && Number(item.id) <= 80034
   confirmModal.value = {
     show: true,
     title: '确认使用',
-    message: `确定要使用 ${item.name || `物品${item.id}`} 吗?\n数量：${item.count || 0}`,
+    message: isCan
+      ? `把 ${item.name || `物品${item.id}`} 直接喂给牧场里的动物?\n数量：1（桶里没余量会自动装入 1 罐）`
+      : `确定要使用 ${item.name || `物品${item.id}`} 吗?\n数量：${item.count || 0}`,
     type: 'primary',
     loading: false,
     action: 'use',
@@ -161,7 +165,9 @@ async function confirmAction() {
       const res = await api.post('/api/ranch/bag/use', { itemId: Number(item.id), count: Number(item.count || 1), uid: Number(item.uid || 0) }, { headers: { 'x-account-id': id } })
       const d = res.data
       if (d?.ok) {
-        toastStore.success(`已使用 ${item.name || `物品${item.id}`}`)
+        // 罐头走"直接喂动物"链路(后端自动灌桶+FeedAnimal), 提示带上实际效果
+        const detail = d?.data?.detail || d?.data?.data?.detail
+        toastStore.success(detail ? `已使用：${detail}` : `已使用 ${item.name || `物品${item.id}`}`)
         await refresh()
       }
       else {
