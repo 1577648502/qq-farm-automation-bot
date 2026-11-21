@@ -3384,8 +3384,13 @@ async function autoPutHazardOnFriends(opts = {}) {
  * @returns {{cleaned: number, details: string[]}} cleaned = 偷到的次数(沿用字段名)
  */
 const _stealToday = new Map();   // gid -> 下次可偷的时刻(ms)
+// 空手轮日志节流: 偷取组与偷菜同频(默认 20~25 秒一轮 × 4 账号),
+// 每轮都打会把日志墙刷爆(线上 2026-11-21 实测 5 分钟 36 条)。
+// 空手 summary 最多 10 分钟一条; 偷到/出错仍立即打。
+let _lastStealPatrolLogAt = 0;
+const STEAL_PATROL_LOG_MIN_INTERVAL_MS = 10 * 60 * 1000;
 async function autoStealFriendProduce(opts = {}) {
-    const result = { cleaned: 0, details: [], checked: 0, skipped: 0, empty: 0, errors: 0 };
+    const result = { cleaned: 0, details: [], checked: 0, skipped: 0, empty: 0, errors: 0, errorSample: '' };
     const maxPerRound = Math.max(1, toNum(opts.maxStealPerRound) || 10);
 
     // ⭐ 2026-11-21 修复「自动偷从来没跑」:
@@ -3425,14 +3430,21 @@ async function autoStealFriendProduce(opts = {}) {
         } catch (e) {
             // 失败(进不去/权限)也退避, 别每轮都撞
             result.errors += 1;
+            if (!result.errorSample) result.errorSample = e && e.message || String(e);
             _stealToday.set(gid, Date.now() + cooldownEmpty);
             await sleep(500);
         }
     }
-    // ⭐ 诊断: 旧实现偷不到时完全静默, "从未偷成功过"排查了一轮才发现是 gate 永假。
-    //   每轮只要有实际检查就打一条 summary, 让空手轮可见。
-    if (result.checked > 0 || result.skipped > 0) {
-        log('牧场', `偷取巡检: 查${result.checked}家 偷${result.cleaned} 空货${result.empty} 冷却${result.skipped} 失败${result.errors}`, {
+    // ⭐ 诊断日志(带节流): 旧实现偷不到时完全静默, "从未偷成功过"排查了一轮才发现
+    //   是 gate 永假。但偷取组 20~25 秒一轮, 每轮都打 = 刷屏(线上实测 5 分钟 36 条)。
+    //   规则: 全冷却轮(checked=0)不打; 空手轮 10 分钟最多一条; 偷到/出错立即打。
+    const nowMs = Date.now();
+    const hasSignal = result.cleaned > 0 || result.errors > 0;
+    if ((result.checked > 0 || result.skipped > 0)
+        && (hasSignal || nowMs - _lastStealPatrolLogAt >= STEAL_PATROL_LOG_MIN_INTERVAL_MS)) {
+        _lastStealPatrolLogAt = nowMs;
+        const errPart = result.errors > 0 && result.errorSample ? ` 首错:${result.errorSample}` : '';
+        log('牧场', `偷取巡检: 查${result.checked}家 偷${result.cleaned} 空货${result.empty} 冷却${result.skipped} 失败${result.errors}${errPart}`, {
             module: 'ranch', event: '偷取巡检', result: result.cleaned > 0 ? 'ok' : 'skip',
             checked: result.checked, stolen: result.cleaned,
         });
