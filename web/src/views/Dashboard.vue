@@ -703,8 +703,12 @@ watch(documentVisibility, (vis) => {
 
 <template>
   <div class="flex flex-col gap-6 pt-6">
-    <!-- Status Cards -->
-    <!-- 牧场已并入左侧账号卡的 EXP 下方, 但保持三列布局(第三列留给后续卡片) -->
+    <!-- 农场区标题 -->
+    <div class="flex items-center gap-2 text-sm text-gray-500 font-medium">
+      <div class="i-carbon-sprout text-green-500" />
+      <span>农场</span>
+    </div>
+    <!-- Status Cards: 农场三卡(账号/资产/化肥收藏) -->
     <div class="grid grid-cols-1 gap-4 lg:grid-cols-3 sm:grid-cols-2">
       <!-- Account & Exp -->
       <div class="min-w-0 flex flex-col rounded-lg bg-white p-4 shadow dark:bg-gray-800">
@@ -739,39 +743,6 @@ watch(documentVisibility, (vis) => {
           <div class="mt-2 min-w-0 flex flex-wrap justify-between gap-x-2 gap-y-1 text-xs text-gray-400">
             <span class="shrink-0">效率: {{ expRate }}</span>
             <span class="min-w-0 break-words text-right">{{ timeToLevel }}</span>
-          </div>
-
-          <!-- 牧场进度: 与上面 EXP 同样的样式(标签 + 数值 + 进度条), 不单独开卡片。
-               数据为空时整行不渲染, 避免没开牧场的账号多一条空行。 -->
-          <div v-if="ranchSummary && ranchSummary.levelNeeded" class="mt-3">
-            <div class="mb-1 min-w-0 flex items-start justify-between gap-2 text-xs text-gray-500">
-              <div class="flex shrink-0 items-center gap-1">
-                <div class="i-fas-paw text-amber-500" />
-                <span>牧场</span>
-                <span class="rounded bg-amber-100 px-1 text-[10px] text-amber-700 dark:bg-amber-900/30 dark:text-amber-300">
-                  Lv{{ ranchSummary.level }}
-                </span>
-              </div>
-              <span class="min-w-0 break-words text-right tabular-nums">{{ formatNumber(ranchSummary.levelExp) }} / {{ formatNumber(ranchSummary.levelNeeded) }}</span>
-            </div>
-            <div class="h-1.5 w-full overflow-hidden rounded-full bg-gray-100 dark:bg-gray-700">
-              <div
-                class="h-full rounded-full bg-amber-500 transition-all duration-500"
-                :style="{ width: `${Math.min(100, Math.round((ranchSummary.levelExp / ranchSummary.levelNeeded) * 100))}%` }"
-              />
-            </div>
-            <div class="mt-2 min-w-0 flex flex-wrap justify-between gap-x-2 gap-y-1 text-xs text-gray-400">
-              <span class="shrink-0">{{ ranchSummary.total }} 只在养 · 窝{{ ranchSummary.coopAnimals }}/{{ ranchSummary.coop }} 棚{{ ranchSummary.penAnimals }}/{{ ranchSummary.pen }}</span>
-              <span class="min-w-0 break-words text-right">
-                下个倒计时
-                <span :class="ranchNextReady === null ? '' : 'text-orange-500'">{{ fmtCountdown(ranchNextReady) }}</span>
-              </span>
-            </div>
-            <div class="mt-1 flex flex-wrap gap-1 text-[10px]">
-              <span class="rounded-full bg-amber-100 px-1.5 py-0.5 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400">可收 {{ ranchSummary.harvestable }}</span>
-              <span class="rounded-full bg-green-100 px-1.5 py-0.5 text-green-700 dark:bg-green-900/30 dark:text-green-400">饥饿 {{ ranchSummary.hungry }}</span>
-              <span class="rounded-full bg-gray-100 px-1.5 py-0.5 text-gray-600 dark:bg-gray-700 dark:text-gray-300">牧草 {{ ranchSummary.grass }}</span>
-            </div>
           </div>
         </div>
       </div>
@@ -829,25 +800,6 @@ watch(documentVisibility, (vis) => {
               {{ formatCurrencyNumber(status?.status?.goldBean) }}
             </div>
           </div>
-          <!-- 牧场货币: 金券(1007) / 松果币(1008), 存在农场背包里 -->
-          <div class="min-w-0">
-            <div class="flex items-center gap-1.5 text-xs text-gray-500">
-              <div class="i-fas-ticket-alt text-teal-500" />
-              金券
-            </div>
-            <div class="break-all text-xl text-teal-600 font-bold leading-tight tabular-nums sm:text-2xl dark:text-teal-400">
-              {{ formatCurrencyNumber(voucherBalance?.count) }}
-            </div>
-          </div>
-          <div class="min-w-0">
-            <div class="flex items-center gap-1.5 text-xs text-gray-500">
-              <div class="i-fas-tree text-lime-600" />
-              松果币
-            </div>
-            <div class="break-all text-xl text-lime-700 font-bold leading-tight tabular-nums sm:text-2xl dark:text-lime-500">
-              {{ formatCurrencyNumber(pineconeBalance?.count) }}
-            </div>
-          </div>
         </div>
         <div class="mt-4 border-t border-gray-100 pt-3 dark:border-gray-700">
           <div class="min-w-0 flex items-center justify-between gap-2">
@@ -899,31 +851,6 @@ watch(documentVisibility, (vis) => {
         </div>
         <div class="my-2 border-t border-gray-100 dark:border-gray-700" />
         <div class="mb-1 flex items-center gap-1.5 text-sm text-gray-500">
-          <div class="i-fas-box-open text-orange-400" />
-          罐头容器
-        </div>
-        <div class="grid grid-cols-2 min-w-0 gap-2">
-          <div class="min-w-0">
-            <div class="flex items-center gap-1 text-xs text-gray-400">
-              <div class="i-fas-box text-orange-400" />
-              普通
-            </div>
-            <div class="break-all font-bold tabular-nums">
-              {{ formatBucketTime(canNormal) }}
-            </div>
-          </div>
-          <div class="min-w-0">
-            <div class="flex items-center gap-1 text-xs text-gray-400">
-              <div class="i-fas-box-open text-orange-400" />
-              有机
-            </div>
-            <div class="break-all font-bold tabular-nums">
-              {{ formatBucketTime(canOrganic) }}
-            </div>
-          </div>
-        </div>
-        <div class="my-2 border-t border-gray-100 dark:border-gray-700" />
-        <div class="mb-1 flex items-center gap-1.5 text-sm text-gray-500">
           <div class="i-fas-star text-emerald-400" />
           收藏点
         </div>
@@ -951,6 +878,143 @@ watch(documentVisibility, (vis) => {
         </div>
       </div>
     </div>
+
+    <!-- ===== 牧场区: 与农场上下分区, 未开牧场的账号整块不渲染 ===== -->
+    <template v-if="ranchSummary && ranchSummary.levelNeeded">
+      <div class="flex items-center justify-between">
+        <div class="flex items-center gap-2 text-sm text-gray-500 font-medium">
+          <div class="i-fas-paw text-amber-500" />
+          <span>牧场</span>
+        </div>
+        <RouterLink to="/personal?tab=ranch" class="flex items-center gap-1 text-xs text-amber-600 hover:underline">
+          打开牧场
+          <div class="i-carbon-arrow-right" />
+        </RouterLink>
+      </div>
+      <div class="grid grid-cols-1 gap-4 lg:grid-cols-3 sm:grid-cols-2">
+        <!-- 牧场账号 -->
+        <div class="min-w-0 flex flex-col rounded-lg bg-white p-4 shadow dark:bg-gray-800">
+          <div class="mb-2 flex items-start justify-between">
+            <div class="flex items-center gap-1.5 text-sm text-gray-500">
+              <div class="i-fas-paw" />
+              牧场账号
+            </div>
+            <div class="rounded bg-amber-100 px-2 py-0.5 text-xs text-amber-700 dark:bg-amber-900/30 dark:text-amber-300">
+              Lv.{{ ranchSummary.level }}
+            </div>
+          </div>
+          <div class="mb-1 truncate text-xl font-bold">
+            {{ ranchSummary.total }} 只在养
+          </div>
+          <div class="mt-auto">
+            <div class="mb-1 min-w-0 flex items-start justify-between gap-2 text-xs text-gray-500">
+              <div class="flex shrink-0 items-center gap-1">
+                <div class="i-fas-bolt text-amber-400" />
+                <span>EXP</span>
+              </div>
+              <span class="min-w-0 break-words text-right tabular-nums">{{ formatNumber(ranchSummary.levelExp) }} / {{ formatNumber(ranchSummary.levelNeeded) }}</span>
+            </div>
+            <div class="h-1.5 w-full overflow-hidden rounded-full bg-gray-100 dark:bg-gray-700">
+              <div
+                class="h-full rounded-full bg-amber-500 transition-all duration-500"
+                :style="{ width: `${Math.min(100, Math.round((ranchSummary.levelExp / ranchSummary.levelNeeded) * 100))}%` }"
+              />
+            </div>
+            <div class="mt-2 min-w-0 flex flex-wrap justify-between gap-x-2 gap-y-1 text-xs text-gray-400">
+              <span class="shrink-0">窝{{ ranchSummary.coopAnimals }}/{{ ranchSummary.coop }} · 棚{{ ranchSummary.penAnimals }}/{{ ranchSummary.pen }}</span>
+              <span class="min-w-0 break-words text-right">
+                下个收获
+                <span :class="ranchNextReady === null ? '' : 'text-orange-500'">{{ fmtCountdown(ranchNextReady) }}</span>
+              </span>
+            </div>
+            <div class="mt-1 flex flex-wrap gap-1 text-[10px]">
+              <span class="rounded-full bg-amber-100 px-1.5 py-0.5 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400">可收 {{ ranchSummary.harvestable }}</span>
+              <span class="rounded-full bg-green-100 px-1.5 py-0.5 text-green-700 dark:bg-green-900/30 dark:text-green-400">饥饿 {{ ranchSummary.hungry }}</span>
+              <span class="rounded-full bg-gray-100 px-1.5 py-0.5 text-gray-600 dark:bg-gray-700 dark:text-gray-300">牧草 {{ ranchSummary.grass }}</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- 牧场货币与罐头 -->
+        <div class="min-w-0 flex flex-col justify-between rounded-lg bg-white p-4 shadow dark:bg-gray-800">
+          <div class="grid grid-cols-2 min-w-0 gap-x-3 gap-y-4">
+            <div class="min-w-0">
+              <div class="flex items-center gap-1.5 text-xs text-gray-500">
+                <div class="i-fas-ticket-alt text-teal-500" />
+                金券
+              </div>
+              <div class="break-all text-xl text-teal-600 font-bold leading-tight tabular-nums sm:text-2xl dark:text-teal-400">
+                {{ formatCurrencyNumber(voucherBalance?.count) }}
+              </div>
+            </div>
+            <div class="min-w-0">
+              <div class="flex items-center gap-1.5 text-xs text-gray-500">
+                <div class="i-fas-tree text-lime-600" />
+                松果币
+              </div>
+              <div class="break-all text-xl text-lime-700 font-bold leading-tight tabular-nums sm:text-2xl dark:text-lime-500">
+                {{ formatCurrencyNumber(pineconeBalance?.count) }}
+              </div>
+            </div>
+            <div class="min-w-0">
+              <div class="flex items-center gap-1.5 text-xs text-gray-500">
+                <div class="i-fas-box text-orange-400" />
+                罐头普通
+              </div>
+              <div class="break-all font-bold tabular-nums">
+                {{ formatBucketTime(canNormal) }}
+              </div>
+            </div>
+            <div class="min-w-0">
+              <div class="flex items-center gap-1.5 text-xs text-gray-500">
+                <div class="i-fas-box-open text-orange-400" />
+                罐头有机
+              </div>
+              <div class="break-all font-bold tabular-nums">
+                {{ formatBucketTime(canOrganic) }}
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 牧场节奏 -->
+        <div class="min-w-0 flex flex-col rounded-lg bg-white p-4 shadow dark:bg-gray-800">
+          <div class="mb-4 flex items-center gap-2 text-lg font-medium">
+            <div class="i-fas-paw text-amber-500" />
+            <span>牧场节奏</span>
+          </div>
+          <div class="flex flex-col justify-center gap-4">
+            <div class="min-w-0 flex items-center justify-between gap-2">
+              <div class="flex shrink-0 items-center gap-2 text-gray-700 dark:text-gray-300">
+                <div class="i-fas-paw text-lg text-amber-500" />
+                <span>牧场巡查</span>
+              </div>
+              <div class="shrink-0 whitespace-nowrap text-lg font-bold font-mono tabular-nums">
+                {{ nextRanchCheck }}
+              </div>
+            </div>
+            <div class="min-w-0 flex items-center justify-between gap-2">
+              <div class="flex shrink-0 items-center gap-2 text-gray-700 dark:text-gray-300">
+                <div class="i-carbon-task text-lg text-amber-500" />
+                <span>牧场日常</span>
+              </div>
+              <div class="shrink-0 whitespace-nowrap text-lg font-bold font-mono tabular-nums">
+                {{ nextRanchDailyCheck }}
+              </div>
+            </div>
+            <div class="min-w-0 flex items-center justify-between gap-2">
+              <div class="flex shrink-0 items-center gap-2 text-gray-700 dark:text-gray-300">
+                <div class="i-carbon-arrow-down-left text-lg text-rose-500" />
+                <span>牧场偷取</span>
+              </div>
+              <div class="shrink-0 whitespace-nowrap text-lg font-bold font-mono tabular-nums">
+                {{ nextRanchStealCheck }}
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </template>
 
     <!-- Main Content Flex -->
     <div class="flex flex-1 flex-col items-stretch gap-6 md:flex-row">
@@ -1082,33 +1146,6 @@ watch(documentVisibility, (vis) => {
               </div>
               <div class="shrink-0 whitespace-nowrap text-lg font-bold font-mono tabular-nums">
                 {{ nextStealCheck }}
-              </div>
-            </div>
-            <div class="min-w-0 flex items-center justify-between gap-2">
-              <div class="flex shrink-0 items-center gap-2 text-gray-700 dark:text-gray-300">
-                <div class="i-fas-paw text-lg text-amber-500" />
-                <span>牧场巡查</span>
-              </div>
-              <div class="shrink-0 whitespace-nowrap text-lg font-bold font-mono tabular-nums">
-                {{ nextRanchCheck }}
-              </div>
-            </div>
-            <div class="min-w-0 flex items-center justify-between gap-2">
-              <div class="flex shrink-0 items-center gap-2 text-gray-700 dark:text-gray-300">
-                <div class="i-carbon-task text-lg text-amber-500" />
-                <span>牧场日常</span>
-              </div>
-              <div class="shrink-0 whitespace-nowrap text-lg font-bold font-mono tabular-nums">
-                {{ nextRanchDailyCheck }}
-              </div>
-            </div>
-            <div class="min-w-0 flex items-center justify-between gap-2">
-              <div class="flex shrink-0 items-center gap-2 text-gray-700 dark:text-gray-300">
-                <div class="i-carbon-arrow-down-left text-lg text-rose-500" />
-                <span>牧场偷取</span>
-              </div>
-              <div class="shrink-0 whitespace-nowrap text-lg font-bold font-mono tabular-nums">
-                {{ nextRanchStealCheck }}
               </div>
             </div>
           </div>

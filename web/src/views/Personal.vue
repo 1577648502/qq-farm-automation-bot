@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { ref, watch } from 'vue'
+import { useRoute } from 'vue-router'
 import BagPanel from '@/components/BagPanel.vue'
 import FarmPanel from '@/components/FarmPanel.vue'
 import IllustratedPanel from '@/components/IllustratedPanel.vue'
@@ -7,7 +8,19 @@ import SeedShopPanel from '@/components/SeedShopPanel.vue'
 import TaskPanel from '@/components/TaskPanel.vue'
 import Ranch from '@/views/Ranch.vue'
 
-const currentTab = ref<'farm' | 'ranch' | 'bag' | 'task' | 'illustrated' | 'seedShop'>('farm')
+type PersonalTab = 'farm' | 'ranch' | 'bag' | 'task' | 'illustrated' | 'seedShop'
+const TAB_KEYS: PersonalTab[] = ['farm', 'ranch', 'bag', 'task', 'illustrated', 'seedShop']
+
+// 支持 /personal?tab=ranch 深链(概览页牧场卡的「打开牧场」入口)
+const route = useRoute()
+function tabFromQuery(): PersonalTab {
+  const t = route.query.tab
+  return TAB_KEYS.includes(t as PersonalTab) ? (t as PersonalTab) : 'farm'
+}
+const currentTab = ref<PersonalTab>(tabFromQuery())
+watch(() => route.query.tab, () => {
+  currentTab.value = tabFromQuery()
+})
 </script>
 
 <template>

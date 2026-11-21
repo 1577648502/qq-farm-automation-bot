@@ -36,6 +36,14 @@ watch(activeTab, (newTab) => {
   localStorage.setItem('settings-active-tab', newTab)
 })
 
+// 策略页签内的农场/牧场子页签: 之前混在一页滚动, 拆开后各管各的
+const strategySubTab = ref<'farm' | 'ranch'>(
+  (localStorage.getItem('settings-strategy-sub-tab') as 'farm' | 'ranch') || 'farm',
+)
+watch(strategySubTab, (newTab) => {
+  localStorage.setItem('settings-strategy-sub-tab', newTab)
+})
+
 const tabs = [
   { key: 'account', label: '账号管理', icon: 'i-carbon-user-settings' },
   { key: 'strategy', label: '策略设置', icon: 'i-fas-cogs' },
@@ -2527,396 +2535,452 @@ async function onBackupFileChange(ev: Event) {
         </div>
 
         <div v-else class="space-y-4">
-          <div class="grid grid-cols-1 gap-3 md:grid-cols-2 sm:grid-cols-2">
-            <BaseSelect
-              v-model="localStrategySettings.plantingStrategy"
-              label="种植策略"
-              :options="plantingStrategyOptions"
-            />
-            <BaseSelect
-              v-if="localStrategySettings.plantingStrategy === 'preferred'"
-              v-model="localStrategySettings.preferredSeedId"
-              label="优先种植种子"
-              :options="preferredSeedOptions"
-            />
-            <BaseSelect
-              v-else-if="localStrategySettings.plantingStrategy === 'bag_priority' && localStrategySettings.bagSeedFallbackStrategy === 'preferred'"
-              v-model="localStrategySettings.preferredSeedId"
-              label="优先种植种子"
-              :options="preferredSeedOptions"
-            />
-            <div v-else class="flex flex-col gap-1.5">
-              <label class="text-sm text-gray-700 font-medium dark:text-gray-300">
-                {{ localStrategySettings.plantingStrategy === 'bag_priority' ? '第二优先策略预览' : '策略选种预览' }}
-              </label>
-              <div
-                class="w-full flex items-center justify-between border border-gray-200 rounded-lg bg-gray-50 px-3 py-2 text-gray-500 dark:border-gray-600 dark:bg-gray-800/50 dark:text-gray-400"
-              >
-                <span class="truncate">{{ strategyPreviewLabel ?? '加载中...' }}</span>
-                <div class="i-carbon-chevron-down shrink-0 text-lg text-gray-400" />
-              </div>
-            </div>
+          <!-- 农场/牧场子页签: 拆分后各管各的, 保存按钮两边各自独立 -->
+          <div class="flex flex-wrap gap-2">
+            <button
+              class="flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-medium transition-colors"
+              :class="strategySubTab === 'farm'
+                ? 'text-white shadow-md'
+                : 'bg-white text-gray-600 hover:bg-gray-100 dark:bg-gray-800 dark:text-gray-300 dark:hover:bg-gray-700'"
+              :style="strategySubTab === 'farm' ? { backgroundColor: 'var(--theme-primary)' } : {}"
+              @click="strategySubTab = 'farm'"
+            >
+              <div class="i-carbon-sprout text-lg" />
+              <span>农场策略</span>
+            </button>
+            <button
+              class="flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-medium transition-colors"
+              :class="strategySubTab === 'ranch'
+                ? 'text-white shadow-md'
+                : 'bg-white text-gray-600 hover:bg-gray-100 dark:bg-gray-800 dark:text-gray-300 dark:hover:bg-gray-700'"
+              :style="strategySubTab === 'ranch' ? { backgroundColor: 'var(--theme-primary)' } : {}"
+              @click="strategySubTab = 'ranch'"
+            >
+              <div class="i-fas-paw text-lg" />
+              <span>牧场策略</span>
+            </button>
           </div>
 
-          <div v-if="localStrategySettings.plantingStrategy === 'bag_priority'" class="space-y-3">
-            <BaseSelect
-              v-model="localStrategySettings.bagSeedFallbackStrategy"
-              label="第二优先策略"
-              :options="BAG_FALLBACK_STRATEGY_OPTIONS"
-            />
-            <div class="border border-amber-200 rounded-lg bg-amber-50/70 p-3 space-y-3 dark:border-amber-800/50 dark:bg-amber-900/20">
-              <div class="flex flex-wrap items-start justify-between gap-3">
-                <div>
-                  <div class="text-sm text-amber-900 font-semibold dark:text-amber-200">
-                    背包种子优先顺序
-                  </div>
-                  <p class="mt-1 text-xs text-amber-700/90 dark:text-amber-300/90">
-                    默认优先 2x2 作物；调整后按下方顺序种植，标记排外的种子不会被自动种植。
-                  </p>
-                </div>
-                <button
-                  class="rounded bg-amber-100 px-2 py-1 text-xs text-amber-700 transition dark:bg-amber-900/50 hover:bg-amber-200 dark:text-amber-300 dark:hover:bg-amber-900/70"
-                  @click="resetBagSeedPriority"
-                >
-                  重置顺序
-                </button>
-              </div>
-              <div v-if="bagSeedsLoading" class="py-4 text-center text-sm text-amber-700 dark:text-amber-300">
-                加载中...
-              </div>
-              <div v-else-if="bagSeedsError" class="py-4 text-center text-sm text-red-600 dark:text-red-400">
-                {{ bagSeedsError }}
-              </div>
-              <div v-else-if="bagSeeds.length === 0" class="py-4 text-center text-sm text-amber-700 dark:text-amber-300">
-                背包中暂无可用种子
-              </div>
-              <div v-else class="grid gap-2 lg:grid-cols-3 sm:grid-cols-2">
-                <div
-                  v-for="(seed, index) in sortedBagSeeds"
-                  :key="seed.seedId"
-                  class="flex items-center gap-2 border border-amber-200 rounded-lg bg-white p-2 dark:border-amber-700/50 dark:bg-gray-800"
-                  :class="isBagSeedExcluded(seed.seedId) ? 'opacity-70' : ''"
-                  draggable="true"
-                  @dragstart="startBagSeedDrag(seed.seedId, $event)"
-                  @dragover.prevent="dragOverBagSeed(seed.seedId, $event)"
-                  @drop="dropBagSeed(seed.seedId, $event)"
-                >
-                  <div class="h-8 w-8 flex shrink-0 items-center justify-center rounded bg-amber-100 text-xs text-amber-700 font-bold dark:bg-amber-900/50 dark:text-amber-300">
-                    {{ index + 1 }}
-                  </div>
-                  <div class="min-w-0 flex-1">
-                    <div class="min-w-0 flex items-center gap-1.5">
-                      <span class="truncate text-sm text-gray-800 font-medium dark:text-gray-200">
-                        {{ seed.name }}
-                      </span>
-                      <span v-if="isBagSeedExcluded(seed.seedId)" class="shrink-0 rounded bg-rose-100 px-1.5 py-0.5 text-[10px] text-rose-700 dark:bg-rose-900/40 dark:text-rose-300">
-                        已排外
-                      </span>
-                    </div>
-                    <div class="text-xs text-gray-500 dark:text-gray-400">
-                      数量: {{ seed.count }} | 等级: {{ seed.requiredLevel }} | 占地: {{ seed.plantSize }}x{{ seed.plantSize }}
-                    </div>
-                  </div>
-                  <button
-                    class="h-8 flex shrink-0 items-center gap-1 rounded px-2 text-xs transition"
-                    :class="isBagSeedExcluded(seed.seedId)
-                      ? 'bg-rose-100 text-rose-700 hover:bg-rose-200 dark:bg-rose-900/40 dark:text-rose-300 dark:hover:bg-rose-900/60'
-                      : 'bg-gray-100 text-gray-600 hover:bg-gray-200 dark:bg-gray-700 dark:text-gray-300 dark:hover:bg-gray-600'"
-                    :title="isBagSeedExcluded(seed.seedId) ? '取消种植排外' : '加入种植排外'"
-                    @click.stop="toggleBagSeedExcluded(seed)"
-                  >
-                    <div :class="isBagSeedExcluded(seed.seedId) ? 'i-carbon-checkmark text-sm' : 'i-carbon-subtract-alt text-sm'" />
-                    <span>{{ isBagSeedExcluded(seed.seedId) ? '取消' : '排外' }}</span>
-                  </button>
-                  <div class="flex shrink-0 flex-col gap-1">
-                    <button
-                      class="rounded p-1 text-gray-400 transition hover:bg-gray-100 hover:text-gray-600 dark:hover:bg-gray-700"
-                      :disabled="index === 0"
-                      @click="moveBagSeed(seed.seedId, -1)"
-                    >
-                      <div class="i-carbon-arrow-up text-sm" />
-                    </button>
-                    <button
-                      class="rounded p-1 text-gray-400 transition hover:bg-gray-100 hover:text-gray-600 dark:hover:bg-gray-700"
-                      :disabled="index === sortedBagSeeds.length - 1"
-                      @click="moveBagSeed(seed.seedId, 1)"
-                    >
-                      <div class="i-carbon-arrow-down text-sm" />
-                    </button>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          <!-- ===== 牧场幼崽策略(与农场"种植策略"完全同构) ===== -->
-          <div class="border border-amber-200 rounded-lg bg-amber-50/40 p-4 space-y-3 dark:border-amber-800/50 dark:bg-amber-900/10">
-            <div class="flex flex-wrap items-start justify-between gap-3">
-              <div>
-                <h4 class="flex items-center gap-1.5 text-sm text-amber-900 font-semibold dark:text-amber-200">
-                  <div class="i-fas-paw" />
-                  牧场幼崽购买策略
-                </h4>
-                <p class="mt-1 text-xs text-amber-700/90 dark:text-amber-300/90">
-                  与上面的农场种植策略相互独立。指标口径与「全部作物」一致：经验/时、普通肥经验/时、净利润/时、普通肥净利润/时。
-                </p>
-              </div>
-            </div>
-
-            <div class="grid grid-cols-1 gap-3 md:grid-cols-2">
+          <template v-if="strategySubTab === 'farm'">
+            <div class="grid grid-cols-1 gap-3 md:grid-cols-2 sm:grid-cols-2">
               <BaseSelect
-                v-model="localStrategySettings.ranchCubStrategy"
-                label="幼崽策略"
-                :options="ranchCubStrategyOptions"
+                v-model="localStrategySettings.plantingStrategy"
+                label="种植策略"
+                :options="plantingStrategyOptions"
               />
-              <div class="flex flex-col gap-1.5">
+              <BaseSelect
+                v-if="localStrategySettings.plantingStrategy === 'preferred'"
+                v-model="localStrategySettings.preferredSeedId"
+                label="优先种植种子"
+                :options="preferredSeedOptions"
+              />
+              <BaseSelect
+                v-else-if="localStrategySettings.plantingStrategy === 'bag_priority' && localStrategySettings.bagSeedFallbackStrategy === 'preferred'"
+                v-model="localStrategySettings.preferredSeedId"
+                label="优先种植种子"
+                :options="preferredSeedOptions"
+              />
+              <div v-else class="flex flex-col gap-1.5">
                 <label class="text-sm text-gray-700 font-medium dark:text-gray-300">
-                  {{ localStrategySettings.ranchCubStrategy === 'bag_priority' ? '第二优先策略预览' : '策略选崽预览' }}
+                  {{ localStrategySettings.plantingStrategy === 'bag_priority' ? '第二优先策略预览' : '策略选种预览' }}
                 </label>
                 <div
                   class="w-full flex items-center justify-between border border-gray-200 rounded-lg bg-gray-50 px-3 py-2 text-gray-500 dark:border-gray-600 dark:bg-gray-800/50 dark:text-gray-400"
-                  :class="ranchCubPreviewLabel && (ranchCubPreviewLabel.startsWith('预览不可用') || ranchCubPreviewLabel.startsWith('加载中')) ? 'border-amber-200 bg-amber-50 text-amber-600 dark:border-amber-800/50 dark:bg-amber-900/20 dark:text-amber-300' : ''"
                 >
-                  <span class="truncate">{{ ranchCubPreviewLabel ?? '加载中...' }}</span>
+                  <span class="truncate">{{ strategyPreviewLabel ?? '加载中...' }}</span>
                   <div class="i-carbon-chevron-down shrink-0 text-lg text-gray-400" />
                 </div>
               </div>
             </div>
 
-            <!-- 与农场"背包种子优先 → 第二优先策略"一一对应 -->
-            <BaseSelect
-              v-if="localStrategySettings.ranchCubStrategy === 'bag_priority'"
-              v-model="localStrategySettings.ranchCubFallbackStrategy"
-              label="第二优先策略"
-              :options="ranchCubFallbackStrategyOptions"
-            />
-
-            <!-- 背包幼崽优先顺序 —— 与农场"背包种子优先顺序"逐项同构:
-                 列表内容 = 背包里实际有的幼崽; 拖拽/上下调整入栏顺序; 可排外(不买也不入栏) -->
-            <div v-if="localStrategySettings.ranchCubStrategy === 'bag_priority'" class="border border-amber-200 rounded-lg bg-amber-50/70 p-3 space-y-3 dark:border-amber-800/50 dark:bg-amber-900/20">
-              <div class="flex flex-wrap items-start justify-between gap-3">
-                <div>
-                  <div class="text-sm text-amber-900 font-semibold dark:text-amber-200">
-                    背包幼崽优先顺序
-                  </div>
-                  <p class="mt-1 text-xs text-amber-700/90 dark:text-amber-300/90">
-                    背包里有多少就按下方顺序入栏多少；背包用完才按第二优先策略从商店购买。标记排外的幼崽不买也不入栏。
-                  </p>
-                </div>
-                <button
-                  class="rounded bg-amber-100 px-2 py-1 text-xs text-amber-700 transition dark:bg-amber-900/50 hover:bg-amber-200 dark:text-amber-300 dark:hover:bg-amber-900/70"
-                  @click="resetRanchCubPriority"
-                >
-                  重置顺序
-                </button>
-              </div>
-              <div v-if="ranchCubsLoading" class="py-4 text-center text-sm text-amber-700 dark:text-amber-300">
-                加载中...
-              </div>
-              <div v-else-if="ranchCubsError" class="py-4 text-center text-sm text-red-600 dark:text-red-400">
-                {{ ranchCubsError }}
-              </div>
-              <div v-else-if="ranchCubs.length === 0" class="py-4 text-center text-sm text-amber-700 dark:text-amber-300">
-                背包中暂无幼崽（背包用完后将按第二优先策略从商店购买）
-              </div>
-              <div v-else class="grid gap-2 lg:grid-cols-3 sm:grid-cols-2">
-                <div
-                  v-for="(cub, index) in sortedRanchCubs"
-                  :key="cub.animalId"
-                  class="flex items-center gap-2 border border-amber-200 rounded-lg bg-white p-2 dark:border-amber-700/50 dark:bg-gray-800"
-                  :class="isRanchCubExcluded(cub.animalId) ? 'opacity-70' : ''"
-                >
-                  <div class="h-8 w-8 flex shrink-0 items-center justify-center rounded bg-amber-100 text-xs text-amber-700 font-bold dark:bg-amber-900/50 dark:text-amber-300">
-                    {{ index + 1 }}
-                  </div>
-                  <div class="min-w-0 flex-1">
-                    <div class="min-w-0 flex items-center gap-1.5">
-                      <span class="truncate text-sm text-gray-800 font-medium dark:text-gray-200">
-                        {{ cub.name }}
-                      </span>
-                      <span v-if="isRanchCubExcluded(cub.animalId)" class="shrink-0 rounded bg-rose-100 px-1.5 py-0.5 text-[10px] text-rose-700 dark:bg-rose-900/40 dark:text-rose-300">
-                        已排外
-                      </span>
+            <div v-if="localStrategySettings.plantingStrategy === 'bag_priority'" class="space-y-3">
+              <BaseSelect
+                v-model="localStrategySettings.bagSeedFallbackStrategy"
+                label="第二优先策略"
+                :options="BAG_FALLBACK_STRATEGY_OPTIONS"
+              />
+              <div class="border border-amber-200 rounded-lg bg-amber-50/70 p-3 space-y-3 dark:border-amber-800/50 dark:bg-amber-900/20">
+                <div class="flex flex-wrap items-start justify-between gap-3">
+                  <div>
+                    <div class="text-sm text-amber-900 font-semibold dark:text-amber-200">
+                      背包种子优先顺序
                     </div>
-                    <div class="text-xs text-gray-500 dark:text-gray-400">
-                      数量: {{ cub.count }}
-                    </div>
+                    <p class="mt-1 text-xs text-amber-700/90 dark:text-amber-300/90">
+                      默认优先 2x2 作物；调整后按下方顺序种植，标记排外的种子不会被自动种植。
+                    </p>
                   </div>
                   <button
-                    class="h-8 flex shrink-0 items-center gap-1 rounded px-2 text-xs transition"
-                    :class="isRanchCubExcluded(cub.animalId)
-                      ? 'bg-rose-100 text-rose-700 hover:bg-rose-200 dark:bg-rose-900/40 dark:text-rose-300 dark:hover:bg-rose-900/60'
-                      : 'bg-gray-100 text-gray-600 hover:bg-gray-200 dark:bg-gray-700 dark:text-gray-300 dark:hover:bg-gray-600'"
-                    :title="isRanchCubExcluded(cub.animalId) ? '取消入栏排外' : '加入入栏排外'"
-                    @click.stop="toggleRanchCubExcluded(cub.animalId)"
+                    class="rounded bg-amber-100 px-2 py-1 text-xs text-amber-700 transition dark:bg-amber-900/50 hover:bg-amber-200 dark:text-amber-300 dark:hover:bg-amber-900/70"
+                    @click="resetBagSeedPriority"
                   >
-                    <div :class="isRanchCubExcluded(cub.animalId) ? 'i-carbon-checkmark text-sm' : 'i-carbon-subtract-alt text-sm'" />
-                    <span>{{ isRanchCubExcluded(cub.animalId) ? '取消' : '排外' }}</span>
+                    重置顺序
                   </button>
-                  <div class="flex shrink-0 flex-col gap-1">
+                </div>
+                <div v-if="bagSeedsLoading" class="py-4 text-center text-sm text-amber-700 dark:text-amber-300">
+                  加载中...
+                </div>
+                <div v-else-if="bagSeedsError" class="py-4 text-center text-sm text-red-600 dark:text-red-400">
+                  {{ bagSeedsError }}
+                </div>
+                <div v-else-if="bagSeeds.length === 0" class="py-4 text-center text-sm text-amber-700 dark:text-amber-300">
+                  背包中暂无可用种子
+                </div>
+                <div v-else class="grid gap-2 lg:grid-cols-3 sm:grid-cols-2">
+                  <div
+                    v-for="(seed, index) in sortedBagSeeds"
+                    :key="seed.seedId"
+                    class="flex items-center gap-2 border border-amber-200 rounded-lg bg-white p-2 dark:border-amber-700/50 dark:bg-gray-800"
+                    :class="isBagSeedExcluded(seed.seedId) ? 'opacity-70' : ''"
+                    draggable="true"
+                    @dragstart="startBagSeedDrag(seed.seedId, $event)"
+                    @dragover.prevent="dragOverBagSeed(seed.seedId, $event)"
+                    @drop="dropBagSeed(seed.seedId, $event)"
+                  >
+                    <div class="h-8 w-8 flex shrink-0 items-center justify-center rounded bg-amber-100 text-xs text-amber-700 font-bold dark:bg-amber-900/50 dark:text-amber-300">
+                      {{ index + 1 }}
+                    </div>
+                    <div class="min-w-0 flex-1">
+                      <div class="min-w-0 flex items-center gap-1.5">
+                        <span class="truncate text-sm text-gray-800 font-medium dark:text-gray-200">
+                          {{ seed.name }}
+                        </span>
+                        <span v-if="isBagSeedExcluded(seed.seedId)" class="shrink-0 rounded bg-rose-100 px-1.5 py-0.5 text-[10px] text-rose-700 dark:bg-rose-900/40 dark:text-rose-300">
+                          已排外
+                        </span>
+                      </div>
+                      <div class="text-xs text-gray-500 dark:text-gray-400">
+                        数量: {{ seed.count }} | 等级: {{ seed.requiredLevel }} | 占地: {{ seed.plantSize }}x{{ seed.plantSize }}
+                      </div>
+                    </div>
                     <button
-                      class="rounded p-1 text-gray-400 transition hover:bg-gray-100 hover:text-gray-600 dark:hover:bg-gray-700"
-                      :disabled="index === 0"
-                      @click="moveRanchCub(cub.animalId, -1)"
+                      class="h-8 flex shrink-0 items-center gap-1 rounded px-2 text-xs transition"
+                      :class="isBagSeedExcluded(seed.seedId)
+                        ? 'bg-rose-100 text-rose-700 hover:bg-rose-200 dark:bg-rose-900/40 dark:text-rose-300 dark:hover:bg-rose-900/60'
+                        : 'bg-gray-100 text-gray-600 hover:bg-gray-200 dark:bg-gray-700 dark:text-gray-300 dark:hover:bg-gray-600'"
+                      :title="isBagSeedExcluded(seed.seedId) ? '取消种植排外' : '加入种植排外'"
+                      @click.stop="toggleBagSeedExcluded(seed)"
                     >
-                      <div class="i-carbon-arrow-up text-sm" />
+                      <div :class="isBagSeedExcluded(seed.seedId) ? 'i-carbon-checkmark text-sm' : 'i-carbon-subtract-alt text-sm'" />
+                      <span>{{ isBagSeedExcluded(seed.seedId) ? '取消' : '排外' }}</span>
                     </button>
-                    <button
-                      class="rounded p-1 text-gray-400 transition hover:bg-gray-100 hover:text-gray-600 dark:hover:bg-gray-700"
-                      :disabled="index === sortedRanchCubs.length - 1"
-                      @click="moveRanchCub(cub.animalId, 1)"
-                    >
-                      <div class="i-carbon-arrow-down text-sm" />
-                    </button>
+                    <div class="flex shrink-0 flex-col gap-1">
+                      <button
+                        class="rounded p-1 text-gray-400 transition hover:bg-gray-100 hover:text-gray-600 dark:hover:bg-gray-700"
+                        :disabled="index === 0"
+                        @click="moveBagSeed(seed.seedId, -1)"
+                      >
+                        <div class="i-carbon-arrow-up text-sm" />
+                      </button>
+                      <button
+                        class="rounded p-1 text-gray-400 transition hover:bg-gray-100 hover:text-gray-600 dark:hover:bg-gray-700"
+                        :disabled="index === sortedBagSeeds.length - 1"
+                        @click="moveBagSeed(seed.seedId, 1)"
+                      >
+                        <div class="i-carbon-arrow-down text-sm" />
+                      </button>
+                    </div>
                   </div>
                 </div>
               </div>
             </div>
-          </div>
 
-          <div class="border border-gray-200 rounded-lg bg-white p-4 space-y-4 dark:border-gray-700 dark:bg-gray-800">
-            <div>
-              <h4 class="text-sm text-gray-900 font-semibold dark:text-gray-100">
-                巡查频率
+            <!-- 巡查频率(农场 3 套节奏, 牧场的在牧场子页签) -->
+            <div class="border border-gray-200 rounded-lg bg-white p-4 space-y-4 dark:border-gray-700 dark:bg-gray-800">
+              <div>
+                <h4 class="text-sm text-gray-900 font-semibold dark:text-gray-100">
+                  巡查频率
+                </h4>
+                <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                  每种巡查在最小与最大秒数之间随机执行。
+                </p>
+              </div>
+              <div class="grid grid-cols-1 gap-3 md:grid-cols-3">
+                <div class="rounded-lg bg-gray-50 p-3 dark:bg-gray-900/40">
+                  <div class="mb-2 flex items-center gap-2 text-sm text-gray-700 font-medium dark:text-gray-300">
+                    <div class="i-carbon-sprout text-green-600 dark:text-green-400" />
+                    农场巡查
+                  </div>
+                  <div class="grid grid-cols-2 gap-2">
+                    <BaseInput v-model.number="localStrategySettings.intervals.farmMin" label="最小 (秒)" type="number" min="1" />
+                    <BaseInput v-model.number="localStrategySettings.intervals.farmMax" label="最大 (秒)" type="number" min="1" />
+                  </div>
+                </div>
+                <div class="rounded-lg bg-gray-50 p-3 dark:bg-gray-900/40">
+                  <div class="mb-2 flex items-center gap-2 text-sm text-gray-700 font-medium dark:text-gray-300">
+                    <div class="i-carbon-collaborate text-blue-600 dark:text-blue-400" />
+                    帮助巡查
+                  </div>
+                  <div class="grid grid-cols-2 gap-2">
+                    <BaseInput v-model.number="localStrategySettings.intervals.helpMin" label="最小 (秒)" type="number" min="1" />
+                    <BaseInput v-model.number="localStrategySettings.intervals.helpMax" label="最大 (秒)" type="number" min="1" />
+                  </div>
+                </div>
+                <div class="rounded-lg bg-gray-50 p-3 dark:bg-gray-900/40">
+                  <div class="mb-2 flex items-center gap-2 text-sm text-gray-700 font-medium dark:text-gray-300">
+                    <div class="i-carbon-crop-growth text-amber-600 dark:text-amber-400" />
+                    偷菜巡查
+                  </div>
+                  <div class="grid grid-cols-2 gap-2">
+                    <BaseInput v-model.number="localStrategySettings.intervals.stealMin" label="最小 (秒)" type="number" min="1" />
+                    <BaseInput v-model.number="localStrategySettings.intervals.stealMax" label="最大 (秒)" type="number" min="1" />
+                  </div>
+                </div>
+              </div>
+
+              <div class="border-t pt-4 dark:border-gray-700">
+                <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                  <BaseSwitch
+                    v-model="localStrategySettings.friendQuietHours.enabled"
+                    label="启用好友互动静默时段"
+                  />
+                  <div class="grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-2 sm:flex">
+                    <input
+                      v-model="localStrategySettings.friendQuietHours.start"
+                      type="time"
+                      aria-label="静默开始时间"
+                      class="min-w-0 w-full border border-gray-200 rounded-md bg-white px-3 py-2 text-sm sm:w-32 dark:border-gray-600 dark:bg-gray-800 dark:text-white disabled:opacity-50"
+                      :disabled="!localStrategySettings.friendQuietHours.enabled"
+                    >
+                    <span class="text-sm text-gray-400">至</span>
+                    <input
+                      v-model="localStrategySettings.friendQuietHours.end"
+                      type="time"
+                      aria-label="静默结束时间"
+                      class="min-w-0 w-full border border-gray-200 rounded-md bg-white px-3 py-2 text-sm sm:w-32 dark:border-gray-600 dark:bg-gray-800 dark:text-white disabled:opacity-50"
+                      :disabled="!localStrategySettings.friendQuietHours.enabled"
+                    >
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div class="border border-gray-200 rounded-lg bg-white p-4 space-y-3 dark:border-gray-700 dark:bg-gray-800">
+              <h4 class="text-sm text-gray-700 font-medium dark:text-gray-300">
+                种植与偷菜延迟
               </h4>
-              <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
-                每种巡查在最小与最大秒数之间随机执行。
-              </p>
-            </div>
-            <div class="grid grid-cols-1 gap-3 md:grid-cols-3">
-              <div class="rounded-lg bg-gray-50 p-3 dark:bg-gray-900/40">
-                <div class="mb-2 flex items-center gap-2 text-sm text-gray-700 font-medium dark:text-gray-300">
-                  <div class="i-carbon-sprout text-green-600 dark:text-green-400" />
-                  农场巡查
-                </div>
-                <div class="grid grid-cols-2 gap-2">
-                  <BaseInput v-model.number="localStrategySettings.intervals.farmMin" label="最小 (秒)" type="number" min="1" />
-                  <BaseInput v-model.number="localStrategySettings.intervals.farmMax" label="最大 (秒)" type="number" min="1" />
-                </div>
-              </div>
-              <div class="rounded-lg bg-gray-50 p-3 dark:bg-gray-900/40">
-                <div class="mb-2 flex items-center gap-2 text-sm text-gray-700 font-medium dark:text-gray-300">
-                  <div class="i-carbon-collaborate text-blue-600 dark:text-blue-400" />
-                  帮助巡查
-                </div>
-                <div class="grid grid-cols-2 gap-2">
-                  <BaseInput v-model.number="localStrategySettings.intervals.helpMin" label="最小 (秒)" type="number" min="1" />
-                  <BaseInput v-model.number="localStrategySettings.intervals.helpMax" label="最大 (秒)" type="number" min="1" />
-                </div>
-              </div>
-              <div class="rounded-lg bg-gray-50 p-3 dark:bg-gray-900/40">
-                <div class="mb-2 flex items-center gap-2 text-sm text-gray-700 font-medium dark:text-gray-300">
-                  <div class="i-carbon-crop-growth text-amber-600 dark:text-amber-400" />
-                  偷菜巡查
-                </div>
-                <div class="grid grid-cols-2 gap-2">
-                  <BaseInput v-model.number="localStrategySettings.intervals.stealMin" label="最小 (秒)" type="number" min="1" />
-                  <BaseInput v-model.number="localStrategySettings.intervals.stealMax" label="最大 (秒)" type="number" min="1" />
-                </div>
-              </div>
-              <!-- 牧场巡查: 与农场同构, 拆成三套独立节奏 -->
-              <div class="rounded-lg bg-amber-50 p-3 dark:bg-amber-900/20">
-                <div class="mb-2 flex items-center gap-2 text-sm text-amber-700 font-medium dark:text-amber-300">
-                  <div class="i-fas-paw text-base" />
-                  牧场巡查（收获/收蛋/催产/入栏/买幼崽/牧草机）
-                </div>
-                <div class="grid grid-cols-2 gap-2">
-                  <BaseInput v-model.number="localStrategySettings.intervals.ranchMin" label="最小 (秒)" type="number" min="5" />
-                  <BaseInput v-model.number="localStrategySettings.intervals.ranchMax" label="最大 (秒)" type="number" min="5" />
-                </div>
-                <p class="mt-1.5 text-[10px] text-amber-600/80 dark:text-amber-400/80">
-                  与农场巡查一致（默认 20~25 秒）。倒计时一到点会立即执行，不用等这一轮。
-                </p>
-              </div>
-              <div class="rounded-lg bg-amber-50 p-3 dark:bg-amber-900/20">
-                <div class="mb-2 flex items-center gap-2 text-sm text-amber-700 font-medium dark:text-amber-300">
-                  <div class="i-carbon-task text-base" />
-                  牧场日常（任务/游商/清理/建筑/地块/出售）
-                </div>
-                <div class="grid grid-cols-2 gap-2">
-                  <BaseInput v-model.number="localStrategySettings.intervals.ranchDailyMin" label="最小 (秒)" type="number" min="5" />
-                  <BaseInput v-model.number="localStrategySettings.intervals.ranchDailyMax" label="最大 (秒)" type="number" min="5" />
-                </div>
-                <p class="mt-1.5 text-[10px] text-amber-600/80 dark:text-amber-400/80">
-                  这些是低频操作，默认 600~900 秒，没必要跟着巡查一起跑。
-                </p>
-              </div>
-              <div class="rounded-lg bg-amber-50 p-3 dark:bg-amber-900/20">
-                <div class="mb-2 flex items-center gap-2 text-sm text-amber-700 font-medium dark:text-amber-300">
-                  <div class="i-carbon-grab text-base" />
-                  牧场偷取（偷好友产物）
-                </div>
-                <div class="grid grid-cols-2 gap-2">
-                  <BaseInput v-model.number="localStrategySettings.intervals.ranchStealMin" label="最小 (秒)" type="number" min="5" />
-                  <BaseInput v-model.number="localStrategySettings.intervals.ranchStealMax" label="最大 (秒)" type="number" min="5" />
-                </div>
-                <p class="mt-1.5 text-[10px] text-amber-600/80 dark:text-amber-400/80">
-                  与「偷菜巡查」同频（默认 20~25 秒）。每家好友每天只偷一次。
-                </p>
-              </div>
-            </div>
-
-            <div class="border-t pt-4 dark:border-gray-700">
-              <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <div class="grid grid-cols-1 gap-3 md:grid-cols-3">
                 <BaseSwitch
-                  v-model="localStrategySettings.friendQuietHours.enabled"
-                  label="启用好友互动静默时段"
+                  v-model="localStrategySettings.plantOrderRandom"
+                  label="种植顺序随机"
                 />
-                <div class="grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-2 sm:flex">
-                  <input
-                    v-model="localStrategySettings.friendQuietHours.start"
-                    type="time"
-                    aria-label="静默开始时间"
-                    class="min-w-0 w-full border border-gray-200 rounded-md bg-white px-3 py-2 text-sm sm:w-32 dark:border-gray-600 dark:bg-gray-800 dark:text-white disabled:opacity-50"
-                    :disabled="!localStrategySettings.friendQuietHours.enabled"
+                <BaseInput
+                  v-model.number="localStrategySettings.plantDelaySeconds"
+                  label="种植延迟 (秒)"
+                  type="number"
+                  min="0"
+                />
+                <BaseInput
+                  v-model.number="localStrategySettings.stealDelaySeconds"
+                  label="偷菜延迟 (秒)"
+                  type="number"
+                  min="0"
+                />
+              </div>
+            </div>
+
+            <div class="flex justify-end gap-2 border-t pt-3 dark:border-gray-700">
+              <BaseButton
+                variant="primary"
+                size="sm"
+                :loading="strategySaving"
+                @click="saveStrategySettings"
+              >
+                保存策略设置
+              </BaseButton>
+            </div>
+          </template>
+
+          <template v-else>
+            <!-- ===== 牧场幼崽策略(与农场"种植策略"完全同构) ===== -->
+            <div class="border border-amber-200 rounded-lg bg-amber-50/40 p-4 space-y-3 dark:border-amber-800/50 dark:bg-amber-900/10">
+              <div class="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <h4 class="flex items-center gap-1.5 text-sm text-amber-900 font-semibold dark:text-amber-200">
+                    <div class="i-fas-paw" />
+                    牧场幼崽购买策略
+                  </h4>
+                  <p class="mt-1 text-xs text-amber-700/90 dark:text-amber-300/90">
+                    与上面的农场种植策略相互独立。指标口径与「全部作物」一致：经验/时、普通肥经验/时、净利润/时、普通肥净利润/时。
+                  </p>
+                </div>
+              </div>
+
+              <div class="grid grid-cols-1 gap-3 md:grid-cols-2">
+                <BaseSelect
+                  v-model="localStrategySettings.ranchCubStrategy"
+                  label="幼崽策略"
+                  :options="ranchCubStrategyOptions"
+                />
+                <div class="flex flex-col gap-1.5">
+                  <label class="text-sm text-gray-700 font-medium dark:text-gray-300">
+                    {{ localStrategySettings.ranchCubStrategy === 'bag_priority' ? '第二优先策略预览' : '策略选崽预览' }}
+                  </label>
+                  <div
+                    class="w-full flex items-center justify-between border border-gray-200 rounded-lg bg-gray-50 px-3 py-2 text-gray-500 dark:border-gray-600 dark:bg-gray-800/50 dark:text-gray-400"
+                    :class="ranchCubPreviewLabel && (ranchCubPreviewLabel.startsWith('预览不可用') || ranchCubPreviewLabel.startsWith('加载中')) ? 'border-amber-200 bg-amber-50 text-amber-600 dark:border-amber-800/50 dark:bg-amber-900/20 dark:text-amber-300' : ''"
                   >
-                  <span class="text-sm text-gray-400">至</span>
-                  <input
-                    v-model="localStrategySettings.friendQuietHours.end"
-                    type="time"
-                    aria-label="静默结束时间"
-                    class="min-w-0 w-full border border-gray-200 rounded-md bg-white px-3 py-2 text-sm sm:w-32 dark:border-gray-600 dark:bg-gray-800 dark:text-white disabled:opacity-50"
-                    :disabled="!localStrategySettings.friendQuietHours.enabled"
+                    <span class="truncate">{{ ranchCubPreviewLabel ?? '加载中...' }}</span>
+                    <div class="i-carbon-chevron-down shrink-0 text-lg text-gray-400" />
+                  </div>
+                </div>
+              </div>
+
+              <!-- 与农场"背包种子优先 → 第二优先策略"一一对应 -->
+              <BaseSelect
+                v-if="localStrategySettings.ranchCubStrategy === 'bag_priority'"
+                v-model="localStrategySettings.ranchCubFallbackStrategy"
+                label="第二优先策略"
+                :options="ranchCubFallbackStrategyOptions"
+              />
+
+              <!-- 背包幼崽优先顺序 —— 与农场"背包种子优先顺序"逐项同构:
+                 列表内容 = 背包里实际有的幼崽; 拖拽/上下调整入栏顺序; 可排外(不买也不入栏) -->
+              <div v-if="localStrategySettings.ranchCubStrategy === 'bag_priority'" class="border border-amber-200 rounded-lg bg-amber-50/70 p-3 space-y-3 dark:border-amber-800/50 dark:bg-amber-900/20">
+                <div class="flex flex-wrap items-start justify-between gap-3">
+                  <div>
+                    <div class="text-sm text-amber-900 font-semibold dark:text-amber-200">
+                      背包幼崽优先顺序
+                    </div>
+                    <p class="mt-1 text-xs text-amber-700/90 dark:text-amber-300/90">
+                      背包里有多少就按下方顺序入栏多少；背包用完才按第二优先策略从商店购买。标记排外的幼崽不买也不入栏。
+                    </p>
+                  </div>
+                  <button
+                    class="rounded bg-amber-100 px-2 py-1 text-xs text-amber-700 transition dark:bg-amber-900/50 hover:bg-amber-200 dark:text-amber-300 dark:hover:bg-amber-900/70"
+                    @click="resetRanchCubPriority"
                   >
+                    重置顺序
+                  </button>
+                </div>
+                <div v-if="ranchCubsLoading" class="py-4 text-center text-sm text-amber-700 dark:text-amber-300">
+                  加载中...
+                </div>
+                <div v-else-if="ranchCubsError" class="py-4 text-center text-sm text-red-600 dark:text-red-400">
+                  {{ ranchCubsError }}
+                </div>
+                <div v-else-if="ranchCubs.length === 0" class="py-4 text-center text-sm text-amber-700 dark:text-amber-300">
+                  背包中暂无幼崽（背包用完后将按第二优先策略从商店购买）
+                </div>
+                <div v-else class="grid gap-2 lg:grid-cols-3 sm:grid-cols-2">
+                  <div
+                    v-for="(cub, index) in sortedRanchCubs"
+                    :key="cub.animalId"
+                    class="flex items-center gap-2 border border-amber-200 rounded-lg bg-white p-2 dark:border-amber-700/50 dark:bg-gray-800"
+                    :class="isRanchCubExcluded(cub.animalId) ? 'opacity-70' : ''"
+                  >
+                    <div class="h-8 w-8 flex shrink-0 items-center justify-center rounded bg-amber-100 text-xs text-amber-700 font-bold dark:bg-amber-900/50 dark:text-amber-300">
+                      {{ index + 1 }}
+                    </div>
+                    <div class="min-w-0 flex-1">
+                      <div class="min-w-0 flex items-center gap-1.5">
+                        <span class="truncate text-sm text-gray-800 font-medium dark:text-gray-200">
+                          {{ cub.name }}
+                        </span>
+                        <span v-if="isRanchCubExcluded(cub.animalId)" class="shrink-0 rounded bg-rose-100 px-1.5 py-0.5 text-[10px] text-rose-700 dark:bg-rose-900/40 dark:text-rose-300">
+                          已排外
+                        </span>
+                      </div>
+                      <div class="text-xs text-gray-500 dark:text-gray-400">
+                        数量: {{ cub.count }}
+                      </div>
+                    </div>
+                    <button
+                      class="h-8 flex shrink-0 items-center gap-1 rounded px-2 text-xs transition"
+                      :class="isRanchCubExcluded(cub.animalId)
+                        ? 'bg-rose-100 text-rose-700 hover:bg-rose-200 dark:bg-rose-900/40 dark:text-rose-300 dark:hover:bg-rose-900/60'
+                        : 'bg-gray-100 text-gray-600 hover:bg-gray-200 dark:bg-gray-700 dark:text-gray-300 dark:hover:bg-gray-600'"
+                      :title="isRanchCubExcluded(cub.animalId) ? '取消入栏排外' : '加入入栏排外'"
+                      @click.stop="toggleRanchCubExcluded(cub.animalId)"
+                    >
+                      <div :class="isRanchCubExcluded(cub.animalId) ? 'i-carbon-checkmark text-sm' : 'i-carbon-subtract-alt text-sm'" />
+                      <span>{{ isRanchCubExcluded(cub.animalId) ? '取消' : '排外' }}</span>
+                    </button>
+                    <div class="flex shrink-0 flex-col gap-1">
+                      <button
+                        class="rounded p-1 text-gray-400 transition hover:bg-gray-100 hover:text-gray-600 dark:hover:bg-gray-700"
+                        :disabled="index === 0"
+                        @click="moveRanchCub(cub.animalId, -1)"
+                      >
+                        <div class="i-carbon-arrow-up text-sm" />
+                      </button>
+                      <button
+                        class="rounded p-1 text-gray-400 transition hover:bg-gray-100 hover:text-gray-600 dark:hover:bg-gray-700"
+                        :disabled="index === sortedRanchCubs.length - 1"
+                        @click="moveRanchCub(cub.animalId, 1)"
+                      >
+                        <div class="i-carbon-arrow-down text-sm" />
+                      </button>
+                    </div>
+                  </div>
                 </div>
               </div>
             </div>
-          </div>
 
-          <div class="border border-gray-200 rounded-lg bg-white p-4 space-y-3 dark:border-gray-700 dark:bg-gray-800">
-            <h4 class="text-sm text-gray-700 font-medium dark:text-gray-300">
-              种植与偷菜延迟
-            </h4>
-            <div class="grid grid-cols-1 gap-3 md:grid-cols-3">
-              <BaseSwitch
-                v-model="localStrategySettings.plantOrderRandom"
-                label="种植顺序随机"
-              />
-              <BaseInput
-                v-model.number="localStrategySettings.plantDelaySeconds"
-                label="种植延迟 (秒)"
-                type="number"
-                min="0"
-              />
-              <BaseInput
-                v-model.number="localStrategySettings.stealDelaySeconds"
-                label="偷菜延迟 (秒)"
-                type="number"
-                min="0"
-              />
+            <!-- 巡查频率(牧场 3 套节奏, 农场的在农场子页签) -->
+            <div class="border border-gray-200 rounded-lg bg-white p-4 space-y-4 dark:border-gray-700 dark:bg-gray-800">
+              <div>
+                <h4 class="text-sm text-gray-900 font-semibold dark:text-gray-100">
+                  巡查频率
+                </h4>
+                <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                  每种巡查在最小与最大秒数之间随机执行。
+                </p>
+              </div>
+              <div class="grid grid-cols-1 gap-3 md:grid-cols-3">
+                <!-- 牧场巡查: 与农场同构, 拆成三套独立节奏 -->
+                <div class="rounded-lg bg-amber-50 p-3 dark:bg-amber-900/20">
+                  <div class="mb-2 flex items-center gap-2 text-sm text-amber-700 font-medium dark:text-amber-300">
+                    <div class="i-fas-paw text-base" />
+                    牧场巡查（收获/收蛋/催产/入栏/买幼崽/牧草机）
+                  </div>
+                  <div class="grid grid-cols-2 gap-2">
+                    <BaseInput v-model.number="localStrategySettings.intervals.ranchMin" label="最小 (秒)" type="number" min="5" />
+                    <BaseInput v-model.number="localStrategySettings.intervals.ranchMax" label="最大 (秒)" type="number" min="5" />
+                  </div>
+                  <p class="mt-1.5 text-[10px] text-amber-600/80 dark:text-amber-400/80">
+                    与农场巡查一致（默认 20~25 秒）。倒计时一到点会立即执行，不用等这一轮。
+                  </p>
+                </div>
+                <div class="rounded-lg bg-amber-50 p-3 dark:bg-amber-900/20">
+                  <div class="mb-2 flex items-center gap-2 text-sm text-amber-700 font-medium dark:text-amber-300">
+                    <div class="i-carbon-task text-base" />
+                    牧场日常（任务/游商/清理/建筑/地块/出售）
+                  </div>
+                  <div class="grid grid-cols-2 gap-2">
+                    <BaseInput v-model.number="localStrategySettings.intervals.ranchDailyMin" label="最小 (秒)" type="number" min="5" />
+                    <BaseInput v-model.number="localStrategySettings.intervals.ranchDailyMax" label="最大 (秒)" type="number" min="5" />
+                  </div>
+                  <p class="mt-1.5 text-[10px] text-amber-600/80 dark:text-amber-400/80">
+                    这些是低频操作，默认 600~900 秒，没必要跟着巡查一起跑。
+                  </p>
+                </div>
+                <div class="rounded-lg bg-amber-50 p-3 dark:bg-amber-900/20">
+                  <div class="mb-2 flex items-center gap-2 text-sm text-amber-700 font-medium dark:text-amber-300">
+                    <div class="i-carbon-grab text-base" />
+                    牧场偷取（偷好友产物）
+                  </div>
+                  <div class="grid grid-cols-2 gap-2">
+                    <BaseInput v-model.number="localStrategySettings.intervals.ranchStealMin" label="最小 (秒)" type="number" min="5" />
+                    <BaseInput v-model.number="localStrategySettings.intervals.ranchStealMax" label="最大 (秒)" type="number" min="5" />
+                  </div>
+                  <p class="mt-1.5 text-[10px] text-amber-600/80 dark:text-amber-400/80">
+                    与「偷菜巡查」同频（默认 20~25 秒）。每家好友每天只偷一次。
+                  </p>
+                </div>
+              </div>
             </div>
-          </div>
 
-          <div class="flex justify-end gap-2 border-t pt-3 dark:border-gray-700">
-            <BaseButton
-              variant="primary"
-              size="sm"
-              :loading="strategySaving"
-              @click="saveStrategySettings"
-            >
-              保存策略设置
-            </BaseButton>
-          </div>
+            <div class="flex justify-end gap-2 border-t pt-3 dark:border-gray-700">
+              <BaseButton
+                variant="primary"
+                size="sm"
+                :loading="strategySaving"
+                @click="saveStrategySettings"
+              >
+                保存策略设置
+              </BaseButton>
+            </div>
+          </template>
         </div>
       </div>
 
@@ -2977,29 +3041,6 @@ async function onBackupFileChange(ev: Event) {
                 <BaseSwitch v-model="localAutomationSettings.automation.farm_push" label="推送触发巡田" />
                 <BaseSwitch v-model="localAutomationSettings.automation.land_upgrade" label="自动升级土地" />
                 <BaseSwitch v-model="localAutomationSettings.automation.skip_own_weed_bug" label="不除自己草虫" />
-              </div>
-            </section>
-
-            <section class="border border-gray-200 rounded-lg bg-white p-4 dark:border-gray-700 dark:bg-gray-800">
-              <div class="mb-3 flex items-center gap-2">
-                <div class="i-carbon-calendar text-rose-600 dark:text-rose-400" />
-                <h4 class="text-sm text-gray-900 font-semibold dark:text-gray-100">
-                  活动任务
-                </h4>
-              </div>
-              <div class="grid gap-3 2xl:grid-cols-2 sm:grid-cols-2 xl:grid-cols-1">
-                <BaseSwitch v-model="localAutomationSettings.automation.star_light_up" :label="autoLabel('star_light_up', '千星游记')" :disabled="isAutomationGated('star_light_up')" />
-                <BaseSwitch v-model="localAutomationSettings.automation.solar_terms" label="节令小礼" />
-                <BaseSwitch v-model="localAutomationSettings.automation.weather_task" :label="autoLabel('weather_task', '雨落成诗采集')" :disabled="isAutomationGated('weather_task')" />
-                <BaseSwitch v-model="localAutomationSettings.automation.weather_research" :label="autoLabel('weather_research', '雨落成诗研究')" :disabled="isAutomationGated('weather_research')" />
-                <BaseSwitch v-model="localAutomationSettings.automation.charity_task" :label="autoLabel('charity_task', '公益小红花')" :disabled="isAutomationGated('charity_task')" />
-                <BaseSwitch v-model="localAutomationSettings.automation.mengchong_task" :label="autoLabel('mengchong_task', '萌宠游记任务')" :disabled="isAutomationGated('mengchong_task')" />
-                <BaseSwitch v-model="localAutomationSettings.automation.mengchong_hunt" :label="autoLabel('mengchong_hunt', '萌宠游记寻宝')" :disabled="isAutomationGated('mengchong_hunt')" />
-                <BaseSwitch
-                  v-model="localAutomationSettings.milkTeaEnabled"
-                  :label="isMilkTeaActivityGated ? '奶茶热销中（活动已在后台关闭）' : '奶茶热销中'"
-                  :disabled="isMilkTeaActivityGated"
-                />
               </div>
             </section>
 
@@ -3132,6 +3173,30 @@ async function onBackupFileChange(ev: Event) {
                 <BaseSwitch v-model="localAutomationSettings.automation.fertilizer_buy_normal" label="自动购买无机化肥" />
                 <BaseSwitch v-model="localAutomationSettings.automation.mystery_shop" label="自动购买神秘商店" />
                 <BaseSwitch v-model="localAutomationSettings.automation.friend" label="自动好友互动" />
+              </div>
+            </section>
+
+            <!-- 活动任务: 排在农场/牧场/物资后面, 让同类卡片相邻 -->
+            <section class="border border-gray-200 rounded-lg bg-white p-4 dark:border-gray-700 dark:bg-gray-800">
+              <div class="mb-3 flex items-center gap-2">
+                <div class="i-carbon-calendar text-rose-600 dark:text-rose-400" />
+                <h4 class="text-sm text-gray-900 font-semibold dark:text-gray-100">
+                  活动任务
+                </h4>
+              </div>
+              <div class="grid gap-3 2xl:grid-cols-2 sm:grid-cols-2 xl:grid-cols-1">
+                <BaseSwitch v-model="localAutomationSettings.automation.star_light_up" :label="autoLabel('star_light_up', '千星游记')" :disabled="isAutomationGated('star_light_up')" />
+                <BaseSwitch v-model="localAutomationSettings.automation.solar_terms" label="节令小礼" />
+                <BaseSwitch v-model="localAutomationSettings.automation.weather_task" :label="autoLabel('weather_task', '雨落成诗采集')" :disabled="isAutomationGated('weather_task')" />
+                <BaseSwitch v-model="localAutomationSettings.automation.weather_research" :label="autoLabel('weather_research', '雨落成诗研究')" :disabled="isAutomationGated('weather_research')" />
+                <BaseSwitch v-model="localAutomationSettings.automation.charity_task" :label="autoLabel('charity_task', '公益小红花')" :disabled="isAutomationGated('charity_task')" />
+                <BaseSwitch v-model="localAutomationSettings.automation.mengchong_task" :label="autoLabel('mengchong_task', '萌宠游记任务')" :disabled="isAutomationGated('mengchong_task')" />
+                <BaseSwitch v-model="localAutomationSettings.automation.mengchong_hunt" :label="autoLabel('mengchong_hunt', '萌宠游记寻宝')" :disabled="isAutomationGated('mengchong_hunt')" />
+                <BaseSwitch
+                  v-model="localAutomationSettings.milkTeaEnabled"
+                  :label="isMilkTeaActivityGated ? '奶茶热销中（活动已在后台关闭）' : '奶茶热销中'"
+                  :disabled="isMilkTeaActivityGated"
+                />
               </div>
             </section>
           </div>
