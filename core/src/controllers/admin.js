@@ -758,6 +758,32 @@ app.use('/api', (req, res, next) => {
         }
     });
 
+    // API: 罐头桶检测并自动购买(与化肥同构; 设置页保存后立即检测用)
+    app.post('/api/ranch/cans/check-and-buy', async (req, res) => {
+        const id = getAccId(req);
+        if (!id) {
+            return res.status(400).json({ ok: false, error: 'Missing x-account-id' });
+        }
+
+        if (!checkAccountAccess(req, id)) {
+            return res.status(403).json({ ok: false, error: '无权访问此账号' });
+        }
+
+        try {
+            const result = await provider.checkAndBuyCans(id, {
+                buyNormal: req.body?.buyNormal,
+                buyOrganic: req.body?.buyOrganic,
+                normalCount: Number(req.body?.normalCount) || undefined,
+                normalThresholdHours: Number(req.body?.normalThresholdHours) || undefined,
+                organicCount: Number(req.body?.organicCount) || undefined,
+                organicThresholdHours: Number(req.body?.organicThresholdHours) || undefined,
+            });
+            res.json({ ok: true, ...result });
+        } catch (e) {
+            res.status(500).json({ ok: false, error: e.message });
+        }
+    });
+
     // API: 检测化肥容器并自动购买
     app.post('/api/fertilizer/check-and-buy', async (req, res) => {
         const id = getAccId(req);

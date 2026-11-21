@@ -581,9 +581,9 @@ const CAN_BUCKET_ORGANIC = 7004;
  * 灌桶/喂食成功后会调 invalidateCanBucketCache() 立即失效。
  */
 let _canBucketCache = { at: 0, normalSec: null, organicSec: null };
-async function readCanBucketSecs() {
+async function readCanBucketSecs(force = false) {
     const now = Date.now();
-    if (_canBucketCache.at > 0 && now - _canBucketCache.at < 60 * 1000) {
+    if (!force && _canBucketCache.at > 0 && now - _canBucketCache.at < 60 * 1000) {
         return { normalSec: _canBucketCache.normalSec, organicSec: _canBucketCache.organicSec };
     }
     try {
@@ -1948,6 +1948,35 @@ async function autoFeedCansByStrategy(view, opts = {}) {
 }
 
 /**
+ * 自动购买罐头检查 —— 与农场化肥自动购买(checkAndBuyFertilizerBoth)完全同构:
+ *   配置 automation.ranch_can_buy_normal / ranch_can_buy_organic (开关, 默认关)
+ *   配置 automation.ranch_can_buy_{normal|organic}_count          (买几次, 默认 10)
+ *   配置 automation.ranch_can_buy_{normal|organic}_threshold_hours (桶余量阈值, 默认 10h)
+ * 判定 = 罐头桶(7003/7004)余量低于阈值小时数; 购买 = 牧场商城(slot6/7)按奖励
+ * itemId 识别商品, 买完顺手灌进桶。options 可覆盖配置(设置页保存后立即检测用)。
+ * @returns {{boughtNormal: number, boughtOrganic: number, normalHours: number|null, organicHours: number|null}}
+ */
+async function checkAndBuyCansIfLow(opts = {}) {
+    let automation = {};
+    try {
+        automation = require('../models/store').getAutomation(process.env.FARM_ACCOUNT_ID || '') || {};
+    } catch { /* 读不到按关 */ }
+    const pick = (key, dft) => (opts[key] !== undefined && opts[key] !== null) ? opts[key] : automation[key];
+    const buyNormal = opts.buyNormal !== undefined ? !!opts.buyNormal : !!automation.ranch_can_buy_normal;
+    const buyOrganic = opts.buyOrganic !== undefined ? !!opts.buyOrganic : !!automation.ranch_can_buy_organic;
+    if (!buyNormal && !buyOrganic) return { boughtNormal: 0, boughtOrganic: 0 };
+    const { checkAndBuyCansBoth } = require('./mall');
+    return checkAndBuyCansBoth({
+        buyNormal,
+        buyOrganic,
+        normalCount: Math.max(0, toNum(pick('ranch_can_buy_normal_count', 10)) || 0),
+        normalThresholdHours: Math.max(0, toNum(pick('ranch_can_buy_normal_threshold_hours', 10)) || 0),
+        organicCount: Math.max(0, toNum(pick('ranch_can_buy_organic_count', 10)) || 0),
+        organicThresholdHours: Math.max(0, toNum(pick('ranch_can_buy_organic_threshold_hours', 10)) || 0),
+    });
+}
+
+/**
  * 一键巡牧场: 收获可收的 → 催产 → 喂食。
  * 顺序有讲究: 先收获腾出产出位, 再催产, 最后喂食让动物恢复生产。
  * @returns {{harvested: number, produced: number, fed: number, details: string[]}}
@@ -2125,6 +2154,26 @@ async function runRanchCare(opts = {}) {
             }
             if (!isExpectedRanchError(e)) {
                 logWarn('牧场', `罐头策略喂食失败: ${e.message}`, { module: 'ranch', event: '喂罐头', result: 'error' });
+            }
+        }
+    }
+
+    await gap();
+
+    // 3b. 自动购买罐头(与化肥自动购买同构): 桶余量低于阈值 → 牧场商城买 N 次并顺手灌桶。
+    //     挂在喂罐头之后 —— 刚喂完扣了桶, 这时判定"要不要补货"最准。
+    if (want('core') && isAutomationOn('ranch_auto')) {
+        try {
+            const br = await checkAndBuyCansIfLow(opts);
+            if (br.boughtNormal > 0 || br.boughtOrganic > 0) {
+                const parts = [];
+                if (br.boughtNormal > 0) parts.push(`普通罐头x${br.boughtNormal}`);
+                if (br.boughtOrganic > 0) parts.push(`有机罐头x${br.boughtOrganic}`);
+                result.details.push(`买罐头${parts.join('+')}`);
+            }
+        } catch (e) {
+            if (!isExpectedRanchError(e)) {
+                logWarn('牧场', `罐头自动购买失败: ${e.message}`, { module: 'ranch', event: '买罐头', result: 'error' });
             }
         }
     }
@@ -4726,6 +4775,7 @@ module.exports = {
     getRanchOverview,
     runRanchCare,
     autoFeedCansByStrategy,
+    checkAndBuyCansIfLow,
     operateRanch,
     checkRanch,
     startRanchCheckLoop,

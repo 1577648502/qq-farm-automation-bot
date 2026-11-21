@@ -1368,6 +1368,11 @@ async function handleApiCall(msg) {
             case 'operateRanch':
                 result = await require('../services/ranch').operateRanch(Array.isArray(args[0]) ? args[0][0] || {} : args[0] || {});
                 break;
+            case 'checkAndBuyCans': {
+                // 罐头自动购买检查(设置页保存后立即检测用); 巡查循环走 runRanchCare 内部
+                result = await require('../services/ranch').checkAndBuyCansIfLow(Array.isArray(args[0]) ? args[0][0] || {} : args[0] || {});
+                break;
+            }
             case 'getCubStrategyPick': {
                 // 设置页预览 —— 与实际执行同一条路径(对齐农场):
                 //   农场 bag_priority 的预览也是"背包有什么 → 背包用完了按第二策略买"

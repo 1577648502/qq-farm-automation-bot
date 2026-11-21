@@ -1468,6 +1468,140 @@ async function checkAndBuyFertilizerBoth(options) {
     }
 }
 
+// ============ 罐头自动购买(与化肥自动购买同构) ============
+// 罐头桶(7003 普通 / 7004 有机)余量低于阈值 → 去牧场商城(slot 6/7)买对应罐头。
+// 商品识别用**奖励 itemId**(80021~24=普通 / 80031~34=有机), 不硬编码 goods_id
+// —— 服务端换货/加档位不用改代码。同类型多档位时选单价最低的(补时长够用)。
+const CAN_NORMAL_ITEM_IDS = [80021, 80022, 80023, 80024];
+const CAN_ORGANIC_ITEM_IDS = [80031, 80032, 80033, 80034];
+
+function findCanMallGoods(goodsList, kind = 'normal') {
+    const ids = kind === 'normal' ? CAN_NORMAL_ITEM_IDS : CAN_ORGANIC_ITEM_IDS;
+    const list = Array.isArray(goodsList) ? goodsList : [];
+    const hits = [];
+    for (const g of list) {
+        const norm = normalizeMallGoods(g, 6);
+        if (!norm.goodsId) continue;
+        if (!(Array.isArray(norm.items) && norm.items.some(it => ids.includes(Number(it && it.id))))) continue;
+        // 已售罄/限购用完的跳过
+        if (norm.remaining !== null && Number(norm.remaining) <= 0) continue;
+        const priceVal = Number(norm.price && norm.price.value) || Number(norm.price) || 0;
+        hits.push({ ...norm, priceVal });
+    }
+    if (!hits.length) return null;
+    hits.sort((a, b) => (a.priceVal || Infinity) - (b.priceVal || Infinity));
+    return hits[0];
+}
+
+/**
+ * 从牧场商城买罐头。
+ * @param kind 'normal' | 'organic'
+ * @param targetCount 买几次商品(每次按服务端数量入包)
+ * @returns 实际购买次数(失败/没货 = 0)
+ */
+async function autoBuyCansViaMall(kind = 'normal', targetCount = 0) {
+    const typeName = kind === 'normal' ? '普通罐头' : '有机罐头';
+    log('商城', `开始购买${typeName}, 目标次数: ${targetCount || '不限'}`, {
+        module: 'mall', event: '购买罐头', kind, targetCount,
+    });
+    // 牧场商城两个槽: 6=罐头/每日福利 7=20·40 小时罐头(见 MALL_SCENE_SLOTS 注释)
+    let goods = null;
+    for (const slot of [6, 7]) {
+        try {
+            const list = await getMallGoodsList(slot);
+            goods = findCanMallGoods(list, kind);
+        } catch (e) {
+            log('商城', `读取牧场商城 slot${slot} 失败: ${e.message}`, {
+                module: 'mall', event: '购买罐头', result: 'error', slot,
+            });
+        }
+        if (goods) break;
+    }
+    if (!goods) {
+        log('商城', `牧场商城没有${typeName}商品(或全部售罄)`, {
+            module: 'mall', event: '购买罐头', result: 'skip', kind,
+        });
+        return 0;
+    }
+
+    let bought = 0;
+    const remaining = targetCount > 0 ? targetCount : MAX_ROUNDS * BUY_PER_ROUND;
+    for (let i = 0; i < MAX_ROUNDS && bought < remaining; i++) {
+        const n = Math.min(BUY_PER_ROUND, remaining - bought);
+        try {
+            await purchaseMallGoods(goods.goodsId, n);
+            bought += n;
+            await sleep(120);
+        } catch (e) {
+            const raw = String((e && e.message) || '').slice(0, 80);
+            log('商城', `购买${typeName}失败(goodsId=${goods.goodsId}): ${raw}`, {
+                module: 'mall', event: '购买罐头', result: 'error', kind, goodsId: goods.goodsId, raw,
+            });
+            break;
+        }
+    }
+    if (bought > 0) {
+        log('商城', `已购买${typeName} x${bought} 次(goodsId=${goods.goodsId}, 单价=${goods.priceVal || '?'})`, {
+            module: 'mall', event: '购买罐头', result: 'ok', kind, count: bought,
+        });
+    }
+    return bought;
+}
+
+/**
+ * 罐头自动购买检查(与 checkAndBuyFertilizerBoth 同构):
+ * 罐头桶余量(7003/7004) < 阈值小时数 → 买 N 次对应罐头。
+ * 配置(automation): ranch_can_buy_normal / ranch_can_buy_normal_count /
+ *   ranch_can_buy_normal_threshold_hours, organic 同构。
+ * options 可覆盖(设置页保存后立即检测用)。
+ */
+async function checkAndBuyCansBoth(options = {}) {
+    const {
+        buyNormal = false,
+        buyOrganic = false,
+        normalCount = 10,
+        normalThresholdHours = 10,
+        organicCount = 10,
+        organicThresholdHours = 10,
+    } = options || {};
+    const result = { normalBought: 0, organicBought: 0, normalHours: null, organicHours: null };
+    if (!buyNormal && !buyOrganic) return result;
+
+    const { readCanBucketSecs, fillCanBuckets } = require('./ranch');
+    const buckets = await readCanBucketSecs(true).catch(() => ({ normalSec: null, organicSec: null }));
+    result.normalHours = buckets.normalSec === null ? null : buckets.normalSec / 3600;
+    result.organicHours = buckets.organicSec === null ? null : buckets.organicSec / 3600;
+
+    if (buyNormal && normalCount > 0 && normalThresholdHours > 0
+        && result.normalHours !== null && result.normalHours < normalThresholdHours) {
+        log('商城', `检测普通罐头桶: 剩余 ${result.normalHours.toFixed(1)} 小时，阈值 ${normalThresholdHours} 小时`, {
+            module: 'mall', event: 'check_cans_normal', currentHours: result.normalHours, thresholdHours: normalThresholdHours,
+        });
+        result.normalBought = await autoBuyCansViaMall('normal', normalCount);
+        if (result.normalBought > 0) {
+            // 买完顺手灌进桶, 不等下一轮喂食/巡查
+            await fillCanBuckets('normal', { maxItems: Math.min(10, result.normalBought) }).catch(() => null);
+        }
+    }
+
+    if (buyNormal && buyOrganic && result.normalBought > 0) {
+        await sleep(1000 + Math.random() * 1000);
+    }
+
+    if (buyOrganic && organicCount > 0 && organicThresholdHours > 0
+        && result.organicHours !== null && result.organicHours < organicThresholdHours) {
+        log('商城', `检测有机罐头桶: 剩余 ${(result.organicHours || 0).toFixed(1)} 小时，阈值 ${organicThresholdHours} 小时`, {
+            module: 'mall', event: 'check_cans_organic', currentHours: result.organicHours, thresholdHours: organicThresholdHours,
+        });
+        result.organicBought = await autoBuyCansViaMall('organic', organicCount);
+        if (result.organicBought > 0) {
+            await fillCanBuckets('organic', { maxItems: Math.min(10, result.organicBought) }).catch(() => null);
+        }
+    }
+
+    return result;
+}
+
 module.exports = {
     getMallCatalog,
     isRanchMallSlot,
@@ -1486,6 +1620,9 @@ module.exports = {
     getMallGoodsList,
     checkAndBuyFertilizerByThreshold,
     checkAndBuyFertilizerBoth,
+    findCanMallGoods,
+    autoBuyCansViaMall,
+    checkAndBuyCansBoth,
     buyFreeGifts,
     getFertilizerBuyDailyState: () => ({
         key: 'fertilizer_buy',

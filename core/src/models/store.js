@@ -207,6 +207,13 @@ const DEFAULT_ACCOUNT_CONFIG = {
         // / organic 仅有机(每轮每只一次) / both 普通+有机 / smart 普通+快成熟有机
         ranch_can: 'smart',
         ranch_can_smart_seconds: 300,
+        // 自动购买罐头(判定=罐头桶余量低于阈值小时数 → 商城买 N 次; 与化肥自动购买同构)
+        ranch_can_buy_normal: false,
+        ranch_can_buy_normal_count: 10,
+        ranch_can_buy_normal_threshold_hours: 10,
+        ranch_can_buy_organic: false,
+        ranch_can_buy_organic_count: 10,
+        ranch_can_buy_organic_threshold_hours: 10,
         skip_own_weed_bug: true,  // 不除自己草虫
         rob_treasure: false,      // 夺宝: 自动遍历好友可夺宝藏并用挑战书抢夺
     },
@@ -514,6 +521,16 @@ function normalizeAccountConfig(input, fallback = accountFallbackConfig) {
                 cfg.automation[k] = normalizeFertilizerLandTypes(v, cfg.automation[k]);
             } else if (k === 'fertilizer_smart_seconds') {
                 cfg.automation[k] = Math.max(30, Math.min(3600, Number(v) || 300));
+            } else if (k === 'ranch_can') {
+                // ⭐ 字符串策略必须单独分支, 走默认 !!v 会被强转成布尔(true), 保存即损坏
+                const allowed = ['both', 'normal', 'organic', 'smart', 'none'];
+                cfg.automation[k] = allowed.includes(v) ? v : cfg.automation[k];
+            } else if (k === 'ranch_can_smart_seconds') {
+                cfg.automation[k] = Math.max(30, Math.min(3600, Number(v) || 300));
+            } else if (k === 'ranch_can_buy_normal_count' || k === 'ranch_can_buy_organic_count') {
+                cfg.automation[k] = Math.max(1, Math.min(99, Number(v) || 10));
+            } else if (k === 'ranch_can_buy_normal_threshold_hours' || k === 'ranch_can_buy_organic_threshold_hours') {
+                cfg.automation[k] = Math.max(0, Math.min(990, Number(v) || 10));
             } else {
                 cfg.automation[k] = !!v;
             }
@@ -1103,7 +1120,7 @@ function applyConfigSnapshot(snapshot, options = {}) {
     const current = getAccountConfigSnapshot(accountId);
     const next = normalizeAccountConfig(current, accountFallbackConfig);
 
-    // ---- 1. automation 子对象: 三个非布尔字段单独处理 ----
+    // ---- 1. automation 子对象: 非布尔字段单独处理 ----
     if (cfg.automation && typeof cfg.automation === 'object') {
         for (const [k, v] of Object.entries(cfg.automation)) {
             if (next.automation[k] === undefined) continue;
@@ -1114,6 +1131,16 @@ function applyConfigSnapshot(snapshot, options = {}) {
                 next.automation[k] = normalizeFertilizerLandTypes(v, next.automation[k]);
             } else if (k === 'fertilizer_smart_seconds') {
                 next.automation[k] = Math.max(30, Math.min(3600, Number(v) || 300));
+            } else if (k === 'ranch_can') {
+                // ⭐ 字符串策略单独分支(同 normalizeAccountConfig, 防止被 !!v 毁掉)
+                const allowed = ['both', 'normal', 'organic', 'smart', 'none'];
+                next.automation[k] = allowed.includes(v) ? v : next.automation[k];
+            } else if (k === 'ranch_can_smart_seconds') {
+                next.automation[k] = Math.max(30, Math.min(3600, Number(v) || 300));
+            } else if (k === 'ranch_can_buy_normal_count' || k === 'ranch_can_buy_organic_count') {
+                next.automation[k] = Math.max(1, Math.min(99, Number(v) || 10));
+            } else if (k === 'ranch_can_buy_normal_threshold_hours' || k === 'ranch_can_buy_organic_threshold_hours') {
+                next.automation[k] = Math.max(0, Math.min(990, Number(v) || 10));
             } else {
                 next.automation[k] = !!v;
             }

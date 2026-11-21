@@ -1101,6 +1101,12 @@ function createDefaultAutomation(fertilizer: string = 'none') {
     fertilizer_smart_seconds: 300,
     ranch_can: 'smart',
     ranch_can_smart_seconds: 300,
+    ranch_can_buy_normal: false,
+    ranch_can_buy_normal_count: 10,
+    ranch_can_buy_normal_threshold_hours: 10,
+    ranch_can_buy_organic: false,
+    ranch_can_buy_organic_count: 10,
+    ranch_can_buy_organic_threshold_hours: 10,
   }
 }
 const fertilizerLandTypeOptions = computed(() =>
@@ -1885,6 +1891,33 @@ async function saveAutomationSettings() {
         }
         catch (e) {
           console.error('检测购买化肥失败', e)
+        }
+      }
+
+      // 如果启用了自动购买罐头，立即检测并购买(与化肥同构)
+      if (localAutomationSettings.value.automation.ranch_can_buy_organic || localAutomationSettings.value.automation.ranch_can_buy_normal) {
+        try {
+          const canRes = await api.post('/api/ranch/cans/check-and-buy', {
+            buyOrganic: localAutomationSettings.value.automation.ranch_can_buy_organic,
+            buyNormal: localAutomationSettings.value.automation.ranch_can_buy_normal,
+            organicCount: localAutomationSettings.value.automation.ranch_can_buy_organic_count,
+            organicThresholdHours: localAutomationSettings.value.automation.ranch_can_buy_organic_threshold_hours,
+            normalCount: localAutomationSettings.value.automation.ranch_can_buy_normal_count,
+            normalThresholdHours: localAutomationSettings.value.automation.ranch_can_buy_normal_threshold_hours,
+          }, {
+            headers: { 'x-account-id': accountId },
+          })
+          if (!isCurrentSave())
+            return
+          if (canRes.data?.ok) {
+            const totalBought = (canRes.data.organicBought || 0) + (canRes.data.normalBought || 0)
+            if (totalBought > 0) {
+              showAlert(`已自动购买 ${totalBought} 次罐头并灌进桶`, 'primary')
+            }
+          }
+        }
+        catch (e) {
+          console.error('检测购买罐头失败', e)
         }
       }
     }
@@ -3010,6 +3043,59 @@ async function onBackupFileChange(ev: Event) {
                   <span class="flex items-end pb-2 text-xs text-gray-500 dark:text-gray-400">
                     距成熟时间 ≤ 此秒数时喂有机罐头（默认300秒=5分钟）；普通罐头每只动物限一次，自动喂给没用过的。
                   </span>
+                </div>
+                <!-- 罐头自动购买(与化肥自动购买同构): 桶余量低于阈值 → 商城买 -->
+                <BaseSwitch v-model="localAutomationSettings.automation.ranch_can_buy_organic" label="自动购买有机罐头" />
+                <BaseSwitch v-model="localAutomationSettings.automation.ranch_can_buy_normal" label="自动购买普通罐头" />
+                <div
+                  v-if="localAutomationSettings.automation.ranch_can_buy_organic || localAutomationSettings.automation.ranch_can_buy_normal"
+                  class="col-span-full rounded bg-green-50 p-3 text-sm space-y-3 dark:bg-green-900/20"
+                >
+                  <p class="text-xs text-green-700/80 dark:text-green-400/80">
+                    罐头桶(普通 7003 / 有机 7004)剩余时长低于阈值时，自动去牧场商城购买对应罐头并灌进桶。判定每轮巡查(5~8 分钟)执行一次。
+                  </p>
+                  <div v-if="localAutomationSettings.automation.ranch_can_buy_organic" class="space-y-2">
+                    <div class="text-green-700 font-medium dark:text-green-400">
+                      有机罐头设置
+                    </div>
+                    <div class="flex flex-wrap gap-4">
+                      <BaseInput
+                        v-model.number="localAutomationSettings.automation.ranch_can_buy_organic_count"
+                        label="购买次数"
+                        type="number"
+                        min="1"
+                        max="99"
+                      />
+                      <BaseInput
+                        v-model.number="localAutomationSettings.automation.ranch_can_buy_organic_threshold_hours"
+                        label="触发阈值 (小时)"
+                        type="number"
+                        min="1"
+                        max="990"
+                      />
+                    </div>
+                  </div>
+                  <div v-if="localAutomationSettings.automation.ranch_can_buy_normal" class="space-y-2">
+                    <div class="text-green-700 font-medium dark:text-green-400">
+                      普通罐头设置
+                    </div>
+                    <div class="flex flex-wrap gap-4">
+                      <BaseInput
+                        v-model.number="localAutomationSettings.automation.ranch_can_buy_normal_count"
+                        label="购买次数"
+                        type="number"
+                        min="1"
+                        max="99"
+                      />
+                      <BaseInput
+                        v-model.number="localAutomationSettings.automation.ranch_can_buy_normal_threshold_hours"
+                        label="触发阈值 (小时)"
+                        type="number"
+                        min="1"
+                        max="990"
+                      />
+                    </div>
+                  </div>
                 </div>
                 <BaseSwitch v-model="localAutomationSettings.automation.ranch_feedmachine" label="自动牧草机补草" />
                 <BaseSwitch v-model="localAutomationSettings.automation.ranch_buy_grass" label="牧草断了自动购买" />

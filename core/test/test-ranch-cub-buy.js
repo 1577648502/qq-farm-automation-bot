@@ -783,6 +783,94 @@ proto.loadProto().then(async () => {
         }
     }
 
+    section('22. 罐头自动购买 checkAndBuyCansIfLow(与化肥自动购买同构)');
+    {
+        const protobufjs = require('protobufjs');
+        // 构造 MallGoods bytes(#4 item_ids={1:itemId,2:count}, #5 price={1:1007,2:单价})
+        const mallGoodsBytes = ({ goodsId, itemId, count = 5, price = 100 }) => {
+            const w = protobufjs.Writer.create();
+            w.uint32(8).int64(goodsId);
+            w.uint32(18).string('罐头礼包');
+            const iw = w.uint32(34).fork();
+            iw.uint32(8).int64(itemId);
+            iw.uint32(16).int64(count);
+            iw.ldelim();
+            const pw = w.uint32(42).fork();
+            pw.uint32(8).int64(1007);
+            pw.uint32(16).int64(price);
+            pw.ldelim();
+            return w.finish();
+        };
+        const bagReplyBytes = (normalSec, organicSec, cans = 0) => types.BagReply.encode(types.BagReply.create({
+            item_bag: { items: [
+                ...(normalSec > 0 ? [{ id: 7003, count: normalSec, uid: 1 }] : []),
+                ...(organicSec > 0 ? [{ id: 7004, count: organicSec, uid: 2 }] : []),
+                // 罐头条目: fillCanBuckets 买完灌桶要用(找 count>0 且 uid>0 的罐头)
+                ...(cans > 0 ? [{ id: 80021, count: cans, uid: 3 }] : []),
+            ] },
+        })).finish();
+
+        const run = async (opts, slots) => {
+            const calls = installStub({
+                // 读桶: 普通桶 1h(3600s), 有机桶 20h(72000s); 背包里给 5 个普通罐头供灌桶
+                'gamepb.itempb.ItemService.Bag': () => bagReplyBytes(opts.__normalSec ?? 3600, opts.__organicSec ?? 72000, opts.__cans ?? 5),
+                GetMallListBySlotType: () => types.GetMallListBySlotTypeResponse.encode(
+                    types.GetMallListBySlotTypeResponse.create({ goods_list: slots || [] })).finish(),
+                Purchase: () => types.PurchaseResponse.encode(types.PurchaseResponse.create({})).finish(),
+                'gamepb.itempb.ItemService.Use': () => Buffer.alloc(0),
+            });
+            const ranch = freshRanch();
+            const r = await ranch.checkAndBuyCansIfLow(opts);
+            const byMethod = {};
+            for (const c of calls) {
+                const key = c.method;
+                byMethod[key] = (byMethod[key] || 0) + 1;
+            }
+            return { r, byMethod };
+        };
+
+        // 1) 开关全关: 不买
+        {
+            const { r, byMethod } = await run({});
+            check('开关全关: 不买(无 Purchase)', (byMethod.Purchase || 0) === 0
+                && r.boughtNormal === 0 && r.boughtOrganic === 0, JSON.stringify({ r, byMethod }));
+        }
+        // 2) 普通 1h < 阈值 5h → 买; 有机 20h > 5h → 不买
+        {
+            const { r, byMethod } = await run({
+                buyNormal: true,
+                ranch_can_buy_normal_count: 2,
+                ranch_can_buy_normal_threshold_hours: 5,
+                buyOrganic: true,
+                ranch_can_buy_organic_count: 2,
+                ranch_can_buy_organic_threshold_hours: 5,
+            }, [mallGoodsBytes({ goodsId: 2002, itemId: 80021 })]);
+            check('普通桶 1h<5h → 买 2 次', r.normalBought === 2, JSON.stringify(r));
+            check('有机桶 20h>5h → 不买', r.organicBought === 0, JSON.stringify(r));
+            check('买完灌桶(Use 被调)', (byMethod.Use || 0) > 0, byMethod.Use);
+        }
+        // 3) slot6 没有罐头商品 → slot7 兜底; 桶条目缺失(0h)也触发购买
+        {
+            const { r } = await run({
+                buyNormal: true,
+                ranch_can_buy_normal_count: 1,
+                ranch_can_buy_normal_threshold_hours: 5,
+                __normalSec: 0,
+            }, [mallGoodsBytes({ goodsId: 20001, itemId: 80031, price: 300 })]);
+            check('slot7 有机商品被普通桶查询忽略 → normalBought=0', r.normalBought === 0, JSON.stringify(r));
+        }
+        // 4) 有机桶空(0h) + slot7 有机商品 → 买有机
+        {
+            const { r } = await run({
+                buyOrganic: true,
+                ranch_can_buy_organic_count: 1,
+                ranch_can_buy_organic_threshold_hours: 5,
+                __organicSec: 0,
+            }, [mallGoodsBytes({ goodsId: 20001, itemId: 80031, price: 300 })]);
+            check('有机桶 0h<5h → slot7 买 1 次', r.organicBought === 1, JSON.stringify(r));
+        }
+    }
+
     finish();
 }).catch((e) => {
     console.error('测试异常:', e);
