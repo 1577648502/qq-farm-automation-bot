@@ -308,7 +308,9 @@ function handleNotify(msg) {
         }
 
         // 物品变化通知 (经验/金币等)
-        if (type.includes('ItemNotify')) {
+        // ⚠ 排除 ItemUseDailyNotify(每日道具使用记录表, 名字含 ItemNotify 但结构完全不同,
+        //   按 ItemNotify 解码会 invalid wire type 被下面 try/catch 静默吞掉 —— 2026-11-21 dump 实测)
+        if (type.includes('ItemNotify') && type !== 'gamepb.itempb.ItemUseDailyNotify') {
             try {
                 const notify = types.ItemNotify.decode(eventBody);
                 const items = notify.items || [];
