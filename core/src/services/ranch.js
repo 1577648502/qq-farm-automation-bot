@@ -506,9 +506,9 @@ async function useCanOnAnimal(itemId, count = 1, uid = 0) {
     const hostGid = toNum(target.ranchInstId) || RANCH_SELF_HOST_GID;
     const instId = toNum(target.animalInstId) || 0;
 
-    // 3. FeedAnimal
+    // 3. FeedAnimal(⭐ #2 是喂食方式不是数量: 普通→2 / 有机→1)
     try {
-        await feedAnimal(Math.max(1, toNum(count) || 1), hostGid, instId);
+        await feedAnimal(kind, hostGid, instId);
         invalidateRanchOverviewCache();
         return {
             ok: true,
@@ -548,7 +548,9 @@ async function useItemWithUid(itemId, count, uid) {
  *   而 feedAnimal 等接口之前用的是 userState.gid(账号3 实测 = 1244632861),
  *   拿 QQ 号去当 host_gid → 服务端一律回 1045202(文案"网络繁忙", 其实是"找不到这个牧场")。
  *
- * 抓包实证: FeedAnimal 请求 target = {1: 10001, 2: feedType}
+ * 抓包实证: FeedAnimal 请求 {1:{1:10001, 2:animal_inst_id(可省略)}, 2:feed_type}
+ * ⭐ 2026-11-21 定案(20261119-091627_罐头 4 帧): 顶层 #2 是喂食方式(1=有机/2=普通),
+ *   不是数量; target#2 才是 animal_inst_id, 缺省=全场每只一条 receipt。
  * 所以这里默认取牧场实例 ID; 访问好友牧场时才传好友的对应值。
  */
 const RANCH_SELF_HOST_GID = 10001;
@@ -619,14 +621,28 @@ function resolveRanchHostGid(hostGid, husbandryType = 0) {
  * @param {number} hostGid      栏舍实例(默认按缓存的 ranch_inst_id)
  * @param {number} animalInstId 目标动物实例 ID; 0 = 全场
  */
-async function feedAnimal(count = 1, hostGid = 0, animalInstId = 0) {
+/**
+ * 喂食(AnimalService.FeedAnimal)。
+ * ⭐ 2026-11-21 抓包定案(20261119-091627_罐头, 官方 4 帧):
+ *   请求 {1:{1:host_gid, 2:animal_inst_id(可省略)}, 2:type}
+ *   #2 **不是数量, 是喂食方式**: 1=有机罐头(服务端扣 7004) / 2=普通罐头(扣 7003)。
+ *   target#2 缺省 = 全场所有动物(每只一条 receipt)。
+ *   官方实证: {target:{1:10001,2:1216},2:2} → 回执 #11={7003,3596};
+ *            {target:{1:10001,2:1216},2:1} → 回执 #11={7004,3593}。
+ *   旧实现把"罐头个数"塞进 #2 → 点普通罐头也走有机路径扣 7004,
+ *   有机桶一空就报 1045234, 普通桶灌得再多也没用。
+ * @param kind 'normal' | 'organic' (或 4/5/6, 自动归类)
+ */
+async function feedAnimal(kind, hostGid = 0, animalInstId = 0) {
+    const isNormal = kind === 'normal' || Number(kind) === FEED_TYPE.NORMAL_CAN;
+    const serverType = isNormal ? 2 : 1;   // 服务端 #2: 2=普通(7003) / 1=有机(7004)
     const gid = resolveRanchHostGid(hostGid);
     const w = protobuf.Writer.create();
     const tw = w.uint32((1 << 3) | 2).fork();
     tw.uint32((1 << 3) | 0).int64(toLong(gid));
     if (toNum(animalInstId) > 0) tw.uint32((2 << 3) | 0).int64(toLong(animalInstId));
     tw.ldelim();
-    w.uint32((2 << 3) | 0).int64(toLong(Math.max(1, toNum(count) || 1)));
+    w.uint32((2 << 3) | 0).int64(toLong(serverType));
     const body = w.finish();
     const { body: replyBody } = await network.sendMsgAsync('gamepb.animalpb.AnimalService', 'FeedAnimal', body);
     const _reply = types.FeedAnimalReply.decode(replyBody)
@@ -1264,11 +1280,12 @@ async function strokeAnimal(friendGid, opts = {}) {
     return { ok: true, ranches: reply.ranches || [] };
 }
 
-/** 用罐头桶加速(FeedAnimal) —— 与"喂食"同一接口, 语义是投喂罐头桶 */
-async function useFeedBucket(slot, count = 1, hostGid = 0) {
+/** 用罐头桶加速(FeedAnimal) —— 与"喂食"同一接口, 语义是投喂罐头桶
+ *  ⭐ #2 是喂食方式(2=普通罐头桶7003 / 1=有机罐头桶7004), 不是数量 */
+async function useFeedBucket(slot, kind = 'organic', hostGid = 0) {
     // target#2 是 animal_inst_id(不是 feed_type); 先按槽位查出该动物的实例 ID
     const instId = await resolveAnimalInstIdBySlot(slot, hostGid);
-    return feedAnimal(count, hostGid, instId);
+    return feedAnimal(kind, hostGid, instId);
 }
 
 // ============ 牧场等级(独立于农场 RoleLevel) ============
@@ -1937,8 +1954,10 @@ async function runRanchCare(opts = {}) {
     //   需要 runRanchCare({ feedType: 4 }) 显式传入才执行。
     if (want('feed') && opts.feedCount && toNum(opts.feedCount) > 0) {
         try {
-            // 自动巡牧场不做单只投喂(没必要), 只支持"全场投 N 个罐头"
-            await feedAnimal(toNum(opts.feedCount));
+            // 自动巡牧场不做单只投喂(没必要), 只支持"全场投喂"
+            // ⭐ #2 是喂食方式: 4=普通罐头→2 / 5,6=有机→1
+            const feedKind = Number(opts.feedType) === FEED_TYPE.NORMAL_CAN ? 'normal' : 'organic';
+            await feedAnimal(feedKind);
             result.fed += 1;
         } catch (e) {
             // 1045234 罐头耗尽 = 正常状态(等用户买罐头/加牧草)
@@ -4147,7 +4166,7 @@ async function operateRanch(opts = {}) {
                     });
                 }
             }
-            const doFeed = async () => feedAnimal(count, feedHostGid, feedAnimalInstId);
+            const doFeed = async () => feedAnimal(wantKind, feedHostGid, feedAnimalInstId);
             try {
                 await doFeed();
                 recordOperation('ranchFeed', count);
@@ -4173,13 +4192,13 @@ async function operateRanch(opts = {}) {
                     //   线上实测: 农场背包里 7003 明明有 707513(≈196.5h), 服务端却回 1045234,
                     //   只显示"桶已空"会让人以为是数据问题。
                     const rawMsg = String(e.message || '').replace(/^[^:]*:\s*/, '').trim();
-                    logWarn('牧场', `喂食失败(桶空分支) feedType=${feedType} code=${code} 背包无${kind}罐头; 服务端原文: ${rawMsg || '(空)'}`, {
+                    logWarn('牧场', `喂食失败(桶空分支) feedType=${feedType} code=${code} 背包无${wantKind}罐头; 服务端原文: ${rawMsg || '(空)'}`, {
                         module: 'ranch', event: '喂食', result: 'rejected',
-                        feedType, code, kind, raw: rawMsg,
+                        feedType, code, kind: wantKind, raw: rawMsg,
                     });
                     return {
                         ok: false, action: '喂食',
-                        error: `罐头桶已空，且背包里没有${kind === 'normal' ? '普通' : '有机'}罐头可灌。`
+                        error: `罐头桶已空，且背包里没有${wantKind === 'normal' ? '普通' : '有机'}罐头可灌。`
                             + `(服务端 code=${code}${rawMsg ? `：${rawMsg}` : ''})`,
                     };
                 }
@@ -4405,8 +4424,9 @@ async function operateRanch(opts = {}) {
                 // 批量默认用有机罐头(5): 普通罐头对多数动物已用过, 全喂必然大面积失败。
                 const ft = toNum(opts.feedType) || FEED_TYPE.ORGANIC_A;
                 try {
-                    // 全场批量: 不带 target#2, count = 罐头数
-                    await feedAnimal(toNum(opts.count) || 1);
+                    // ⭐ #2 是喂食方式: 4=普通→2 / 5,6=有机→1(全场批量, 不带 target#2)
+                    const ftKind = ft === FEED_TYPE.NORMAL_CAN ? 'normal' : 'organic';
+                    await feedAnimal(ftKind);
                     recordOperation('ranchFeed', 1);
                     return { ok: true, action: '全场喂罐头', detail: FEED_TYPE_LABEL[ft] || '罐头' };
                 } catch (e) {
@@ -4417,7 +4437,7 @@ async function operateRanch(opts = {}) {
                         const filled = await fillCanBuckets(kind, { maxItems: 2 });
                         if (filled.used > 0) {
                             try {
-                                await feedAnimal(toNum(opts.count) || 1);
+                                await feedAnimal(kind);
                                 recordOperation('ranchFeed', 1);
                                 return { ok: true, action: '全场喂罐头', detail: `自动灌入 ${filled.used} 个罐头后喂食成功` };
                             } catch (e2) {

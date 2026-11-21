@@ -114,8 +114,8 @@ message GetRanchDetailReply {
 //   方式 4/5/6 的确切含义待更多抓包; 响应 #5.#3 与请求 #1.#2 一致,
 //   #5.#11{7003/7004=余量} 是被扣的无机/有机罐头桶剩余时长(秒)。
 message FeedAnimalRequest {
-    FeedTarget target = 1;           // {1: hostGid, 2: feedType}
-    int64 count = 2;                 // 喂食数量(1 或 2)
+    FeedTarget target = 1;           // {1: hostGid, 2: animal_inst_id(可省略, 缺省=全场)}
+    int64 feed_type = 2;             // ⭐ 喂食方式: 1=有机罐头(扣7004) / 2=普通罐头(扣7003), 不是数量
 }
 message FeedAnimalReply {
     repeated RanchInfo ranches = 1;
@@ -125,7 +125,7 @@ message FeedAnimalReply {
 }
 message FeedTarget {
     int64 host_gid = 1;
-    int64 feed_type = 2;             // 4/5/6(具体枚举待确认)
+    int64 animal_inst_id = 2;        // 动物实例 ID(抓包定案, 非 feed_type); 缺省=全场
 }
 message FeedReceipt {
     int64 host_gid = 1;
