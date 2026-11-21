@@ -458,6 +458,7 @@ async function fillCanBuckets(kind = 'normal', opts = {}) {
         log('牧场', `已灌罐头 ${result.used} 个进${isNormal ? '普通' : '有机'}罐头桶: ${result.details.join('，')}`, {
             module: 'ranch', event: '灌罐头', result: 'ok', kind, count: result.used,
         });
+        invalidateCanBucketCache();   // 桶余量变了, 让总览显示立即刷新
     }
     return result;
 }
@@ -573,6 +574,38 @@ const RANCH_OP_ID_STROKE = 11009;
 const CAN_BUCKET_NORMAL = 7003;
 const CAN_BUCKET_ORGANIC = 7004;
 
+/**
+ * 读两个罐头桶的余量(秒), 给面板总览头部显示。
+ * 桶(7003/7004)在农场背包, count=剩余秒数; 背包无该条目 = 0(空桶)。
+ * 60s 小缓存: overview 被 10s 节流后仍会被巡检频繁触发, 不让它每次多打一个 Bag RPC。
+ * 灌桶/喂食成功后会调 invalidateCanBucketCache() 立即失效。
+ */
+let _canBucketCache = { at: 0, normalSec: null, organicSec: null };
+async function readCanBucketSecs() {
+    const now = Date.now();
+    if (_canBucketCache.at > 0 && now - _canBucketCache.at < 60 * 1000) {
+        return { normalSec: _canBucketCache.normalSec, organicSec: _canBucketCache.organicSec };
+    }
+    try {
+        const wh = require('./warehouse');
+        const farmReply = await wh.getBag();
+        const items = wh.getBagItems(farmReply) || [];
+        const norm = items.find(it => toNum(it.id) === CAN_BUCKET_NORMAL);
+        const org = items.find(it => toNum(it.id) === CAN_BUCKET_ORGANIC);
+        const out = {
+            normalSec: norm ? Math.max(0, toNum(norm.count)) : 0,
+            organicSec: org ? Math.max(0, toNum(org.count)) : 0,
+        };
+        _canBucketCache = { at: now, ...out };
+        return out;
+    } catch {
+        return { normalSec: null, organicSec: null };
+    }
+}
+function invalidateCanBucketCache() {
+    _canBucketCache.at = 0;
+}
+
 // ⭐ 2026-11-19: 窝/棚是两个**不同实例**(窝 10001, 棚 10003, 见 GetRanchDetailReply 的
 //   repeated RanchInfo)。所有动物接口(target#1)用的 host_gid 就是 ranch_inst_id。
 //   以前写死 10001, 于是养殖棚动物(羊/牛…)时服务端回"动物不存在" —— 它在 10003 那个栏舍里。
@@ -647,6 +680,7 @@ async function feedAnimal(kind, hostGid = 0, animalInstId = 0) {
     const { body: replyBody } = await network.sendMsgAsync('gamepb.animalpb.AnimalService', 'FeedAnimal', body);
     const _reply = types.FeedAnimalReply.decode(replyBody)
     invalidateRanchOverviewCache();
+    invalidateCanBucketCache();   // 喂食扣桶, 让总览的桶余量显示立即刷新
     return _reply;
 }
 
@@ -1809,6 +1843,8 @@ async function getRanchOverview(accountId = '') {
             // 记住本次的栏舍实例(窝/棚), 后续 feedAnimal 等要用它当 host_gid
             try { rememberRanchInstIds(view); } catch { /* 旁路 */ }
             try { scheduleRanchFromCountdowns(view); } catch { /* 旁路, 不影响概览 */ }
+            // 罐头桶余量(60s 小缓存): 总览头部显示"普通/有机桶", 桶空是喂食失败最常见原因
+            try { view.canBuckets = await readCanBucketSecs(); } catch { view.canBuckets = { normalSec: null, organicSec: null }; }
             return view;
         } catch (e) {
             logWarn('牧场', `获取牧场详情失败: ${e.message}`, {
@@ -4030,12 +4066,57 @@ async function autoSellRanchProducts(opts = {}) {
 }
 
 // 单槽喂食/催产(面板手动操作)
+
+/**
+ * 全场收获三连(官方操作顺序, 文档 6.2 RPC 一览 + 入栏抓包 t+17~t+36):
+ *   收取副产物(CollectProduce 按槽 1..6 收架上的蛋) → 催产(TriggerProduce 给冷却到点的动物开新轮)
+ *   → 收获(HarvestRanch)。
+ * ⭐ 只发 HarvestRanch 时架上有蛋(feed=3/#6≥1)会一直回 1045211 —— batch harvest
+ *   之前只发这一个, 面板"全部收获"在有蛋时必失败。这里抽成公共函数, 手动 op
+ *   和 batch sub=harvest 都走同一条路径。
+ * @returns {{items: string[], harvested: number}} items 是"名字x数量"明细
+ */
+async function collectThenHarvest() {
+    let collectedText = '';
+    for (const s of [1, 2, 3, 4, 5, 6]) {
+        try {
+            const cr = await collectProduce(s);
+            const got = ((cr.items || cr.get_items || []).map(it => `${toNum(it.id)}x${toNum(it.count)}`)).join(',');
+            if (got) collectedText += `${collectedText ? '，' : ''  }槽${s}:${got}`;
+            await sleep(200);
+        } catch (e) {
+            const code = parseRanchErrorCode(e);
+            if (!isExpectedRanchError(e) && code !== 1045211) {
+                logWarn('牧场', `收副产物槽${s}失败: ${e.message}`, { module: 'ranch', event: '收副产物', result: 'error', slot: s });
+            }
+        }
+    }
+    // 催产(给冷却到点的动物开新一轮; 失败不阻断)
+    try {
+        await triggerProduce(0).catch(() => null);
+        await sleep(400);
+    } catch { /* 催产失败继续尝试收获 */ }
+    const r = await harvestRanch(1);
+    const items = [];
+    let harvested = 0;
+    for (const gain of (r.gains || [])) {
+        for (const item of (gain.items || [])) {
+            const id = toNum(item.item_id);
+            if (id === 1102) continue;
+            items.push(`${getAnimalName(id) || id}x${toNum(item.count)}`);
+            harvested += toNum(item.count);
+        }
+    }
+    if (collectedText) items.unshift(`副产物[${collectedText}]`);
+    return { items, harvested };
+}
+
 async function operateRanch(opts = {}) {
     // 兼容错误的调用形态(opts 被传成字符串), 并在未知 op 时把收到的参数打进错误里,
     // 便于定位"半更新"部署下 admin/worker 版本不一致的问题
     if (typeof opts === 'string') opts = { op: opts };
     const op = String((opts && opts.op) || '').trim();
-    if (op && !['harvest', 'produce', 'feed', 'feedmachine', 'buycub', 'rotation', 'clean', 'steal', 'place', 'collect', 'harvestanimal', 'donate', 'hazard', 'upgrade', 'unlock', 'batch'].includes(op)) {
+    if (op && !['harvest', 'produce', 'feed', 'feedmachine', 'buycub', 'rotation', 'rotationbuy', 'clean', 'steal', 'place', 'collect', 'harvestanimal', 'donate', 'hazard', 'stroke', 'autostroke', 'autohazard', 'upgrade', 'unlock', 'batch'].includes(op)) {
         logWarn('牧场', `收到未知操作: ${JSON.stringify(opts).slice(0, 200)}`, {
             module: 'ranch', event: '操作牧场', result: 'unknown_op', op,
         });
@@ -4057,42 +4138,8 @@ async function operateRanch(opts = {}) {
                     slot,
                 };
             }
-                        // ⭐ 官方操作顺序(文档 6.2 RPC 一览 + 入栏抓包 t+17~t+36):
-            //   收取副产物(CollectProduce) → 催产(TriggerProduce) → 收获(HarvestRanch)
-            //   之前只发 HarvestRanch: 架上有蛋(feed=3/#6≥1)时收不到 → 一直 1045211。
-            //   CollectProduce 按槽收(鹅/鸡的蛋在架上); slot=0 尝试全场。
-            let collectedText = '';
-            for (const s of [1, 2, 3, 4, 5, 6]) {
-                try {
-                    const cr = await collectProduce(s);
-                    const got = ((cr.items || cr.get_items || []).map(it => `${toNum(it.id)}x${toNum(it.count)}`)).join(',');
-                    if (got) collectedText += `${collectedText ? '，' : ''  }槽${s}:${got}`;
-                    await sleep(200);
-                } catch (e) {
-                    const code = parseRanchErrorCode(e);
-                    if (!isExpectedRanchError(e) && code !== 1045211) {
-                        logWarn('牧场', `收副产物槽${s}失败: ${e.message}`, { module: 'ranch', event: '收副产物', result: 'error', slot: s });
-                    }
-                }
-            }
-            if (collectedText) result.details.push(`副产物${collectedText}`);
-            // 催产(给冷却到点的动物开新一轮; 失败不阻断)
-            try {
-                await triggerProduce(0).catch(() => null);
-                await sleep(400);
-            } catch { /* 催产失败继续尝试收获 */ }
-            const r = await harvestRanch(1);
-            const items = [];
-            let manualHarvested = 0;
-            for (const gain of (r.gains || [])) {
-                for (const item of (gain.items || [])) {
-                    const id = toNum(item.item_id);
-                    if (id === 1102) continue;
-                    items.push(`${getAnimalName(id) || id}x${toNum(item.count)}`);
-                    manualHarvested += toNum(item.count);
-                }
-            }
-            if (manualHarvested > 0) recordOperation('ranchHarvest', manualHarvested);
+            const { items, harvested } = await collectThenHarvest();
+            if (harvested > 0) recordOperation('ranchHarvest', harvested);
             return { ok: true, action: '收获', detail: items.join('，') || '没有可收的' };
         }
         case 'produce': {
@@ -4236,10 +4283,19 @@ async function operateRanch(opts = {}) {
                     return { ok: false, action: '买幼崽', error: r.error, name: r.name };
                 }
                 if (r.bought > 0) recordOperation('ranchBuyCubs', r.bought);
+                // ⭐ 买完立即入栏: BuyGoods 的 auto_add 只进背包(幼崽 itemType=105),
+                //   不入栏 —— 之前要等下一轮自动巡检才进栏, 面板买了"看不到变化"。
+                let placedNote = '';
+                if (r.bought > 0 && opts.placeAfterBuy !== false) {
+                    try {
+                        const placed = await autoPlaceCubs({});
+                        if (placed.placed > 0) placedNote = `，已入栏 ${placed.placed} 只`;
+                    } catch { /* 入栏失败不阻断购买结果 */ }
+                }
                 return {
                     ok: true,
                     action: '买幼崽',
-                    detail: `${r.name}x${r.bought} / 花 ${r.spent} 金券`,
+                    detail: `${r.name}x${r.bought} / 花 ${r.spent} 金券${placedNote}`,
                     bought: r.bought,
                     spent: r.spent,
                 };
@@ -4248,10 +4304,18 @@ async function operateRanch(opts = {}) {
             // 默认不限预算(用户要求移除); 只有显式传了才透传
             const r = await autoBuyCubs(toNum(opts.maxSpend) > 0 ? { maxSpend: toNum(opts.maxSpend) } : {});
             if (r.bought > 0) recordOperation('ranchBuyCubs', r.bought);
+            // 同上: 自动买完也立即入栏(autoBuyCubs 内部不入栏, 入栏在巡检第 5 步)
+            let autoPlacedNote = '';
+            if (r.bought > 0 && opts.placeAfterBuy !== false) {
+                try {
+                    const placed = await autoPlaceCubs({});
+                    if (placed.placed > 0) autoPlacedNote = `，已入栏 ${placed.placed} 只`;
+                } catch { /* 入栏失败不阻断购买结果 */ }
+            }
             return {
                 ok: true,
                 action: '买幼崽',
-                detail: r.bought > 0 ? `${r.details.join('，')} / 花 ${r.spent} 金券` : '没有空槽或可买幼崽',
+                detail: r.bought > 0 ? `${r.details.join('，')} / 花 ${r.spent} 金券${autoPlacedNote}` : '没有空槽或可买幼崽',
             };
         }
         case 'rotationbuy': {
@@ -4328,9 +4392,6 @@ async function operateRanch(opts = {}) {
         case 'harvestanimal': {
             // ⚠ HarvestAnimal 服务端不存在(对照实验证实), 不要发请求
             return { ok: false, action: '收获出栏', error: '该接口服务端未开放，请用「收获」批量收取' };
-            let n = 0;
-            for (const g of (r.gains || [])) for (const it of (g.items || [])) n += toNum(it.count);
-            return { ok: true, action: '收获出栏', detail: `槽${slot} → ${n} 个` };
         }
         case 'donate': {
             if (!slot) throw new Error('需要指定槽位');
@@ -4395,16 +4456,11 @@ async function operateRanch(opts = {}) {
             // 批量操作(对照农场"整田操作"): harvest/produce/clean/feed
             const sub = String(opts.batch || '').trim();
             if (sub === 'harvest') {
-                const r = await harvestRanch(1);
-                const items = [];
-                let n = 0;
-                for (const g of (r.gains || [])) for (const it of (g.items || [])) {
-                    const id = toNum(it.item_id);
-                    if (id === 1102) continue;
-                    items.push(`${getAnimalName(id) || id}x${toNum(it.count)}`);
-                    n += toNum(it.count);
-                }
-                if (n > 0) recordOperation('ranchHarvest', n);
+                // ⭐ 2026-11-21: 改成与手动「收获」同一套三连(收副产物→催产→收获)。
+                //   之前只发 HarvestRanch —— 架上有蛋(鸡/鹅)时服务端回 1045211,
+                //   面板「全部收获」按钮在有蛋的牧场永远失败。
+                const { items, harvested } = await collectThenHarvest();
+                if (harvested > 0) recordOperation('ranchHarvest', harvested);
                 return { ok: true, action: '全场收获', detail: items.join('，') || '没有可收的' };
             }
             if (sub === 'produce') {
@@ -4426,6 +4482,16 @@ async function operateRanch(opts = {}) {
                 try {
                     // ⭐ #2 是喂食方式: 4=普通→2 / 5,6=有机→1(全场批量, 不带 target#2)
                     const ftKind = ft === FEED_TYPE.NORMAL_CAN ? 'normal' : 'organic';
+                    // 预灌目标桶(与单只喂食一致): 桶没余量才灌, 省一次必失败的请求
+                    if (opts.autoFillCans !== false) {
+                        const pre = await fillCanBuckets(ftKind, { maxItems: 1, onlyIfBucketEmpty: true })
+                            .catch(() => ({ used: 0 }));
+                        if (pre.used > 0) {
+                            log('牧场', `全场喂食前把 1 个${ftKind === 'normal' ? '普通' : '有机'}罐头灌进桶`, {
+                                module: 'ranch', event: '灌罐头', result: 'ok', kind: ftKind,
+                            });
+                        }
+                    }
                     await feedAnimal(ftKind);
                     recordOperation('ranchFeed', 1);
                     return { ok: true, action: '全场喂罐头', detail: FEED_TYPE_LABEL[ft] || '罐头' };
@@ -4597,6 +4663,9 @@ module.exports = {
     getRanchShop,
     buyGrass,
     fillCanBuckets,
+    readCanBucketSecs,
+    invalidateCanBucketCache,
+    collectThenHarvest,
     useItemWithUid,
     getRanchWeightScore,
     __privateRanchFns: {

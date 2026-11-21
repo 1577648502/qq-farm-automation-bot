@@ -499,6 +499,21 @@ const careSummary = computed(() => {
   }
 })
 
+/** 罐头桶余量文案(总览头部): 读不到(null)时显示'?'，0=空桶。喂食失败最常见原因就是桶空 */
+const canBucketText = computed(() => {
+  const b = (overview.value as any)?.canBuckets
+  if (!b || (b.normalSec === null && b.organicSec === null))
+    return ''
+  const fmt = (sec: number | null) => (sec === null ? '?' : (sec > 0 ? `${(sec / 3600).toFixed(1)}h` : '空'))
+  return `普通桶 ${fmt(b.normalSec)} · 有机桶 ${fmt(b.organicSec)}`
+})
+const canBucketEmpty = computed(() => {
+  const b = (overview.value as any)?.canBuckets
+  if (!b)
+    return false
+  return b.normalSec === 0 || b.organicSec === 0
+})
+
 /** 窝/棚分组视图(对应农场的田地) */
 interface PenView {
   key: string
@@ -1471,9 +1486,17 @@ onUnmounted(() => {
               <div class="i-carbon-home text-xl" />
               牧场总览
             </h3>
-            <div v-if="overview" class="flex items-center gap-3 text-xs text-gray-500 dark:text-gray-400">
+            <div v-if="overview" class="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-gray-500 dark:text-gray-400">
               <span>窝 {{ overview.coopAnimals ?? 0 }}/{{ overview.coopCount }} · 棚 {{ overview.penAnimals ?? 0 }}/{{ overview.penCount }}</span>
               <span>牧草 {{ overview.grassCount }}</span>
+              <span
+                v-if="canBucketText"
+                :class="canBucketEmpty ? 'text-rose-500 dark:text-rose-400' : ''"
+                title="罐头桶里的剩余加速时长；喂食从桶里扣，桶空会报「罐头桶已耗尽」"
+              >
+                <span class="i-carbon-restaurant inline-block align-[-1px]" />
+                {{ canBucketText }}
+              </span>
               <span v-if="overview.ranchLevel">牧场 Lv{{ overview.ranchLevel }} <span class="text-gray-400">{{ overview.ranchLevelExp }}/{{ overview.ranchLevelNeeded }}</span></span>
               <span v-else>经验 {{ overview.ranchExp }}</span>
             </div>
@@ -1489,9 +1512,9 @@ onUnmounted(() => {
             <i class="i-fas-egg" />
             <span class="font-medium">可收 {{ careSummary.harvestable }}</span>
           </div>
-          <div class="flex items-center gap-1 rounded-full bg-green-100 px-2.5 py-1 text-green-700 dark:bg-green-900/30 dark:text-green-400">
+          <div class="flex items-center gap-1 rounded-full px-2.5 py-1" :class="careSummary.hungry > 0 ? 'bg-rose-100 text-rose-700 dark:bg-rose-900/30 dark:text-rose-400' : 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400'">
             <i class="i-carbon-sprout" />
-            <span class="font-medium">饥饿 {{ careSummary.hungry }}</span>
+            <span class="font-medium">缺草 {{ careSummary.hungry }}</span>
           </div>
           <div class="flex items-center gap-1 rounded-full bg-fuchsia-100 px-2.5 py-1 text-fuchsia-700 dark:bg-fuchsia-900/30 dark:text-fuchsia-400">
             <i class="i-carbon-star" />
@@ -1563,81 +1586,98 @@ onUnmounted(() => {
              批量操作条和建筑网格必须包在同一个 v-else 里 —— 它们之间不能再插
              独立 v-if 节点, 否则会把上面那条 "空态 v-else-if" 链切断。 -->
           <div v-else class="space-y-4">
-            <!-- 批量操作 —— 与农场 "整田操作" 同一套排布:
-                 手机上 3 列网格(不横向滚动), 桌面自动展开; 图标 + 文字居中。 -->
-            <div class="grid grid-cols-3 gap-2 border-b border-gray-100 pb-2.5 dark:border-gray-700 sm:flex sm:flex-wrap">
-              <button
-                v-for="op in BATCH_OPS"
-                :key="op.key"
-                type="button"
-                class="min-h-[44px] inline-flex items-center justify-center gap-1.5 border rounded-lg px-2 py-2 text-sm font-medium transition active:scale-[0.98] disabled:cursor-not-allowed sm:px-3 disabled:opacity-50"
-                :class="op.tone"
-                :disabled="opBusy !== ''"
-                @click="op.key === 'feed' ? runBatch('feed', { feedType: 5 }) : runBatch(op.key)"
-              >
-                <div :class="op.icon" class="shrink-0 text-base" />
-                {{ op.label }}
-              </button>
-              <!-- 游商兑换: 用便便向流动商贩换物, 是牧场唯一的"便便变现"路径。
-                   autoBuyRotationShop 会自己判断是否营业/有没有便便。 -->
-              <button
-                type="button"
-                class="min-h-[44px] inline-flex items-center justify-center gap-1.5 border border-violet-300 rounded-lg bg-violet-50 px-2 py-2 text-sm text-violet-700 font-medium transition active:scale-[0.98] disabled:cursor-not-allowed sm:px-3 disabled:opacity-50 dark:border-violet-700 dark:bg-violet-900/30 hover:bg-violet-100 dark:text-violet-300"
-                :disabled="opBusy !== ''"
-                @click="runOp('rotation')"
-              >
-                <div class="i-carbon-store" />
-                游商兑换
-              </button>
-              <!-- 照顾好友动物: 自动流程由 ranch_stroke 开关控制, 这里给手动补跑一次 -->
-              <button
-                type="button"
-                class="min-h-[44px] inline-flex items-center justify-center gap-1.5 border border-emerald-300 rounded-lg bg-emerald-50 px-2 py-2 text-sm text-emerald-700 font-medium transition active:scale-[0.98] disabled:cursor-not-allowed sm:px-3 disabled:opacity-50 dark:border-emerald-700 dark:bg-emerald-900/30 hover:bg-emerald-100 dark:text-emerald-300"
-                :disabled="opBusy !== ''"
-                @click="runOp('autostroke')"
-              >
-                <div class="i-fas-paw" />
-                照顾好友动物
-              </button>
-              <!-- 使坏好友: 自动流程由 ranch_hazard 开关控制(默认关), 这里给手动补跑一次 -->
-              <button
-                type="button"
-                class="min-h-[44px] inline-flex items-center justify-center gap-1.5 border border-rose-300 rounded-lg bg-rose-50 px-2 py-2 text-sm text-rose-700 font-medium transition active:scale-[0.98] disabled:cursor-not-allowed sm:px-3 disabled:opacity-50 dark:border-rose-700 dark:bg-rose-900/30 hover:bg-rose-100 dark:text-rose-300"
-                :disabled="opBusy !== ''"
-                @click="runOp('autohazard')"
-              >
-                <div class="i-carbon-warning-alt" />
-                使坏好友
-              </button>
-              <!-- 偷好友牧场产物: 自动流程由 ranch_steal 开关控制, 这里给手动补跑一次 -->
-              <button
-                type="button"
-                class="min-h-[44px] inline-flex items-center justify-center gap-1.5 border border-pink-300 rounded-lg bg-pink-50 px-2 py-2 text-sm text-pink-700 font-medium transition active:scale-[0.98] disabled:cursor-not-allowed sm:px-3 disabled:opacity-50 dark:border-pink-700 dark:bg-pink-900/30 hover:bg-pink-100 dark:text-pink-300"
-                :disabled="opBusy !== ''"
-                @click="stealConfirming = true"
-              >
-                <div class="i-carbon-arrow-down-left" />
-                偷好友牧场
-              </button>
-              <!-- 建筑升级 / 地块解锁: 后端是一键(先领竣工再升级), 不传 instId 即整场 -->
-              <button
-                type="button"
-                class="min-h-[38px] inline-flex items-center gap-1.5 border border-indigo-300 rounded-lg bg-indigo-50 px-3 py-1.5 text-xs text-indigo-700 font-medium transition dark:border-indigo-700 dark:bg-indigo-900/30 hover:bg-indigo-100 dark:text-indigo-300 disabled:opacity-50"
-                :disabled="opBusy !== ''"
-                @click="runOp('upgrade')"
-              >
-                <div class="i-carbon-upgrade" />
-                建筑升级
-              </button>
-              <button
-                type="button"
-                class="min-h-[38px] inline-flex items-center gap-1.5 border border-cyan-300 rounded-lg bg-cyan-50 px-3 py-1.5 text-xs text-cyan-700 font-medium transition dark:border-cyan-700 dark:bg-cyan-900/30 hover:bg-cyan-100 dark:text-cyan-300 disabled:opacity-50"
-                :disabled="opBusy !== ''"
-                @click="runOp('unlock')"
-              >
-                <div class="i-carbon-unlocked" />
-                解锁地块
-              </button>
+            <!-- 批量操作条: 按"自己 / 好友 / 建筑"分 3 组, 手机上各自成网格不横向滚动 -->
+            <div class="space-y-2.5 border-b border-gray-100 pb-2.5 dark:border-gray-700">
+              <!-- 第 1 组: 牧场操作(自己的动物/桶/游商) -->
+              <div>
+                <div class="mb-1 text-[10px] tracking-wide text-gray-400">
+                  牧场操作
+                </div>
+                <div class="grid grid-cols-3 gap-2 sm:flex sm:flex-wrap">
+                  <button
+                    v-for="op in BATCH_OPS"
+                    :key="op.key"
+                    type="button"
+                    class="min-h-[44px] inline-flex items-center justify-center gap-1.5 border rounded-lg px-2 py-2 text-sm font-medium transition active:scale-[0.98] disabled:cursor-not-allowed sm:px-3 disabled:opacity-50"
+                    :class="op.tone"
+                    :disabled="opBusy !== ''"
+                    @click="op.key === 'feed' ? runBatch('feed', { feedType: 5 }) : runBatch(op.key)"
+                  >
+                    <div :class="op.icon" class="shrink-0 text-base" />
+                    {{ op.label }}
+                  </button>
+                  <!-- 游商兑换: 用便便向流动商贩换物, 是牧场唯一的"便便变现"路径。
+                       autoBuyRotationShop 会自己判断是否营业/有没有便便。 -->
+                  <button
+                    type="button"
+                    class="min-h-[44px] inline-flex items-center justify-center gap-1.5 border border-violet-300 rounded-lg bg-violet-50 px-2 py-2 text-sm text-violet-700 font-medium transition active:scale-[0.98] disabled:cursor-not-allowed sm:px-3 disabled:opacity-50 dark:border-violet-700 dark:bg-violet-900/30 hover:bg-violet-100 dark:text-violet-300"
+                    :disabled="opBusy !== ''"
+                    @click="runOp('rotation')"
+                  >
+                    <div class="i-carbon-store" />
+                    游商兑换
+                  </button>
+                </div>
+              </div>
+              <!-- 第 2 组: 好友互动(自动流程由设置里的 ranch_stroke/ranch_hazard/ranch_steal 开关控制, 这里手动补跑) -->
+              <div>
+                <div class="mb-1 text-[10px] tracking-wide text-gray-400">
+                  好友互动
+                </div>
+                <div class="grid grid-cols-3 gap-2 sm:flex sm:flex-wrap">
+                  <button
+                    type="button"
+                    class="min-h-[44px] inline-flex items-center justify-center gap-1.5 border border-emerald-300 rounded-lg bg-emerald-50 px-2 py-2 text-sm text-emerald-700 font-medium transition active:scale-[0.98] disabled:cursor-not-allowed sm:px-3 disabled:opacity-50 dark:border-emerald-700 dark:bg-emerald-900/30 hover:bg-emerald-100 dark:text-emerald-300"
+                    :disabled="opBusy !== ''"
+                    @click="runOp('autostroke')"
+                  >
+                    <div class="i-fas-paw" />
+                    照顾好友
+                  </button>
+                  <button
+                    type="button"
+                    class="min-h-[44px] inline-flex items-center justify-center gap-1.5 border border-rose-300 rounded-lg bg-rose-50 px-2 py-2 text-sm text-rose-700 font-medium transition active:scale-[0.98] disabled:cursor-not-allowed sm:px-3 disabled:opacity-50 dark:border-rose-700 dark:bg-rose-900/30 hover:bg-rose-100 dark:text-rose-300"
+                    :disabled="opBusy !== ''"
+                    @click="runOp('autohazard')"
+                  >
+                    <div class="i-carbon-warning-alt" />
+                    使坏好友
+                  </button>
+                  <button
+                    type="button"
+                    class="min-h-[44px] inline-flex items-center justify-center gap-1.5 border border-pink-300 rounded-lg bg-pink-50 px-2 py-2 text-sm text-pink-700 font-medium transition active:scale-[0.98] disabled:cursor-not-allowed sm:px-3 disabled:opacity-50 dark:border-pink-700 dark:bg-pink-900/30 hover:bg-pink-100 dark:text-pink-300"
+                    :disabled="opBusy !== ''"
+                    @click="stealConfirming = true"
+                  >
+                    <div class="i-carbon-arrow-down-left" />
+                    偷好友牧场
+                  </button>
+                </div>
+              </div>
+              <!-- 第 3 组: 建筑与发展 -->
+              <div class="flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  class="min-h-[38px] inline-flex items-center gap-1.5 border border-indigo-300 rounded-lg bg-indigo-50 px-3 py-1.5 text-xs text-indigo-700 font-medium transition dark:border-indigo-700 dark:bg-indigo-900/30 hover:bg-indigo-100 dark:text-indigo-300 disabled:opacity-50"
+                  :disabled="opBusy !== ''"
+                  @click="runOp('upgrade')"
+                >
+                  <div class="i-carbon-upgrade" />
+                  建筑升级
+                </button>
+                <button
+                  type="button"
+                  class="min-h-[38px] inline-flex items-center gap-1.5 border border-cyan-300 rounded-lg bg-cyan-50 px-3 py-1.5 text-xs text-cyan-700 font-medium transition dark:border-cyan-700 dark:bg-cyan-900/30 hover:bg-cyan-100 dark:text-cyan-300 disabled:opacity-50"
+                  :disabled="opBusy !== ''"
+                  @click="runOp('unlock')"
+                >
+                  <div class="i-carbon-unlocked" />
+                  解锁地块
+                </button>
+                <span class="ml-auto self-center text-[10px] text-gray-400">
+                  自动流程由设置里的牧场开关控制，这里是手动补跑入口
+                </span>
+              </div>
             </div>
 
             <div
@@ -1761,11 +1801,12 @@ onUnmounted(() => {
                     </span>
                   </div>
 
-                  <div class="mt-auto w-full flex gap-1 pt-2">
+                  <!-- 操作按钮: 2x2 网格(一行 4 个在窄卡上挤成一坨, 2x2 每个按钮都有可点宽度) -->
+                  <div class="mt-auto grid w-full grid-cols-2 gap-1 pt-2">
                     <button
                       v-if="a.canProduce"
                       type="button"
-                      class="min-h-[36px] flex-1 border border-sky-300 rounded-lg bg-sky-50 px-2 py-1.5 text-xs text-sky-700 font-medium transition dark:border-sky-700 dark:bg-sky-900/30 hover:bg-sky-100 dark:text-sky-300 disabled:opacity-40"
+                      class="min-h-[36px] border border-sky-300 rounded-lg bg-sky-50 px-2 py-1.5 text-xs text-sky-700 font-medium transition dark:border-sky-700 dark:bg-sky-900/30 hover:bg-sky-100 dark:text-sky-300 disabled:opacity-40"
                       :disabled="operateLoading === a.slot || opBusy !== ''"
                       @click="runOp('produce', a.slot)"
                     >
@@ -1773,20 +1814,22 @@ onUnmounted(() => {
                     </button>
                     <!-- 喂罐头(FeedAnimal, 单只实测可用)
                          两种罐头限制不同(抓包实测):
-                           4 = 普通罐头, 每只动物只能用一次
+                           4 = 普通罐头, 每只动物只能用一次(limited_can_used 服务端标记)
                            5/6 = 有机罐头, 不限次数 -->
                     <button
                       type="button"
-                      class="min-h-[36px] flex-1 border border-orange-300 rounded-lg bg-orange-50 px-2 py-1.5 text-xs text-orange-700 font-medium transition dark:border-orange-700 dark:bg-orange-900/30 hover:bg-orange-100 dark:text-orange-300 disabled:opacity-40"
-                      :disabled="operateLoading === a.slot || opBusy !== ''"
-                      title="普通罐头：每只动物只能用一次（推快本次产出 1 小时）"
+                      class="min-h-[36px] border border-orange-300 rounded-lg bg-orange-50 px-2 py-1.5 text-xs text-orange-700 font-medium transition dark:border-orange-700 dark:bg-orange-900/30 hover:bg-orange-100 dark:text-orange-300 disabled:opacity-40"
+                      :disabled="operateLoading === a.slot || opBusy !== '' || a.limitedCanUsed"
+                      :title="a.limitedCanUsed
+                        ? '这只动物已经用过普通罐头（每只限一次），请用有机罐头'
+                        : '普通罐头：每只动物只能用一次（推快本次产出 1 小时）'"
                       @click="runOp('feed', a.slot, { feedType: 4 })"
                     >
-                      普通罐头
+                      {{ a.limitedCanUsed ? '普通已用' : '普通罐头' }}
                     </button>
                     <button
                       type="button"
-                      class="min-h-[36px] flex-1 border border-amber-300 rounded-lg bg-amber-50 px-2 py-1.5 text-xs text-amber-700 font-medium transition dark:border-amber-700 dark:bg-amber-900/30 hover:bg-amber-100 dark:text-amber-300 disabled:opacity-40"
+                      class="min-h-[36px] border border-amber-300 rounded-lg bg-amber-50 px-2 py-1.5 text-xs text-amber-700 font-medium transition dark:border-amber-700 dark:bg-amber-900/30 hover:bg-amber-100 dark:text-amber-300 disabled:opacity-40"
                       :disabled="operateLoading === a.slot || opBusy !== ''"
                       title="有机罐头：不限次数（累积罐头加成时长）"
                       @click="runOp('feed', a.slot, { feedType: 5 })"
@@ -1796,7 +1839,7 @@ onUnmounted(() => {
                     <!-- 出售动物(donate): 卖栏里的这只换金券。按农场"整块操作"的习惯放在卡片内联 -->
                     <button
                       type="button"
-                      class="min-h-[36px] flex-1 border border-rose-300 rounded-lg bg-rose-50 px-2 py-1.5 text-xs text-rose-700 font-medium transition dark:border-rose-700 dark:bg-rose-900/30 hover:bg-rose-100 dark:text-rose-300 disabled:opacity-40"
+                      class="min-h-[36px] border border-rose-300 rounded-lg bg-rose-50 px-2 py-1.5 text-xs text-rose-700 font-medium transition dark:border-rose-700 dark:bg-rose-900/30 hover:bg-rose-100 dark:text-rose-300 disabled:opacity-40"
                       :disabled="operateLoading === a.slot || opBusy !== ''"
                       title="出售这只动物(回收价以服务端结算为准)"
                       @click="openSellConfirm(a)"

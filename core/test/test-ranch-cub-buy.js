@@ -467,46 +467,56 @@ proto.loadProto().then(async () => {
             apply(withData, { strategy: 'max_profit' })[0].name);
     }
 
-    section('7. FeedAnimal 编码与官方抓包逐字节一致(target#2 = animal_inst_id)');
+    section('7. FeedAnimal 编码与官方抓包逐字节一致(#2=喂食方式: 2=普通/1=有机)');
     {
-        // ⭐ 2026-11-19 官方抓包(20261119-091627_罐头)定案, 推翻之前"#2=feed_type"的猜测:
-        //   单独喂: {1:{1:10001, 2:animal_inst_id}, 2:count}
-        //   批量喂: {1:{1:10001},                  2:count}
-        // 之前硬编码 feed_type=4/5/6, 服务端拿 4 去找动物 → 1045207「动物不存在」。
+        // ⭐ 2026-11-21 官方抓包(20261119-091627_罐头 4 帧)定案:
+        //   请求 {1:{1:10001, 2:animal_inst_id(可省略)}, 2:feed_type}
+        //   顶层 #2 是**喂食方式**(1=有机扣7004 / 2=普通扣7003), 不是数量;
+        //   target#2 才是 animal_inst_id, 缺省=全场每只一条 receipt。
+        //   旧实现把罐头个数塞进 #2 → 点普通罐头也走有机路径 → 1045234 桶空。
         const calls = installStub({
             FeedAnimal: () => types.FeedAnimalReply.encode(types.FeedAnimalReply.create({})).finish(),
         });
         const ranch = freshRanch();
         const f = ranch.__privateRanchFns;
 
-        // 单独: 槽位动物的实例 1216
-        await f.feedAnimal(2, 10001, 1216);
-        check('单独喂 count=2 → 0a0608914e10c0091002',
+        // 单独: 槽位动物的实例 1216, 普通罐头 → #2=2
+        await f.feedAnimal('normal', 10001, 1216);
+        check('单独喂 普通罐头 → 0a0608914e10c0091002',
             calls[0].body.toString('hex') === '0a0608914e10c0091002', calls[0].body.toString('hex'));
 
         const calls2 = installStub({
             FeedAnimal: () => types.FeedAnimalReply.encode(types.FeedAnimalReply.create({})).finish(),
         });
         const fresh2 = freshRanch();
-        await fresh2.__privateRanchFns.feedAnimal(1, 10001, 1216);
-        check('单独喂 count=1 → 0a0608914e10c0091001',
+        await fresh2.__privateRanchFns.feedAnimal('organic', 10001, 1216);
+        check('单独喂 有机罐头 → 0a0608914e10c0091001',
             calls2[0].body.toString('hex') === '0a0608914e10c0091001', calls2[0].body.toString('hex'));
+
+        // 数字形式(4=FEED_TYPE.NORMAL_CAN)也应归类为普通
+        const calls5 = installStub({
+            FeedAnimal: () => types.FeedAnimalReply.encode(types.FeedAnimalReply.create({})).finish(),
+        });
+        const fresh5 = freshRanch();
+        await fresh5.__privateRanchFns.feedAnimal(4, 10001, 1216);
+        check('feedAnimal(4) 归类普通 → 0a0608914e10c0091002',
+            calls5[0].body.toString('hex') === '0a0608914e10c0091002', calls5[0].body.toString('hex'));
 
         // 批量: 不带 target#2
         const calls3 = installStub({
             FeedAnimal: () => types.FeedAnimalReply.encode(types.FeedAnimalReply.create({})).finish(),
         });
         const fresh3 = freshRanch();
-        await fresh3.__privateRanchFns.feedAnimal(2, 10001, 0);
-        check('批量喂 count=2 → 0a0308914e1002',
+        await fresh3.__privateRanchFns.feedAnimal('normal', 10001, 0);
+        check('批量喂 普通罐头 → 0a0308914e1002',
             calls3[0].body.toString('hex') === '0a0308914e1002', calls3[0].body.toString('hex'));
 
         const calls4 = installStub({
             FeedAnimal: () => types.FeedAnimalReply.encode(types.FeedAnimalReply.create({})).finish(),
         });
         const fresh4 = freshRanch();
-        await fresh4.__privateRanchFns.feedAnimal(1, 10001, 0);
-        check('批量喂 count=1 → 0a0308914e1001',
+        await fresh4.__privateRanchFns.feedAnimal('organic', 10001, 0);
+        check('批量喂 有机罐头 → 0a0308914e1001',
             calls4[0].body.toString('hex') === '0a0308914e1001', calls4[0].body.toString('hex'));
     }
 
