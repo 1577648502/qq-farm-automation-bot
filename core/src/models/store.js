@@ -203,6 +203,10 @@ const DEFAULT_ACCOUNT_CONFIG = {
         fertilizer_multi_season: true,
         fertilizer_land_types: [...DEFAULT_FERTILIZER_LAND_TYPES],
         fertilizer_smart_seconds: 300,
+        // 牧场罐头策略(与农场施肥策略同构): none 不喂 / normal 仅普通罐头(每只一次)
+        // / organic 仅有机(每轮每只一次) / both 普通+有机 / smart 普通+快成熟有机
+        ranch_can: 'smart',
+        ranch_can_smart_seconds: 300,
         skip_own_weed_bug: true,  // 不除自己草虫
         rob_treasure: false,      // 夺宝: 自动遍历好友可夺宝藏并用挑战书抢夺
     },

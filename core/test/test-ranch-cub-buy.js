@@ -721,6 +721,68 @@ proto.loadProto().then(async () => {
         check('没有多余的 #3(count)', req.count === undefined || Number(req.count) === 0, req.count);
     }
 
+    section('21. 罐头策略 autoFeedCansByStrategy(与农场施肥策略同构)');
+    {
+        // 动物矩阵:
+        //   A 鸡  stage=4 剩 200s  没用过普通 → 普通目标 + (≤300s)有机目标
+        //   B 鸭  stage=4 剩 600s  没用过普通 → 普通目标 + 非(>300s)有机目标
+        //   C 鹅  stage=3 生产期    用过普通   → 仅有机(organic/both 策略)目标
+        const animals = [
+            { slot: 1, animalInstId: 121, ranchInstId: 10001, canFeed: true, limitedCanUsed: false, stage: 4, matureInSec: 200 },
+            { slot: 2, animalInstId: 122, ranchInstId: 10001, canFeed: true, limitedCanUsed: false, stage: 4, matureInSec: 600 },
+            { slot: 3, animalInstId: 123, ranchInstId: 10001, canFeed: true, limitedCanUsed: true, stage: 3, matureInSec: null },
+        ];
+        const EMPTY_FEED = () => types.FeedAnimalReply.encode(types.FeedAnimalReply.create({})).finish();
+        // 注意不能字节扫描 #2: target 嵌套里的 `10` 也是 animal_inst_id 的标签, 会误判
+        const reqOf = (body) => types.FeedAnimalRequest.decode(Buffer.isBuffer(body) ? body : Buffer.from(body));
+        const kindOf = (body) => {
+            const t = Number(reqOf(body).feed_type);
+            return t === 2 ? 'normal' : 'organic';
+        };
+        const instOf = (body) => Number(reqOf(body).target && reqOf(body).target.animal_inst_id) || 0;
+
+        const run = async (strategy, smartSeconds = 300) => {
+            const calls = installStub({ FeedAnimal: EMPTY_FEED });
+            const ranch = freshRanch();
+            const r = await ranch.autoFeedCansByStrategy({ animals }, { feedStrategy: strategy, smartSeconds });
+            return { r, kinds: calls.map(c => `${kindOf(c.body)}#${instOf(c.body)}`) };
+        };
+
+        // smart: 普通喂 A/B(没用过), 有机只喂 A(≤300s 快成熟)
+        {
+            const { r, kinds } = await run('smart');
+            check('smart: 普通x2 + 有机x1 = 3', r.fed === 3 && r.details.join() === '普通罐头x2,有机罐头x1',
+                `${r.fed}/${r.details.join()}`);
+            check('smart: 普通喂 A,B; 有机只喂 A(快成熟)', kinds.join() === 'normal#121,normal#122,organic#121', kinds.join());
+        }
+        // normal: 只喂普通 A/B, 不喂有机
+        {
+            const { r, kinds } = await run('normal');
+            check('normal: 普通x2, 无有机', r.fed === 2 && kinds.join() === 'normal#121,normal#122', kinds.join());
+        }
+        // organic: 全场喂有机(含 C), 不喂普通
+        {
+            const { r, kinds } = await run('organic');
+            check('organic: 有机x3(A/B/C), 无普通', r.fed === 3 && kinds.join() === 'organic#121,organic#122,organic#123', kinds.join());
+        }
+        // both: 普通 A/B + 有机 A/B/C
+        {
+            const { r, kinds } = await run('both');
+            check('both: 普通x2 + 有机x3 = 5', r.fed === 5 && kinds.filter(k => k.startsWith('normal')).length === 2
+                && kinds.filter(k => k.startsWith('organic')).length === 3, kinds.join());
+        }
+        // none: 一只都不喂
+        {
+            const { r, kinds } = await run('none');
+            check('none: 不喂', r.fed === 0 && kinds.length === 0 && r.strategy === 'none', `${r.fed}/${kinds.length}`);
+        }
+        // smart 秒数可覆盖: 60s 时 A(200s) 也不算快成熟
+        {
+            const { kinds } = await run('smart', 60);
+            check('smart(60s): 无快成熟目标, 只喂普通', kinds.join() === 'normal#121,normal#122', kinds.join());
+        }
+    }
+
     finish();
 }).catch((e) => {
     console.error('测试异常:', e);

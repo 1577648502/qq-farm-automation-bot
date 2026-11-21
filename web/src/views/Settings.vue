@@ -1099,6 +1099,8 @@ function createDefaultAutomation(fertilizer: string = 'none') {
     fertilizer_multi_season: false,
     fertilizer_land_types: [...allFertilizerLandTypes],
     fertilizer_smart_seconds: 300,
+    ranch_can: 'smart',
+    ranch_can_smart_seconds: 300,
   }
 }
 const fertilizerLandTypeOptions = computed(() =>
@@ -1185,6 +1187,15 @@ const fertilizerOptions = [
   { label: '仅普通化肥', value: 'normal' },
   { label: '仅有机化肥', value: 'organic' },
   { label: '不施肥', value: 'none' },
+]
+
+// 牧场罐头策略(与施肥策略同构: 普通/有机罐头 ↔ 普通/有机化肥)
+const ranchCanOptions = [
+  { label: '普通 + 快成熟有机', value: 'smart' },
+  { label: '普通 + 有机', value: 'both' },
+  { label: '仅普通罐头', value: 'normal' },
+  { label: '仅有机罐头', value: 'organic' },
+  { label: '不喂罐头', value: 'none' },
 ]
 
 // 活动菜单在后台被关闭时, 对应自动化开关必须一并关闭
@@ -2979,10 +2990,31 @@ async function onBackupFileChange(ev: Event) {
                 <BaseSwitch v-model="localAutomationSettings.automation.ranch_unlock" label="自动地块解锁" />
                 <BaseSwitch v-model="localAutomationSettings.automation.ranch_harvest" label="自动收获" />
                 <BaseSwitch v-model="localAutomationSettings.automation.ranch_produce" label="自动催产" />
+                <BaseSelect
+                  v-model="localAutomationSettings.automation.ranch_can"
+                  label="罐头策略"
+                  :options="ranchCanOptions"
+                />
+                <div
+                  v-if="localAutomationSettings.automation.ranch_can === 'smart'"
+                  class="col-span-full flex flex-wrap gap-4 rounded bg-amber-50 p-3 text-sm dark:bg-amber-900/20"
+                >
+                  <BaseInput
+                    v-model.number="localAutomationSettings.automation.ranch_can_smart_seconds"
+                    label="快成熟判定秒数"
+                    type="number"
+                    min="30"
+                    max="3600"
+                    class="w-40"
+                  />
+                  <span class="flex items-end pb-2 text-xs text-gray-500 dark:text-gray-400">
+                    距成熟时间 ≤ 此秒数时喂有机罐头（默认300秒=5分钟）；普通罐头每只动物限一次，自动喂给没用过的。
+                  </span>
+                </div>
                 <BaseSwitch v-model="localAutomationSettings.automation.ranch_feedmachine" label="自动牧草机补草" />
                 <BaseSwitch v-model="localAutomationSettings.automation.ranch_buy_grass" label="牧草断了自动购买" />
                 <div class="col-span-full text-xs text-gray-400 dark:text-gray-500">
-                  自动经营按 5~8 分钟一轮依次执行：收获 → 催产 → 牧草机补草 → 卖产物 → 买幼崽 → 清理牧场 → 偷好友产物 → 建筑升级 → 地块解锁 → 游商兑换 → 领牧场任务。
+                  自动经营按 5~8 分钟一轮依次执行：收获 → 催产 → 喂罐头（按罐头策略）→ 牧草机补草 → 卖产物 → 买幼崽 → 清理牧场 → 偷好友产物 → 建筑升级 → 地块解锁 → 游商兑换 → 领牧场任务。
                   每一步都有独立开关（手动在牧场页点单个操作不受这些开关影响）；关闭总开关后所有牧场动作停止。
                   牧场任务与农场任务相互独立（服务端按场景区分）。
                 </div>

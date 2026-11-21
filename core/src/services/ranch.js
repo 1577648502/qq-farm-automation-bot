@@ -1858,6 +1858,96 @@ async function getRanchOverview(accountId = '') {
 }
 
 /**
+ * 按「罐头策略」自动喂罐头 —— 与农场施肥策略(automation.fertilizer)完全同构:
+ *   配置 automation.ranch_can: 'none' / 'normal' / 'organic' / 'both' / 'smart'
+ *   配置 automation.ranch_can_smart_seconds: 快成熟判定秒数(默认 300 = 5 分钟)
+ * 策略语义(化肥 → 罐头):
+ *   normal  = 仅普通罐头: 给没用过(limited_can_used=0)的动物逐只各喂一次
+ *   organic = 仅有机罐头: 全场每轮各喂一次(有机不限次数)
+ *   both    = 普通 + 有机(全场每轮)
+ *   smart   = 普通 + 快成熟有机(成熟期剩余 ≤ smart_seconds 的动物逐只喂有机)
+ *   none    = 不自动喂
+ * 普通罐头 ↔ 普通化肥, 有机罐头 ↔ 有机化肥; 快成熟判定 ↔ getFastMatureLands。
+ * 逐只喂的原因: 普通罐头每只动物限一次, 全场一枪打过去已喂过的动物会混进失败;
+ * 且带 target#2=animal_inst_id 才能精确记账。
+ * @returns {{fed: number, details: string[], strategy: string}}
+ */
+async function autoFeedCansByStrategy(view, opts = {}) {
+    const out = { fed: 0, details: [], strategy: 'none' };
+    let automation = {};
+    try {
+        automation = require('../models/store').getAutomation(process.env.FARM_ACCOUNT_ID || '') || {};
+    } catch { /* 读不到按 none */ }
+    const strategy = String(opts.feedStrategy || automation.ranch_can || 'none').trim();
+    out.strategy = strategy;
+    if (!strategy || strategy === 'none') return out;
+    const animals = (view && Array.isArray(view.animals)) ? view.animals : [];
+    if (!animals.length) return out;
+    const smartSeconds = Math.max(30, toNum(opts.smartSeconds) || toNum(automation.ranch_can_smart_seconds) || 300);
+
+    const gidFor = a => toNum(a.ranchInstId) || 0;
+    const instFor = a => toNum(a.animalInstId) || 0;
+
+    // 桶空 → 灌一个对应桶再重试一次; 还失败就算这只喂不了(罐头耗尽=正常态)
+    const feedOneWithRefill = async (a, kind) => {
+        try {
+            await feedAnimal(kind, gidFor(a), instFor(a));
+        } catch (e) {
+            if (parseRanchErrorCode(e) !== RANCH_ERR.CANS_EMPTY) throw e;
+            const filled = await fillCanBuckets(kind, { maxItems: 1 }).catch(() => ({ used: 0 }));
+            if (!(filled.used > 0)) throw e;
+            await feedAnimal(kind, gidFor(a), instFor(a));
+        }
+        await sleep(300);
+    };
+
+    const feedList = async (targets, kind, label) => {
+        let n = 0;
+        for (const a of targets) {
+            try {
+                await feedOneWithRefill(a, kind);
+                n += 1;
+            } catch (e) {
+                const code = parseRanchErrorCode(e);
+                // 预期内拒绝(1045202 限流/已喂过/1045207 动物不在)不刷屏; 其余记一条
+                if (code !== RANCH_ERR.FEED_REJECTED && !isExpectedRanchError(e)) {
+                    logWarn('牧场', `喂${label}失败(槽${toNum(a.slot)}): code=${code || '?'} ${String(e.message || '').slice(0, 60)}`, {
+                        module: 'ranch', event: '喂罐头', result: 'error', kind, slot: toNum(a.slot),
+                    });
+                }
+            }
+        }
+        if (n > 0) {
+            out.details.push(`${label}x${n}`);
+            out.fed += n;
+            recordOperation('ranchFeed', n);
+        }
+        return n;
+    };
+
+    // 普通罐头: 只喂没用过的(每只动物限一次, limited_can_used 服务端权威位)
+    if (strategy === 'normal' || strategy === 'both' || strategy === 'smart') {
+        const targets = animals.filter(a => a.canFeed && !a.limitedCanUsed && instFor(a) > 0);
+        await feedList(targets, 'normal', '普通罐头');
+    }
+    // 有机罐头: organic/both = 全场每轮各一次; smart = 只喂快成熟的(对齐农场快成熟施肥)
+    if (strategy === 'organic' || strategy === 'both' || strategy === 'smart') {
+        let targets;
+        if (strategy === 'smart') {
+            // 快成熟判定(对齐 getFastMatureLands 的 timeToMature ∈ [0, threshold]):
+            // 成熟期(stage=4)剩余秒数 ∈ (0, threshold]; 已熟(stage=5)/生产期不喂(浪费)
+            targets = animals.filter(a => a.canFeed && instFor(a) > 0
+                && toNum(a.stage) === 4
+                && a.matureInSec !== null && a.matureInSec > 0 && a.matureInSec <= smartSeconds);
+        } else {
+            targets = animals.filter(a => a.canFeed && instFor(a) > 0);
+        }
+        await feedList(targets, 'organic', '有机罐头');
+    }
+    return out;
+}
+
+/**
  * 一键巡牧场: 收获可收的 → 催产 → 喂食。
  * 顺序有讲究: 先收获腾出产出位, 再催产, 最后喂食让动物恢复生产。
  * @returns {{harvested: number, produced: number, fed: number, details: string[]}}
@@ -1984,10 +2074,11 @@ async function runRanchCare(opts = {}) {
     }
     await gap();
 
-    // 3. 喂食(任务"饲养幼崽N个"靠它驱动)
+    // 3. 喂罐头 —— 两条路径:
+    //   a) 手动"全场投喂"(显式传 feedCount): 一次全场 FeedAnimal, 保留旧行为
+    //   b) 罐头策略(automation.ranch_can, 与农场施肥策略同构): core 组每轮巡查执行
     // ⚠ 20261117 抓包: 真实客户端全程没调 FeedAnimal —— 动物吃牧草机里的草是自动的,
-    //   这个接口是手动"投喂罐头"用的(消耗罐头 80021+)。自动巡牧场默认不发,
-    //   需要 runRanchCare({ feedType: 4 }) 显式传入才执行。
+    //   这个接口是"投喂罐头加速"用的(消耗罐头 80021+)。
     if (want('feed') && opts.feedCount && toNum(opts.feedCount) > 0) {
         try {
             // 自动巡牧场不做单只投喂(没必要), 只支持"全场投喂"
@@ -2006,6 +2097,34 @@ async function runRanchCare(opts = {}) {
             }
             if (!isExpectedRanchError(e)) {
                 logWarn('牧场', `喂食失败: ${e.message}`, { module: 'ranch', event: '喂食', result: 'error' });
+            }
+        }
+    }
+    else if (want('core') && isAutomationOn('ranch_auto')) {
+        // 罐头策略: none 不喂 / normal 仅普通(每只一次) / organic 仅有机(每轮每只一次)
+        // / both 普通+有机 / smart 普通+快成熟有机(≤ ranch_can_smart_seconds, 默认 300s)
+        try {
+            let feedView = null;
+            try { feedView = await getRanchOverview(); } catch { feedView = null; }
+            const fr = await autoFeedCansByStrategy(feedView, opts);
+            result.fed = fr.fed;
+            if (fr.fed > 0) {
+                result.details.push(`喂罐头${fr.details.join('+')}`);
+                log('牧场', `罐头策略(${fr.strategy}): ${fr.details.join('，')}`, {
+                    module: 'ranch', event: '喂罐头', result: 'ok', count: fr.fed, strategy: fr.strategy,
+                });
+            }
+        } catch (e) {
+            // 1045202 = 服务端限流, 中止本轮(继续打只会更糟)
+            if (parseRanchErrorCode(e) === RANCH_ERR.FEED_REJECTED) {
+                result.rateLimited = true;
+                log('牧场', '喂罐头被服务端拒绝(code=1045202), 本轮巡牧场提前结束', {
+                    module: 'ranch', event: '喂罐头', result: 'rejected',
+                });
+                return result;
+            }
+            if (!isExpectedRanchError(e)) {
+                logWarn('牧场', `罐头策略喂食失败: ${e.message}`, { module: 'ranch', event: '喂罐头', result: 'error' });
             }
         }
     }
@@ -4606,6 +4725,7 @@ module.exports = {
     harvestRanch,
     getRanchOverview,
     runRanchCare,
+    autoFeedCansByStrategy,
     operateRanch,
     checkRanch,
     startRanchCheckLoop,
