@@ -489,9 +489,23 @@ const OP_META: Record<string, { label: string, icon: string, color: string }> = 
   helpBug: { label: '帮除虫', icon: 'i-carbon-warning-alt', color: 'text-red-300' },
   taskClaim: { label: '任务', icon: 'i-carbon-task-complete', color: 'text-indigo-500' },
   sell: { label: '出售', icon: 'i-carbon-shopping-cart', color: 'text-pink-500' },
-  ranchHarvest: { label: '牧场收', icon: 'i-carbon-hide', color: 'text-amber-500' },
+  // 牧场(与农场同构, 全部功能都有条目; 图标只用已安装的 carbon/fa-solid 包)
+  ranchHarvest: { label: '牧场收', icon: 'i-fas-egg', color: 'text-amber-500' },
   ranchProduce: { label: '催产', icon: 'i-carbon-flash', color: 'text-lime-500' },
   ranchFeed: { label: '牧场喂', icon: 'i-carbon-restaurant', color: 'text-orange-400' },
+  ranchSell: { label: '卖产物', icon: 'i-carbon-shopping-cart-plus', color: 'text-pink-400' },
+  ranchBuyCubs: { label: '买幼崽', icon: 'i-fas-coins', color: 'text-amber-400' },
+  ranchPlace: { label: '幼崽入栏', icon: 'i-fas-chess-pawn', color: 'text-yellow-500' },
+  ranchClean: { label: '清牧场', icon: 'i-carbon-clean', color: 'text-teal-500' },
+  ranchSteal: { label: '偷牧场', icon: 'i-carbon-arrow-down-left', color: 'text-rose-500' },
+  ranchStroke: { label: '照顾', icon: 'i-fas-hand-holding-heart', color: 'text-emerald-500' },
+  ranchHazard: { label: '使坏', icon: 'i-fas-bug', color: 'text-red-400' },
+  ranchRotation: { label: '游商', icon: 'i-carbon-store', color: 'text-violet-500' },
+  ranchTask: { label: '牧场任务', icon: 'i-carbon-task', color: 'text-sky-500' },
+  ranchIllustrated: { label: '图鉴', icon: 'i-carbon-gift', color: 'text-fuchsia-500' },
+  ranchBuilding: { label: '建筑', icon: 'i-carbon-building', color: 'text-indigo-400' },
+  ranchRegion: { label: '地块', icon: 'i-carbon-map', color: 'text-cyan-500' },
+  ranchGrass: { label: '牧草机', icon: 'i-fas-seedling', color: 'text-green-400' },
 }
 
 const filteredOperations = computed(() => {
@@ -1096,6 +1110,7 @@ useIntervalFn(() => void fetchRanchOverview(), 60000)
             </div>
             <div class="min-w-0 flex items-center justify-between gap-2 pl-7">
               <div class="flex shrink-0 items-center gap-2 text-xs text-gray-500 dark:text-gray-400">
+                <div class="i-carbon-task text-sm text-amber-400" />
                 <span>牧场日常</span>
               </div>
               <div class="shrink-0 whitespace-nowrap text-xs text-gray-500 font-mono tabular-nums dark:text-gray-400">
@@ -1104,6 +1119,7 @@ useIntervalFn(() => void fetchRanchOverview(), 60000)
             </div>
             <div class="min-w-0 flex items-center justify-between gap-2 pl-7">
               <div class="flex shrink-0 items-center gap-2 text-xs text-gray-500 dark:text-gray-400">
+                <div class="i-carbon-arrow-down-left text-sm text-rose-400" />
                 <span>牧场偷取</span>
               </div>
               <div class="shrink-0 whitespace-nowrap text-xs text-gray-500 font-mono tabular-nums dark:text-gray-400">

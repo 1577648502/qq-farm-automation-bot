@@ -2341,6 +2341,32 @@ function scheduleNextRanchCheck(delayMs, groupKey = 'core') {
 }
 
 /**
+ * 把 runRanchCare 一轮的产出统一记进"今日统计"(对照农场 recordOperation)。
+ * 之前只记了 收/产/喂 3 项, 出售/买崽/入栏/清理/偷/照顾/使坏/游商/任务/
+ * 手册/建筑/地块/牧草机全都没有统计, 首页今日统计里永远显示不出来。
+ */
+function recordRanchCareStats(result) {
+    if (!result) return;
+    if (result.sold > 0) recordOperation('ranchSell', result.sold);
+    if (result.boughtCubs > 0) recordOperation('ranchBuyCubs', result.boughtCubs);
+    if (result.cubsPlaced > 0) recordOperation('ranchPlace', result.cubsPlaced);
+    if (result.cleanedFriends > 0) recordOperation('ranchClean', result.cleanedFriends);
+    if (result.stolenFriends > 0) recordOperation('ranchSteal', result.stolenFriends);
+    if (result.strokedFriends > 0) recordOperation('ranchStroke', result.strokedFriends);
+    if (result.hazardedFriends > 0) recordOperation('ranchHazard', result.hazardedFriends);
+    if (result.rotationBought > 0) recordOperation('ranchRotation', result.rotationBought);
+    if (result.ranchTasksClaimed > 0) recordOperation('ranchTask', result.ranchTasksClaimed);
+    if (result.illustratedClaimed > 0) recordOperation('ranchIllustrated', result.illustratedClaimed);
+    if (result.buildingsCompleted > 0 || result.buildingsUpgraded > 0) {
+        recordOperation('ranchBuilding', result.buildingsCompleted + result.buildingsUpgraded);
+    }
+    if (result.regionsCompleted > 0 || result.regionsUnlocked > 0) {
+        recordOperation('ranchRegion', result.regionsCompleted + result.regionsUnlocked);
+    }
+    if (result.feedMachineAdded > 0) recordOperation('ranchGrass', result.feedMachineAdded);
+}
+
+/**
  * 执行某个分组的巡查(防重入 + 开关闸门 + 汇总日志 + 统计)。
  * @param {'core'|'daily'|'steal'} groupKey
  * @returns {Promise<boolean>} 本轮有没有实际干活
@@ -2360,6 +2386,7 @@ async function checkRanchGroup(groupKey) {
         if (result.harvested > 0) recordOperation('ranchHarvest', result.harvested);
         if (result.produced > 0) recordOperation('ranchProduce', result.produced);
         if (result.fed > 0) recordOperation('ranchFeed', result.fed);
+        recordRanchCareStats(result);
 
         // 限流算一次失败 → 退避; 否则清零
         if (result.rateLimited) ranchFailStreak += 1;
@@ -2436,7 +2463,7 @@ function planRanchDueActions(view) {
  * @returns {Promise<{actions:string[], harvested:number, produced:number, details:string[]}>}
  */
 async function runRanchDueActions(view, opts = {}) {
-    const out = { actions: [], harvested: 0, produced: 0, details: [] };
+    const out = { actions: [], harvested: 0, produced: 0, feedMachineAdded: 0, details: [] };
     const plan = Array.isArray(opts.plan) && opts.plan.length ? opts.plan : planRanchDueActions(view);
     if (!plan.length) return out;
     const gapMs = Math.max(200, toNum(opts.stepGapMs) || 600);
@@ -2466,7 +2493,10 @@ async function runRanchDueActions(view, opts = {}) {
             } else if (action === 'feed') {
                 if (!isAutomationOn('ranch_feedmachine')) continue;
                 const fm = await autoFeedMachine(opts);
-                if (fm.fed > 0) out.details.push(`牧草机+${fm.fed}`);
+                if (fm.fed > 0) {
+                    out.feedMachineAdded = fm.fed;
+                    out.details.push(`牧草机+${fm.fed}`);
+                }
             }
         } catch (e) {
             // 单步失败不影响其它步骤, 也不刷 error(这类"状态已变"很常见)
@@ -2682,10 +2712,12 @@ async function runRanchDueTick() {
         const out = await runRanchDueActions(view, { plan });
         if (out.harvested > 0) recordOperation('ranchHarvest', out.harvested);
         if (out.produced > 0) recordOperation('ranchProduce', out.produced);
+        if (out.feedMachineAdded > 0) recordOperation('ranchGrass', out.feedMachineAdded);
         if (out.actions.length) {
             const parts = [];
             if (out.harvested > 0) parts.push(`收:${out.harvested}`);
             if (out.produced > 0) parts.push(`产:${out.produced}`);
+            if (out.feedMachineAdded > 0) parts.push(`草:${out.feedMachineAdded}`);
             log('牧场', `[到点] ${out.actions.join('→')}${parts.length ? ` [${parts.join(' ')}]` : ''}${out.details.length ? ` ${out.details.slice(0, 6).join('/')}` : ''}`, {
                 module: 'ranch', event: '倒计时动作', result: 'ok', actions: out.actions,
             });
@@ -4032,13 +4064,16 @@ async function operateRanch(opts = {}) {
             } catch { /* 催产失败继续尝试收获 */ }
             const r = await harvestRanch(1);
             const items = [];
+            let manualHarvested = 0;
             for (const gain of (r.gains || [])) {
                 for (const item of (gain.items || [])) {
                     const id = toNum(item.item_id);
                     if (id === 1102) continue;
                     items.push(`${getAnimalName(id) || id}x${toNum(item.count)}`);
+                    manualHarvested += toNum(item.count);
                 }
             }
+            if (manualHarvested > 0) recordOperation('ranchHarvest', manualHarvested);
             return { ok: true, action: '收获', detail: items.join('，') || '没有可收的' };
         }
         case 'produce': {
@@ -4055,6 +4090,7 @@ async function operateRanch(opts = {}) {
                 const r = await triggerProduce(slot, produceGid);
                 let produced = 0;
                 for (const pr of (r.receipts || [])) produced += toNum(pr.count);
+                if (produced > 0) recordOperation('ranchProduce', produced);
                 return { ok: true, action: '催产', detail: `${produced} 个产物` };
             } catch (e) {
                 if (isExpectedRanchError(e)) {
@@ -4114,6 +4150,7 @@ async function operateRanch(opts = {}) {
             const doFeed = async () => feedAnimal(count, feedHostGid, feedAnimalInstId);
             try {
                 await doFeed();
+                recordOperation('ranchFeed', count);
                 return { ok: true, action: '喂食', detail: `${feedLabel} x${count}` };
             } catch (e) {
                 const code = parseRanchErrorCode(e);
@@ -4123,6 +4160,7 @@ async function operateRanch(opts = {}) {
                     if (filled.used > 0) {
                         try {
                             await doFeed();
+                            recordOperation('ranchFeed', count);
                             return {
                                 ok: true, action: '喂食',
                                 detail: `${feedLabel} x${count}(自动灌入 ${filled.used} 个罐头)`,
@@ -4166,7 +4204,9 @@ async function operateRanch(opts = {}) {
         }
         case 'feedmachine': {
             // 给牧草机补草(默认拉满 100, 实际受背包存量限制)
-            const r = await addFeedToMachine(toNum(opts.count) || 100);   // count 默认 1, 不能写 count || 100
+            const wantGrass = toNum(opts.count) || 100;
+            const r = await addFeedToMachine(wantGrass);
+            recordOperation('ranchGrass', 1);   // 手动补草按次数记(与自动补草 ranchGrass 一致)
             return { ok: true, action: '牧草机加草', detail: `存量 ${r.stored}` };
         }
         case 'buycub': {
@@ -4176,6 +4216,7 @@ async function operateRanch(opts = {}) {
                 if (!r.ok) {
                     return { ok: false, action: '买幼崽', error: r.error, name: r.name };
                 }
+                if (r.bought > 0) recordOperation('ranchBuyCubs', r.bought);
                 return {
                     ok: true,
                     action: '买幼崽',
@@ -4187,6 +4228,7 @@ async function operateRanch(opts = {}) {
             // 买幼崽(利益最大: 按 整只回收/幼崽成本 收益比排序)
             // 默认不限预算(用户要求移除); 只有显式传了才透传
             const r = await autoBuyCubs(toNum(opts.maxSpend) > 0 ? { maxSpend: toNum(opts.maxSpend) } : {});
+            if (r.bought > 0) recordOperation('ranchBuyCubs', r.bought);
             return {
                 ok: true,
                 action: '买幼崽',
@@ -4202,6 +4244,7 @@ async function operateRanch(opts = {}) {
                 Math.max(1, toNum(opts.count) || 1),
                 toNum(shop.refreshAt) || 0,
             );
+            if (r.ok) recordOperation('ranchRotation', Math.max(1, toNum(opts.count) || 1));
             return {
                 ok: r.ok,
                 action: '游商兑换',
@@ -4212,6 +4255,7 @@ async function operateRanch(opts = {}) {
         }
         case 'rotation': {
             const r = await autoBuyRotationShop(opts);
+            if (r.bought > 0) recordOperation('ranchRotation', r.bought);
             // 把"为什么没买到"说清楚, 而不是一律"集市未营业或没有便便"
             let detail;
             if (r.bought > 0) {
@@ -4226,6 +4270,7 @@ async function operateRanch(opts = {}) {
         case 'clean': {
             // 清理自己的牧场(20261117 抓包修正: CleanAllRanch 只清自己)
             const r = await autoCleanOwnRanch();
+            if (r.cleaned > 0) recordOperation('ranchClean', r.cleaned);
             return {
                 ok: true,
                 action: '清理牧场',
@@ -4246,6 +4291,7 @@ async function operateRanch(opts = {}) {
                 lastAnimals = (r.ranches || []).reduce((n, x) => n + (x.animals || []).length, 0);
                 await sleep(300);
             }
+            if (placedN > 0) recordOperation('ranchPlace', placedN);
             return { ok: true, action: '幼崽入栏', detail: `已放 ${placedN} 只，当前在养 ${lastAnimals} 只` };
         }
         case 'collect': {
@@ -4281,6 +4327,7 @@ async function operateRanch(opts = {}) {
                 hostGid: toNum(opts.instId) || RANCH_SELF_HOST_GID,
                 count: toNum(opts.count) || 1,
             });
+            if (r.ok) recordOperation('ranchHazard', toNum(opts.count) || 1);
             return {
                 ok: r.ok,
                 action: '放蚊子',
@@ -4300,10 +4347,12 @@ async function operateRanch(opts = {}) {
                 hostGid: toNum(opts.hostGid) || RANCH_SELF_HOST_GID,
                 animalInstId,
             });
+            recordOperation('ranchStroke', 1);
             return { ok: true, action: '照顾动物', detail: `gid=${toNum(opts.gid)} 动物#${animalInstId}` };
         }
         case 'autostroke': {
             const r = await autoStrokeFriendAnimals(opts);
+            if (r.count > 0) recordOperation('ranchStroke', r.count);
             return {
                 ok: true,
                 action: '自动照顾好友动物',
@@ -4314,6 +4363,7 @@ async function operateRanch(opts = {}) {
         }
         case 'autohazard': {
             const r = await autoPutHazardOnFriends(opts);
+            if (r.count > 0) recordOperation('ranchHazard', r.count);
             return {
                 ok: true,
                 action: '自动使坏好友',
@@ -4328,21 +4378,26 @@ async function operateRanch(opts = {}) {
             if (sub === 'harvest') {
                 const r = await harvestRanch(1);
                 const items = [];
+                let n = 0;
                 for (const g of (r.gains || [])) for (const it of (g.items || [])) {
                     const id = toNum(it.item_id);
                     if (id === 1102) continue;
                     items.push(`${getAnimalName(id) || id}x${toNum(it.count)}`);
+                    n += toNum(it.count);
                 }
+                if (n > 0) recordOperation('ranchHarvest', n);
                 return { ok: true, action: '全场收获', detail: items.join('，') || '没有可收的' };
             }
             if (sub === 'produce') {
                 const r = await triggerProduce(0);
                 let n = 0;
                 for (const p2 of (r.receipts || [])) n += toNum(p2.count);
+                if (n > 0) recordOperation('ranchProduce', n);
                 return { ok: true, action: '全场催产', detail: `${n} 个产物` };
             }
             if (sub === 'clean') {
                 const r = await autoCleanOwnRanch();
+                if (r.cleaned > 0) recordOperation('ranchClean', r.cleaned);
                 return { ok: true, action: '全场清理', detail: r.cleaned > 0 ? '清理完成' : '没有待清理的' };
             }
             if (sub === 'feed') {
@@ -4352,6 +4407,7 @@ async function operateRanch(opts = {}) {
                 try {
                     // 全场批量: 不带 target#2, count = 罐头数
                     await feedAnimal(toNum(opts.count) || 1);
+                    recordOperation('ranchFeed', 1);
                     return { ok: true, action: '全场喂罐头', detail: FEED_TYPE_LABEL[ft] || '罐头' };
                 } catch (e) {
                     const code = parseRanchErrorCode(e);
@@ -4362,6 +4418,7 @@ async function operateRanch(opts = {}) {
                         if (filled.used > 0) {
                             try {
                                 await feedAnimal(toNum(opts.count) || 1);
+                                recordOperation('ranchFeed', 1);
                                 return { ok: true, action: '全场喂罐头', detail: `自动灌入 ${filled.used} 个罐头后喂食成功` };
                             } catch (e2) {
                                 return { ok: false, action: '全场喂罐头', error: feedFailureHint(ft, e2) };
@@ -4404,6 +4461,7 @@ async function operateRanch(opts = {}) {
             // ⚠ autoUpgradeBuildings 只认 maxPerRound, 领竣工是它内部的第一步, 没有别的开关。
             if (!opts.list) {
                 const r = await f.autoUpgradeBuildings({ maxPerRound: toNum(opts.maxPerRound) || 3 });
+                if (r.completed > 0 || r.upgraded > 0) recordOperation('ranchBuilding', r.completed + r.upgraded);
                 return {
                     ok: true,
                     action: '建筑升级',
@@ -4423,6 +4481,7 @@ async function operateRanch(opts = {}) {
             // 地块解锁: 一键解到底(自动流程里由 ranch_unlock 开关控制, 这里是手动入口)
             const f = require('./ranch-facility');
             const r = await f.autoUnlockRegions({});
+            if (r.completed > 0 || r.unlocked > 0) recordOperation('ranchRegion', r.completed + r.unlocked);
             return {
                 ok: true,
                 action: '地块解锁',
@@ -4433,6 +4492,7 @@ async function operateRanch(opts = {}) {
             // 偷好友牧场产物(opts.gid 指定单个好友; 不传则批量)
             if (opts.gid) {
                 const r = await stealFriendProduce(toNum(opts.gid));
+                if (r.ok) recordOperation('ranchSteal', 1);
                 return {
                     ok: r.ok,
                     action: '偷产物',
@@ -4440,6 +4500,7 @@ async function operateRanch(opts = {}) {
                 };
             }
             const r = await autoStealFriendProduce(opts);
+            if (r.cleaned > 0) recordOperation('ranchSteal', r.cleaned);
             return {
                 ok: true,
                 action: '偷好友产物',

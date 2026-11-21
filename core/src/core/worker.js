@@ -1577,6 +1577,9 @@ async function handleApiCall(msg) {
                     // 否则"合并数量 + 单格 uid"会报 1000019 不足
                     { skipFarmFilter: true, scene: 'ranch' },
                 );
+                // 手动出售也记入今日统计(与自动出售 ranchSell 同一计数)
+                const manualSold = (Array.isArray(args[0]) ? args[0] : []).reduce((n, it) => n + (Number(it.count) || 0), 0);
+                if (manualSold > 0) recordOperation('ranchSell', manualSold);
                 break;
             }
             case 'setAutomation': {

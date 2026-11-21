@@ -61,6 +61,19 @@ const operations = {
     ranchHarvest: 0,
     ranchProduce: 0,
     ranchFeed: 0,
+    ranchSell: 0,
+    ranchBuyCubs: 0,
+    ranchPlace: 0,
+    ranchClean: 0,
+    ranchSteal: 0,
+    ranchStroke: 0,
+    ranchHazard: 0,
+    ranchRotation: 0,
+    ranchTask: 0,
+    ranchIllustrated: 0,
+    ranchBuilding: 0,
+    ranchRegion: 0,
+    ranchGrass: 0,
 };
 
 let currentDateKey = null;
