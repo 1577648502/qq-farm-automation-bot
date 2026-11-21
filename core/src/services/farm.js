@@ -2275,7 +2275,7 @@ function startFertilizerBuyCheckTimer() {
     if (fertilizerBuyCheckTimer) {
         clearInterval(fertilizerBuyCheckTimer);
     }
-    
+
     // 检查是否有开启的化肥购买功能
     if (!isAutomationOn('fertilizer_buy_organic') && !isAutomationOn('fertilizer_buy_normal')) {
         return;
@@ -2309,6 +2309,17 @@ function stopFertilizerBuyCheckTimer() {
     });
 }
 
+/**
+ * 保存设置后重启化肥购买定时器(2026-11-21 修):
+ * 旧实现 startFarmCheckLoop 才挂定时器, applyRuntimeConfig 只刷巡田循环,
+ * 开关 关→开 / 改间隔后旧定时器仍按旧配置跑, 要等下次重启进程才生效。
+ * startFertilizerBuyCheckTimer 自带"先清后挂 + 关着不挂", 幂等可重复调。
+ */
+function restartFertilizerBuyCheckTimer() {
+    stopFertilizerBuyCheckTimer();
+    startFertilizerBuyCheckTimer();
+}
+
 async function checkFertilizerBuyOnce() {
     if (!isAutomationOn('fertilizer_buy_organic') && !isAutomationOn('fertilizer_buy_normal')) {
         return;
@@ -2338,6 +2349,7 @@ async function checkFertilizerBuyOnce() {
 module.exports = {
     checkFarm, startFarmCheckLoop, stopFarmCheckLoop,
     refreshFarmCheckLoop,
+    restartFertilizerBuyCheckTimer,
     getCurrentPhase,
     setOperationLimitsCallback,
     getAllLands,

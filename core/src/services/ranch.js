@@ -2755,13 +2755,14 @@ async function checkCanBuyOnce() {
     if (!isAutomationOn('ranch_can_buy_organic') && !isAutomationOn('ranch_can_buy_normal')) return;
     try {
         const br = await checkAndBuyCansIfLow();
-        if (br.boughtNormal > 0 || br.boughtOrganic > 0) {
+        // ⚠ 字段名是 normalBought/organicBought(checkAndBuyCansBoth 的返回), 不是 boughtNormal
+        if (br.normalBought > 0 || br.organicBought > 0) {
             const parts = [];
-            if (br.boughtNormal > 0) parts.push(`普通罐头x${br.boughtNormal}`);
-            if (br.boughtOrganic > 0) parts.push(`有机罐头x${br.boughtOrganic}`);
+            if (br.normalBought > 0) parts.push(`普通罐头x${br.normalBought}`);
+            if (br.organicBought > 0) parts.push(`有机罐头x${br.organicBought}`);
             log('牧场', `罐头桶余量低于阈值, 已自动购买 ${parts.join(' + ')}`, {
                 module: 'ranch', event: '买罐头', result: 'ok',
-                boughtNormal: br.boughtNormal, boughtOrganic: br.boughtOrganic,
+                boughtNormal: br.normalBought, boughtOrganic: br.organicBought,
             });
         }
     } catch (e) {
@@ -2788,6 +2789,15 @@ function stopCanBuyCheckTimer() {
         clearInterval(canBuyCheckTimer);
         canBuyCheckTimer = null;
     }
+}
+
+/**
+ * 保存设置后重启罐头购买定时器(与化肥 restartFertilizerBuyCheckTimer 同构):
+ * 开关 关→开 / 改间隔后立即按新配置重挂, 不用等重启进程。
+ */
+function restartCanBuyCheckTimer() {
+    stopCanBuyCheckTimer();
+    startCanBuyCheckTimer();
 }
 
 function startRanchCheckLoop(options = {}) {
@@ -4835,6 +4845,7 @@ module.exports = {
     checkRanch,
     startRanchCheckLoop,
     stopRanchCheckLoop,
+    restartCanBuyCheckTimer,
     runRanchTick,
     checkRanchGroup,
     getNextRanchDelayMs: nextRanchDelayMs,

@@ -12,7 +12,7 @@ const { getLevelExpProgress } = require('../config/gameConfig');
 const { getAutomation, getPreferredSeed, getConfigSnapshot, applyConfigSnapshot, getBuyBookConfig, getAutumnWishConfig, getHappyShareEnabled, getMilkTeaConfig, getActivityStatus, getAdGiftEnabled, getLimitedPackConfig, getCollectionEnabled } = require('../models/store');
 const { checkAndClaimEmails } = require('../services/email');
 const { getEmailDailyState } = require('../services/email');
-const { checkFarm, startFarmCheckLoop, stopFarmCheckLoop, refreshFarmCheckLoop, getLandsDetail, getAvailableSeeds, buySeed, runFarmOperation, runFertilizerByConfig, operateSingleLand } = require('../services/farm');
+const { checkFarm, startFarmCheckLoop, stopFarmCheckLoop, refreshFarmCheckLoop, restartFertilizerBuyCheckTimer, getLandsDetail, getAvailableSeeds, buySeed, runFarmOperation, runFertilizerByConfig, operateSingleLand } = require('../services/farm');
 const { checkFriends, startFriendCheckLoop, stopFriendCheckLoop, refreshFriendCheckLoop, runBadOnceOnStartup, isHelpExpLimitReached, getFriendsList, getFriendLandsDetail, doFriendOperation } = require('../services/friend');
 const { getInteractRecords } = require('../services/interact');
 const { processInviteCodes } = require('../services/invite');
@@ -846,6 +846,12 @@ function applyRuntimeConfig(snapshot, syncNow = false) {
         refreshFriendCheckLoop(200);
         resetUnifiedSchedule();
         scheduleUnifiedNextTick();
+
+        // 保存设置后重启 化肥/罐头 购买检测定时器(2026-11-21 修):
+        // 旧实现只在 startFarmCheckLoop/startRanchCheckLoop 时挂,
+        // 开关 关→开 / 改间隔不生效, 要等重启进程。两个 restart 都幂等。
+        try { restartFertilizerBuyCheckTimer(); } catch { /* 旁路 */ }
+        try { ranch.restartCanBuyCheckTimer(); } catch { /* 旁路 */ }
 
         // 保存设置后若“自动处理日常”开启，则立即执行一次
         const hasAutomationPayload = !!(snapshot && snapshot.automation && typeof snapshot.automation === 'object');
