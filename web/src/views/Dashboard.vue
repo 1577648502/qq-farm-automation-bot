@@ -1093,21 +1093,21 @@ watch(documentVisibility, (vis) => {
                 {{ nextRanchCheck }}
               </div>
             </div>
-            <div class="min-w-0 flex items-center justify-between gap-2 pl-7">
-              <div class="flex shrink-0 items-center gap-2 text-xs text-gray-500 dark:text-gray-400">
-                <div class="i-carbon-task text-sm text-amber-400" />
+            <div class="min-w-0 flex items-center justify-between gap-2">
+              <div class="flex shrink-0 items-center gap-2 text-gray-700 dark:text-gray-300">
+                <div class="i-carbon-task text-lg text-amber-500" />
                 <span>牧场日常</span>
               </div>
-              <div class="shrink-0 whitespace-nowrap text-xs text-gray-500 font-mono tabular-nums dark:text-gray-400">
+              <div class="shrink-0 whitespace-nowrap text-lg font-bold font-mono tabular-nums">
                 {{ nextRanchDailyCheck }}
               </div>
             </div>
-            <div class="min-w-0 flex items-center justify-between gap-2 pl-7">
-              <div class="flex shrink-0 items-center gap-2 text-xs text-gray-500 dark:text-gray-400">
-                <div class="i-carbon-arrow-down-left text-sm text-rose-400" />
+            <div class="min-w-0 flex items-center justify-between gap-2">
+              <div class="flex shrink-0 items-center gap-2 text-gray-700 dark:text-gray-300">
+                <div class="i-carbon-arrow-down-left text-lg text-rose-500" />
                 <span>牧场偷取</span>
               </div>
-              <div class="shrink-0 whitespace-nowrap text-xs text-gray-500 font-mono tabular-nums dark:text-gray-400">
+              <div class="shrink-0 whitespace-nowrap text-lg font-bold font-mono tabular-nums">
                 {{ nextRanchStealCheck }}
               </div>
             </div>
