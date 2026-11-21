@@ -80,3 +80,47 @@ export const ORGANIC_FERTILIZER_TONE = 'border-lime-300 bg-lime-50 text-lime-700
 export function getLandOpMeta(op: string): LandOpMeta {
   return LAND_OP_META[String(op)] || { label: String(op), icon: 'i-carbon-circle-dash', tone: 'border-gray-300 bg-gray-50 text-gray-700 dark:border-gray-600 dark:bg-gray-900/30 dark:text-gray-300', color: 'text-gray-400' }
 }
+
+/**
+ * 操作记录条目元数据(Dashboard"今日操作"统计用)。
+ * 与 LAND_OP_META 的区别: 记录里会出现好友互助/商店/牧场专属条目, 且部分 icon
+ * 特意选了偏"记录展示"的形态(如收获记录用 crop-growth 而按钮用 wheat)。
+ * 单一来源: 后端 OPERATION_KEYS(runtime-engine.js) 里每个键都应在这里有条目。
+ */
+export const STATUS_OP_META: Record<string, { label: string, icon: string, color: string }> = {
+  // ---- 农场(与 LAND_OP_META 同键, label/color 复用, icon 用记录展示形态) ----
+  harvest: { label: '收获', icon: 'i-carbon-crop-growth', color: 'text-green-500' },
+  water: { label: '浇水', icon: 'i-carbon-rain-drop', color: 'text-blue-400' },
+  weed: { label: '除草', icon: 'i-carbon-cut-out', color: 'text-yellow-500' },
+  bug: { label: '除虫', icon: 'i-carbon-warning-alt', color: 'text-red-400' },
+  fertilize: { label: '施肥', icon: 'i-carbon-chemistry', color: 'text-emerald-500' },
+  plant: { label: '种植', icon: 'i-carbon-tree', color: 'text-lime-500' },
+  steal: { label: '偷菜', icon: 'i-carbon-run', color: 'text-orange-500' },
+  helpWater: { label: '帮浇水', icon: 'i-carbon-rain-drop', color: 'text-blue-300' },
+  helpWeed: { label: '帮除草', icon: 'i-carbon-cut-out', color: 'text-yellow-400' },
+  helpBug: { label: '帮除虫', icon: 'i-carbon-warning-alt', color: 'text-red-300' },
+  taskClaim: { label: '任务', icon: 'i-carbon-task-complete', color: 'text-indigo-500' },
+  sell: { label: '出售', icon: 'i-carbon-shopping-cart', color: 'text-pink-500' },
+  // ---- 牧场(与农场同构, 全部功能都有条目; 图标只用已安装的 carbon/fa-solid 包) ----
+  ranchHarvest: { label: '牧场收', icon: 'i-fas-egg', color: 'text-amber-500' },
+  ranchProduce: { label: '催产', icon: 'i-carbon-flash', color: 'text-lime-500' },
+  ranchFeed: { label: '牧场喂', icon: 'i-carbon-restaurant', color: 'text-orange-400' },
+  ranchSell: { label: '卖产物', icon: 'i-carbon-shopping-cart-plus', color: 'text-pink-400' },
+  ranchBuyCubs: { label: '买幼崽', icon: 'i-fas-coins', color: 'text-amber-400' },
+  ranchPlace: { label: '幼崽入栏', icon: 'i-fas-chess-pawn', color: 'text-yellow-500' },
+  ranchClean: { label: '清牧场', icon: 'i-carbon-clean', color: 'text-teal-500' },
+  ranchSteal: { label: '偷牧场', icon: 'i-carbon-arrow-down-left', color: 'text-rose-500' },
+  ranchStroke: { label: '照顾', icon: 'i-fas-hand-holding-heart', color: 'text-emerald-500' },
+  ranchHazard: { label: '使坏', icon: 'i-fas-bug', color: 'text-red-400' },
+  ranchRotation: { label: '游商', icon: 'i-carbon-store', color: 'text-violet-500' },
+  ranchTask: { label: '牧场任务', icon: 'i-carbon-task', color: 'text-sky-500' },
+  ranchIllustrated: { label: '图鉴', icon: 'i-carbon-gift', color: 'text-fuchsia-500' },
+  ranchBuilding: { label: '建筑', icon: 'i-carbon-building', color: 'text-indigo-400' },
+  ranchRegion: { label: '地块', icon: 'i-carbon-map', color: 'text-cyan-500' },
+  ranchGrass: { label: '牧草机', icon: 'i-fas-seedling', color: 'text-green-400' },
+}
+
+/** 操作记录条目查询(缺省给中性占位) */
+export function getStatusOpMeta(op: string): { label: string, icon: string, color: string } {
+  return STATUS_OP_META[String(op)] || { label: String(op), icon: 'i-carbon-circle-dash', color: 'text-gray-400' }
+}

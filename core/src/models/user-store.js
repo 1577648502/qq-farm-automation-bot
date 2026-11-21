@@ -33,7 +33,7 @@ function loadLoginLogs() {
             const data = JSON.parse(fs.readFileSync(LOGIN_LOGS_FILE, 'utf8'));
             loginLogs = Array.isArray(data.logs) ? data.logs : [];
         }
-    } catch (e) {
+    } catch {
         loginLogs = [];
     }
 }
@@ -86,7 +86,7 @@ function loadLoginAttempts() {
             const data = JSON.parse(fs.readFileSync(LOGIN_ATTEMPTS_FILE, 'utf8'));
             loginAttempts = data || {};
         }
-    } catch (e) {
+    } catch {
         loginAttempts = {};
     }
 }
@@ -791,33 +791,7 @@ function changePassword(username, oldPassword, newPassword) {
     return { ok: true, message: '密码修改成功' };
 }
 
-// 获取用户账号额度
-function getUserAccountLimit(username) {
-    loadUsers();
-    const user = users.find(u => u.username === username);
-    if (!user) {
-        return DEFAULT_ACCOUNT_LIMIT;
-    }
-    return user.accountLimit || DEFAULT_ACCOUNT_LIMIT;
-}
 
-// 检查用户是否可以添加更多账号
-function canAddAccount(username) {
-    loadUsers();
-    const user = users.find(u => u.username === username);
-    if (!user) {
-        return { canAdd: false, current: 0, limit: DEFAULT_ACCOUNT_LIMIT };
-    }
-    
-    // 管理员无限制
-    if (user.role === 'admin') {
-        return { canAdd: true, current: 0, limit: -1 };
-    }
-    
-    const limit = user.accountLimit || DEFAULT_ACCOUNT_LIMIT;
-    // 需要从 store 获取当前账号数量，这里先返回额度信息
-    return { canAdd: true, current: 0, limit };
-}
 
 initDefaultAdmin();
 
@@ -834,7 +808,7 @@ function loadCardClaimRecords() {
             cardClaimRecords = [];
             saveCardClaimRecords();
         }
-    } catch (e) {
+    } catch {
         cardClaimEnabled = true;
         cardClaimRecords = [];
     }
@@ -847,7 +821,7 @@ function saveCardClaimRecords() {
             enabled: cardClaimEnabled,
             records: cardClaimRecords
         }, null, 2), 'utf8');
-    } catch (e) {
+    } catch {
         // console.error('保存卡密领取记录失败:', e.message);
     }
 }
@@ -951,7 +925,14 @@ function clearExpiredClaimRecords() {
     return { cleared: beforeCount - cardClaimRecords.length };
 }
 
+
+// 按 username 找用户对象(供 token 持久化恢复用; 返回的是内部引用, 只读使用)
+function findUserByUsername(username) {
+    return users.find(u => u.username === username) || null;
+}
+
 module.exports = {
+    findUserByUsername,
     validateUser,
     registerUser,
     renewUser,

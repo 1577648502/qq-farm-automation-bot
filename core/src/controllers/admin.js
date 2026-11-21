@@ -1,4 +1,4 @@
-﻿const crypto = require('node:crypto');
+const crypto = require('node:crypto');
 /**
  * 管理面板 HTTP 服务
  * 改写为接收 DataProvider 模式
@@ -25,7 +25,6 @@ const { getSchedulerRegistrySnapshot } = require('../services/scheduler');
 const userStore = require('../models/user-store');
 const { readQcbyCodeConfigForUI, saveQcbyCodeConfig } = require('../services/qcby-code-config');
 
-const hashPassword = (pwd) => crypto.createHash('sha256').update(String(pwd || '')).digest('hex');
 const adminLogger = createModuleLogger('admin');
 
 let app = null;
@@ -104,6 +103,42 @@ function startAdminServer(dataProvider) {
 
     const tokens = new Set();
 
+    // ===== token 持久化: 容器重启不掉线 =====
+    // tokens.json 存 {token: {username, issuedAt}}, 重启后按 username 从 userStore 找回用户对象。
+    // 7 天过期; 封禁/过期用户恢复时会被下面的封禁/过期检查自然踢掉。
+    const TOKENS_FILE = require('../config/runtime-paths').getDataFile('tokens.json');
+    const TOKEN_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+    let tokenPersistTimer = null;
+    function saveTokens() {
+        try {
+            const out = {};
+            for (const t of tokens) {
+                const u = tokenUserMap.get(t);
+                out[t] = { username: u ? u.username : '', issuedAt: u ? (u._issuedAt || Date.now()) : Date.now() };
+            }
+            fs.writeFileSync(TOKENS_FILE, JSON.stringify(out, null, 2), 'utf8');
+        } catch (e) { adminLogger.warn('token 持久化失败', { error: e.message }); }
+    }
+    function scheduleSaveTokens() {
+        if (tokenPersistTimer) return;
+        tokenPersistTimer = setTimeout(() => { tokenPersistTimer = null; saveTokens(); }, 500);
+    }
+    function restoreTokens() {
+        try {
+            if (!fs.existsSync(TOKENS_FILE)) return;
+            const saved = JSON.parse(fs.readFileSync(TOKENS_FILE, 'utf8'));
+            const now = Date.now();
+            for (const [t, info] of Object.entries(saved)) {
+                if (!info || !info.username || (now - (info.issuedAt || 0)) > TOKEN_TTL_MS) continue;
+                const user = userStore.findUserByUsername(info.username);
+                if (!user) continue;
+                tokens.add(t);
+                user._issuedAt = info.issuedAt;
+                tokenUserMap.set(t, user);
+            }
+            if (tokens.size) adminLogger.info('token 恢复', { count: tokens.size });
+        } catch (e) { adminLogger.warn('token 恢复失败', { error: e.message }); }
+    }
     const issueToken = () => crypto.randomBytes(24).toString('hex');
     const authRequired = (req, res, next) => {
         const token = req.headers['x-admin-token'];
@@ -121,6 +156,7 @@ function startAdminServer(dataProvider) {
                 if (req.currentUser.card.enabled === false) {
                     console.log('[请求拒绝] 用户已被封禁:', req.currentUser.username);
                     tokens.delete(token);
+                    scheduleSaveTokens();
                     tokenUserMap.delete(token);
                     return res.status(403).json({ ok: false, error: '账号已被封禁，请联系管理员' });
                 }
@@ -131,6 +167,7 @@ function startAdminServer(dataProvider) {
                     if (req.currentUser.card.expiresAt < now) {
                         console.log('[请求拒绝] 用户已过期:', req.currentUser.username);
                         tokens.delete(token);
+                    scheduleSaveTokens();
                         tokenUserMap.delete(token);
                         return res.status(403).json({ ok: false, error: '账号已过期，请续费后重新登录' });
                     }
@@ -181,6 +218,7 @@ function startAdminServer(dataProvider) {
 
     // Token 到用户映射（用于用户系统）
     const tokenUserMap = new Map();
+    restoreTokens();
 
     // 检查用户是否有权访问（管理员或普通用户）
     const checkUserAccess = (req, res, next) => {
@@ -199,6 +237,7 @@ function startAdminServer(dataProvider) {
                 if (req.currentUser.card.enabled === false) {
                     console.log('[请求拒绝] 用户已被封禁:', req.currentUser.username);
                     tokens.delete(token);
+                    scheduleSaveTokens();
                     tokenUserMap.delete(token);
                     return res.status(403).json({ ok: false, error: '账号已被封禁，请联系管理员' });
                 }
@@ -209,6 +248,7 @@ function startAdminServer(dataProvider) {
                     if (req.currentUser.card.expiresAt < now) {
                         console.log('[请求拒绝] 用户已过期:', req.currentUser.username);
                         tokens.delete(token);
+                    scheduleSaveTokens();
                         tokenUserMap.delete(token);
                         return res.status(403).json({ ok: false, error: '账号已过期，请续费后重新登录' });
                     }
@@ -243,6 +283,7 @@ function startAdminServer(dataProvider) {
 
         for (const { token, username, reason } of usersToCleanup) {
             tokens.delete(token);
+                    scheduleSaveTokens();
             tokenUserMap.delete(token);
             // 断开相关 socket 连接
             if (io) {
@@ -327,8 +368,10 @@ function startAdminServer(dataProvider) {
             }
 
             const token = issueToken();
+            user._issuedAt = Date.now();
             tokens.add(token);
             tokenUserMap.set(token, user);
+            scheduleSaveTokens();
             
             adminLogger.info('登录成功', { username, role: user.role, ip: clientIp });
 
@@ -530,6 +573,7 @@ app.use('/api', (req, res, next) => {
         const token = req.adminToken;
         if (token) {
             tokens.delete(token);
+                    scheduleSaveTokens();
             tokenUserMap.delete(token);
             if (io) {
                 for (const socket of io.sockets.sockets.values()) {
@@ -930,7 +974,7 @@ app.use('/api', (req, res, next) => {
             if (provider && typeof provider.getFriends === 'function') {
                 friendsList = await provider.getFriends(id) || [];
             }
-        } catch (e) {
+        } catch {
             // 忽略获取好友列表失败
         }
         
@@ -990,7 +1034,7 @@ app.use('/api', (req, res, next) => {
             if (provider && typeof provider.getFriends === 'function') {
                 friendsList = await provider.getFriends(id) || [];
             }
-        } catch (e) {
+        } catch {
             // 忽略获取好友列表失败
         }
         
@@ -2908,6 +2952,7 @@ app.use('/api', (req, res, next) => {
             for (const [token, user] of tokenUserMap.entries()) {
                 if (user.username === username) {
                     tokens.delete(token);
+                    scheduleSaveTokens();
                     tokenUserMap.delete(token);
                     if (io) {
                         for (const socket of io.sockets.sockets.values()) {
@@ -3357,11 +3402,11 @@ app.use('/api', (req, res, next) => {
 
     app.post('/api/activity/daily-signin/claim', withAccount((accountId, req) => provider.claimActivityDailySignin(req.body || {}), { softErrors: false }));
 
-    app.post('/api/activity/exchange', withAccount((accountId, req) => provider.exchangeActivityGoods(req.body || {}), { softErrors: false }));
+    app.post('/api/activity/exchange', withAccount((_accountId, req) => provider.exchangeActivityGoods(req.body || {}), { softErrors: false }));
 
-    app.get('/api/activity/star', withAccount((accountId, req) => provider.getStarActivity(), { softErrors: false }));
+    app.get('/api/activity/star', withAccount((_accountId, _req) => provider.getStarActivity(), { softErrors: false }));
 
-    app.post('/api/activity/star/exchange', withAccount((accountId, req) => provider.exchangeStarGoods(req.body || {}), { softErrors: false }));
+    app.post('/api/activity/star/exchange', withAccount((_accountId, req) => provider.exchangeStarGoods(req.body || {}), { softErrors: false }));
 
     // ===== 夺宝(抢宝) API =====
     // 列出可夺宝藏(不传 gid = 遍历所有好友)

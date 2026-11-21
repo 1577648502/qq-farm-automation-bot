@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { useIntervalFn } from '@vueuse/core'
+import { useDocumentVisibility, useIntervalFn } from '@vueuse/core'
 import { storeToRefs } from 'pinia'
 import { computed, nextTick, onMounted, reactive, ref, watch } from 'vue'
 import api from '@/api'
@@ -10,7 +10,7 @@ import { useAccountStore } from '@/stores/account'
 import { useBagStore } from '@/stores/bag'
 import { useStatusStore } from '@/stores/status'
 import { useToastStore } from '@/stores/toast'
-import { LAND_OP_META } from '@/utils/land-ops'
+import { STATUS_OP_META } from '@/utils/land-ops'
 import { formatCompactNumber, formatSignedCompactNumber } from '@/utils/number-format'
 
 const statusStore = useStatusStore()
@@ -474,39 +474,7 @@ function formatLogTime(timeStr: string) {
   return parts.length > 1 ? parts[1] : timeStr
 }
 
-// 自己农场的操作名/图标以 land-ops 为准(与农场面板、单地块操作共用一份),
-// 这里只补操作记录里额外出现的好友/商店类条目。
-const OP_META: Record<string, { label: string, icon: string, color: string }> = {
-  harvest: { label: LAND_OP_META.harvest!.label, icon: 'i-carbon-crop-growth', color: LAND_OP_META.harvest!.color },
-  water: { label: LAND_OP_META.water!.label, icon: LAND_OP_META.water!.icon, color: LAND_OP_META.water!.color },
-  weed: { label: LAND_OP_META.weed!.label, icon: 'i-carbon-cut-out', color: LAND_OP_META.weed!.color },
-  bug: { label: LAND_OP_META.bug!.label, icon: LAND_OP_META.bug!.icon, color: LAND_OP_META.bug!.color },
-  fertilize: { label: LAND_OP_META.fertilize!.label, icon: LAND_OP_META.fertilize!.icon, color: LAND_OP_META.fertilize!.color },
-  plant: { label: LAND_OP_META.plant!.label, icon: 'i-carbon-tree', color: LAND_OP_META.plant!.color },
-  steal: { label: '偷菜', icon: 'i-carbon-run', color: 'text-orange-500' },
-  helpWater: { label: '帮浇水', icon: 'i-carbon-rain-drop', color: 'text-blue-300' },
-  helpWeed: { label: '帮除草', icon: 'i-carbon-cut-out', color: 'text-yellow-400' },
-  helpBug: { label: '帮除虫', icon: 'i-carbon-warning-alt', color: 'text-red-300' },
-  taskClaim: { label: '任务', icon: 'i-carbon-task-complete', color: 'text-indigo-500' },
-  sell: { label: '出售', icon: 'i-carbon-shopping-cart', color: 'text-pink-500' },
-  // 牧场(与农场同构, 全部功能都有条目; 图标只用已安装的 carbon/fa-solid 包)
-  ranchHarvest: { label: '牧场收', icon: 'i-fas-egg', color: 'text-amber-500' },
-  ranchProduce: { label: '催产', icon: 'i-carbon-flash', color: 'text-lime-500' },
-  ranchFeed: { label: '牧场喂', icon: 'i-carbon-restaurant', color: 'text-orange-400' },
-  ranchSell: { label: '卖产物', icon: 'i-carbon-shopping-cart-plus', color: 'text-pink-400' },
-  ranchBuyCubs: { label: '买幼崽', icon: 'i-fas-coins', color: 'text-amber-400' },
-  ranchPlace: { label: '幼崽入栏', icon: 'i-fas-chess-pawn', color: 'text-yellow-500' },
-  ranchClean: { label: '清牧场', icon: 'i-carbon-clean', color: 'text-teal-500' },
-  ranchSteal: { label: '偷牧场', icon: 'i-carbon-arrow-down-left', color: 'text-rose-500' },
-  ranchStroke: { label: '照顾', icon: 'i-fas-hand-holding-heart', color: 'text-emerald-500' },
-  ranchHazard: { label: '使坏', icon: 'i-fas-bug', color: 'text-red-400' },
-  ranchRotation: { label: '游商', icon: 'i-carbon-store', color: 'text-violet-500' },
-  ranchTask: { label: '牧场任务', icon: 'i-carbon-task', color: 'text-sky-500' },
-  ranchIllustrated: { label: '图鉴', icon: 'i-carbon-gift', color: 'text-fuchsia-500' },
-  ranchBuilding: { label: '建筑', icon: 'i-carbon-building', color: 'text-indigo-400' },
-  ranchRegion: { label: '地块', icon: 'i-carbon-map', color: 'text-cyan-500' },
-  ranchGrass: { label: '牧草机', icon: 'i-fas-seedling', color: 'text-green-400' },
-}
+// 操作记录条目元数据已统一到 @/utils/land-ops 的 STATUS_OP_META(单一来源)
 
 const filteredOperations = computed(() => {
   const ops = status.value?.operations || {}
@@ -520,15 +488,15 @@ const filteredOperations = computed(() => {
 })
 
 function getOpName(key: string | number) {
-  return OP_META[String(key)]?.label || String(key)
+  return STATUS_OP_META[String(key)]?.label || String(key)
 }
 
 function getOpIcon(key: string | number) {
-  return OP_META[String(key)]?.icon || 'i-carbon-circle-dash'
+  return STATUS_OP_META[String(key)]?.icon || 'i-carbon-circle-dash'
 }
 
 function getOpColor(key: string | number) {
-  return OP_META[String(key)]?.color || 'text-gray-400'
+  return STATUS_OP_META[String(key)]?.color || 'text-gray-400'
 }
 
 function getExpPercent(p: any) {
@@ -706,14 +674,31 @@ onMounted(async () => {
 watch(() => accountStore.currentAccountId, () => void fetchRanchOverview())
 
 // Auto refresh fallback every 10s (WS 断开或筛选条件启用时会回退 HTTP)
-useIntervalFn(refresh, 10000)
+// 页面不可见(后台标签页)时暂停全部轮询, 回前台立即刷一次 —— 空转轮询是纯浪费
+const { pause: pausePolling, resume: resumePolling } = useIntervalFn(refresh, 10000)
+const documentVisibility = useDocumentVisibility()
+watch(documentVisibility, (vis) => {
+  if (vis === 'visible') {
+    resumePolling()
+    void refresh()
+    void fetchRanchOverview()
+  }
+  else {
+    pausePolling()
+  }
+})
 // Countdown timer (every 1s)
-useIntervalFn(updateCountdowns, 1000)
+const countdownTimer = useIntervalFn(updateCountdowns, 1000)
 // 牧场倒计时 + 定时刷新(60s)
-useIntervalFn(() => {
+const ranchTickTimer = useIntervalFn(() => {
   ranchTick.value++
 }, 1000)
-useIntervalFn(() => void fetchRanchOverview(), 60000)
+const ranchFetchTimer = useIntervalFn(() => void fetchRanchOverview(), 60000)
+watch(documentVisibility, (vis) => {
+  const active = vis === 'visible'
+  if (active) { countdownTimer.resume(); ranchTickTimer.resume(); ranchFetchTimer.resume() }
+  else { countdownTimer.pause(); ranchTickTimer.pause(); ranchFetchTimer.pause() }
+})
 </script>
 
 <template>

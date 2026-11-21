@@ -1759,7 +1759,7 @@ async function checkFriends(options = {}) {
 
                     try {
                         await visitFriend(friend, totalActions, state.gid, state.accountId);
-                    } catch (e) {
+                    } catch {
                         // 单个好友失败不影响整体
                     }
                     await randomDelay(2000, 3500);
@@ -1848,6 +1848,20 @@ function onFriendApplicationReceived(applications) {
     // 自动同意
     const gids = applications.map(a => toNum(a.gid));
     acceptFriendsWithRetry(gids);
+}
+
+/**
+ * 拉取待处理好友申请(GetApplications)
+ * 2026-11-21 lint no-undef 修复: 此前调用的 getApplications 未定义,
+ * checkAndAcceptApplications 一进来就 TypeError 被 catch 静默吞掉 —— 自动同意申请从未工作过。
+ */
+async function getApplications() {
+    if (!types.GetApplicationsRequest || !types.GetApplicationsReply) {
+        throw new Error('GetApplications 接口类型未加载');
+    }
+    const body = types.GetApplicationsRequest.encode(types.GetApplicationsRequest.create({})).finish();
+    const { body: replyBody } = await sendMsgAsync('gamepb.friendpb.FriendService', 'GetApplications', body);
+    return types.GetApplicationsReply.decode(replyBody);
 }
 
 /**
@@ -2010,10 +2024,9 @@ function clearFriendsListCache() {
 }
 
 module.exports = {
-    __privateFriendFns: { withFriendFarm },
+    __privateFriendFns: { withFriendFarm, getApplications, checkAndAcceptApplications },
     checkFriends, startFriendCheckLoop, stopFriendCheckLoop,
     refreshFriendCheckLoop,
-    // checkAndAcceptApplications,
     runBadOnceOnStartup,
     isHelpExpLimitReached,
     getOperationLimits,
