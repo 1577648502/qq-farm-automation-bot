@@ -1,5 +1,5 @@
 import { defineStore } from 'pinia'
-import { ref, computed } from 'vue'
+import { computed, ref } from 'vue'
 import api from '@/api'
 
 export interface DogFoodItem {
@@ -132,7 +132,11 @@ export const DOG_GUARD_RATES: Record<number, number> = {
 }
 
 export const DOG_DEFAULT_QUALITY: Record<number, number> = {
-  90001: 200, 90002: 100, 90003: 300, 90011: 300, 90021: 500,
+  90001: 200,
+  90002: 100,
+  90003: 300,
+  90011: 300,
+  90021: 500,
 }
 
 export const DOG_DESCRIPTIONS: Record<number, string> = {
@@ -168,11 +172,12 @@ export const usePetStore = defineStore('pet', () => {
   function getGuardRate(level: number): number { return DOG_GUARD_RATES[level] || 0.3 }
 
   function formatRemainTime(seconds: number): string {
-    if (seconds == null || seconds <= 0) return '已过期'
+    if (seconds == null || seconds <= 0)
+      return '已过期'
     const h = Math.floor(seconds / 3600)
     const m = Math.floor((seconds % 3600) / 60)
-    if (h > 24) { const d = Math.floor(h / 24); const rh = h % 24; return d + '天' + (rh > 0 ? rh + '小时' : '') }
-    return (h > 0 ? h + '小时' : '') + (m > 0 ? m + '分钟' : '')
+    if (h > 24) { const d = Math.floor(h / 24); const rh = h % 24; return `${d}天${rh > 0 ? `${rh}小时` : ''}` }
+    return (h > 0 ? `${h}小时` : '') + (m > 0 ? `${m}分钟` : '')
   }
 
   function getDogImageUrl(id: number): string {
@@ -206,12 +211,15 @@ export const usePetStore = defineStore('pet', () => {
   async function fetchPetStatus(accountId: string, friendGid?: string | number) {
     try {
       const params: Record<string, any> = {}
-      if (friendGid) params.friendGid = String(friendGid)
+      if (friendGid)
+        params.friendGid = String(friendGid)
       const res = await api.get('/api/pet/status', {
-        headers: { 'x-account-id': accountId }, params,
+        headers: { 'x-account-id': accountId },
+        params,
       })
       if (res.data?.ok) { dogStatus.value = res.data.data }
-    } catch { /* ignore */ }
+    }
+    catch { /* ignore */ }
   }
 
   // 从 dogTypes 构建 dogs + overview（数据源与原始工作代码一致）
@@ -224,13 +232,13 @@ export const usePetStore = defineStore('pet', () => {
       const isActive = dt.id === activeDogId
       return {
         dogId: dt.id,
-        name: dt.name || '未知#' + dt.id,
+        name: dt.name || `未知#${dt.id}`,
         quality: DOG_QUALITY_NAMES[qLevel] || '普通',
         qualityLabel: DOG_QUALITY_NAMES[qLevel] || '普通',
         probability: Math.round(guardRate * 100),
         status: isActive ? 'guarding' : (dt.field7 > 0 ? 'active' : 'inactive'),
         statusLabel: isActive ? '守护中' : (dt.field7 > 0 ? '已激活' : '未激活'),
-        description: DOG_DESCRIPTIONS[dt.id] || (dt.name + '，忠实的小伙伴'),
+        description: DOG_DESCRIPTIONS[dt.id] || (`${dt.name}，忠实的小伙伴`),
         image: getDogImageUrl(dt.id),
         skillName: dt.id === 90021 ? '同气连枝' : '',
         skillDesc: dt.id === 90021 ? '概率掉落金色礼包' : '',
@@ -254,7 +262,8 @@ export const usePetStore = defineStore('pet', () => {
   }
 
   async function fetchOverview(accountId: string) {
-    if (!accountId) return
+    if (!accountId)
+      return
     loading.value = true
     try {
       // 直接调用 API 避免 fetchPetStatus 的 loading 管理冲突
@@ -268,13 +277,14 @@ export const usePetStore = defineStore('pet', () => {
           const allDogs = buildDogsFromStatus(d)
           dogs.value = allDogs
           overview.value = buildOverviewFromDogs(allDogs, d)
-        } else if (d.dogTypeId) {
+        }
+        else if (d.dogTypeId) {
           // 后端没有返回 dogTypes 但返回了当前狗信息，从单条构建
           const qLevel = DOG_DEFAULT_QUALITY[d.dogTypeId] || 100
           const guardRate = DOG_GUARD_RATES[qLevel] || 0.3
           const singleDog: DogItem = {
             dogId: d.dogTypeId,
-            name: d.dogName || '未知#' + d.dogTypeId,
+            name: d.dogName || `未知#${d.dogTypeId}`,
             quality: DOG_QUALITY_NAMES[qLevel] || '普通',
             qualityLabel: DOG_QUALITY_NAMES[qLevel] || '普通',
             probability: Math.round(guardRate * 100),
@@ -298,18 +308,22 @@ export const usePetStore = defineStore('pet', () => {
             foodStockCount: dogFoods.value.reduce((sum, f) => sum + f.count, 0),
           }
           console.warn('[pet] fetchOverview: built from single dog (no dogTypes)', d)
-        } else {
+        }
+        else {
           dogs.value = []
           overview.value = null
           console.warn('[pet] fetchOverview: no dog data at all', d)
         }
-      } else {
+      }
+      else {
         dogs.value = []
         overview.value = null
       }
-    } catch (e) {
+    }
+    catch (e) {
       console.error('[pet] fetchOverview error:', e)
-    } finally {
+    }
+    finally {
       loading.value = false
     }
   }
@@ -319,7 +333,8 @@ export const usePetStore = defineStore('pet', () => {
       const res = await api.post('/api/pet/deploy', { dogTypeId: dogId }, { headers: { 'x-account-id': accountId } })
       if (res.data?.ok) { await fetchOverview(accountId) }
       return res.data
-    } catch { return { ok: false, error: '上阵失败' } }
+    }
+    catch { return { ok: false, error: '上阵失败' } }
   }
 
   async function activateDog(accountId: string, dogId: number) {
@@ -327,7 +342,8 @@ export const usePetStore = defineStore('pet', () => {
       const res = await api.post('/api/pet/activate', { dogTypeId: dogId }, { headers: { 'x-account-id': accountId } })
       if (res.data?.ok) { await fetchOverview(accountId) }
       return res.data
-    } catch { return { ok: false, error: '激活失败' } }
+    }
+    catch { return { ok: false, error: '激活失败' } }
   }
 
   async function withdrawDog(accountId: string) {
@@ -335,7 +351,8 @@ export const usePetStore = defineStore('pet', () => {
       const res = await api.post('/api/pet/recall', {}, { headers: { 'x-account-id': accountId } })
       if (res.data?.ok) { await fetchOverview(accountId) }
       return res.data
-    } catch { return { ok: false, error: '收回失败' } }
+    }
+    catch { return { ok: false, error: '收回失败' } }
   }
 
   async function fetchFoodItems(accountId: string) {
@@ -345,7 +362,7 @@ export const usePetStore = defineStore('pet', () => {
         dogFoods.value = res.data.data.foods.map((f: any) => ({
           id: Number(f.food_type_id || 0),
           count: Number(f.count || 0),
-          name: f.name || DOG_FOOD_NAMES[Number(f.food_type_id)] || '狗粮 #' + Number(f.food_type_id),
+          name: f.name || DOG_FOOD_NAMES[Number(f.food_type_id)] || `狗粮 #${Number(f.food_type_id)}`,
           days: DOG_FOOD_DAYS[Number(f.food_type_id)] || 0,
         }))
         return
@@ -353,19 +370,23 @@ export const usePetStore = defineStore('pet', () => {
       // 回退到背包数据
       const bagRes = await api.get('/api/bag', { headers: { 'x-account-id': accountId } }).catch(() => null)
       if (bagRes?.data?.ok && bagRes.data.data?.items) {
-        const items: Array<{ id: number; count: number; name: string }> = bagRes.data.data.items.map((i: any) => ({
-          id: Number(i.id) || 0, count: Number(i.count) || 0, name: String(i.name || ''),
+        const items: Array<{ id: number, count: number, name: string }> = bagRes.data.data.items.map((i: any) => ({
+          id: Number(i.id) || 0,
+          count: Number(i.count) || 0,
+          name: String(i.name || ''),
         }))
         dogFoods.value = items.filter(i => [90004, 90005, 90006].includes(i.id)).map(i => ({
-          id: i.id, count: i.count,
-          name: DOG_FOOD_NAMES[i.id] || '狗粮 #' + i.id,
+          id: i.id,
+          count: i.count,
+          name: DOG_FOOD_NAMES[i.id] || `狗粮 #${i.id}`,
           days: DOG_FOOD_DAYS[i.id] || 0,
         }))
       }
-    } catch { /* ignore */ }
+    }
+    catch { /* ignore */ }
   }
 
-    async function fetchGuardLogs(accountId: string) {
+  async function fetchGuardLogs(accountId: string) {
     loading.value = true
     try {
       const res = await api.get('/api/pet/guard-logs', {
@@ -385,7 +406,8 @@ export const usePetStore = defineStore('pet', () => {
         }))
         guardLogTotal.value = Number(data?.total || 0)
       }
-    } catch { /* ignore */ }
+    }
+    catch { /* ignore */ }
     finally { loading.value = false }
   }
 
@@ -462,7 +484,8 @@ export const usePetStore = defineStore('pet', () => {
           selectedDogId: data.config?.selected_dog_id || data.config?.selectedDogId || null,
         }
       }
-    } catch { /* ignore */ }
+    }
+    catch { /* ignore */ }
   }
 
   async function saveCapitalMode(accountId: string, config: CapitalModeConfig) {
@@ -470,7 +493,8 @@ export const usePetStore = defineStore('pet', () => {
       const res = await api.post('/api/pet/capital-mode/save', config, { headers: { 'x-account-id': accountId } })
       if (res.data?.ok) { capitalMode.value = config }
       return res.data
-    } catch { return { ok: false, error: '保存失败' } }
+    }
+    catch { return { ok: false, error: '保存失败' } }
   }
 
   async function feedDog(accountId: string, itemId: number, count = 1) {
@@ -479,16 +503,22 @@ export const usePetStore = defineStore('pet', () => {
       const res = await api.post('/api/pet/feed', { itemId, count }, { headers: { 'x-account-id': accountId } })
       if (res.data?.ok) { await fetchPetStatus(accountId); return res.data.data }
       throw new Error(res.data?.error || '喂食失败')
-    } catch (e: any) {
-      if (e.response?.data?.error) throw new Error(e.response.data.error)
-      if (e.message) throw e
+    }
+    catch (e: any) {
+      if (e.response?.data?.error)
+        throw new Error(e.response.data.error)
+      if (e.message)
+        throw e
       throw new Error('喂食失败')
-    } finally { feedLoading.value = false }
+    }
+    finally { feedLoading.value = false }
   }
 
-  function syncFromBag(items: Array<{ id: number; count: number; name?: string }>) {
+  function syncFromBag(items: Array<{ id: number, count: number, name?: string }>) {
     dogFoods.value = items.filter(item => [90004, 90005, 90006].includes(item.id)).map(item => ({
-      id: item.id, count: item.count, name: DOG_FOOD_NAMES[item.id] || '狗粮 #' + item.id,
+      id: item.id,
+      count: item.count,
+      name: DOG_FOOD_NAMES[item.id] || `狗粮 #${item.id}`,
       days: DOG_FOOD_DAYS[item.id] || 0,
     }))
   }
@@ -504,17 +534,43 @@ export const usePetStore = defineStore('pet', () => {
   }
 
   return {
-    currentTab, loading, dogStatus, dogFoods, feedLoading,
-    overview, dogs, guardLogs, guardLogTotal, capitalMode,
-    guardReward, guardRewardLoading, guardRewardClaiming, guardRewardError,
-    hasActiveDog, availableDogFoods,
-    fetchPetStatus, fetchOverview,
-    activateDog, deployDog, withdrawDog, fetchFoodItems,
-    fetchGuardLogs, fetchGuardReward, claimGuardReward,
-    fetchCapitalMode, saveCapitalMode,
-    feedDog, syncFromBag,
-    refreshCurrentTab, clear,
-    getQualityName, getQualityColor, getGuardRate,
-    formatRemainTime, getDogImageUrl, getDogFoodImageUrl, describeDog,
+    currentTab,
+    loading,
+    dogStatus,
+    dogFoods,
+    feedLoading,
+    overview,
+    dogs,
+    guardLogs,
+    guardLogTotal,
+    capitalMode,
+    guardReward,
+    guardRewardLoading,
+    guardRewardClaiming,
+    guardRewardError,
+    hasActiveDog,
+    availableDogFoods,
+    fetchPetStatus,
+    fetchOverview,
+    activateDog,
+    deployDog,
+    withdrawDog,
+    fetchFoodItems,
+    fetchGuardLogs,
+    fetchGuardReward,
+    claimGuardReward,
+    fetchCapitalMode,
+    saveCapitalMode,
+    feedDog,
+    syncFromBag,
+    refreshCurrentTab,
+    clear,
+    getQualityName,
+    getQualityColor,
+    getGuardRate,
+    formatRemainTime,
+    getDogImageUrl,
+    getDogFoodImageUrl,
+    describeDog,
   }
 })

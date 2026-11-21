@@ -31,7 +31,6 @@ const ACTIVITY_SERVICE = 'gamepb.activitypb.ActivityService';
 // 活动与子活动ID
 const WEATHER_GROUP_ID = 2026070300;
 const ACTIVITY_ID_SHOP = 2026070301;
-const ACTIVITY_ID_RESEARCH_ENTER = 2026070302;
 const ACTIVITY_ID_TASK_PROGRESS = 2026070303;
 const ACTIVITY_ID_RESEARCH = 2026070304;
 const ACTIVITY_ID_DAILY_TASKS = 2026070305;
@@ -332,7 +331,7 @@ async function useThunderBottleSelf() {
     try {
         const rep = types.UseReply.decode(replyBody);
         awards = (rep.items || []).map(a => normalizeItem(a));
-    } catch (_) { /* 忽略解析失败 */ }
+    } catch { /* 忽略解析失败 */ }
     return { itemUid, awards };
 }
 
@@ -481,7 +480,7 @@ async function checkAndRunWeatherResearch() {
         // 从当前可升级档开始, 按数组顺序依次升级; 每升一档本地扣减徽章
         const tiers = (research.tiers || []).slice().sort((a, b) => toNum(a.tierId) - toNum(b.tierId));
         let badge = overview.bag.thunderBadge || 0;
-        let startIndex = tiers.findIndex(t => t.upgradable);
+        const startIndex = tiers.findIndex(t => t.upgradable);
         if (startIndex < 0) { summary.skipped.push(`无可升级档位(徽章=${badge})`); return summary; }
 
         for (let i = startIndex; i < tiers.length; i++) {

@@ -1,4 +1,4 @@
-﻿const { Buffer } = require('node:buffer');
+const { Buffer } = require('node:buffer');
 /**
  * 商城自动购买
  */
@@ -8,7 +8,6 @@ const { sendMsgAsync, getUserState } = require('../utils/network');
 const { types } = require('../utils/proto');
 const { toNum, log, sleep } = require('../utils/utils');
 const { getItemById, getAllItems, getItemImageById } = require('../config/gameConfig');
-const fs = require('node:fs');
 
 // 名称 -> 物品 索引 (懒加载; gameConfig 未导出 getItemByName, 这里自建, 同时避免未收录物品抛错)
 let itemNameIndex = null;
@@ -29,7 +28,6 @@ function getItemByNameLocal(name) {
 const ORGANIC_FERTILIZER_MALL_GOODS_ID = 1002;
 const INORGANIC_FERTILIZER_MALL_GOODS_ID = 1003;
 const BUY_COOLDOWN_MS = 10 * 60 * 1000;
-const CHECK_BUY_COOLDOWN_MS = 60 * 1000;
 const MAX_ROUNDS = 100;
 const BUY_PER_ROUND = 10;
 const FREE_GIFTS_DAILY_KEY = 'mall_free_gifts';
@@ -41,7 +39,6 @@ const SHOP_ITEM_CURRENCY = {
 };
 
 let lastBuyAt = 0;
-let lastCheckBuyAt = 0;
 let buyDoneDateKey = '';
 let buyLastSuccessAt = 0;
 let buyPausedNoGoldDateKey = '';
@@ -71,7 +68,6 @@ function getDateKey() {
  */
 const MALL_LIST_FLAG_FIELD = 2;
 const MALL_LIST_CONST_FIELD = 3;   // 恒为 1, 抓包 3 次请求都有
-const MALL_LIST_CONST_FIELD_VALUE = 1;
 
 async function getMallListBySlotType(slotType = 1, options = {}) {
     const raw = Number(slotType);
@@ -899,8 +895,7 @@ function isDoneTodayByKey(key) {
 }
 
 // ===== 每日购买中级挑战书 (商城 goodsId=1050, 150 金豆豆/个, 2026-09-18 抓包实测) =====
-const BUY_BOOK_GOODS_ID = 1050;
-const BUY_BOOK_ITEM_ID = 80102;      // 中级挑战书
+const BUY_BOOK_GOODS_ID = 1050;      // 商品买回后 item_id=80102(中级挑战书)
 const BUY_BOOK_EXPECT_PRICE = 150;   // 单价(金豆豆), 用于防止改价误买
 
 /**
@@ -1150,7 +1145,7 @@ function isCollectionPackGoods(goods) {
  *   验证: 抓包里对 1047 连买了 2 次都成功 → 剩余不可能只有 1(旧解析把 {1,2,3} 当
  *   "已购2/上限3"会得到剩余 1, 与实际不符)。
  */
-function parseSlot0Limit(limitField, goodsName) {
+function parseSlot0Limit(limitField, _goodsName) {
     const bytes = Buffer.isBuffer(limitField) ? limitField : Buffer.from(limitField || []);
     if (!bytes.length) return null;
     for (const numeric of collectWireNumericMessages(bytes)) {
@@ -1392,7 +1387,7 @@ async function checkAndBuyFertilizerByThreshold(type, count, thresholdHours) {
 
 async function checkAndBuyFertilizerBoth(options) {
     const { getBag, getBagItems, getContainerHoursFromBagItems } = require('./warehouse');
-    const { sleep, randomDelay } = require('../utils/utils');
+    const { sleep } = require('../utils/utils');
     
     const {
         buyOrganic = false,

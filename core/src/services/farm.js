@@ -4,7 +4,7 @@
 
 const protobuf = require('protobufjs');
 const { CONFIG, PlantPhase, PHASE_NAMES } = require('../config/config');
-const { getPlantNameBySeedId, getPlantName, formatGrowTime, getPlantGrowTime, getAllSeeds, getPlantById, getPlantBySeedId, getSeedImageBySeedId, resolveMutationInfo, isGoldenPlant } = require('../config/gameConfig');
+const { getPlantNameBySeedId, formatGrowTime, getPlantGrowTime, getAllSeeds, getPlantById, getPlantBySeedId, resolveMutationInfo, isGoldenPlant } = require('../config/gameConfig');
 const { isAutomationOn, getPreferredSeed, getAutomation, getPlantingStrategy, getBagSeedPriority, getBagSeedFallbackStrategy, getPlantSeedExclude, getFertilizerBuyOrganicCount, getFertilizerBuyOrganicThresholdHours, getFertilizerBuyNormalCount, getFertilizerBuyNormalThresholdHours, getFertilizerBuyCheckIntervalMinutes } = require('../models/store');
 const { sendMsgAsync, getUserState, networkEvents, getWsErrorState } = require('../utils/network');
 const { types } = require('../utils/proto');
@@ -15,7 +15,7 @@ const { recordOperation } = require('./stats');
 const { getBagSeeds } = require('./warehouse');
 const { buildLandBoard, getSlaveLandIds, hasPlantData } = require('./land-layout');
 const { buildLockedLand, buildEmptyLand, buildPlantedLand } = require('./land-view');
-const { autoBuyFertilizer, checkAndBuyFertilizerBoth } = require('./mall');
+const { checkAndBuyFertilizerBoth } = require('./mall');
 const { getCapitalModeConfig, deployDog, withdrawDog, DOG_TYPE_NAMES } = require('./pet');
 
 // ============ 内部状态 ============
@@ -24,7 +24,6 @@ let isFirstFarmCheck = true;
 let farmLoopRunning = false;
 let externalSchedulerMode = false;
 let fertilizerBuyCheckTimer = null;
-let lastFertilizerBuyCheckAt = 0;
 const farmScheduler = createScheduler('farm');
 const LARGE_SEED_PRIORITY_MIN_SIZE = 2;
 const LARGE_SEED_WAIT_MS = 10 * 60 * 1000;
@@ -1906,7 +1905,7 @@ function logHarvestedMutants(harvestReply) {
         }
     }
     if (mutated.length === 0) return;
-    log('变异', '收获发现变异作物: ' + mutated.map(m => `${m.mutationType}(${m.plantName}${m.mutationEffect ? `, ${m.mutationEffect}` : ''})`).join(', '), {
+    log('变异', `收获发现变异作物: ${  mutated.map(m => `${m.mutationType}(${m.plantName}${m.mutationEffect ? `, ${m.mutationEffect}` : ''})`).join(', ')}`, {
         module: 'farm',
         event: '变异收获',
         result: 'ok',
@@ -2064,7 +2063,7 @@ async function runFarmOperation(opType) {
                     log('宠物', '资本模式: 已收回狗');
                 }
             } catch (e) {
-                log('宠物', '资本模式: 收狗失败 ' + (e.message || e));
+                log('宠物', `资本模式: 收狗失败 ${  e.message || e}`);
             }
         }
     }
@@ -2212,7 +2211,7 @@ async function operateSingleLand(opts = {}) {
             return { ok: true, action: '施肥', landId, detail: `fertilizerId=${fertilizerId}` };
         }
         default:
-            throw new Error('不支持的操作: ' + op);
+            throw new Error(`不支持的操作: ${  op}`);
     }
 }
 
@@ -2367,6 +2366,8 @@ module.exports = {
     getBagSeedPlantCapacity,
     encodePlantRequest,
     __privateFarmFns: {
+        getOrganicFertilizerTargetsFromLands,
+        getFastMatureLands,
         LARGE_SEED_PRIORITY_MIN_SIZE,
         LARGE_SEED_WAIT_MS,
         getLargeSeedWaitKey,

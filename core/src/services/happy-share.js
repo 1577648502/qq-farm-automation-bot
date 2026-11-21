@@ -48,7 +48,7 @@
  */
 const { log, toNum, toInt, sleep } = require('../utils/utils');
 const { getItemById, getItemImageById } = require('../config/gameConfig');
-const { operateRaw, getGroupRaw, parseTop, findField } = require('./mengchong');
+const { operateRaw, parseTop, findField } = require('./mengchong');
 
 const GROUP_S3 = 2026092501;   // 上一期(9/24-10/12)
 const GROUP_S4 = 2026110104;   // S4 版(2026-10-15 上线, 机制相同)
@@ -78,15 +78,11 @@ function setSeason(group) {
     activeGroup = hit.group;
     return true;
 }
-/** 结果字段号(只用于读回包, 不用于构造请求 —— 请求体只有 group+cmd) */
-const FIELD_OPEN = 153;
-const FIELD_HAPPY = 157;
-const FIELD_TIER = 154;
-const FIELD_PACK = 155;
+// 结果字段号(只用于读回包, 不用于构造请求): open=153 happy=157 tier=154 pack=155
 const STATE_FIELD = 120;    // 活动体里的状态容器
-const TIER_UNREACHED = 1;   // 档位状态: 未达成
 const TIER_CLAIMABLE = 2;   // 档位状态: 可领
 const TIER_CLAIMED = 3;     // 档位状态: 已领
+// 档位状态: 1=未达成 2=可领(TIER_CLAIMABLE) 3=已领(TIER_CLAIMED)
 const GIFT_PACK_ID = 101616; // 奶茶券惊喜礼包(2026-11-04 新增档位奖励; type=11/can_use=1, 由仓库负责开启)
 
 function itemLabel(id, count) {
@@ -221,7 +217,7 @@ async function claimDailyHappy() {
                 return { ok: true, gained: after.happy - before.happy, happy: after.happy, tiers: after.tiers, viaShare: true };
             }
         }
-    } catch (e) { /* 分享失败就按"没涨"处理 */ }
+    } catch { /* 分享失败就按"没涨"处理 */ }
     return {
         ok: false,
         reason: gained > 0 ? `接口回报 +${gained} 但状态没变, 请核对` : '未获得快乐值(今日可能已领过)',

@@ -98,10 +98,10 @@ function overwriteBundledConfigs(itemSourcePath, plantSourcePath, imageSourceDir
     if (imageSourceDir && fs.existsSync(imageSourceDir)) {
         const bundledImageDir = getResourcePath('gameConfig', 'seed_images_named');
         fs.mkdirSync(bundledImageDir, { recursive: true });
-        var sourceFiles = fs.readdirSync(imageSourceDir);
-        for (var i = 0; i < sourceFiles.length; i++) {
-            var srcPath = path.join(imageSourceDir, sourceFiles[i]);
-            var dstPath = path.join(bundledImageDir, sourceFiles[i]);
+        const sourceFiles = fs.readdirSync(imageSourceDir);
+        for (let i = 0; i < sourceFiles.length; i++) {
+            const srcPath = path.join(imageSourceDir, sourceFiles[i]);
+            const dstPath = path.join(bundledImageDir, sourceFiles[i]);
             if (fs.statSync(srcPath).isFile()) {
                 if (!fs.existsSync(dstPath) || !filesEqual(srcPath, dstPath)) {
                     writeAtomic(dstPath, fs.readFileSync(srcPath));
@@ -115,43 +115,43 @@ function overwriteBundledConfigs(itemSourcePath, plantSourcePath, imageSourceDir
 
 function scanCacheDir(fsRoot, hasAccountDir) {
     if (!fs.existsSync(fsRoot)) return [];
-    var candidates = [];
+    const candidates = [];
     try {
-        var dirs = fs.readdirSync(fsRoot);
-        for (var i = 0; i < dirs.length; i++) {
-            var gameCachesDir = hasAccountDir
+        const dirs = fs.readdirSync(fsRoot);
+        for (let i = 0; i < dirs.length; i++) {
+            const gameCachesDir = hasAccountDir
                 ? path.join(fsRoot, dirs[i], QQ_FARM_APP_ID, 'usr', 'gamecaches')
                 : path.join(fsRoot, QQ_FARM_APP_ID, 'usr', 'gamecaches');
-            var cacheListPath = path.join(gameCachesDir, 'cacheList.json');
+            const cacheListPath = path.join(gameCachesDir, 'cacheList.json');
             if (!fs.existsSync(cacheListPath)) continue;
             candidates.push({
-                gameCachesDir: gameCachesDir,
-                cacheListPath: cacheListPath,
+                gameCachesDir,
+                cacheListPath,
                 mtimeMs: fs.statSync(cacheListPath).mtimeMs,
             });
         }
-    } catch (e) {}
+    } catch {}
     return candidates;
 }
 
 function findAllQQFarmCaches() {
     const candidates = [];
-    candidates.push.apply(candidates, scanCacheDir(path.join(os.homedir(), QQ_CACHE_RELATIVE_ROOT), true));
-    candidates.push.apply(candidates, scanCacheDir(path.join(os.homedir(), WINDOWS_QQ_CACHE_ROOT), true));
-    candidates.push.apply(candidates, scanCacheDir(path.join(os.homedir(), WINDOWS_QQNT_CACHE_ROOT), false));
+    candidates.push(...scanCacheDir(path.join(os.homedir(), QQ_CACHE_RELATIVE_ROOT), true));
+    candidates.push(...scanCacheDir(path.join(os.homedir(), WINDOWS_QQ_CACHE_ROOT), true));
+    candidates.push(...scanCacheDir(path.join(os.homedir(), WINDOWS_QQNT_CACHE_ROOT), false));
     candidates.sort((a, b) => b.mtimeMs - a.mtimeMs);
     return candidates;
 }
 
 function findLatestQQFarmCache() {
-    var candidates = [];
+    const candidates = [];
     // macOS
-    candidates.push.apply(candidates, scanCacheDir(path.join(os.homedir(), QQ_CACHE_RELATIVE_ROOT), true));
+    candidates.push(...scanCacheDir(path.join(os.homedir(), QQ_CACHE_RELATIVE_ROOT), true));
     // Windows QQEX
-    candidates.push.apply(candidates, scanCacheDir(path.join(os.homedir(), WINDOWS_QQ_CACHE_ROOT), true));
+    candidates.push(...scanCacheDir(path.join(os.homedir(), WINDOWS_QQ_CACHE_ROOT), true));
     // Windows QQNT
-    candidates.push.apply(candidates, scanCacheDir(path.join(os.homedir(), WINDOWS_QQNT_CACHE_ROOT), false));
-    candidates.sort(function (a, b) { return b.mtimeMs - a.mtimeMs; });
+    candidates.push(...scanCacheDir(path.join(os.homedir(), WINDOWS_QQNT_CACHE_ROOT), false));
+    candidates.sort((a, b) => { return b.mtimeMs - a.mtimeMs; });
     return candidates[0] || null;
 }
 
@@ -352,14 +352,14 @@ function getSeedAssetCandidates(item) {
     if (assetMatch) add(`Crop_${Number(assetMatch[1])}`);
 
     // Add _Seed suffixed versions to match buildSeedAssetIndex keys
-    var suffixList = [];
-    for (var i = 0; i < candidates.length; i++) {
-        if (candidates[i].indexOf('_Seed') === -1) {
-            suffixList.push(candidates[i] + '_Seed');
+    const suffixList = [];
+    for (let i = 0; i < candidates.length; i++) {
+        if (!candidates[i].includes('_Seed')) {
+            suffixList.push(`${candidates[i]  }_Seed`);
         }
     }
-    for (var i = 0; i < suffixList.length; i++) {
-        if (candidates.indexOf(suffixList[i]) === -1) candidates.push(suffixList[i]);
+    for (let i = 0; i < suffixList.length; i++) {
+        if (!candidates.includes(suffixList[i])) candidates.push(suffixList[i]);
     }
 
     return candidates;
@@ -416,8 +416,8 @@ async function mapLimit(values, limit, worker) {
  * Create a minimal 1x1 white PNG placeholder
  * Used when CDN/bundle image not available
  */
-function writePlaceholderPng(filePath, label) {
-    var png = Buffer.from([
+function writePlaceholderPng(filePath, _label) {
+    const png = Buffer.from([
         0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A,
         0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52,
         0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01,
@@ -643,11 +643,11 @@ async function syncMengchongImages(options = {}) {
     let wanted = [];
     for (const cache of caches) {
         let cacheList = null;
-        try { cacheList = readJson(cache.cacheListPath); } catch (e) { continue; }
+        try { cacheList = readJson(cache.cacheListPath); } catch { continue; }
         const found = [];
         for (const bundleName of ['delayRes', 'extraRes', 'mainscene']) {
             let bundle = null;
-            try { bundle = findBundleConfig(cacheList, cache, bundleName); } catch (e) { bundle = null; }
+            try { bundle = findBundleConfig(cacheList, cache, bundleName); } catch { bundle = null; }
             if (!bundle || !bundle.config) continue;
             // ⚠ bundle.config 已经是解析好的 JSON(findBundleConfig 内部 readJson), 不要再 readFileSync
             const index = buildAssetPathIndex(bundle.config);
@@ -668,7 +668,7 @@ async function syncMengchongImages(options = {}) {
     const dataDir = path.join(getDataDir(), 'gameConfig', 'mengchong_images');
     const bundledDir = getResourcePath('gameConfig', 'mengchong_images');
     fs.mkdirSync(dataDir, { recursive: true });
-    try { fs.mkdirSync(bundledDir, { recursive: true }); } catch (e) { /* 内置目录可能只读 */ }
+    try { fs.mkdirSync(bundledDir, { recursive: true }); } catch { /* 内置目录可能只读 */ }
 
     let synced = 0;
     const missing = [];
@@ -683,9 +683,9 @@ async function syncMengchongImages(options = {}) {
             const content = await readNativeAssetContent(w.cache, cacheListOf(w.cache), nativeAsset);
             if (!content || content.length < 100) { missing.push(base); continue; }
             writeAtomic(dataPath, content);
-            try { writeAtomic(path.join(bundledDir, fileName), content); } catch (e) { /* 只读忽略 */ }
+            try { writeAtomic(path.join(bundledDir, fileName), content); } catch { /* 只读忽略 */ }
             synced += 1;
-        } catch (e) {
+        } catch {
             missing.push(base);
         }
     }
@@ -724,7 +724,7 @@ async function syncPetCharmConfig(url, cache, outputDir) {
     writeAtomic(path.join(outputDir, 'ActivityPetTreasureHuntCharm.json'), payload);
     try {
         writeAtomic(getResourcePath('gameConfig', 'ActivityPetTreasureHuntCharm.json'), payload);
-    } catch (e) { /* 内置目录只读时忽略 */ }
+    } catch { /* 内置目录只读时忽略 */ }
     return charms.length;
 }
 
@@ -800,8 +800,8 @@ async function syncGameConfigFromQQCache(options = {}) {
     const officialItems = decodeCocosJsonAsset(JSON.parse(itemBuffer.toString('utf8')), 'ItemInfo');
     const officialPlants = decodeCocosJsonAsset(JSON.parse(plantBuffer.toString('utf8')), 'Plant');
     // Filter out fake/placeholder plant IDs
-    var validPlants = officialPlants.filter(function(p) {
-        var pid = Number(p && p.id) || 0;
+    const validPlants = officialPlants.filter((p) => {
+        const pid = Number(p && p.id) || 0;
         return pid !== 29999;
     });
     if (officialItems.length < 100) throw new Error(`ItemInfo 数量异常: ${officialItems.length}`);

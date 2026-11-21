@@ -113,24 +113,24 @@ function installStub() {
                 }
                 if (cmd === 74) { phase5 = 1; throw new Error('新版回放不走 cmd=74'); }
                 if (cmd === 71) { phase5 = 2; return { body: bodyOfHex(F5.TIER.hex) }; }
-                throw new Error('新版桩未 stub 的 cmd: ' + cmd);
+                throw new Error(`新版桩未 stub 的 cmd: ${  cmd}`);
             }
             // ===== S4 期(2026110104): 命令号 70/74/71 =====
             if (group === 2026110104) {
                 if (cmd === 70) return { body: bodyOfHex([F4.OPEN, F4.HAPPY, F4.TIER][phase4].hex) };
                 if (cmd === 74) { phase4 = 1; return { body: bodyOfHex(F4.HAPPY.hex) }; }
                 if (cmd === 71) { phase4 = 2; return { body: bodyOfHex(F4.TIER.hex) }; }
-                throw new Error('S4 未 stub 的 cmd: ' + cmd);
+                throw new Error(`S4 未 stub 的 cmd: ${  cmd}`);
             }
             // ===== S3 期(2026092501): 命令号 69/73/70/71 =====
             if (cmd === 69) return { body: bodyOfHex([F_OPEN, F_SHARE, F_TIER][phase].hex) };
             if (cmd === 73) { phase = 1; return { body: bodyOfHex(F_SHARE.hex) }; }
             if (cmd === 70) { phase = 2; return { body: bodyOfHex(F_TIER.hex) }; }
             if (cmd === 71) return { body: bodyOfHex(F_PACK.hex) };
-            throw new Error('未 stub 的 cmd: ' + cmd);
+            throw new Error(`未 stub 的 cmd: ${  cmd}`);
         }
         if (/Share/.test(method)) return { body: Buffer.alloc(0) };
-        throw new Error('未 stub 的接口: ' + key);
+        throw new Error(`未 stub 的接口: ${  key}`);
     };
 }
 

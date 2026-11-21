@@ -38,7 +38,7 @@ network.sendMsgAsync = async (_s, method) => {
     if (method === 'Fertilize') {
         return { body: Buffer.from(types.FertilizeReply.encode(types.FertilizeReply.create({})).finish()) };
     }
-    throw new Error('unexpected ' + method);
+    throw new Error(`unexpected ${  method}`);
 };
 
 proto.loadProto().then(async () => {

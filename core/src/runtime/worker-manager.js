@@ -1,4 +1,4 @@
-﻿const { createScheduler } = require('../services/scheduler');
+const { createScheduler } = require('../services/scheduler');
 
 function createWorkerManager(options) {
     const {
@@ -81,7 +81,7 @@ function createWorkerManager(options) {
         }
 
         if (typeof onWorkerStarted === 'function') {
-            try { onWorkerStarted(String(account.id)); } catch (e) { /* 忽略 */ }
+            try { onWorkerStarted(String(account.id)); } catch { /* 忽略 */ }
         }
 
         workers[account.id] = {
@@ -146,7 +146,7 @@ function createWorkerManager(options) {
                         signal: signal || '',
                         byStealth: stoppedReason ? /防封号/.test(stoppedReason) : false,
                     });
-                } catch (e) { /* 忽略 */ }
+                } catch { /* 忽略 */ }
             }
 
             managerScheduler.clear(`force_kill_${account.id}`);
@@ -188,15 +188,15 @@ function createWorkerManager(options) {
                     event: '停止',
                     reason: 'stopped',
                 });
-            } catch (e) { /* 忽略 */ }
+            } catch { /* 忽略 */ }
             if (typeof addAccountLog === 'function') {
                 try {
                     addAccountLog('stopped', reason, String(accountId), worker.name || '', { reason, byStealth });
-                } catch (e) { /* 忽略 */ }
+                } catch { /* 忽略 */ }
             }
         }
         if (typeof onWorkerStopped === 'function') {
-            try { onWorkerStopped(String(accountId), { reason, byStealth }); } catch (e) { /* 忽略 */ }
+            try { onWorkerStopped(String(accountId), { reason, byStealth }); } catch { /* 忽略 */ }
         }
         worker.process.send({ type: 'stop' });
         // process.kill will happen in 'exit' handler, or we can force it

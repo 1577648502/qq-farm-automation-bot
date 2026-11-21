@@ -1,13 +1,13 @@
-﻿<script setup lang="ts">
+<script setup lang="ts">
 import { storeToRefs } from 'pinia'
 import { computed, ref, triggerRef, watch } from 'vue'
-import { usePageRefresh } from '@/composables/usePageRefresh'
 import api from '@/api'
 import BaseButton from '@/components/ui/BaseButton.vue'
+import { usePageRefresh } from '@/composables/usePageRefresh'
 import { useAccountStore } from '@/stores/account'
-import { apiError } from '@/utils/api-result'
 import { useStatusStore } from '@/stores/status'
 import { useToastStore } from '@/stores/toast'
+import { apiError } from '@/utils/api-result'
 import { formatCompactNumber } from '@/utils/number-format'
 import {
   findQingmeiCrop,
@@ -64,7 +64,7 @@ interface LiveActivity {
   shop?: {
     goods?: Array<{
       id: number
-      cost?: Array<{id: number}>
+      cost?: Array<{ id: number }>
     }>
   } | null
   qingmei?: {
@@ -179,7 +179,7 @@ async function fetchOverview() {
       throw new Error(apiError(res, res.data?.data) || '获取活动数据失败')
     overview.value = res.data.data
     await statusStore.fetchStatus(accountId)
-      // 强制通知 Vue 响应式系统重新求值，确保页面立即刷新
+    // 强制通知 Vue 响应式系统重新求值，确保页面立即刷新
     triggerRef(overview)
   }
   catch (e: any) {
@@ -215,8 +215,8 @@ async function runAction(key: string, path: string, payload: Record<string, any>
     // 用操作返回的实际累计金币覆盖，独立于 qingmei 条件，避免卖出后 qingmei 为 null 时跳过
     if (responseData.goldAwarded > 0 && overview.value?.live?.activity?.drawActivity?.qingmei) {
       overview.value.live.activity.drawActivity.qingmei.brewedGold = responseData.goldAwarded
-  }
-        // 强制刷新页面响应式数据，确保金额立即更新
+    }
+    // 强制刷新页面响应式数据，确保金额立即更新
     triggerRef(overview)
   }
   catch (e: any) {
@@ -268,7 +268,7 @@ async function brewFine() {
     const sessions = data?.sessions || []
     const gold = data?.goldAwarded || 0
     const consumed = data?.fruitsConsumed || 0
-    const prices = sessions.map((s: {price: number; gold: number; critical?: boolean}, i: number) => `第${i+1}次: ${formatGold(s.price)}${s.critical ? ' 暴击' : ''}`).join('、')
+    const prices = sessions.map((s: { price: number, gold: number, critical?: boolean }, i: number) => `第${i + 1}次: ${formatGold(s.price)}${s.critical ? ' 暴击' : ''}`).join('、')
     return prices ? `精酿完成，消耗 ${consumed} 青梅\n${prices}\n待卖出 ${formatGold(gold)} 金币` : `精酿完成，待卖出 ${formatGold(gold)} 金币`
   })
 }
@@ -307,7 +307,6 @@ async function shareSellBrew() {
   })
 }
 
-
 watch([currentAccountId, () => currentAccount.value?.running], fetchOverview)
 
 usePageRefresh('/qingniang', async () => {
@@ -334,7 +333,7 @@ usePageRefresh('/qingniang', async () => {
         </div>
       </div>
       <div class="flex flex-wrap items-center gap-2">
-        <span class="rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm text-gray-600 shadow-sm dark:border-gray-700 dark:bg-gray-800 dark:text-gray-300">
+        <span class="border border-gray-200 rounded-xl bg-white px-3 py-2 text-sm text-gray-600 shadow-sm dark:border-gray-700 dark:bg-gray-800 dark:text-gray-300">
           剩余：{{ formatRemaining(remainingEndTime) }}
         </span>
         <BaseButton variant="secondary" :loading="loading" :disabled="!accountReady" @click="fetchOverview">
@@ -377,7 +376,7 @@ usePageRefresh('/qingniang', async () => {
                 <h2 class="mt-2 text-2xl text-gray-900 font-bold dark:text-white">
                   青梅酿
                 </h2>
-                <div class="mt-4 grid grid-cols-2 gap-3 text-sm sm:max-w-md">
+                <div class="grid grid-cols-2 mt-4 gap-3 text-sm sm:max-w-md">
                   <div class="rounded-lg bg-gray-50 p-3 dark:bg-gray-900/40">
                     <p class="text-gray-500 dark:text-gray-400">
                       青梅果实
@@ -398,7 +397,7 @@ usePageRefresh('/qingniang', async () => {
             </div>
           </div>
 
-          <aside class="border-t border-emerald-100 bg-emerald-50/70 p-5 dark:border-emerald-900/50 dark:bg-emerald-900/20 lg:border-l lg:border-t-0">
+          <aside class="border-t border-emerald-100 bg-emerald-50/70 p-5 lg:border-l lg:border-t-0 dark:border-emerald-900/50 dark:bg-emerald-900/20">
             <p class="text-sm text-gray-500 dark:text-gray-400">
               青梅种子
             </p>
@@ -445,21 +444,21 @@ usePageRefresh('/qingniang', async () => {
               {{ brewedCount > 0 ? `酿造进度 ${brewedCount}/${brewLimit || 3}` : '预计可卖' }}
             </p>
             <strong class="mt-1 block text-2xl text-amber-500">{{ formatGold(brewState?.brewedGold || expectedGold) }}</strong>
-<div class="mt-3 flex items-center gap-2 justify-end">
-              <label class="text-sm text-gray-500 dark:text-gray-400 whitespace-nowrap">果实:</label>
-              <input v-model.number="brewFruitCount" type="number" min="1" :max="fruitCount" class="w-16 px-2 py-1 text-sm text-center border border-gray-300 rounded-md dark:border-gray-600 dark:bg-gray-700 dark:text-white" />
-              <BaseButton :loading="actionLoading === 'brew'" :disabled="!accountReady || canSellBrew || (!fruitCount && brewedCount === 0)" @click="brewNormal" size="sm">
+            <div class="mt-3 flex items-center justify-end gap-2">
+              <label class="whitespace-nowrap text-sm text-gray-500 dark:text-gray-400">果实:</label>
+              <input v-model.number="brewFruitCount" type="number" min="1" :max="fruitCount" class="w-16 border border-gray-300 rounded-md px-2 py-1 text-center text-sm dark:border-gray-600 dark:bg-gray-700 dark:text-white">
+              <BaseButton :loading="actionLoading === 'brew'" :disabled="!accountReady || canSellBrew || (!fruitCount && brewedCount === 0)" size="sm" @click="brewNormal">
                 <span class="i-carbon-shopping-cart mr-1" />酿造
               </BaseButton>
-              <BaseButton :loading="actionLoading === 'brew-fine'" :disabled="!accountReady || canSellBrew || (!fruitCount && brewedCount === 0)" @click="brewFine" variant="secondary" size="sm">
+              <BaseButton :loading="actionLoading === 'brew-fine'" :disabled="!accountReady || canSellBrew || (!fruitCount && brewedCount === 0)" variant="secondary" size="sm" @click="brewFine">
                 <span class="i-carbon-cafe mr-1" />精酿
               </BaseButton>
             </div>
-            <div class="mt-2 flex flex-wrap gap-2 justify-end">
-              <BaseButton :loading="actionLoading === 'sell'" :disabled="!accountReady || !canSellBrew" @click="sellBrew" variant="outline" size="sm">
+            <div class="mt-2 flex flex-wrap justify-end gap-2">
+              <BaseButton :loading="actionLoading === 'sell'" :disabled="!accountReady || !canSellBrew" variant="outline" size="sm" @click="sellBrew">
                 <span class="i-carbon-wallet mr-1" />卖出
               </BaseButton>
-              <BaseButton :loading="actionLoading === 'share-sell'" :disabled="!accountReady || !canSellBrew" @click="shareSellBrew" variant="outline" size="sm">
+              <BaseButton :loading="actionLoading === 'share-sell'" :disabled="!accountReady || !canSellBrew" variant="outline" size="sm" @click="shareSellBrew">
                 <span class="i-carbon-share mr-1" />分享卖出(1.5x)
               </BaseButton>
             </div>

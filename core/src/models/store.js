@@ -1,4 +1,4 @@
-﻿const process = require('node:process');
+const process = require('node:process');
 /**
  * 运行时存储 - 自动化开关、种子偏好、账号管理
  */
@@ -33,7 +33,7 @@ function readKnownFriendGidsCache(accountId) {
                 return data.gids;
             }
         }
-    } catch (e) {
+    } catch {
         // 忽略读取错误
     }
     return null;
@@ -46,7 +46,7 @@ function writeKnownFriendGidsCache(accountId, gids) {
             gids: gids || [],
             updatedAt: Date.now(),
         });
-    } catch (e) {
+    } catch {
         // 忽略写入错误
     }
 }
@@ -100,13 +100,6 @@ function normalizeKnownFriendGidSyncCooldownSec(input, fallback = DEFAULT_KNOWN_
 }
 
 
-const QQ_UIN_RE = /^\d{8,12}$/;
-
-function normalizeQQUin(value) {
-    const text = String(value || '').trim();
-    if (!text) return '';
-    return QQ_UIN_RE.test(text) ? text : '';
-}
 function normalizeFriendsListCacheTtlSec(input, fallback = DEFAULT_FRIENDS_LIST_CACHE_TTL_SEC) {
     const value = Number.parseInt(input, 10);
     const base = Number.isFinite(value) ? value : fallback;
@@ -1543,7 +1536,6 @@ function addOrUpdateAccount(acc) {
     const data = normalizeAccountsData(loadAccounts());
     let touchedAccountId = '';
     // 备注里填写 QQ 号时以备注为准；QQ 号可能是 8-12 位。
-    const normalizedUin = normalizeQQUin(acc.name) || (acc.uin ?? acc.wxid ?? acc.qq ?? '');
     if (acc.id) {
         const idx = data.accounts.findIndex(a => a.id === acc.id);
         if (idx >= 0) {

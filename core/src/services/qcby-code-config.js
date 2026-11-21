@@ -43,13 +43,13 @@ function readFileConfig() {
         }
         const raw = fs.readFileSync(file, 'utf-8');
         return { fileCreated: false, config: JSON.parse(raw) || {} };
-    } catch (_) {
+    } catch {
         return { fileCreated: false, config: {} };
     }
 }
 
 function normalizeAccounts(rawAccounts, env) {
-    let list = Array.isArray(rawAccounts) ? rawAccounts.slice() : [];
+    const list = Array.isArray(rawAccounts) ? rawAccounts.slice() : [];
 
     // 单账号环境变量便捷映射
     const envAccountId = String(env.QCBY_ACCOUNT_ID || '').trim();
@@ -126,7 +126,7 @@ function readQcbyCodeConfigForUI() {
         if (!fs.existsSync(file)) return normalizeQcbyConfigForStore(DEFAULT_CONFIG);
         const cfg = JSON.parse(fs.readFileSync(file, 'utf-8')) || {};
         return normalizeQcbyConfigForStore(cfg);
-    } catch (_) {
+    } catch {
         return normalizeQcbyConfigForStore(DEFAULT_CONFIG);
     }
 }
@@ -141,7 +141,7 @@ function saveQcbyCodeConfig(partial) {
     let existing = {};
     try {
         if (fs.existsSync(file)) existing = JSON.parse(fs.readFileSync(file, 'utf-8')) || {};
-    } catch (_) {
+    } catch {
         existing = {};
     }
     const merged = { ...existing, ...(partial && typeof partial === 'object' ? partial : {}) };
@@ -167,7 +167,7 @@ function isQcbyCodeEnabled(env = process.env) {
         if (!fs.existsSync(file)) return false;
         const cfg = JSON.parse(fs.readFileSync(file, 'utf-8')) || {};
         return cfg.enabled === true;
-    } catch (_) {
+    } catch {
         return false;
     }
 }

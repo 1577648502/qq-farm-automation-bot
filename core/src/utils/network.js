@@ -95,7 +95,7 @@ async function fetchGoldBeanFromBag() {
                 break;
             }
         }
-    } catch (e) {
+    } catch {
         // 忽略获取失败
     }
 }

@@ -887,9 +887,9 @@ proto.loadProto().then(async () => {
             check('store 默认 ranch_can_buy_check_interval_minutes=10',
                 /ranch_can_buy_check_interval_minutes: 10/.test(storeSrc), null);
             check('store merge 对检测间隔做 clamp(1..1440)',
-                /ranch_can_buy_check_interval_minutes'\) \{\s*\n\s*(cfg|next)\.automation\[k\] = Math\.max\(1, Math\.min\(1440/.test(storeSrc), null);
+                /ranch_can_buy_check_interval_minutes'\) \{[\t\v\f\r \xA0\u1680\u2000-\u200A\u2028\u2029\u202F\u205F\u3000\uFEFF]*\n\s*(?:cfg|next)\.automation\[k\] = Math\.max\(1, Math\.min\(1440/.test(storeSrc), null);
             check('Settings.vue 罐头参数卡有检测间隔输入',
-                /ranch_can_buy_check_interval_minutes"\s*\n?\s*label="检测间隔 \(分钟\)"/.test(settingsSrc)
+                /ranch_can_buy_check_interval_minutes"\s*label="检测间隔 \(分钟\)"/.test(settingsSrc)
                     || /ranch_can_buy_check_interval_minutes"/.test(settingsSrc), null);
             check('罐头 label 与化肥一致(购买数量, 非"购买次数")',
                 !/购买次数/.test(settingsSrc), null);

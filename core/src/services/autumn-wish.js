@@ -25,7 +25,6 @@
  *   效果: 消耗自己 1 个 → 自己 经验+30 → FarmSocialEventsNotify 推送给好友(社交可见)
  *   商城另有 goodsId 1033「烟花·花好月圆」= 物品 6002 (6 钻石, 总限购 50)
  */
-const { sendMsgAsync } = require('../utils/network');
 const { log, toNum, toInt, sleep } = require('../utils/utils');
 const { getItemById, getItemImageById } = require('../config/gameConfig');
 const { operateRaw, getGroupRaw, parseTop, findField } = require('./mengchong');
@@ -37,7 +36,6 @@ const CMD_CLAIM = 52;              // 领取奖励(真正发放)
 const FIELD_WISH = 151;            // 结果字段 = cmd + 100 (实测)
 const FIELD_CLAIM = 152;
 const PENDING_RED_DOT = 119;       // 活动体里的"可领奖励"红点
-const PENDING_FLAG = 23;           // 活动头里的待领标记
 
 const FIREWORK_ITEM_ID = 6001;     // 烟花桶(祈愿奖励)
 const FIREWORK_FRIEND_ITEM_ID = 6002; // 烟花·花好月圆(商城 6 钻石)
@@ -100,7 +98,7 @@ function parseWishGroup(replyBuf) {
                 }
             }
         }
-    } catch (e) { /* 解析失败按"读不到状态"处理, 由调用方决定 */ }
+    } catch { /* 解析失败按"读不到状态"处理, 由调用方决定 */ }
     out.hasPending = (out.redDotInner || []).includes(1) || (out.pendingFlag || 0) > 0;
     out.ok = !!out.name;
     return out;
@@ -140,7 +138,7 @@ const WISH_INDEX_CANDIDATES = [4, 1, 2, 3, 5, 6];
 /** 把愿望编号编成 payload: {#1: idx} (wire: 字段1 varint) */
 function encodeWishPayload(index) {
     const idx = Math.max(0, Math.min(999, toInt(index)));
-    return Buffer.from([0x08, idx & 0x7f]);      // 0x08 = (1<<3)|0
+    return Buffer.from([0x08, idx & 0x7F]);      // 0x08 = (1<<3)|0
 }
 
 /**
@@ -270,7 +268,6 @@ async function useFirework(opts = {}) {
         const rewards = (reply && Array.isArray(reply.items) ? reply.items : []).map(it => ({
             id: toNum(it.id), count: toNum(it.count), name: itemLabel(toNum(it.id), toNum(it.count)),
         }));
-        const exp = reply && reply.items ? 0 : 0;   // UseReply 的经验在 #6, 由 ItemNotify 体现, 这里不强解析
         log('活动', `放烟花(${mode === 'friend' ? '好友家' : '自己家'}): ${itemName}×1${targetGid ? ` @${targetGid}` : ''} → ${rewards.map(r => r.name).join('、') || '已使用'}`, {
             module: 'activity', event: '放烟花', result: 'ok', mode, itemId, friendGid: targetGid,
         });
@@ -291,7 +288,7 @@ async function getFireworkCount(itemId = FIREWORK_ITEM_ID) {
         for (const it of getBagItems(bag)) {
             if (toNum(it && it.id) === toNum(itemId)) return toNum(it.count) || 0;
         }
-    } catch (e) { /* 读背包失败按 0 处理 */ }
+    } catch { /* 读背包失败按 0 处理 */ }
     return 0;
 }
 

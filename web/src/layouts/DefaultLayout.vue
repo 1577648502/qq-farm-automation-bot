@@ -1,11 +1,10 @@
 <script setup lang="ts">
 import { storeToRefs } from 'pinia'
-import { watch } from 'vue'
-import { onMounted, onUnmounted } from 'vue'
+import { onMounted, onUnmounted, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import Sidebar from '@/components/Sidebar.vue'
-import { useAppStore } from '@/stores/app'
 import { useAccountStore } from '@/stores/account'
+import { useAppStore } from '@/stores/app'
 
 const appStore = useAppStore()
 const { sidebarOpen } = storeToRefs(appStore)
@@ -44,11 +43,11 @@ watch(() => r.path, () => {
     <main class="relative h-full min-w-0 flex flex-1 flex-col overflow-hidden">
       <!-- Top Bar (Mobile/Tablet only or for additional actions) -->
       <header class="h-14 flex shrink-0 items-center justify-between border-b border-gray-100 bg-white px-4 lg:hidden dark:border-gray-700/50 dark:bg-gray-800">
-        <div class="text-base font-bold truncate max-w-[70vw]">
+        <div class="max-w-[70vw] truncate text-base font-bold">
           QQ农场智能助手
         </div>
         <button
-          class="flex items-center justify-center rounded-lg p-2 text-gray-500 min-h-[44px] min-w-[44px] hover:bg-gray-100 dark:text-gray-400 dark:hover:bg-gray-700"
+          class="min-h-[44px] min-w-[44px] flex items-center justify-center rounded-lg p-2 text-gray-500 hover:bg-gray-100 dark:text-gray-400 dark:hover:bg-gray-700"
           @click="appStore.toggleSidebar"
         >
           <div class="i-carbon-menu text-xl" />
@@ -57,7 +56,7 @@ watch(() => r.path, () => {
 
       <!-- Main Content Area -->
       <div class="flex flex-1 flex-col overflow-hidden">
-        <div class="custom-scrollbar flex flex-1 flex-col overflow-y-auto p-3 sm:p-4 md:p-6">
+        <div class="custom-scrollbar flex flex-1 flex-col overflow-y-auto p-3 md:p-6 sm:p-4">
           <RouterView v-slot="{ Component, route }">
             <Transition name="slide-fade" mode="out-in">
               <component :is="Component" :key="`${route.path}::${currentAccountId}`" />

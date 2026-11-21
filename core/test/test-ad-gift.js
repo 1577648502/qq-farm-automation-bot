@@ -55,8 +55,8 @@ const MALL = 'gamepb.mallpb.MallService.GetMallListBySlotType';
     let failRequestAdCode = '1031013';
     let failRequestAdMsg = '分享礼包功能还不能使用';
     let failReportAd = false;              // 模拟 ReportAd 被拒(如 1044006 未看完)
-    let failReportCode = '1044006';
-    let failReportMsg = '广告未观看完成，无法获得奖励';
+    const failReportCode = '1044006';
+    const failReportMsg = '广告未观看完成，无法获得奖励';
     let reportAttempts = 0;
     const bodyOf = (hex) => Buffer.from(types.GateMessage.decode(Buffer.from(hex, 'hex')).body || []);
 
@@ -87,7 +87,7 @@ const MALL = 'gamepb.mallpb.MallService.GetMallListBySlotType';
             if (!f) throw new Error('抓包里没有商城列表响应');
             return { body: bodyOf(f.hex) };
         }
-        throw new Error('未 stub 的接口: ' + key);
+        throw new Error(`未 stub 的接口: ${  key}`);
     };
 
     // 沙箱里 CONFIG.platform 默认是 'qq' → 主体用例按微信端跑(QQ 端在最后一节单独测)

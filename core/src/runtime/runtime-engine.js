@@ -3,7 +3,7 @@ const path = require('node:path')
 const process = require('node:process');
 const { Worker } = require('node:worker_threads')
 const store = require('../models/store')
-const { updateRuntimeConfig, getRuntimeConfig, getDefaultSystemConfig } = require('../config/config')
+const { updateRuntimeConfig } = require('../config/config')
 const { sendPushooMessage } = require('../services/push')
 const { MiniProgramLoginSession } = require('../services/qrlogin')
 const { createDataProvider } = require('./data-provider')
@@ -113,14 +113,14 @@ function createRuntimeEngine(options = {}) {
         const target = String(ref || '')
         if (!target) return null
         return list.find(a => String(a.id) === target || String(a.name) === target || String(a.uin) === target) || null
-      } catch (e) { return null }
+      } catch { return null }
     },
     isWorkerRunning,
     listAccounts: () => {
       try {
         const data = store.getAccounts() || {}
         return Array.isArray(data) ? data : (data.accounts || [])
-      } catch (e) { return [] }
+      } catch { return [] }
     },
     // 上线前按需取新 code(防"code已过期"); qcbyScheduler 在 start() 里才创建, 这里晚绑定
     refreshCode: (accountId) => {
@@ -128,7 +128,7 @@ function createRuntimeEngine(options = {}) {
         if (qcbyScheduler && typeof qcbyScheduler.fetchCodeOnly === 'function') {
           return qcbyScheduler.fetchCodeOnly(accountId)
         }
-      } catch (e) { /* 忽略 */ }
+      } catch { /* 忽略 */ }
       return Promise.resolve({ ok: false, reason: 'qcby_unavailable' })
     },
     addAccountLog,
@@ -140,7 +140,7 @@ function createRuntimeEngine(options = {}) {
   try {
     const recovered = stealthMode.bootstrap()
     if (recovered > 0) log('系统', `防封号: 后台启动, 已恢复 ${recovered} 个账号的上下线循环`, { module: 'system', event: '防封号' })
-  } catch (e) { /* 忽略 */ }
+  } catch { /* 忽略 */ }
   workerControls.startWorker = startWorker
   workerControls.restartWorker = restartWorker
   workerControls.refreshWorkerCode = refreshWorkerCode
@@ -153,7 +153,6 @@ function createRuntimeEngine(options = {}) {
     store,
     getAccounts: store.getAccounts,
     callWorkerApi,
-    refreshWorkerCode,
     buildDefaultStatus,
     normalizeStatusForPanel,
     filterLogs,
@@ -231,7 +230,7 @@ function createRuntimeEngine(options = {}) {
       })
       qcbyScheduler.start()
     } catch (err) {
-      log('系统', 'qcby 取码调度器启动失败: ' + (err && err.message ? err.message : String(err)))
+      log('系统', `qcby 取码调度器启动失败: ${  err && err.message ? err.message : String(err)}`)
     }
 
     if (shouldAutoStartAccounts) {
@@ -269,7 +268,7 @@ function createRuntimeEngine(options = {}) {
       }
     } catch (err) {
       const reason = err && err.message ? err.message : String(err)
-      log('系统', 'qcby 取码调度器热重载失败: ' + reason)
+      log('系统', `qcby 取码调度器热重载失败: ${  reason}`)
       return { ok: false, reason }
     }
   }

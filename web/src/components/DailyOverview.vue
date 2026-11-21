@@ -184,7 +184,7 @@ function formatGiftProgress(gift: any) {
           <button
             v-if="canManualClaim(gift)"
             type="button"
-            class="mt-2 w-full border border-rose-200 rounded-md bg-rose-50 py-1 text-[11px] text-rose-600 font-medium transition hover:bg-rose-100 disabled:opacity-50 dark:border-rose-800 dark:bg-rose-900/20 dark:text-rose-300"
+            class="mt-2 w-full border border-rose-200 rounded-md bg-rose-50 py-1 text-[11px] text-rose-600 font-medium transition dark:border-rose-800 dark:bg-rose-900/20 hover:bg-rose-100 dark:text-rose-300 disabled:opacity-50"
             :disabled="!!claimingKey"
             @click="manualClaim(gift)"
           >

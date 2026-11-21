@@ -379,172 +379,172 @@ useIntervalFn(loadBag, 60000)
     <RanchBagPanel v-if="bagSource === 'ranch'" />
 
     <template v-else>
-    <LoadingState v-if="bagLoading || statusLoading" />
+      <LoadingState v-if="bagLoading || statusLoading" />
 
-    <div v-else-if="!currentAccountId" class="rounded-lg bg-white p-8 text-center text-gray-500 shadow dark:bg-gray-800">
-      请选择账号后查看背包
-    </div>
-
-    <div v-else-if="statusError" class="border border-red-200 rounded-lg bg-red-50 p-8 text-center text-red-500 shadow dark:border-red-800 dark:bg-red-900/20">
-      <div class="mb-2 text-lg font-bold">
-        获取数据失败
+      <div v-else-if="!currentAccountId" class="rounded-lg bg-white p-8 text-center text-gray-500 shadow dark:bg-gray-800">
+        请选择账号后查看背包
       </div>
-      <div class="text-sm">
-        {{ statusError }}
-      </div>
-    </div>
 
-    <div v-else-if="!status?.connection?.connected" class="flex flex-col items-center justify-center gap-4 rounded-lg bg-white p-12 text-center text-gray-500 shadow dark:bg-gray-800">
-      <div class="i-carbon-connection-signal-off text-4xl text-gray-400" />
-      <div>
-        <div class="text-lg text-gray-700 font-medium dark:text-gray-300">
-          账号未登录
+      <div v-else-if="statusError" class="border border-red-200 rounded-lg bg-red-50 p-8 text-center text-red-500 shadow dark:border-red-800 dark:bg-red-900/20">
+        <div class="mb-2 text-lg font-bold">
+          获取数据失败
         </div>
-        <div class="mt-1 text-sm text-gray-400">
-          请先运行账号或检查网络连接
+        <div class="text-sm">
+          {{ statusError }}
         </div>
       </div>
-    </div>
 
-    <div v-else-if="items.length === 0" class="rounded-lg bg-white p-8 text-center text-gray-500 shadow dark:bg-gray-800">
-      无可展示物品
-    </div>
+      <div v-else-if="!status?.connection?.connected" class="flex flex-col items-center justify-center gap-4 rounded-lg bg-white p-12 text-center text-gray-500 shadow dark:bg-gray-800">
+        <div class="i-carbon-connection-signal-off text-4xl text-gray-400" />
+        <div>
+          <div class="text-lg text-gray-700 font-medium dark:text-gray-300">
+            账号未登录
+          </div>
+          <div class="mt-1 text-sm text-gray-400">
+            请先运行账号或检查网络连接
+          </div>
+        </div>
+      </div>
 
-    <div v-else>
-      <div class="mb-4 flex flex-wrap items-center gap-2">
-        <button
-          v-for="cat in CATEGORY_OPTIONS"
-          :key="cat.value"
-          class="rounded-lg px-3 py-1.5 text-sm font-medium transition"
-          :class="selectedCategory === cat.value
-            ? 'bg-blue-500 text-white dark:bg-blue-600'
-            : 'bg-gray-100 text-gray-700 hover:bg-gray-200 dark:bg-gray-700 dark:text-gray-300 dark:hover:bg-gray-600'"
-          @click="selectedCategory = cat.value"
-        >
-          {{ cat.label }}
-          <span class="ml-1 text-xs opacity-70">({{ categoryCounts[cat.value] || 0 }})</span>
-        </button>
+      <div v-else-if="items.length === 0" class="rounded-lg bg-white p-8 text-center text-gray-500 shadow dark:bg-gray-800">
+        无可展示物品
+      </div>
 
-        <div class="flex-1" />
-
-        <template v-if="selectedCategory === 'fruit' || selectedCategory === 'all'">
+      <div v-else>
+        <div class="mb-4 flex flex-wrap items-center gap-2">
           <button
+            v-for="cat in CATEGORY_OPTIONS"
+            :key="cat.value"
             class="rounded-lg px-3 py-1.5 text-sm font-medium transition"
-            :class="batchMode
-              ? 'bg-orange-500 text-white dark:bg-orange-600'
+            :class="selectedCategory === cat.value
+              ? 'bg-blue-500 text-white dark:bg-blue-600'
               : 'bg-gray-100 text-gray-700 hover:bg-gray-200 dark:bg-gray-700 dark:text-gray-300 dark:hover:bg-gray-600'"
-            @click="toggleBatchMode"
+            @click="selectedCategory = cat.value"
           >
-            <div v-if="batchMode" class="i-carbon-close mr-1 inline-block" />
-            {{ batchMode ? '取消批量' : '批量出售' }}
+            {{ cat.label }}
+            <span class="ml-1 text-xs opacity-70">({{ categoryCounts[cat.value] || 0 }})</span>
           </button>
-          <template v-if="batchMode">
-            <button
-              class="rounded-lg bg-blue-500 px-3 py-1.5 text-sm text-white font-medium transition dark:bg-blue-600 hover:bg-blue-600 dark:hover:bg-blue-700"
-              @click="selectAllSellable"
-            >
-              全选
-            </button>
+
+          <div class="flex-1" />
+
+          <template v-if="selectedCategory === 'fruit' || selectedCategory === 'all'">
             <button
               class="rounded-lg px-3 py-1.5 text-sm font-medium transition"
-              :class="selectedSellableCount > 0
-                ? 'bg-red-500 text-white hover:bg-red-600 dark:bg-red-600 dark:hover:bg-red-700'
-                : 'bg-gray-100 text-gray-400 dark:bg-gray-700 dark:text-gray-500'"
-              :disabled="selectedSellableCount === 0"
-              @click="handleBatchSellClick"
+              :class="batchMode
+                ? 'bg-orange-500 text-white dark:bg-orange-600'
+                : 'bg-gray-100 text-gray-700 hover:bg-gray-200 dark:bg-gray-700 dark:text-gray-300 dark:hover:bg-gray-600'"
+              @click="toggleBatchMode"
             >
-              出售 ({{ selectedSellableCount }})
+              <div v-if="batchMode" class="i-carbon-close mr-1 inline-block" />
+              {{ batchMode ? '取消批量' : '批量出售' }}
             </button>
-          </template>
-        </template>
-      </div>
-
-      <div class="grid grid-cols-2 gap-4 lg:grid-cols-5 md:grid-cols-4 sm:grid-cols-3 xl:grid-cols-6">
-        <div
-          v-for="item in filteredItems"
-          :key="getBagGroupKey(item)"
-          class="group relative flex flex-col items-center border rounded-lg bg-white p-3 transition dark:border-gray-700 dark:bg-gray-800 hover:shadow-md"
-          :class="{
-            'ring-2 ring-orange-500 dark:ring-orange-400': batchMode && selectedForBatch.has(getBagGroupKey(item)),
-            'opacity-50': batchMode && canBatchSell(item) && !selectedForBatch.has(getBagGroupKey(item)),
-          }"
-          @click="batchMode && canBatchSell(item) && handleSellClick(item)"
-        >
-          <div class="absolute left-2 top-2 text-xs text-gray-400 font-mono">
-            #{{ item.id }}
-          </div>
-
-          <div class="absolute right-1 top-1 flex gap-1">
-            <template v-if="!batchMode">
+            <template v-if="batchMode">
               <button
-                v-if="canSell(item)"
-                class="rounded bg-red-500 px-1.5 py-0.5 text-[10px] text-white opacity-70 transition dark:bg-red-600 hover:opacity-100"
-                title="出售全部"
-                @click.stop="handleSellClick(item)"
+                class="rounded-lg bg-blue-500 px-3 py-1.5 text-sm text-white font-medium transition dark:bg-blue-600 hover:bg-blue-600 dark:hover:bg-blue-700"
+                @click="selectAllSellable"
               >
-                售
+                全选
               </button>
               <button
-                v-if="canUse(item)"
-                class="rounded bg-green-500 px-1.5 py-0.5 text-[10px] text-white opacity-70 transition dark:bg-green-600 hover:opacity-100"
-                title="使用全部"
-                @click.stop="handleUseClick(item)"
+                class="rounded-lg px-3 py-1.5 text-sm font-medium transition"
+                :class="selectedSellableCount > 0
+                  ? 'bg-red-500 text-white hover:bg-red-600 dark:bg-red-600 dark:hover:bg-red-700'
+                  : 'bg-gray-100 text-gray-400 dark:bg-gray-700 dark:text-gray-500'"
+                :disabled="selectedSellableCount === 0"
+                @click="handleBatchSellClick"
               >
-                用
+                出售 ({{ selectedSellableCount }})
               </button>
             </template>
-            <div
-              v-else-if="canBatchSell(item)"
-              class="h-5 w-5 flex items-center justify-center border-2 rounded transition"
-              :class="selectedForBatch.has(getBagGroupKey(item))
-                ? 'border-orange-500 bg-orange-500 text-white'
-                : 'border-gray-300 bg-white dark:border-gray-600 dark:bg-gray-700'"
-            >
-              <div v-if="selectedForBatch.has(getBagGroupKey(item))" class="i-carbon-checkmark text-xs" />
-            </div>
-          </div>
+          </template>
+        </div>
 
+        <div class="grid grid-cols-2 gap-4 lg:grid-cols-5 md:grid-cols-4 sm:grid-cols-3 xl:grid-cols-6">
           <div
-            class="thumb-wrap mb-2 mt-6 h-16 w-16 flex items-center justify-center rounded-full bg-gray-50 dark:bg-gray-700/50"
-            :data-fallback="(item.name || '物').slice(0, 1)"
+            v-for="item in filteredItems"
+            :key="getBagGroupKey(item)"
+            class="group relative flex flex-col items-center border rounded-lg bg-white p-3 transition dark:border-gray-700 dark:bg-gray-800 hover:shadow-md"
+            :class="{
+              'ring-2 ring-orange-500 dark:ring-orange-400': batchMode && selectedForBatch.has(getBagGroupKey(item)),
+              'opacity-50': batchMode && canBatchSell(item) && !selectedForBatch.has(getBagGroupKey(item)),
+            }"
+            @click="batchMode && canBatchSell(item) && handleSellClick(item)"
           >
-            <img
-              v-if="item.image && !imageErrors[item.id]"
-              :src="item.image"
-              :alt="item.name"
-              class="max-h-full max-w-full object-contain"
-              loading="lazy"
-              @error="imageErrors[item.id] = true"
-            >
-            <div v-else class="text-2xl text-gray-400 font-bold uppercase">
-              {{ (item.name || '物').slice(0, 1) }}
+            <div class="absolute left-2 top-2 text-xs text-gray-400 font-mono">
+              #{{ item.id }}
             </div>
-          </div>
 
-          <div class="mb-1 w-full truncate px-2 text-center text-sm font-bold" :title="item.name">
-            {{ item.name || `物品${item.id}` }}
-          </div>
-          <div v-if="item.isMutantItem && item.mutantTypes && item.mutantTypes.length > 0" class="mb-1 flex flex-wrap justify-center gap-1">
-            <span v-for="mt in item.mutantTypes" :key="mt" class="inline-block rounded-full from-purple-500 to-pink-500 bg-gradient-to-r px-2 py-0.5 text-[10px] text-white font-bold shadow-sm">
-              🌟 {{ mt }}
-            </span>
-          </div>
+            <div class="absolute right-1 top-1 flex gap-1">
+              <template v-if="!batchMode">
+                <button
+                  v-if="canSell(item)"
+                  class="rounded bg-red-500 px-1.5 py-0.5 text-[10px] text-white opacity-70 transition dark:bg-red-600 hover:opacity-100"
+                  title="出售全部"
+                  @click.stop="handleSellClick(item)"
+                >
+                  售
+                </button>
+                <button
+                  v-if="canUse(item)"
+                  class="rounded bg-green-500 px-1.5 py-0.5 text-[10px] text-white opacity-70 transition dark:bg-green-600 hover:opacity-100"
+                  title="使用全部"
+                  @click.stop="handleUseClick(item)"
+                >
+                  用
+                </button>
+              </template>
+              <div
+                v-else-if="canBatchSell(item)"
+                class="h-5 w-5 flex items-center justify-center border-2 rounded transition"
+                :class="selectedForBatch.has(getBagGroupKey(item))
+                  ? 'border-orange-500 bg-orange-500 text-white'
+                  : 'border-gray-300 bg-white dark:border-gray-600 dark:bg-gray-700'"
+              >
+                <div v-if="selectedForBatch.has(getBagGroupKey(item))" class="i-carbon-checkmark text-xs" />
+              </div>
+            </div>
 
-          <div class="mb-2 flex flex-col items-center gap-0.5 text-xs text-gray-400">
-            <span v-if="item.uid">UID: {{ item.uid }}</span>
-            <span>
-              类型: {{ item.itemType || 0 }}
-              <span v-if="item.level > 0"> · Lv{{ item.level }}</span>
-              <span v-if="item.price > 0" :class="getPriceClass(item)"> · {{ item.price }}{{ item.priceUnit || '金' }}</span>
-            </span>
-          </div>
+            <div
+              class="thumb-wrap mb-2 mt-6 h-16 w-16 flex items-center justify-center rounded-full bg-gray-50 dark:bg-gray-700/50"
+              :data-fallback="(item.name || '物').slice(0, 1)"
+            >
+              <img
+                v-if="item.image && !imageErrors[item.id]"
+                :src="item.image"
+                :alt="item.name"
+                class="max-h-full max-w-full object-contain"
+                loading="lazy"
+                @error="imageErrors[item.id] = true"
+              >
+              <div v-else class="text-2xl text-gray-400 font-bold uppercase">
+                {{ (item.name || '物').slice(0, 1) }}
+              </div>
+            </div>
 
-          <div class="mt-auto font-medium" :class="item.hoursText ? 'text-blue-500' : 'text-gray-600 dark:text-gray-300'">
-            {{ item.hoursText || `x${item.count || 0}` }}
+            <div class="mb-1 w-full truncate px-2 text-center text-sm font-bold" :title="item.name">
+              {{ item.name || `物品${item.id}` }}
+            </div>
+            <div v-if="item.isMutantItem && item.mutantTypes && item.mutantTypes.length > 0" class="mb-1 flex flex-wrap justify-center gap-1">
+              <span v-for="mt in item.mutantTypes" :key="mt" class="inline-block rounded-full from-purple-500 to-pink-500 bg-gradient-to-r px-2 py-0.5 text-[10px] text-white font-bold shadow-sm">
+                🌟 {{ mt }}
+              </span>
+            </div>
+
+            <div class="mb-2 flex flex-col items-center gap-0.5 text-xs text-gray-400">
+              <span v-if="item.uid">UID: {{ item.uid }}</span>
+              <span>
+                类型: {{ item.itemType || 0 }}
+                <span v-if="item.level > 0"> · Lv{{ item.level }}</span>
+                <span v-if="item.price > 0" :class="getPriceClass(item)"> · {{ item.price }}{{ item.priceUnit || '金' }}</span>
+              </span>
+            </div>
+
+            <div class="mt-auto font-medium" :class="item.hoursText ? 'text-blue-500' : 'text-gray-600 dark:text-gray-300'">
+              {{ item.hoursText || `x${item.count || 0}` }}
+            </div>
           </div>
         </div>
       </div>
-    </div>
     </template>
 
     <ConfirmModal

@@ -719,7 +719,7 @@ function formatGrowTime(seconds: any) {
       <!-- ===== 牧场幼崽分析(与农场"全部作物"同构) ===== -->
       <div v-if="activeTab === 'ranch'" class="space-y-3">
         <div class="flex flex-wrap items-center gap-3">
-          <span class="font-medium text-gray-700 dark:text-gray-300">全部幼崽</span>
+          <span class="text-gray-700 font-medium dark:text-gray-300">全部幼崽</span>
           <BaseSelect
             v-model="cubSort"
             class="w-52"
@@ -767,16 +767,36 @@ function formatGrowTime(seconds: any) {
             <table class="w-full whitespace-nowrap text-left text-sm">
               <thead class="border-b bg-gray-50 text-xs text-gray-500 uppercase dark:border-gray-700 dark:bg-gray-700/50 dark:text-gray-400">
                 <tr>
-                  <th class="px-4 py-3 font-medium">幼崽 (Lv)</th>
-                  <th class="px-4 py-3 font-medium">周期</th>
-                  <th class="px-4 py-3 text-right font-medium">经验/时</th>
-                  <th class="px-4 py-3 text-right font-medium">普通肥经验/时</th>
-                  <th class="px-4 py-3 text-right font-medium">净利润/时</th>
-                  <th class="px-4 py-3 text-right font-medium">普通肥净利润/时</th>
-                  <th class="px-4 py-3 text-right font-medium">成本</th>
-                  <th class="px-4 py-3 text-right font-medium">整只回收</th>
-                  <th class="px-4 py-3 text-right font-medium">收益比</th>
-                  <th class="px-4 py-3 text-center font-medium">状态</th>
+                  <th class="px-4 py-3 font-medium">
+                    幼崽 (Lv)
+                  </th>
+                  <th class="px-4 py-3 font-medium">
+                    周期
+                  </th>
+                  <th class="px-4 py-3 text-right font-medium">
+                    经验/时
+                  </th>
+                  <th class="px-4 py-3 text-right font-medium">
+                    普通肥经验/时
+                  </th>
+                  <th class="px-4 py-3 text-right font-medium">
+                    净利润/时
+                  </th>
+                  <th class="px-4 py-3 text-right font-medium">
+                    普通肥净利润/时
+                  </th>
+                  <th class="px-4 py-3 text-right font-medium">
+                    成本
+                  </th>
+                  <th class="px-4 py-3 text-right font-medium">
+                    整只回收
+                  </th>
+                  <th class="px-4 py-3 text-right font-medium">
+                    收益比
+                  </th>
+                  <th class="px-4 py-3 text-center font-medium">
+                    状态
+                  </th>
                 </tr>
               </thead>
               <tbody class="divide-y divide-gray-100 dark:divide-gray-700">
@@ -819,8 +839,12 @@ function formatGrowTime(seconds: any) {
                   <td class="px-4 py-2 text-right text-green-500 font-bold tabular-nums">
                     {{ r.normalFertilizerProfitPerHour ?? '-' }}
                   </td>
-                  <td class="px-4 py-2 text-right tabular-nums">{{ r.cost }}</td>
-                  <td class="px-4 py-2 text-right tabular-nums">{{ r.grownValue || '-' }}</td>
+                  <td class="px-4 py-2 text-right tabular-nums">
+                    {{ r.cost }}
+                  </td>
+                  <td class="px-4 py-2 text-right tabular-nums">
+                    {{ r.grownValue || '-' }}
+                  </td>
                   <td class="px-4 py-2 text-right tabular-nums" :class="r.ratio >= 2 ? 'text-emerald-600 font-medium dark:text-emerald-400' : ''">
                     {{ r.ratio ? r.ratio.toFixed(2) : '-' }}
                   </td>

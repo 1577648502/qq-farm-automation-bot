@@ -52,7 +52,7 @@ function realShopReply() {
 function varint(n) {
     const out = [];
     let v = n;
-    while (v > 127) { out.push((v & 0x7f) | 0x80); v >>>= 7; }
+    while (v > 127) { out.push((v & 0x7F) | 0x80); v >>>= 7; }
     out.push(v);
     return Buffer.from(out);
 }

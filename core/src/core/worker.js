@@ -1,4 +1,4 @@
-﻿const process = require('node:process');
+const process = require('node:process');
 /**
  * 子进程 Worker - 负责运行单个账号的挂机逻辑
  */
@@ -16,7 +16,7 @@ const { checkFarm, startFarmCheckLoop, stopFarmCheckLoop, refreshFarmCheckLoop, 
 const { checkFriends, startFriendCheckLoop, stopFriendCheckLoop, refreshFriendCheckLoop, runBadOnceOnStartup, isHelpExpLimitReached, getFriendsList, getFriendLandsDetail, doFriendOperation } = require('../services/friend');
 const { getInteractRecords } = require('../services/interact');
 const { processInviteCodes } = require('../services/invite');
-const { autoBuyOrganicFertilizer, autoBuyFertilizer, checkAndBuyFertilizerBoth, buyFreeGifts, getFreeGiftDailyState, checkAndBuyChallengeBooks, checkAndBuyLimitedPacks } = require('../services/mall');
+const { autoBuyFertilizer, checkAndBuyFertilizerBoth, buyFreeGifts, getFreeGiftDailyState, checkAndBuyChallengeBooks, checkAndBuyLimitedPacks } = require('../services/mall');
 const { getMallCatalog, purchaseCatalogGoods } = require('../services/mall');
 const treasureRob = require('../services/treasure-rob');
 const autumnWish = require('../services/autumn-wish');
@@ -31,7 +31,7 @@ const { performDailyVipGift, getVipDailyState } = require('../services/qqvip');
 const { performDailyRedPacket, getRedPacketDailyState } = require('../services/redpacket');
 const { createScheduler, getSchedulerRegistrySnapshot } = require('../services/scheduler');
 const { performDailyShare, getShareDailyState } = require('../services/share');
-const { setInitialValues, resetSessionGains, recordOperation, initStatsWithPersistence, saveStats } = require('../services/stats');
+const { resetSessionGains, recordOperation, initStatsWithPersistence, saveStats } = require('../services/stats');
 const { initStatusBar, setStatusPlatform, statusData } = require('../services/status');
 const { setRecordGoldExpHook } = require('../services/status');
 const { cleanupTaskSystem, checkAndClaimTasks, getTaskClaimDailyState, getTaskDailyStateLikeApp, getGrowthTaskStateLikeApp } = require('../services/task');
@@ -436,8 +436,8 @@ async function runBuyLimitedPacks(reason = 'interval') {
         const r = await checkAndBuyLimitedPacks(false);
         if (r.bought > 0) {
             lastLimitedPackSkipLog = '';
-            log('商城', `限时礼包: 本次购买 ${r.bought} 个(开包 ${r.opened}) `
-                + r.goods.map(g => `${g.name}买${g.bought}`).join('、'), {
+            log('商城', `限时礼包: 本次购买 ${r.bought} 个(开包 ${r.opened}) ${
+                 r.goods.map(g => `${g.name}买${g.bought}`).join('、')}`, {
                 module: 'mall', event: '限时礼包', result: 'ok', trigger: reason,
             });
         } else if (r.skipped && r.skipped !== lastLimitedPackSkipLog) {

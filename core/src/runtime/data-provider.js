@@ -272,7 +272,7 @@ function createDataProvider(options) {
             store.applyConfigSnapshot(snapshot, { accountId });
             // 防封号参数变化后立即重排(开启→开始计时; 关闭→清理定时器)
             if (stealthMode && typeof stealthMode.refreshAll === 'function') {
-                try { stealthMode.refreshAll(); } catch (e) { /* 忽略 */ }
+                try { stealthMode.refreshAll(); } catch { /* 忽略 */ }
             }
             const rev = nextConfigRevision();
             broadcastConfigToWorkers(accountId);
@@ -357,7 +357,7 @@ function createDataProvider(options) {
                         if (acc && acc.id !== undefined && acc.id !== null) stealthMode.stateOf(String(acc.id));
                     }
                 }
-            } catch (e) { /* 忽略 */ }
+            } catch { /* 忽略 */ }
             return {
                 enabled: !!cfg.enabled,
                 config: cfg,
@@ -471,7 +471,7 @@ function createDataProvider(options) {
             // (否则每取一次码就重启一次, 会不断重置"在线计时", 导致永远走不到离线阶段)
             const waitingForCode = !!(worker.wsError && worker.wsError.waitingCodeRefresh);
             const stealthOn = (() => {
-                try { return !!store.getStealthConfig(accountId).enabled; } catch (e) { return false; }
+                try { return !!store.getStealthConfig(accountId).enabled; } catch { return false; }
             })();
             if (stealthOn && !waitingForCode) {
                 addAccountLog('code_keep', `防封号模式: 已更新 Code, 不打断当前在线会话(${nextCode.substring(0, 8)}...)`, accountId, acc.name, { reason: 'stealth_keep_running' });

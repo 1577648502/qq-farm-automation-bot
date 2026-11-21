@@ -179,7 +179,7 @@ function parseCollectionsReply(buf) {
 async function getCollectionsRaw() {
     // ⚠ 抓包请求是 0a 01 01: #1 为 wire2(bytes), 内容 1 字节 0x01。
     //   用 .proto 编码 int32 会变成 08 01, 与客户端不一致 → 手工拼。
-    const body = Buffer.from([0x0a, 0x01, 0x01]);
+    const body = Buffer.from([0x0A, 0x01, 0x01]);
     const { body: reply } = await sendMsgAsync(SERVICE, 'GetCollections', body);
     return Buffer.isBuffer(reply) ? reply : Buffer.from(reply || []);
 }

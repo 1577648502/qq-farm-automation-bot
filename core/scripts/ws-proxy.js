@@ -65,7 +65,7 @@ async function logFrame(direction, raw, outStream) {
     // 控制台简报
     if (res.ok) {
         const m = res.meta;
-        const errTag = m.error_code ? ` ERR=${m.error_code}${m.error_message ? '(' + m.error_message + ')' : ''}` : '';
+        const errTag = m.error_code ? ` ERR=${m.error_code}${m.error_message ? `(${  m.error_message  })` : ''}` : '';
         console.log(`[${direction}] ${m.service_name}.${m.method_name} type=${m.message_type_name} seq=${m.client_seq || m.server_seq}${errTag}`);
     } else {
         console.log(`[${direction}] <解析失败> ${res.error}`);

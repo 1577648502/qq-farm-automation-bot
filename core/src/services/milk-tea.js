@@ -128,7 +128,7 @@ const MILK_TEA_SEED_IDS = [20525, 20526, 20527, 20528, 20021, 21435, 20529, 2900
 //  C. 2026-11-02 更新(#11 限制类型 4=永久累计): 给 6 款森野种子**补充永久限购次数**,
 //     同一 itemId 出现**两件商品**(301~306 限购 108 已买满 + 339~344 限购 24),
 //     所以自动购买必须按 itemId 汇总所有商品, 不能只看单件商品是否售罄。
-const EXCHANGE_SEED_IDS = [20525, 20526, 20527, 20528, 20021, 21435, 20529, 29005, 20522, 20523];
+// 兑换商店在售种子清单: 20525/20526/20527/20528/20021/21435/20529/29005/20522/20523
 /**
  * 可加工果实 → 配方 id。
  * 抓包(cmd=58)确认配方 #2..#9 与 MILK_TEA_SEED_IDS 顺序一一对应；
@@ -138,7 +138,7 @@ function getCraftableFruitRecipeMap() {
     const map = new Map();
     MILK_TEA_SEED_IDS.forEach((seed, index) => {
         const recipeId = index + 2;
-        const plant = getPlantBySeedId(seed) || getFallbackPlantBySeedId(seed);
+        const plant = getPlantBySeedId(seed);
         const add = (o) => {
             const id = toNum(o && o.id);
             if (id > 0 && !map.has(id)) map.set(id, recipeId);
@@ -218,7 +218,7 @@ async function mainOperate(cmd, payloadField, payloadBytes) {
 
 /** 把 varint 编成 payload: {#1: n} */
 function encodeUint1(n) {
-    return Buffer.from([0x08, toInt(n) & 0x7f]);
+    return Buffer.from([0x08, toInt(n) & 0x7F]);
 }
 function encodeVarint(v) {
     const out = [];
@@ -228,7 +228,7 @@ function encodeVarint(v) {
     else n = BigInt(Math.max(0, Math.trunc(Number(v) || 0)));
     n = n < 0n ? 0n : n;
     do {
-        let byte = Number(n & 0x7fn);
+        let byte = Number(n & 0x7Fn);
         n >>= 7n;
         if (n > 0n) byte |= 0x80;
         out.push(byte);
@@ -263,7 +263,7 @@ function parseMainState(activityBuf) {
         if (recipe && recipe.w === 2) out.recipeId = toInt((findField(parseTop(recipe.v), 1250) || {}).v);
         out.opened = !!out.storeName;
         out.ok = true;
-    } catch (e) { /* 解析失败按"读不到"处理 */ }
+    } catch { /* 解析失败按"读不到"处理 */ }
     return out;
 }
 
@@ -397,7 +397,7 @@ async function claimCashierOnce() {
                 const count = toInt((findField(xf, 2) || {}).v);
                 if (id) gainedList.push({ id, count, name: itemLabel(id, count) });
             }
-        } catch (e) { /* 忽略 */ }
+        } catch { /* 忽略 */ }
     }
     const after = parseMainState(r.activity);
     log('活动', `奶茶热销中: 已领取收银台收益${gainedList.length ? ` → ${gainedList.map((x) => x.name).join('、')}` : ''}${after.value ? ` (累计营业额 ${after.value})` : ''}`, {
@@ -415,7 +415,7 @@ async function useSpeaker() {
 async function openStore(storeName) {
     const name = String(storeName || '').trim() || '奶茶小铺';
     const nameBuf = Buffer.from(name, 'utf8');
-    const payload = Buffer.concat([Buffer.from([0x0a, nameBuf.length]), nameBuf]);   // {#1: string}
+    const payload = Buffer.concat([Buffer.from([0x0A, nameBuf.length]), nameBuf]);   // {#1: string}
     const r = await mainOperate(CMD_OPEN, undefined, payload);
     if (r.ok === false || r.errorCode !== 0) {
         return { ok: false, reason: `开业失败 ${r.reason || `code=${r.errorCode}`}` };
@@ -612,7 +612,7 @@ async function hireFriend(friendGid, duration = 1, opts = {}) {
         encodeVarintField(2, normalizeHireDuration(duration)),
         encodeVarintField(3, gid),
     ]);
-    const payload = Buffer.concat([Buffer.from([0x0a, inner.length]), inner]);
+    const payload = Buffer.concat([Buffer.from([0x0A, inner.length]), inner]);
     const r = await mainOperate(CMD_HIRE, undefined, payload);
     if (!r.ok) {
         const code = toInt(r.errorCode);
@@ -995,7 +995,7 @@ async function upgradeStore() {
                 const n = toInt((findField(e, 2) || {}).v);
                 if (id) got.push(`${itemLabel(id, n)}`);
             }
-        } catch (e) { /* 忽略 */ }
+        } catch { /* 忽略 */ }
     }
     log('活动', `奶茶热销中: 店铺已升级到 Lv${level || '?'}${got.length ? ` (奖励 ${got.join('、')})` : ''}`, {
         module: 'activity', event: '奶茶热销中', result: 'ok',
@@ -1271,7 +1271,7 @@ async function buyShopGoods(goodsId, count = 1, opts = {}) {
                 const bf = parseTop(b.v);
                 cost = { currencyId: toInt((findField(bf, 1) || {}).v), amount: toInt((findField(bf, 2) || {}).v) };
             }
-        } catch (e) { /* 忽略 */ }
+        } catch { /* 忽略 */ }
     }
     const actualCount = got && got.count > 0 ? got.count : n;
     shopBought.set(id, (shopBought.get(id) || 0) + actualCount);
@@ -2031,7 +2031,7 @@ async function craftAllFruits(perBatch = CRAFT_BATCH_SIZE, maxBatches = 50) {
 /** 提交一批果实 uid 去制作(内部用) */
 async function mainOperateCraft(uids) {
     const packed = encodePackedVarints(uids);
-    const payload = Buffer.concat([encodeVarint(0x0a), encodeVarint(packed.length), packed]);
+    const payload = Buffer.concat([encodeVarint(0x0A), encodeVarint(packed.length), packed]);
     const r = await mainOperate(CMD_CRAFT_REAL, 167, payload);
     if (r.ok === false || r.errorCode !== 0) {
         return {
@@ -2053,7 +2053,7 @@ async function mainOperateCraft(uids) {
                 const count = toInt((findField(xf, 2) || {}).v);
                 if (id) made.push({ id, count, name: itemLabel(id, count) });
             }
-        } catch (e) { /* 忽略 */ }
+        } catch { /* 忽略 */ }
     }
     return { ok: true, errorCode: 0, reason: '', made, state: parseMainState(r.activity) };
 }
@@ -2369,7 +2369,7 @@ async function interactWithFriendOnce(type = WORK_INTERACT_TYPE) {
                     field8: snapshot(effect8),
                 },
             };
-        } catch (e) { /* 忽略 */ }
+        } catch { /* 忽略 */ }
     }
     const wageTxt = result && result.wage && result.wage.change !== null
         ? `, 工资${result.wage.before !== null ? ` ${result.wage.before}→${result.wage.after}` : ''}` +
@@ -2438,7 +2438,7 @@ async function claimWageOnce() {
                 const gf = parseTop(g.v);
                 gained = { id: toInt((findField(gf, 1) || {}).v), count: toInt((findField(gf, 2) || {}).v) };
             }
-        } catch (e) { /* 忽略 */ }
+        } catch { /* 忽略 */ }
     }
     log('活动', `奶茶热销中: 已领取兼职工资${gained ? ` ${itemLabel(gained.id, gained.count)}` : ''}`, {
         module: 'activity', event: '奶茶热销中', result: 'ok',
@@ -2555,7 +2555,7 @@ function parseWorkFromRefresh(resultHex) {
             }
         }
         out.ok = true;
-    } catch (e) { /* 忽略 */ }
+    } catch { /* 忽略 */ }
     // #2 = 兼职历史记录(老板/时长及未闭环字段), 仅用于展示, **不覆盖** employer
     return out;
 }

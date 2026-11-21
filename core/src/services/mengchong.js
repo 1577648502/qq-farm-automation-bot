@@ -77,7 +77,6 @@ function toInt(value) {
 
 const ITEM_ID_YUANQIGAO = 1028;   // 萌宠元气糕 (投喂/寻宝消耗, 每次投喂 700)
 const ITEM_ID_LUCKYSTAR = 1029;   // 幸运星
-const ITEM_ID_BEAR = 90031;       // 比熊犬 (成年后领取)
 const FEED_COST = 700;            // 单次投喂消耗的元气糕 (配置 feed_items 1028:700)
 // 以下来自游戏配置表 config/ActivityPetTreasureHuntBase / ActivityPetTreasureHuntFight
 const ADULT_GROWTH = 7000;        // 成年阈值
@@ -180,7 +179,7 @@ function parseHead(buf) {
     const f = parseTop(buf);
     const descBuf = findField(f, 5);
     let descJson = null;
-    if (descBuf && descBuf.w === 2 && descBuf.v.length > 2 && descBuf.v[0] === 0x7b) {
+    if (descBuf && descBuf.w === 2 && descBuf.v.length > 2 && descBuf.v[0] === 0x7B) {
         try { descJson = JSON.parse(descBuf.v.toString('utf8')); } catch { /* 忽略 */ }
     }
     return {
@@ -471,7 +470,7 @@ async function getMengchongOverview() {
             const stateField = inner.find(x => x.f === 115 && x.w === 2);
             if (stateField) { result.pet = parsePetState(stateField.v); break; }
         }
-    } catch (e) { /* 主活动可能未开启 */ }
+    } catch { /* 主活动可能未开启 */ }
     // GetGroup 不带状态时, 用主活动 cmd=27 拉一次
     if (!result.pet) {
         try {
@@ -480,7 +479,7 @@ async function getMengchongOverview() {
                 const stateField = parseTop(res.activity).find(x => x.f === 115 && x.w === 2);
                 if (stateField) result.pet = parsePetState(stateField.v);
             }
-        } catch (e) { /* 忽略 */ }
+        } catch { /* 忽略 */ }
     }
     try {
         const reply = await getGroupRaw(GROUP_GIFT);
@@ -501,7 +500,7 @@ async function getMengchongOverview() {
             };
             result.active = true;
         }
-    } catch (e) { /* 忽略 */ }
+    } catch { /* 忽略 */ }
     // 背包里的游记道具数量 (1028 萌宠元气糕 = 投喂/寻宝消耗; 1029 幸运星 = 游记代币)
     try {
         const { getBag, getBagItems } = require('./warehouse');
@@ -511,7 +510,7 @@ async function getMengchongOverview() {
             if (id === ITEM_ID_YUANQIGAO) result.yuanqigao = toInt(it.count);
             else if (id === ITEM_ID_LUCKYSTAR) result.luckyStar = toInt(it.count);
         }
-    } catch (e) { /* 背包读取失败不阻断 */ }
+    } catch { /* 背包读取失败不阻断 */ }
     return result;
 }
 
@@ -552,7 +551,7 @@ function loadCharmTable() {
                 };
             }
             if (Object.keys(table).length) break;
-        } catch (e) { /* 换下一个来源 */ }
+        } catch { /* 换下一个来源 */ }
     }
     charmTable = Object.keys(table).length
         ? table
@@ -658,7 +657,7 @@ async function getMengchongShop() {
         for (const it of getBagItems(bag)) {
             if (toInt(it && it.id) === ITEM_ID_LUCKYSTAR) { luckyStar = toInt(it.count); break; }
         }
-    } catch (e) { /* 背包失败不阻断 */ }
+    } catch { /* 背包失败不阻断 */ }
     return { updatedAt: Date.now(), luckyStar, items };
 }
 
@@ -688,7 +687,7 @@ async function exchangeMengchongShopGoods(goodsId, count = 1) {
 
     // 校验: 重新拉列表看已兑换数量是否变化
     let after = null;
-    try { after = await getMengchongShop(); } catch (e) { after = null; }
+    try { after = await getMengchongShop(); } catch { after = null; }
     const afterTarget = after ? (after.items || []).find(it => it.id === id) : null;
     const verified = !!(afterTarget && afterTarget.bought > (target.bought || 0));
     return {
@@ -743,7 +742,7 @@ async function petOperate(opts = {}) {
     const payloadField = Math.floor(Number(opts.payloadField)) || MAIN_CMD_PAYLOAD_FIELD[cmd] || 0;
     let payloadBytes = null;
     if (opts.payloadHex) {
-        payloadBytes = Buffer.from(String(opts.payloadHex).replace(/[^0-9a-fA-F]/g, ''), 'hex');
+        payloadBytes = Buffer.from(String(opts.payloadHex).replace(/[^0-9a-f]/gi, ''), 'hex');
     } else if (Array.isArray(opts.payloadVarints) && opts.payloadVarints.length) {
         const w = new protobuf.Writer();
         for (const v of opts.payloadVarints) {
@@ -761,8 +760,8 @@ async function petOperate(opts = {}) {
         const f = parseTop(Buffer.from(res.resultHex, 'hex'));
         result = { raw: res.resultHex };
         for (const x of f) {
-            if (x.w === 0) result['f' + x.f] = toInt(x.v);
-            else if (x.w === 2 && x.v.length <= 64) result['f' + x.f] = x.v.toString('hex');
+            if (x.w === 0) result[`f${  x.f}`] = toInt(x.v);
+            else if (x.w === 2 && x.v.length <= 64) result[`f${  x.f}`] = x.v.toString('hex');
         }
         // 尝试提取奖励 items (字段 2/3 里的 {id,count})
         const awards = [];
@@ -794,7 +793,7 @@ async function feedPet() {
     const r = parseTop(Buffer.from(res.resultHex || '', 'hex'));
     const out = { ok: true, raw: res.resultHex };
     for (const x of r) {
-        if (x.w === 0) out['f' + x.f] = toInt(x.v);
+        if (x.w === 0) out[`f${  x.f}`] = toInt(x.v);
         else if (x.w === 2 && x.v.length <= 16) {
             const inner = parseTop(x.v);
             const id = toInt((findField(inner, 1) || {}).v);
@@ -894,7 +893,7 @@ async function bagCountOf(itemId) {
         for (const it of getBagItems(bag)) {
             if (toInt(it && it.id) === itemId) return toInt(it.count);
         }
-    } catch (e) { /* 忽略 */ }
+    } catch { /* 忽略 */ }
     return 0;
 }
 

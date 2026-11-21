@@ -198,7 +198,7 @@ const navItems = computed(() => {
   return menuRoutes
     .filter(item => !item.adminOnly || isAdmin)
     .filter((item) => {
-      // ?????????????
+      // 活动开关: 后端关了的活动隐藏菜单项
       if (item.activityKey) {
         return as[item.activityKey as keyof typeof as] !== false
       }
@@ -255,6 +255,7 @@ const activityStatus = ref({
   mengChongEnabled: true,
   milkTeaEnabled: true,
 })
+// 活动菜单显隐状态(后端 /api/activities/status 为准, 默认全显)
 
 async function loadActivityStatus() {
   try {
@@ -272,7 +273,7 @@ async function loadActivityStatus() {
     }
   }
   catch {
-    // ????
+    // 拉不到就保持默认全显
   }
 }
 

@@ -45,7 +45,7 @@ async function getIllustratedList({ refresh = false, listType = LIST_TYPE.PLANT,
  *   旧实现发 true → 编码 {1:1} = 植物图鉴 —— 能领但只领植物那类,
  *   牧场动物图鉴(「巨大」页签)从来没领过。
  *
- * @param {number} [listType=1] 1=农场植物图鉴; 101=牧场动物图鉴
+ * @param {number} [listType] 1=农场植物图鉴; 101=牧场动物图鉴
  * @returns {Promise<object>} ClaimAllRewardsV2Reply 明文对象
  */
 async function claimAllRewards(listType = LIST_TYPE.PLANT) {

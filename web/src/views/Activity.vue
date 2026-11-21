@@ -1,14 +1,14 @@
 <script setup lang="ts">
 import { storeToRefs } from 'pinia'
 import { computed, ref, watch } from 'vue'
-import { usePageRefresh } from '@/composables/usePageRefresh'
 import api from '@/api'
 import ConfirmModal from '@/components/ConfirmModal.vue'
 import BaseButton from '@/components/ui/BaseButton.vue'
+import { usePageRefresh } from '@/composables/usePageRefresh'
 import { useAccountStore } from '@/stores/account'
-import { apiError } from '@/utils/api-result'
 import { useStatusStore } from '@/stores/status'
 import { useToastStore } from '@/stores/toast'
+import { apiError } from '@/utils/api-result'
 
 interface ActivityItem {
   id: number
@@ -423,7 +423,7 @@ async function claimBattlePass() {
 async function claimTasks() {
   await runAction('tasks', '/api/activity/tasks/claim', {
     activityName: '荷风游记',
-  }, (data) => `领取 ${Number(data?.claimedCount || 0)} 个活动任务`)
+  }, data => `领取 ${Number(data?.claimedCount || 0)} 个活动任务`)
 }
 
 async function claimDailySignin() {
@@ -489,7 +489,7 @@ usePageRefresh('/activity', async () => {
         <div
           v-for="currency in overview?.currencies || []"
           :key="currency.id"
-          class="h-11 flex items-center gap-2 border border-gray-200 rounded-xl bg-white px-2 sm:px-3 text-sm shadow-sm dark:border-gray-700 dark:bg-gray-800"
+          class="h-11 flex items-center gap-2 border border-gray-200 rounded-xl bg-white px-2 text-sm shadow-sm dark:border-gray-700 dark:bg-gray-800 sm:px-3"
         >
           <img v-if="currency.image" :src="currency.image" :alt="currency.name" class="h-6 w-6 object-contain">
           <span v-else class="i-carbon-wallet text-lg text-gray-400" />
@@ -628,7 +628,7 @@ usePageRefresh('/activity', async () => {
             </div>
             <span class="i-carbon-gift text-3xl text-rose-500" />
           </div>
-          <p class="mt-4 line-clamp-2 min-h-10 text-sm text-gray-600 dark:text-gray-300">
+          <p class="line-clamp-2 mt-4 min-h-10 text-sm text-gray-600 dark:text-gray-300">
             {{ formatRewardList(dailySignin?.rewards?.[0]?.items || []) || '当前无赠礼' }}
           </p>
           <BaseButton class="mt-4" size="sm" variant="secondary" :loading="actionLoading === 'daily-signin'" :disabled="!accountReady || !dailySignin || dailySignin.claimedToday" @click="claimDailySignin">
@@ -721,7 +721,7 @@ usePageRefresh('/activity', async () => {
               </div>
             </div>
 
-            <div class="mt-4 grid grid-cols-2 gap-3 text-sm">
+            <div class="grid grid-cols-2 mt-4 gap-3 text-sm">
               <div class="rounded-lg bg-gray-50 p-3 dark:bg-gray-900/40">
                 <p class="text-gray-500 dark:text-gray-400">
                   背包种子
@@ -744,8 +744,9 @@ usePageRefresh('/activity', async () => {
           <h2 class="text-lg text-gray-900 font-bold dark:text-white">
             活动物品
           </h2>
-          <div class="flex flex-nowrap gap-2 overflow-x-auto pb-1 snap-x snap-mandatory scrollbar-none sm:flex-wrap sm:overflow-visible sm:pb-0">
-      <button v-for="option in categoryOptions" :key="option.key" class="min-h-[44px] h-auto flex items-center gap-1 rounded-lg px-3 text-sm font-medium transition whitespace-nowrap sm:whitespace-normal"
+          <div class="scrollbar-none flex flex-nowrap snap-x snap-mandatory gap-2 overflow-x-auto pb-1 sm:flex-wrap sm:overflow-visible sm:pb-0">
+            <button
+              v-for="option in categoryOptions" :key="option.key" class="h-auto min-h-[44px] flex items-center gap-1 whitespace-nowrap rounded-lg px-3 text-sm font-medium transition sm:whitespace-normal"
               :class="activeCategory === option.key
                 ? 'text-white shadow-sm'
                 : 'border border-gray-200 bg-white text-gray-600 hover:bg-gray-50 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-300 dark:hover:bg-gray-700'"
@@ -791,7 +792,6 @@ usePageRefresh('/activity', async () => {
           </article>
         </div>
       </section>
-
     </template>
 
     <ConfirmModal

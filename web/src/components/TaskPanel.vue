@@ -1,4 +1,4 @@
-﻿<script setup lang="ts">
+<script setup lang="ts">
 import { storeToRefs } from 'pinia'
 import { computed, onMounted, watch } from 'vue'
 import DailyOverview from '@/components/DailyOverview.vue'

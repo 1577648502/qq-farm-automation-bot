@@ -68,7 +68,7 @@ const SELL_SVC = 'gamepb.itempb.ItemService.Sell';
             const reply = sellReplies[Math.min(sellCalls.length - 1, sellReplies.length - 1)];
             return { body: reply };
         }
-        throw new Error('未 stub 的接口: ' + key);
+        throw new Error(`未 stub 的接口: ${  key}`);
     };
 
     const warehouse = require(`${SB}/src/services/warehouse`);

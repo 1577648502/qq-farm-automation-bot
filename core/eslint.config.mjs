@@ -11,6 +11,16 @@ export default antfu(
     formatters: false,
   },
   {
+    files: ['test/**/*.js'],
+    rules: {
+      // 测试分节惯用法: section(...) 后跟裸块做视觉分组
+      'no-lone-blocks': 'off',
+      // 测试里的 stub/临时变量噪音, 降为警告
+      'no-unused-vars': 'warn',
+      'unused-imports/no-unused-vars': 'warn',
+    },
+  },
+  {
     linterOptions: {
       reportUnusedDisableDirectives: false,
     },

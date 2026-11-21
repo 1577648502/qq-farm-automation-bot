@@ -1,39 +1,39 @@
-﻿<script setup lang="ts">
-import { storeToRefs } from "pinia"
-import { onMounted, ref, watch } from "vue"
-import { useAccountStore } from "@/stores/account"
-import { usePetStore } from "@/stores/pet"
-import { useToastStore } from "@/stores/toast"
+<script setup lang="ts">
+import { storeToRefs } from 'pinia'
+import { onMounted, ref, watch } from 'vue'
+import { useAccountStore } from '@/stores/account'
+import { usePetStore } from '@/stores/pet'
+import { useToastStore } from '@/stores/toast'
 
 const accountStore = useAccountStore()
 const petStore = usePetStore()
 const toast = useToastStore()
 const { currentAccountId, currentAccount } = storeToRefs(accountStore)
-const { overview, dogs, dogFoods, guardLogs, capitalMode, loading, currentTab, feedLoading,
-  guardReward, guardRewardLoading, guardRewardClaiming, guardRewardError } = storeToRefs(petStore)
+const { overview, dogs, dogFoods, guardLogs, capitalMode, loading, currentTab, feedLoading, guardReward, guardRewardLoading, guardRewardClaiming, guardRewardError } = storeToRefs(petStore)
 void dogFoods
 void guardRewardLoading
 
-const error = ref("")
+const error = ref('')
 const qualityColors = {
-  "普通": "text-gray-500 bg-gray-100 dark:bg-gray-700",
-  "稀有": "text-blue-500 bg-blue-100 dark:bg-blue-900/30",
-  "珍品": "text-purple-500 bg-purple-100 dark:bg-purple-900/30",
-  "天工": "text-amber-500 bg-amber-100 dark:bg-amber-900/30",
+  普通: 'text-gray-500 bg-gray-100 dark:bg-gray-700',
+  稀有: 'text-blue-500 bg-blue-100 dark:bg-blue-900/30',
+  珍品: 'text-purple-500 bg-purple-100 dark:bg-purple-900/30',
+  天工: 'text-amber-500 bg-amber-100 dark:bg-amber-900/30',
 } as Record<string, string>
 
 const TABS = [
-  { key: "overview", label: "狗狗总览", desc: "查看与管理守护狗狗", icon: "i-carbon-paw" },
-  { key: "food", label: "狗粮管理", desc: "查看狗粮库存与喂食", icon: "i-carbon-basketball" },
-  { key: "logs", label: "守护日志", desc: "查看防护日志记录", icon: "i-carbon-notebook" },
-  { key: "capital", label: "资本模式", desc: "成熟前放狗守护，收获后收回", icon: "i-carbon-chart-line" },
+  { key: 'overview', label: '狗狗总览', desc: '查看与管理守护狗狗', icon: 'i-carbon-paw' },
+  { key: 'food', label: '狗粮管理', desc: '查看狗粮库存与喂食', icon: 'i-carbon-basketball' },
+  { key: 'logs', label: '守护日志', desc: '查看防护日志记录', icon: 'i-carbon-notebook' },
+  { key: 'capital', label: '资本模式', desc: '成熟前放狗守护，收获后收回', icon: 'i-carbon-chart-line' },
 ] as const
 
-
 function formatGuardTime(ts: number | string): string {
-  if (!ts) return ''
-  const num = typeof ts === 'string' ? parseInt(ts) : ts
-  if (isNaN(num) || num <= 0) return ''
+  if (!ts)
+    return ''
+  const num = typeof ts === 'string' ? Number.parseInt(ts) : ts
+  if (Number.isNaN(num) || num <= 0)
+    return ''
   const d = new Date(num * 1000)
   const pad = (n: number) => String(n).padStart(2, '0')
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
@@ -41,32 +41,39 @@ function formatGuardTime(ts: number | string): string {
 
 async function handleActivate(dogId: number) {
   const id = currentAccountId.value
-  if (!id) return
+  if (!id)
+    return
   const result = await petStore.activateDog(id, dogId)
-  if (result?.ok) toast.success("激活成功")
-  else toast.error(result?.error || "激活失败")
+  if (result?.ok)
+    toast.success('激活成功')
+  else toast.error(result?.error || '激活失败')
 }
 
 async function handleDeploy(dogId: number) {
   const id = currentAccountId.value
-  if (!id) return
+  if (!id)
+    return
   const result = await petStore.deployDog(id, dogId)
-  if (result?.ok) toast.success("上阵成功")
-  else toast.error(result?.error || "上阵失败")
+  if (result?.ok)
+    toast.success('上阵成功')
+  else toast.error(result?.error || '上阵失败')
 }
 
 async function handleWithdraw() {
   const id = currentAccountId.value
-  if (!id) return
+  if (!id)
+    return
   const result = await petStore.withdrawDog(id)
-  if (result?.ok) toast.success("已收起")
-  else toast.error(result?.error || "操作失败")
+  if (result?.ok)
+    toast.success('已收起')
+  else toast.error(result?.error || '操作失败')
 }
 
 /** 领取看家奖励(护主奖励) */
-const claimGuardReward = async () => {
+async function claimGuardReward() {
   const id = currentAccountId.value
-  if (!id) return
+  if (!id)
+    return
   const result = await petStore.claimGuardReward(id)
   if (result?.ok) {
     const all = [...(result.items || []), ...(result.bonusItems || [])]
@@ -79,23 +86,28 @@ const claimGuardReward = async () => {
   }
 }
 
-async function handleFeed(foodId: number) {  const id = currentAccountId.value
-  if (!id) return
+async function handleFeed(foodId: number) {
+  const id = currentAccountId.value
+  if (!id)
+    return
   try {
     await petStore.feedDog(id, foodId, 1)
-    toast.success("喂食成功")
+    toast.success('喂食成功')
     refreshCurrentTab()
-  } catch (e: any) {
-    toast.error(e.message || "喂食失败")
+  }
+  catch (e: any) {
+    toast.error(e.message || '喂食失败')
   }
 }
 
 async function handleSaveCapital() {
   const id = currentAccountId.value
-  if (!id) return
+  if (!id)
+    return
   const result = await petStore.saveCapitalMode(id, capitalMode.value)
-  if (result?.ok) toast.success("资本模式已保存")
-  else toast.error(result?.error || "保存失败")
+  if (result?.ok)
+    toast.success('资本模式已保存')
+  else toast.error(result?.error || '保存失败')
 }
 
 function selectCapitalDog(dogId: number) {
@@ -103,29 +115,38 @@ function selectCapitalDog(dogId: number) {
 }
 
 async function refreshCurrentTab() {
-  error.value = ""
-  if (!currentAccountId.value) return
+  error.value = ''
+  if (!currentAccountId.value)
+    return
   if (!currentAccount.value?.running) {
-    error.value = "当前账号未运行，请先启动账号后再查看宠物。"
+    error.value = '当前账号未运行，请先启动账号后再查看宠物。'
     return
   }
   const id = currentAccountId.value
   switch (currentTab.value) {
-    case "overview": await petStore.fetchOverview(id); break
-    case "food": await petStore.fetchFoodItems(id); break
-    case "logs": await petStore.fetchGuardLogs(id); break
-    case "capital": await Promise.all([petStore.fetchCapitalMode(id), petStore.fetchOverview(id)]); break
+    case 'overview': await petStore.fetchOverview(id); break
+    case 'food': await petStore.fetchFoodItems(id); break
+    case 'logs': await petStore.fetchGuardLogs(id); break
+    case 'capital': await Promise.all([petStore.fetchCapitalMode(id), petStore.fetchOverview(id)]); break
   }
 }
 
 watch(currentAccountId, (newId) => { if (newId) { petStore.clear(); refreshCurrentTab() } })
-watch(() => currentAccount.value?.running, () => { if (currentAccountId.value) refreshCurrentTab() })
-onMounted(() => { if (currentAccountId.value) refreshCurrentTab() })
+watch(() => currentAccount.value?.running, () => {
+  if (currentAccountId.value)
+    refreshCurrentTab()
+})
+onMounted(() => {
+  if (currentAccountId.value)
+    refreshCurrentTab()
+})
 </script>
 
 <template>
   <div class="h-full flex flex-col p-3 sm:p-4">
-    <h1 class="mb-4 text-xl font-bold">宠物</h1>
+    <h1 class="mb-4 text-xl font-bold">
+      宠物
+    </h1>
 
     <!-- 子选项卡导航 -->
     <div class="mb-4 flex flex-wrap gap-2">
@@ -138,10 +159,12 @@ onMounted(() => { if (currentAccountId.value) refreshCurrentTab() })
         :style="currentTab === tab.key ? { backgroundColor: 'var(--theme-primary)' } : {}"
         @click="currentTab = tab.key; refreshCurrentTab()"
       >
-        <div :class="[tab.icon, 'text-lg']" />
+        <div class="text-lg" :class="[tab.icon]" />
         <div class="text-left text-sm leading-tight">
           <div>{{ tab.label }}</div>
-          <div class="text-xs opacity-70">{{ tab.desc }}</div>
+          <div class="text-xs opacity-70">
+            {{ tab.desc }}
+          </div>
         </div>
       </button>
     </div>
@@ -156,13 +179,12 @@ onMounted(() => { if (currentAccountId.value) refreshCurrentTab() })
 
     <!-- 内容区 -->
     <div class="flex-1 overflow-y-auto">
-
       <!-- ===== 狗狗总览 ===== -->
       <template v-if="currentTab === 'overview'">
         <!-- 看家奖励(护主奖励): 后端一直有, 页面原先没入口 -->
         <div
           v-if="guardReward && guardReward.hasHuzhuDog"
-          class="mb-4 rounded-xl border p-4 shadow-sm"
+          class="mb-4 border rounded-xl p-4 shadow-sm"
           :class="guardReward.canClaim
             ? 'border-amber-300 bg-amber-50 dark:border-amber-700 dark:bg-amber-900/20'
             : 'border-gray-200 bg-white dark:border-gray-700 dark:bg-gray-800'"
@@ -201,7 +223,9 @@ onMounted(() => { if (currentAccountId.value) refreshCurrentTab() })
               {{ guardRewardClaiming ? '领取中…' : '领取奖励' }}
             </button>
           </div>
-          <p v-if="guardRewardError" class="mt-2 text-xs text-red-500">{{ guardRewardError }}</p>
+          <p v-if="guardRewardError" class="mt-2 text-xs text-red-500">
+            {{ guardRewardError }}
+          </p>
         </div>
 
         <!-- 顶部概要卡片 -->
@@ -221,7 +245,8 @@ onMounted(() => { if (currentAccountId.value) refreshCurrentTab() })
                 >
                   {{ overview?.currentDog?.quality || dogs[0]?.quality || '-' }}
                 </span>
-                <span class="rounded-full px-2 py-0.5 text-xs font-medium"
+                <span
+                  class="rounded-full px-2 py-0.5 text-xs font-medium"
                   :class="overview?.currentDog
                     ? 'bg-green-100 text-green-600 dark:bg-green-900/30 dark:text-green-400'
                     : 'bg-gray-100 text-gray-500 dark:bg-gray-700 dark:text-gray-400'"
@@ -229,33 +254,51 @@ onMounted(() => { if (currentAccountId.value) refreshCurrentTab() })
                   {{ overview?.currentDog ? overview.currentDog.statusLabel : '未部署' }}
                 </span>
               </div>
-              <p class="mb-2 text-sm text-gray-500 dark:text-gray-400">{{ overview?.currentDog?.description || dogs[0]?.description || '' }}</p>
+              <p class="mb-2 text-sm text-gray-500 dark:text-gray-400">
+                {{ overview?.currentDog?.description || dogs[0]?.description || '' }}
+              </p>
               <div class="grid grid-cols-2 gap-3 sm:grid-cols-4">
                 <div>
-                  <div class="text-xs text-gray-400">狗狗数量</div>
-                  <div class="font-bold">{{ overview?.dogCount ?? 0 }}</div>
-                  <div class="text-xs text-gray-400">已激活 {{ overview?.activeCount ?? 0 }} 只</div>
+                  <div class="text-xs text-gray-400">
+                    狗狗数量
+                  </div>
+                  <div class="font-bold">
+                    {{ overview?.dogCount ?? 0 }}
+                  </div>
+                  <div class="text-xs text-gray-400">
+                    已激活 {{ overview?.activeCount ?? 0 }} 只
+                  </div>
                 </div>
                 <div>
-                  <div class="text-xs text-gray-400">守护概率</div>
-                  <div class="font-bold">{{ overview?.probability ?? 0 }}%</div>
-                  <div class="text-xs text-gray-400">当前展示狗狗</div>
+                  <div class="text-xs text-gray-400">
+                    守护概率
+                  </div>
+                  <div class="font-bold">
+                    {{ overview?.probability ?? 0 }}%
+                  </div>
+                  <div class="text-xs text-gray-400">
+                    当前展示狗狗
+                  </div>
                 </div>
                 <div v-if="overview?.currentDog || (overview?.feedRemainSec ?? 0) > 0">
-                  <div class="text-xs text-gray-400">狗粮剩余时间</div>
-                  <div class="font-bold">{{ overview?.feedRemainText ?? '无' }}</div>
+                  <div class="text-xs text-gray-400">
+                    狗粮剩余时间
+                  </div>
+                  <div class="font-bold">
+                    {{ overview?.feedRemainText ?? '无' }}
+                  </div>
                   <!-- 狗粮剩余时间进度条 -->
                   <div v-if="overview?.totalFeedSec && overview?.totalFeedSec > 0" class="mt-1.5">
                     <div class="h-2 w-full overflow-hidden rounded-full bg-gray-200 dark:bg-gray-600">
                       <div
                         class="h-full rounded-full transition-all duration-500"
                         :style="{
-                          width: Math.min(100, Math.max(0, (overview.feedRemainSec / overview.totalFeedSec) * 100)) + '%',
+                          width: `${Math.min(100, Math.max(0, (overview.feedRemainSec / overview.totalFeedSec) * 100))}%`,
                           backgroundColor: (overview.feedRemainSec / overview.totalFeedSec) > 0.5
                             ? '#22c55e'
                             : (overview.feedRemainSec / overview.totalFeedSec) > 0.25
                               ? '#eab308'
-                              : '#ef4444'
+                              : '#ef4444',
                         }"
                       />
                     </div>
@@ -264,12 +307,20 @@ onMounted(() => { if (currentAccountId.value) refreshCurrentTab() })
                       <span>共 {{ overview?.totalFeedText ?? '0' }}</span>
                     </div>
                   </div>
-                  <div class="text-xs text-gray-400">当前守护可用时长</div>
+                  <div class="text-xs text-gray-400">
+                    当前守护可用时长
+                  </div>
                 </div>
                 <div>
-                  <div class="text-xs text-gray-400">狗粮折合时间</div>
-                  <div class="font-bold">{{ overview?.totalFeedText ?? '无' }}</div>
-                  <div class="text-xs text-gray-400">库存 {{ overview?.foodStockCount ?? 0 }} 个</div>
+                  <div class="text-xs text-gray-400">
+                    狗粮折合时间
+                  </div>
+                  <div class="font-bold">
+                    {{ overview?.totalFeedText ?? '无' }}
+                  </div>
+                  <div class="text-xs text-gray-400">
+                    库存 {{ overview?.foodStockCount ?? 0 }} 个
+                  </div>
                 </div>
               </div>
             </div>
@@ -288,7 +339,9 @@ onMounted(() => { if (currentAccountId.value) refreshCurrentTab() })
         <!-- 狗狗列表 -->
         <div v-else>
           <div class="mb-3 flex items-center justify-between">
-            <h3 class="text-lg font-bold">狗狗列表</h3>
+            <h3 class="text-lg font-bold">
+              狗狗列表
+            </h3>
             <button
               class="rounded-lg px-3 py-1.5 text-sm text-gray-500 transition-colors hover:bg-gray-100 dark:text-gray-400 dark:hover:bg-gray-700"
               @click="refreshCurrentTab()"
@@ -296,11 +349,13 @@ onMounted(() => { if (currentAccountId.value) refreshCurrentTab() })
               <span class="i-carbon-renew mr-1" /> 刷新
             </button>
           </div>
-          <p class="mb-3 text-sm text-gray-400">图中狗狗可单击选择或切换查看</p>
-          <div class="grid grid-cols-1 gap-3 md:grid-cols-2 lg:grid-cols-3">
+          <p class="mb-3 text-sm text-gray-400">
+            图中狗狗可单击选择或切换查看
+          </p>
+          <div class="grid grid-cols-1 gap-3 lg:grid-cols-3 md:grid-cols-2">
             <div
               v-for="dog in dogs" :key="dog.dogId"
-              class="rounded-xl bg-white p-4 shadow-sm transition-shadow hover:shadow-md dark:bg-gray-800"
+              class="rounded-xl bg-white p-4 shadow-sm transition-shadow dark:bg-gray-800 hover:shadow-md"
             >
               <div class="mb-3 flex items-start gap-3">
                 <div class="h-14 w-14 flex-shrink-0 overflow-hidden rounded-lg bg-gray-100 dark:bg-gray-700">
@@ -316,28 +371,44 @@ onMounted(() => { if (currentAccountId.value) refreshCurrentTab() })
                       {{ dog.quality }}
                     </span>
                   </div>
-                  <div class="text-xs text-gray-400">{{ dog.statusLabel }}</div>
+                  <div class="text-xs text-gray-400">
+                    {{ dog.statusLabel }}
+                  </div>
                 </div>
               </div>
-              <p class="mb-3 text-sm text-gray-500 dark:text-gray-400">{{ dog.description }}</p>
-              <div class="mb-3 grid grid-cols-3 gap-2 text-center text-xs">
+              <p class="mb-3 text-sm text-gray-500 dark:text-gray-400">
+                {{ dog.description }}
+              </p>
+              <div class="grid grid-cols-3 mb-3 gap-2 text-center text-xs">
                 <div>
-                  <div class="text-gray-400">状态</div>
-                  <div class="font-medium">{{ dog.statusLabel }}</div>
+                  <div class="text-gray-400">
+                    状态
+                  </div>
+                  <div class="font-medium">
+                    {{ dog.statusLabel }}
+                  </div>
                 </div>
                 <div>
-                  <div class="text-gray-400">概率</div>
-                  <div class="font-medium">{{ dog.probability }}%</div>
+                  <div class="text-gray-400">
+                    概率
+                  </div>
+                  <div class="font-medium">
+                    {{ dog.probability }}%
+                  </div>
                 </div>
                 <div>
-                  <div class="text-gray-400">品质</div>
-                  <div class="font-medium">{{ dog.quality }}</div>
+                  <div class="text-gray-400">
+                    品质
+                  </div>
+                  <div class="font-medium">
+                    {{ dog.quality }}
+                  </div>
                 </div>
               </div>
               <!-- 操作按钮 -->
               <button
                 v-if="dog.status === 'active'"
-                class="w-full rounded-lg py-2 text-sm font-medium text-white transition-opacity hover:opacity-90"
+                class="w-full rounded-lg py-2 text-sm text-white font-medium transition-opacity hover:opacity-90"
                 :style="{ backgroundColor: 'var(--theme-primary)' }"
                 @click="handleDeploy(dog.dogId)"
               >
@@ -345,14 +416,14 @@ onMounted(() => { if (currentAccountId.value) refreshCurrentTab() })
               </button>
               <button
                 v-else-if="dog.status === 'guarding'"
-                class="w-full rounded-lg bg-red-500 py-2 text-sm font-medium text-white transition-opacity hover:opacity-90"
+                class="w-full rounded-lg bg-red-500 py-2 text-sm text-white font-medium transition-opacity hover:opacity-90"
                 @click="handleWithdraw()"
               >
                 收起
               </button>
               <button
                 v-else
-                class="w-full rounded-lg py-2 text-sm font-medium text-white transition-opacity hover:opacity-90"
+                class="w-full rounded-lg py-2 text-sm text-white font-medium transition-opacity hover:opacity-90"
                 :style="{ backgroundColor: 'var(--theme-primary)' }"
                 @click="handleActivate(dog.dogId)"
               >
@@ -366,14 +437,20 @@ onMounted(() => { if (currentAccountId.value) refreshCurrentTab() })
       <!-- ===== 狗粮管理 ===== -->
       <template v-if="currentTab === 'food'">
         <div class="mb-3 flex items-center justify-between">
-          <h3 class="text-lg font-bold">狗粮库存</h3>
+          <h3 class="text-lg font-bold">
+            狗粮库存
+          </h3>
           <div v-if="overview" class="text-xs text-gray-400">
             剩余容量: {{ overview.feedRemainText || '-' }} / 30天
           </div>
         </div>
-        <div v-if="loading" class="py-12 text-center text-gray-400">加载中...</div>
-        <div v-else-if="!dogFoods.length" class="py-12 text-center text-gray-400">暂无狗粮</div>
-        <div v-else class="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+        <div v-if="loading" class="py-12 text-center text-gray-400">
+          加载中...
+        </div>
+        <div v-else-if="!dogFoods.length" class="py-12 text-center text-gray-400">
+          暂无狗粮
+        </div>
+        <div v-else class="grid grid-cols-1 gap-3 lg:grid-cols-3 sm:grid-cols-2">
           <div
             v-for="food in dogFoods" :key="food.id"
             class="flex items-center gap-3 rounded-xl bg-white p-4 shadow-sm dark:bg-gray-800"
@@ -382,17 +459,23 @@ onMounted(() => { if (currentAccountId.value) refreshCurrentTab() })
               <img :src="petStore.getDogFoodImageUrl(food.id)" :alt="food.name" class="h-full w-full object-cover">
             </div>
             <div class="flex-1">
-              <div class="font-bold">{{ food.name }}</div>
-              <div class="text-xs text-gray-400">{{ food.days }}天狗粮</div>
-              <div class="mt-1 text-sm text-gray-500">x{{ food.count }}</div>
+              <div class="font-bold">
+                {{ food.name }}
+              </div>
+              <div class="text-xs text-gray-400">
+                {{ food.days }}天狗粮
+              </div>
+              <div class="mt-1 text-sm text-gray-500">
+                x{{ food.count }}
+              </div>
             </div>
             <button
-              class="rounded-lg px-4 py-2 text-sm font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-40"
+              class="rounded-lg px-4 py-2 text-sm text-white font-medium transition-opacity disabled:opacity-40 hover:opacity-90"
               :style="{ backgroundColor: 'var(--theme-primary)' }"
               :disabled="food.count <= 0 || feedLoading"
               @click="handleFeed(food.id)"
             >
-              <span v-if="feedLoading" class="i-carbon-loading animate-spin mr-1"></span>
+              <span v-if="feedLoading" class="i-carbon-loading mr-1 animate-spin" />
               {{ feedLoading ? '喂食中...' : '喂食' }}
             </button>
           </div>
@@ -402,7 +485,9 @@ onMounted(() => { if (currentAccountId.value) refreshCurrentTab() })
       <!-- ===== 守护日志 ===== -->
       <template v-if="currentTab === 'logs'">
         <div class="mb-3 flex items-center justify-between">
-          <h3 class="text-lg font-bold">防护日志</h3>
+          <h3 class="text-lg font-bold">
+            防护日志
+          </h3>
           <button
             class="rounded-lg px-3 py-1.5 text-sm text-gray-500 transition-colors hover:bg-gray-100 dark:text-gray-400 dark:hover:bg-gray-700"
             @click="refreshCurrentTab()"
@@ -410,8 +495,12 @@ onMounted(() => { if (currentAccountId.value) refreshCurrentTab() })
             <span class="i-carbon-renew mr-1" /> 刷新
           </button>
         </div>
-        <div v-if="loading" class="py-12 text-center text-gray-400">加载中...</div>
-        <div v-else-if="!guardLogs.length" class="py-12 text-center text-gray-400">暂无防护日志</div>
+        <div v-if="loading" class="py-12 text-center text-gray-400">
+          加载中...
+        </div>
+        <div v-else-if="!guardLogs.length" class="py-12 text-center text-gray-400">
+          暂无防护日志
+        </div>
         <div v-else class="space-y-2">
           <div
             v-for="(log, idx) in guardLogs" :key="idx"
@@ -421,33 +510,42 @@ onMounted(() => { if (currentAccountId.value) refreshCurrentTab() })
               <img :src="log.friendAvatar" :alt="log.friendName" class="h-full w-full object-cover">
             </div>
             <div class="flex-1">
-              <div class="font-medium">{{ log.friendName }}</div>
+              <div class="font-medium">
+                {{ log.friendName }}
+              </div>
               <div class="text-sm text-gray-500 dark:text-gray-400">
                 被{{ log.dogName }}咬了{{ log.biteCount }}次，拦截了{{ log.goldIntercepted }}金币
               </div>
             </div>
             <div class="text-right text-xs text-gray-400">
               <div>{{ formatGuardTime(log.timestamp) }}</div>
-              <div class="font-medium text-green-500">{{ log.status }}</div>
+              <div class="text-green-500 font-medium">
+                {{ log.status }}
+              </div>
             </div>
           </div>
         </div>
-
       </template>
 
       <!-- ===== 资本模式 ===== -->
       <template v-if="currentTab === 'capital'">
-        <h3 class="mb-3 text-lg font-bold">资本模式</h3>
+        <h3 class="mb-3 text-lg font-bold">
+          资本模式
+        </h3>
         <p class="mb-4 text-sm text-gray-500 dark:text-gray-400">
           开启后，当自己土地的农作物即将成熟时自动上阵选中的狗狗进行守护，收获完成后延迟收回。
         </p>
 
-        <div class="space-y-4 rounded-xl bg-white p-4 shadow-sm dark:bg-gray-800">
+        <div class="rounded-xl bg-white p-4 shadow-sm space-y-4 dark:bg-gray-800">
           <!-- 启用开关 -->
           <div class="flex items-center justify-between">
             <div>
-              <div class="font-medium">启用资本模式</div>
-              <div class="text-sm text-gray-400">农作物成熟前自动放狗，收获后延迟5秒收狗</div>
+              <div class="font-medium">
+                启用资本模式
+              </div>
+              <div class="text-sm text-gray-400">
+                农作物成熟前自动放狗，收获后延迟5秒收狗
+              </div>
             </div>
             <button
               class="relative h-6 w-12 rounded-full transition-colors"
@@ -464,15 +562,19 @@ onMounted(() => { if (currentAccountId.value) refreshCurrentTab() })
 
           <!-- 秒数输入 -->
           <div>
-            <div class="mb-1 font-medium">成熟前放狗秒数</div>
-            <div class="mb-2 text-sm text-gray-400">当距离农作物成熟时间 ≤ 此秒数时，自动上阵选中的狗狗（范围5-300秒，默认10秒）</div>
+            <div class="mb-1 font-medium">
+              成熟前放狗秒数
+            </div>
+            <div class="mb-2 text-sm text-gray-400">
+              当距离农作物成熟时间 ≤ 此秒数时，自动上阵选中的狗狗（范围5-300秒，默认10秒）
+            </div>
             <div class="flex items-center gap-2">
               <input
                 v-model.number="capitalMode.secondsBeforeMature"
                 type="number"
                 min="5"
                 max="300"
-                class="w-24 rounded-lg border border-gray-300 bg-white px-3 py-2 text-center text-sm dark:border-gray-600 dark:bg-gray-700 dark:text-white"
+                class="w-24 border border-gray-300 rounded-lg bg-white px-3 py-2 text-center text-sm dark:border-gray-600 dark:bg-gray-700 dark:text-white"
               >
               <span class="text-sm text-gray-400">秒</span>
             </div>
@@ -480,13 +582,19 @@ onMounted(() => { if (currentAccountId.value) refreshCurrentTab() })
 
           <!-- 选择狗狗 -->
           <div>
-            <div class="mb-1 font-medium">选择上阵的狗狗</div>
-            <div class="mb-2 text-sm text-gray-400">选择一只需要在资本模式下自动上阵的狗狗（单选，点击已选中的可取消）</div>
-            <div v-if="!dogs.length" class="py-4 text-center text-gray-400">暂无可用狗狗</div>
+            <div class="mb-1 font-medium">
+              选择上阵的狗狗
+            </div>
+            <div class="mb-2 text-sm text-gray-400">
+              选择一只需要在资本模式下自动上阵的狗狗（单选，点击已选中的可取消）
+            </div>
+            <div v-if="!dogs.length" class="py-4 text-center text-gray-400">
+              暂无可用狗狗
+            </div>
             <div v-else class="flex flex-wrap gap-3">
               <div
                 v-for="dog in dogs" :key="dog.dogId"
-                class="cursor-pointer rounded-xl border-2 p-3 transition-all"
+                class="cursor-pointer border-2 rounded-xl p-3 transition-all"
                 :class="capitalMode.selectedDogId === dog.dogId
                   ? 'shadow-md'
                   : 'border-gray-200 hover:border-gray-300 dark:border-gray-600 dark:hover:border-gray-500'"
@@ -497,7 +605,7 @@ onMounted(() => { if (currentAccountId.value) refreshCurrentTab() })
               >
                 <div class="flex items-center gap-2">
                   <div
-                    class="h-5 w-5 rounded-full border-2 flex items-center justify-center"
+                    class="h-5 w-5 flex items-center justify-center border-2 rounded-full"
                     :class="capitalMode.selectedDogId === dog.dogId ? '' : 'border-gray-300 dark:border-gray-500'"
                     :style="capitalMode.selectedDogId === dog.dogId ? { borderColor: 'var(--theme-primary)' } : {}"
                   >
@@ -511,8 +619,12 @@ onMounted(() => { if (currentAccountId.value) refreshCurrentTab() })
                     <img :src="dog.image" :alt="dog.name" class="h-full w-full object-cover">
                   </div>
                   <div>
-                    <div class="text-sm font-medium">{{ dog.name }}</div>
-                    <div class="text-xs text-gray-400">{{ dog.quality }} · 守护概率 {{ dog.probability }}%</div>
+                    <div class="text-sm font-medium">
+                      {{ dog.name }}
+                    </div>
+                    <div class="text-xs text-gray-400">
+                      {{ dog.quality }} · 守护概率 {{ dog.probability }}%
+                    </div>
                   </div>
                 </div>
               </div>
@@ -521,7 +633,7 @@ onMounted(() => { if (currentAccountId.value) refreshCurrentTab() })
 
           <!-- 保存 -->
           <button
-            class="w-full rounded-lg py-2.5 text-sm font-medium text-white transition-opacity hover:opacity-90"
+            class="w-full rounded-lg py-2.5 text-sm text-white font-medium transition-opacity hover:opacity-90"
             :style="{ backgroundColor: 'var(--theme-primary)' }"
             @click="handleSaveCapital"
           >

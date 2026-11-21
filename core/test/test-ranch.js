@@ -45,11 +45,11 @@ proto.loadProto().then(async () => {
     network.sendMsgAsync = async (_s, method) => {
         const m = method.split('.').pop();
         const list = frames[m] || [];
-        if (list.length === 0) throw new Error('桩里没有该方法的响应: ' + m);
+        if (list.length === 0) throw new Error(`桩里没有该方法的响应: ${  m}`);
         cursor[m] = (cursor[m] || 0);
         const idx = cursor[m] % list.length;
         cursor[m] += 1;
-        const T = types[m + 'Reply'];
+        const T = types[`${m  }Reply`];
         if (T && T.encode) return { body: T.encode(T.decode(list[idx])).finish() };
         return { body: Buffer.from(list[idx]) };
     };
@@ -58,7 +58,7 @@ proto.loadProto().then(async () => {
     //   所以必须先打桩、后 require —— 它们对桩的引用才是测试桩。
     section('1. animalpb 无损解码全部抓包帧');
     {
-        let ok = 0, fail = 0;
+        let ok = 0; let fail = 0;
         const failDetail = [];
         for (const fname of FILES) {
             const p = `${CAPTURES}/${fname}`;
@@ -232,7 +232,7 @@ proto.loadProto().then(async () => {
                     }
                 }
             }
-            throw new Error('unexpected ' + method);
+            throw new Error(`unexpected ${  method}`);
         };
         const r = await ranch.autoBuyCubs({ maxSpend: 5000 });
         check('没有空槽时不买幼崽', r.bought === 0, r);
@@ -385,7 +385,7 @@ proto.loadProto().then(async () => {
 
         // 状态类失败不消耗预算(没真正照料, 不该算进 10 次里)
         check('已照料/巨大化不消耗预算',
-            /STROKE_ALREADY \|\| code === RANCH_ERR\.STROKE_MUTANT\) \{\s*\n\s*_strokeSkip\.set/.test(src), null);
+            /STROKE_ALREADY \|\| code === RANCH_ERR\.STROKE_MUTANT\) \{[\t\v\f\r \xA0\u1680\u2000-\u200A\u2028\u2029\u202F\u205F\u3000\uFEFF]*\n\s*_strokeSkip\.set/.test(src), null);
         void ranch;
     }
 

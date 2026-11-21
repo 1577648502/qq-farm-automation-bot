@@ -91,7 +91,7 @@ const VISIT_LEAVE = 'gamepb.visitpb.VisitService.Leave';
         }
         if (key === VISIT_ENTER) return { body: Buffer.alloc(0) };
         if (key === VISIT_LEAVE) return { body: Buffer.alloc(0) };
-        throw new Error('未 stub 的接口: ' + key);
+        throw new Error(`未 stub 的接口: ${  key}`);
     };
 
     const wish = require(`${SB}/src/services/autumn-wish`);

@@ -373,7 +373,7 @@ async function autoUnlockRegions(opts = {}) {
                 module: 'ranch', event: '地块解锁', result: 'ok', regionId: c.regionId,
             });
             await sleep(500);
-        } catch (e) {
+        } catch {
             // 额度不足(region_quota 满)/材料不足 → 正常, 停
             // 限流/额度不足/材料不足都属正常, 静默停止(每轮只试一次)
             break;

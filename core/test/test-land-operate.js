@@ -36,8 +36,8 @@ isolateDataDir(SB, 'land-op-test');
             if (li) {
                 let i = 0; const b = Buffer.from(li.v);
                 while (i < b.length) {
-                    let v = 0, s = 0, c;
-                    do { c = b[i++]; v += (c & 0x7f) * 2 ** s; s += 7; } while (c & 0x80);
+                    let v = 0; let s = 0; let c;
+                    do { c = b[i++]; v += (c & 0x7F) * 2 ** s; s += 7; } while (c & 0x80);
                     landIds.push(v);
                 }
             }

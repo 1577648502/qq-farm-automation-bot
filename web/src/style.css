@@ -49,8 +49,6 @@ body {
     0 0 5px #10b981 !important;
 }
 
-
-
 /* ===== Hide scrollbar for horizontal scroll containers (keep functionality) ===== */
 .scrollbar-none::-webkit-scrollbar {
   display: none;
@@ -75,7 +73,9 @@ body {
     border-radius: 0.75rem !important;
   }
   /* Make form inputs more touchable */
-  input, select, textarea {
+  input,
+  select,
+  textarea {
     font-size: 16px !important; /* Prevents iOS zoom on focus */
   }
 }
@@ -87,7 +87,6 @@ body {
   -webkit-box-orient: vertical;
   overflow: hidden;
 }
-
 
 /* ===== Mobile Responsive Overrides ===== */
 @media (max-width: 640px) {
@@ -105,7 +104,12 @@ body {
     width: 85vw !important;
     max-width: 320px;
   }
-  button, a, [role="button"], input, select, textarea {
+  button,
+  a,
+  [role='button'],
+  input,
+  select,
+  textarea {
     touch-action: manipulation;
   }
   .gap-6 {
@@ -162,7 +166,9 @@ body {
   }
 }
 
-*, *::before, *::after {
+*,
+*::before,
+*::after {
   box-sizing: border-box;
 }
 

@@ -73,7 +73,6 @@ function isExpectedRanchError(e) {
 }
 
 // 场景类型(抓包 20261116: PlayerSceneLogin 请求体 {1:1}=农场(0801), {1:2}=牧场(0802))
-const FARM_SCENE_TYPE = 1;
 const RANCH_SCENE_TYPE = 2;
 
 // 场景被拒(code=1045002)时记住状态, 1 小时内不重试(避免刷屏)。
@@ -478,7 +477,7 @@ async function fillCanBuckets(kind = 'normal', opts = {}) {
  * @param {number} count  数量(当前固定 1, 与官方单次喂一致)
  * @param {number} uid    道具格 uid
  */
-async function useCanOnAnimal(itemId, count = 1, uid = 0) {
+async function useCanOnAnimal(itemId, _count = 1, uid = 0) {
     const id = toNum(itemId);
     const isNormal = id >= 80021 && id <= 80024;
     const isOrganic = id >= 80031 && id <= 80034;
@@ -702,7 +701,7 @@ async function triggerProduce(slot = 0, hostGid = 0) {
  * 收获牧场(产物/整只)。
  * @param flag 抓包恒 1, 原样透传
  */
-async function harvestRanch(flag = 1, hostGid = 0) {
+async function harvestRanch(flag = 1, _hostGid = 0) {
     // 抓包(20261117): 自己牧场 = {2:{}, 3:1}, #2 是空 msg 不带 gid。
     // 服务端从会话场景推导主人, 带 gid=0 反而和客户端行为不一致。
     const body = types.HarvestRanchRequest.encode(types.HarvestRanchRequest.create({
@@ -860,7 +859,6 @@ const RANCH_CUB_STRATEGY_LABELS = {
     max_fert_profit: '最大普通肥净利润/时',
     bag_priority: '背包幼崽优先',
 };
-const RANCH_CUB_STRATEGY_KEYS = Object.keys(RANCH_CUB_STRATEGY_LABELS);
 
 /** 第二优先策略的标签(不含 bag_priority —— 它没有"回退"语义) */
 const RANCH_CUB_FALLBACK_LABELS = {
@@ -1384,7 +1382,7 @@ for (const [id, name] of Object.entries(ANIMAL_NAMES)) {
     const produceId = (isPen ? 1070000 : 1060000) + base;   // 蛋/崽
     const grownId = (isPen ? 2070000 : 2060000) + base;     // 整只
     ANIMAL_NAMES[produceId] = name + (isPen ? '产物' : '蛋/崽');
-    ANIMAL_NAMES[grownId] = '整' + name;
+    ANIMAL_NAMES[grownId] = `整${  name}`;
 }
 ANIMAL_NAMES[1102] = '牧场经验';
 
@@ -1960,7 +1958,7 @@ async function checkAndBuyCansIfLow(opts = {}) {
     try {
         automation = require('../models/store').getAutomation(process.env.FARM_ACCOUNT_ID || '') || {};
     } catch { /* 读不到按关 */ }
-    const pick = (key, dft) => (opts[key] !== undefined && opts[key] !== null) ? opts[key] : automation[key];
+    const pick = (key, _dft) => (opts[key] !== undefined && opts[key] !== null) ? opts[key] : automation[key];
     const buyNormal = opts.buyNormal !== undefined ? !!opts.buyNormal : !!automation.ranch_can_buy_normal;
     const buyOrganic = opts.buyOrganic !== undefined ? !!opts.buyOrganic : !!automation.ranch_can_buy_organic;
     if (!buyNormal && !buyOrganic) return { boughtNormal: 0, boughtOrganic: 0 };
@@ -2000,10 +1998,6 @@ async function runRanchCare(opts = {}) {
         ? new Set(opts.groups.map(String))
         : null;
     const want = (group) => !wantGroups || wantGroups.has(group);
-    const step = async (group, opts2, fn) => {
-        if (!want(group)) return undefined;
-        return fn();
-    };
 
     // 0. 自动使用牧场背包道具(与农场 automation.auto_use_items 同一个开关)
     //    罐头(80021~80034)灌进桶也在这里发生 —— 桶有时长才能喂。
@@ -2396,8 +2390,7 @@ function resetLogOnceState() { _logOnceState.clear(); }
 //   牧草机耗尽 → feed 组立即跑
 // 倒计时到点就走, 不用等下一轮巡查。
 
-const RANCH_CHECK_INTERVAL_MIN_MS = 5 * 60 * 1000;   // 兜底轮询间隔 5~8 分钟
-const RANCH_CHECK_INTERVAL_MAX_MS = 8 * 60 * 1000;
+// 兜底轮询间隔 5~8 分钟
 const RANCH_PUSH_THROTTLE_MS = 60 * 1000;            // 推送触发最少间隔(1 分钟)
 // 失败退避: 连续失败时按 2^N 拉长间隔, 上限 60 分钟
 const RANCH_BACKOFF_MAX_MS = 60 * 60 * 1000;
@@ -2541,11 +2534,6 @@ function scheduleRanchGroup(groupKey, delayMs) {
     }
 }
 
-function scheduleNextRanchCheck(delayMs, groupKey = 'core') {
-    if (externalRanchSchedulerMode) return;
-    if (!ranchLoopRunning) return;
-    scheduleRanchGroup(groupKey, delayMs);
-}
 
 /**
  * 把 runRanchCare 一轮的产出统一记进"今日统计"(对照农场 recordOperation)。
@@ -3009,7 +2997,6 @@ async function runRanchDueTick() {
 //           8/9:折扣时段, 10:限购, 13:唯一序号}
 // 抓包里没有"购买游商商品"的请求 —— 商品挂在 mall slot 7 下, 用 MallService.Purchase 买。
 const ROTATION_SHOP_ID = 7;
-const ROTATION_MALL_SLOT = 7;
 
 /** 查询游商(兑换集市)状态与商品 */
 /**
@@ -3133,21 +3120,21 @@ function walkWire(buf) {
     const out = [];
     let i = 0;
     while (i < buf.length) {
-        let tag = 0, shift = 0;
+        let tag = 0; let shift = 0;
         while (true) {
             if (i >= buf.length) return out;
             const b = buf[i++];
-            tag += (b & 0x7f) * 2 ** shift;
+            tag += (b & 0x7F) * 2 ** shift;
             shift += 7;
             if (!(b & 0x80)) break;
         }
-        const field = tag >> 3, wire = tag & 7;
+        const field = tag >> 3; const wire = tag & 7;
         if (wire === 0) {
             let v = 0n; shift = 0n;
             while (true) {
                 if (i >= buf.length) return out;
                 const b = buf[i++];
-                v += BigInt(b & 0x7f) * (2n ** shift);
+                v += BigInt(b & 0x7F) * (2n ** shift);
                 shift += 7n;
                 if (!(b & 0x80)) break;
             }
@@ -3161,7 +3148,7 @@ function walkWire(buf) {
             while (true) {
                 if (i >= buf.length) return out;
                 const b = buf[i++];
-                len += (b & 0x7f) * 2 ** shift;
+                len += (b & 0x7F) * 2 ** shift;
                 shift += 7;
                 if (!(b & 0x80)) break;
             }
@@ -3192,7 +3179,7 @@ async function autoCleanOwnRanch() {
     try {
         await cleanOwnRanch();
         return { cleaned: 1, details: ['清理完成'] };
-    } catch (e) {
+    } catch {
         // 没有待清理内容 = 正常状态, 静默
         return { cleaned: 0, details: [] };
     }
@@ -3500,7 +3487,7 @@ async function autoStealFriendProduce(opts = {}) {
     return result;
 }
 
-async function autoBuyRotationShop(opts = {}) {
+async function autoBuyRotationShop(_opts = {}) {
     const result = { bought: 0, details: [], reason: '' };
     const shop = await getRotationShop();
     if (!shop.open) {
@@ -3728,7 +3715,7 @@ async function autoFeedMachine(opts = {}) {
     const { getRanchBagDetail } = require('./warehouse');
     const bag = await getRanchBagDetail();
     const grass = bag.items.find(it => Number(it.id) === GRASS_ITEM_ID);
-    let have = grass ? Number(grass.count) : 0;
+    const have = grass ? Number(grass.count) : 0;
 
     // 背包没草 → 自动去牧场商店买(2026-11-18 抓包实证: shop6 / goods 10001 / 单价 60)
     // 受 automation.ranch_buy_grass 控制(默认开), 避免有人不想花金券
@@ -4252,7 +4239,7 @@ async function autoBuyCubs(opts = {}) {
 // 之前只卖 107, 于是整鸡/鸭/鹅/巨大鸭在背包里越堆越多(用户实测 x1197)。
 const PRODUCE_ITEM_TYPES = [107, 106];
 
-async function autoSellRanchProducts(opts = {}) {
+async function autoSellRanchProducts(_opts = {}) {
     const result = { sold: 0, earned: 0, details: [] };
     const { getRanchBagDetail, sellItems } = require('./warehouse');
     const bag = await getRanchBagDetail();
@@ -4857,7 +4844,6 @@ module.exports = {
     // 倒计时到点: 只做收产物/催产/收获/补草, 不跑整套巡检
     runRanchDueTick,
     enterRanchSceneForApi,
-    useItemWithUid,
     useCanOnAnimal,
     // 日志节流: 供测试验证"同一状态不重复刷屏"
     shouldLogOnce,
@@ -4917,7 +4903,7 @@ module.exports = {
         // 缓存: 供测试验证"写操作后 overview 必须失效"(收获后入栏读到满栏的事故)
         invalidateRanchOverviewCache,
         // 栏舍实例: 供测试验证"棚动物要用 10003 而不是写死的 10001"
-        rememberRanchInstIds, resolveRanchHostGid,
+        rememberRanchInstIds,
         planRanchDueActions, runRanchDueActions,
         // 好友牧场: 照顾 target#2 必须用 animal_inst_id(线上 1045207)
         listFriendAnimals, strokeAnimal, putHazard,

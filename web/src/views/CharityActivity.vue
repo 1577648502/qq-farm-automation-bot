@@ -1,9 +1,9 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
-import { usePageRefresh } from '@/composables/usePageRefresh'
-
 import api from '@/api'
+
 import BaseButton from '@/components/ui/BaseButton.vue'
+import { usePageRefresh } from '@/composables/usePageRefresh'
 import { useToastStore } from '@/stores/toast'
 
 interface RewardItem {
@@ -56,7 +56,8 @@ const overview = ref<CharityOverview | null>(null)
 const active = computed(() => !!overview.value?.activity?.hasBody)
 
 function fmtTime(sec: number) {
-  if (!sec) return '-'
+  if (!sec)
+    return '-'
   const d = new Date(sec * 1000)
   return `${d.getMonth() + 1}/${d.getDate()} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
 }
@@ -75,7 +76,8 @@ function extractError(e: any): string {
 
 const serverProgress = computed(() => {
   const a = overview.value?.activity
-  if (!a || !a.serverTarget) return 0
+  if (!a || !a.serverTarget)
+    return 0
   return Math.min(100, ((a.serverLoveTotal || 0) / Math.max(1, a.serverTarget)) * 100)
 })
 
@@ -85,12 +87,15 @@ async function loadOverview() {
     const { data } = await api.get('/api/charity/overview')
     if (data?.ok) {
       overview.value = data.data
-    } else {
+    }
+    else {
       toast.error(data?.error || '加载失败')
     }
-  } catch (e: any) {
+  }
+  catch (e: any) {
     toast.error(extractError(e) || '加载失败')
-  } finally {
+  }
+  finally {
     loading.value = false
   }
 }
@@ -102,12 +107,15 @@ async function handleClaimGift() {
     if (data?.ok) {
       toast.success('公益礼包领取成功')
       await loadOverview()
-    } else {
+    }
+    else {
       toast.error(data?.error || '领取失败')
     }
-  } catch (e: any) {
+  }
+  catch (e: any) {
     toast.error(extractError(e) || '领取失败')
-  } finally {
+  }
+  finally {
     busy.value = false
   }
 }
@@ -119,12 +127,15 @@ async function handleSendLove() {
     if (data?.ok) {
       toast.success('已送出爱心')
       await loadOverview()
-    } else {
+    }
+    else {
       toast.error(data?.error || '送出失败')
     }
-  } catch (e: any) {
+  }
+  catch (e: any) {
     toast.error(extractError(e) || '送出失败')
-  } finally {
+  }
+  finally {
     busy.value = false
   }
 }
@@ -136,12 +147,15 @@ async function handleClaimTier(threshold: number) {
     if (data?.ok) {
       toast.success(`已领取 ${threshold} 爱心档位奖励`)
       await loadOverview()
-    } else {
+    }
+    else {
       toast.error(data?.error || '领取失败(可能已领取或未达标)')
     }
-  } catch (e: any) {
+  }
+  catch (e: any) {
     toast.error(extractError(e) || '领取失败')
-  } finally {
+  }
+  finally {
     busy.value = false
   }
 }
@@ -153,16 +167,20 @@ async function handleShare() {
     if (data?.ok) {
       if (data.data?.shared) {
         toast.success('每日分享成功')
-      } else {
+      }
+      else {
         toast.info(data.data?.reason || '当前不可分享')
       }
       await loadOverview()
-    } else {
+    }
+    else {
       toast.error(data?.error || '分享失败')
     }
-  } catch (e: any) {
+  }
+  catch (e: any) {
     toast.error(extractError(e) || '分享失败')
-  } finally {
+  }
+  finally {
     busy.value = false
   }
 }
@@ -175,12 +193,15 @@ async function handleRunNow() {
       const r = data.data || {}
       toast.success(`已执行: 领礼包 ${r.claimed ? '是' : '否'}, 送爱心 ${r.loved ? '是' : '否'}, 领档位 ${r.tierClaims || 0} 个, 分享 ${r.shared ? '是' : '否'}`)
       await loadOverview()
-    } else {
+    }
+    else {
       toast.error(data?.error || '执行失败')
     }
-  } catch (e: any) {
+  }
+  catch (e: any) {
     toast.error(extractError(e) || '执行失败')
-  } finally {
+  }
+  finally {
     busy.value = false
   }
 }
@@ -189,7 +210,7 @@ usePageRefresh('/charity-activity', loadOverview)
 </script>
 
 <template>
-  <div class="mx-auto max-w-5xl space-y-4 p-4">
+  <div class="mx-auto max-w-5xl p-4 space-y-4">
     <!-- 标题 -->
     <div class="flex items-center justify-between">
       <div>
@@ -211,18 +232,18 @@ usePageRefresh('/charity-activity', loadOverview)
     </div>
 
     <!-- 公益提示 -->
-    <div class="rounded-lg border border-rose-300 bg-rose-50 p-4 text-sm text-rose-800 dark:border-rose-700 dark:bg-rose-900/30 dark:text-rose-200">
+    <div class="border border-rose-300 rounded-lg bg-rose-50 p-4 text-sm text-rose-800 dark:border-rose-700 dark:bg-rose-900/30 dark:text-rose-200">
       本活动为腾讯公益真实慈善项目（免费午餐·小善大爱），涉及真实公益金。活动规则要求由本人参与，请知悉相关风险后谨慎使用自动化。
     </div>
 
     <!-- 未开启提示 -->
-    <div v-if="!active && !loading" class="rounded border border-yellow-300 bg-yellow-50 p-4 text-yellow-800 dark:border-yellow-700 dark:bg-yellow-900/30 dark:text-yellow-200">
+    <div v-if="!active && !loading" class="border border-yellow-300 rounded bg-yellow-50 p-4 text-yellow-800 dark:border-yellow-700 dark:bg-yellow-900/30 dark:text-yellow-200">
       活动未开启或已结束。
     </div>
 
     <template v-if="active && overview && overview.activity">
       <!-- 全服进度 -->
-      <div class="rounded-lg border border-gray-200 bg-white p-4 shadow-sm dark:border-gray-700 dark:bg-gray-800">
+      <div class="border border-gray-200 rounded-lg bg-white p-4 shadow-sm dark:border-gray-700 dark:bg-gray-800">
         <div class="mb-2 flex flex-wrap items-center justify-between gap-2">
           <h3 class="text-sm text-gray-900 font-medium dark:text-white">
             全服爱心值进度
@@ -245,34 +266,54 @@ usePageRefresh('/charity-activity', loadOverview)
 
       <!-- 背包摘要 -->
       <div class="grid grid-cols-2 gap-3 md:grid-cols-4">
-        <div class="rounded-lg border border-gray-200 bg-white p-3 dark:border-gray-700 dark:bg-gray-800">
-          <div class="text-xs text-gray-500 dark:text-gray-400">累计爱心值(档位)</div>
-          <div class="mt-1 text-xl font-bold">{{ fmtNum(overview.activity.personalLoveTotal || 0) }}</div>
+        <div class="border border-gray-200 rounded-lg bg-white p-3 dark:border-gray-700 dark:bg-gray-800">
+          <div class="text-xs text-gray-500 dark:text-gray-400">
+            累计爱心值(档位)
+          </div>
+          <div class="mt-1 text-xl font-bold">
+            {{ fmtNum(overview.activity.personalLoveTotal || 0) }}
+          </div>
         </div>
-        <div class="rounded-lg border border-gray-200 bg-white p-3 dark:border-gray-700 dark:bg-gray-800">
-          <div class="text-xs text-gray-500 dark:text-gray-400">背包爱心道具</div>
-          <div class="mt-1 text-xl font-bold">{{ fmtNum(overview.bag.love || 0) }}</div>
+        <div class="border border-gray-200 rounded-lg bg-white p-3 dark:border-gray-700 dark:bg-gray-800">
+          <div class="text-xs text-gray-500 dark:text-gray-400">
+            背包爱心道具
+          </div>
+          <div class="mt-1 text-xl font-bold">
+            {{ fmtNum(overview.bag.love || 0) }}
+          </div>
         </div>
-        <div class="rounded-lg border border-gray-200 bg-white p-3 dark:border-gray-700 dark:bg-gray-800">
-          <div class="text-xs text-gray-500 dark:text-gray-400">小红花种子</div>
-          <div class="mt-1 text-xl font-bold">{{ fmtNum(overview.bag.seed || 0) }}</div>
+        <div class="border border-gray-200 rounded-lg bg-white p-3 dark:border-gray-700 dark:bg-gray-800">
+          <div class="text-xs text-gray-500 dark:text-gray-400">
+            小红花种子
+          </div>
+          <div class="mt-1 text-xl font-bold">
+            {{ fmtNum(overview.bag.seed || 0) }}
+          </div>
         </div>
-        <div class="rounded-lg border border-gray-200 bg-white p-3 dark:border-gray-700 dark:bg-gray-800">
-          <div class="text-xs text-gray-500 dark:text-gray-400">小红花(果实)</div>
-          <div class="mt-1 text-xl font-bold">{{ fmtNum(overview.bag.fruit || 0) }}</div>
+        <div class="border border-gray-200 rounded-lg bg-white p-3 dark:border-gray-700 dark:bg-gray-800">
+          <div class="text-xs text-gray-500 dark:text-gray-400">
+            小红花(果实)
+          </div>
+          <div class="mt-1 text-xl font-bold">
+            {{ fmtNum(overview.bag.fruit || 0) }}
+          </div>
         </div>
       </div>
 
       <!-- 每日操作 -->
       <div class="grid grid-cols-1 gap-3 md:grid-cols-3">
         <!-- 领取公益礼包 -->
-        <div class="flex flex-col rounded-lg border border-gray-200 bg-white p-4 dark:border-gray-700 dark:bg-gray-800">
-          <h3 class="text-sm text-gray-900 font-medium dark:text-white">领取公益礼包</h3>
+        <div class="flex flex-col border border-gray-200 rounded-lg bg-white p-4 dark:border-gray-700 dark:bg-gray-800">
+          <h3 class="text-sm text-gray-900 font-medium dark:text-white">
+            领取公益礼包
+          </h3>
           <p class="mt-1 flex-1 text-xs text-gray-500 dark:text-gray-400">
             <template v-if="overview.activity.dailyGift?.id">
               {{ overview.activity.dailyGift.name }} × {{ overview.activity.dailyGift.count }}
             </template>
-            <template v-else>每日收获小红花后可领取</template>
+            <template v-else>
+              每日收获小红花后可领取
+            </template>
           </p>
           <BaseButton
             class="mt-3"
@@ -287,8 +328,10 @@ usePageRefresh('/charity-activity', loadOverview)
         </div>
 
         <!-- 送出爱心 -->
-        <div class="flex flex-col rounded-lg border border-gray-200 bg-white p-4 dark:border-gray-700 dark:bg-gray-800">
-          <h3 class="text-sm text-gray-900 font-medium dark:text-white">送出爱心</h3>
+        <div class="flex flex-col border border-gray-200 rounded-lg bg-white p-4 dark:border-gray-700 dark:bg-gray-800">
+          <h3 class="text-sm text-gray-900 font-medium dark:text-white">
+            送出爱心
+          </h3>
           <p class="mt-1 flex-1 text-xs text-gray-500 dark:text-gray-400">
             捐赠爱心值为公益项目助力（活动结束后结算）
           </p>
@@ -305,13 +348,17 @@ usePageRefresh('/charity-activity', loadOverview)
         </div>
 
         <!-- 每日分享 -->
-        <div class="flex flex-col rounded-lg border border-gray-200 bg-white p-4 dark:border-gray-700 dark:bg-gray-800">
-          <h3 class="text-sm text-gray-900 font-medium dark:text-white">每日分享</h3>
+        <div class="flex flex-col border border-gray-200 rounded-lg bg-white p-4 dark:border-gray-700 dark:bg-gray-800">
+          <h3 class="text-sm text-gray-900 font-medium dark:text-white">
+            每日分享
+          </h3>
           <p class="mt-1 flex-1 text-xs text-gray-500 dark:text-gray-400">
             <template v-if="overview.activity.seedReward?.id">
               分享可得 {{ overview.activity.seedReward.name }} × {{ overview.activity.seedReward.count }}
             </template>
-            <template v-else>分享获得小红花种子</template>
+            <template v-else>
+              分享获得小红花种子
+            </template>
           </p>
           <BaseButton
             class="mt-3"
@@ -327,15 +374,15 @@ usePageRefresh('/charity-activity', loadOverview)
       </div>
 
       <!-- 个人爱心值档位奖励 -->
-      <div v-if="overview.activity.tiers && overview.activity.tiers.length" class="rounded-lg border border-gray-200 bg-white p-4 dark:border-gray-700 dark:bg-gray-800">
+      <div v-if="overview.activity.tiers && overview.activity.tiers.length" class="border border-gray-200 rounded-lg bg-white p-4 dark:border-gray-700 dark:bg-gray-800">
         <h3 class="mb-3 text-sm text-gray-900 font-medium dark:text-white">
           个人爱心值档位奖励
         </h3>
-        <div class="grid grid-cols-2 gap-2 md:grid-cols-3 lg:grid-cols-5">
+        <div class="grid grid-cols-2 gap-2 lg:grid-cols-5 md:grid-cols-3">
           <div
             v-for="t in overview.activity.tiers"
             :key="t.threshold"
-            class="flex flex-col rounded border border-gray-200 p-3 text-sm dark:border-gray-700"
+            class="flex flex-col border border-gray-200 rounded p-3 text-sm dark:border-gray-700"
             :class="(overview.activity.personalLoveTotal || 0) >= t.threshold
               ? 'bg-rose-50 dark:bg-rose-900/20'
               : 'bg-gray-50 dark:bg-gray-900/40'"

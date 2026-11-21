@@ -16,14 +16,14 @@ defineProps<{
 </script>
 
 <template>
-  <div class="rounded-lg border border-gray-200 bg-white dark:border-gray-700 dark:bg-gray-800">
+  <div class="border border-gray-200 rounded-lg bg-white dark:border-gray-700 dark:bg-gray-800">
     <!-- ① 抬头 -->
     <div class="flex items-start justify-between gap-3 px-3 py-2.5">
       <div class="min-w-0">
         <div class="text-sm text-gray-900 font-medium dark:text-gray-100">
           {{ title }}
         </div>
-        <p v-if="desc" class="mt-0.5 text-xs leading-5 text-gray-500 dark:text-gray-400">
+        <p v-if="desc" class="mt-0.5 text-xs text-gray-500 leading-5 dark:text-gray-400">
           {{ desc }}
         </p>
       </div>
@@ -35,7 +35,7 @@ defineProps<{
     <!-- ②③ + 子任务 -->
     <div
       v-if="$slots.params || $slots.actions || $slots.default"
-      class="space-y-2 border-t border-gray-100 px-3 py-2.5 dark:border-gray-700/60"
+      class="border-t border-gray-100 px-3 py-2.5 space-y-2 dark:border-gray-700/60"
     >
       <div v-if="$slots.params" class="flex flex-wrap items-end gap-3">
         <slot name="params" />
@@ -49,7 +49,7 @@ defineProps<{
     <!-- ④ 备注 -->
     <div
       v-if="$slots.note"
-      class="border-t border-gray-100 px-3 py-2 text-xs leading-5 text-gray-500 dark:border-gray-700/60 dark:text-gray-400"
+      class="border-t border-gray-100 px-3 py-2 text-xs text-gray-500 leading-5 dark:border-gray-700/60 dark:text-gray-400"
     >
       <slot name="note" />
     </div>

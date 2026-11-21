@@ -43,7 +43,7 @@ function readInput(args) {
     // stdin
     const data = fs.readFileSync(0);
     const text = data.toString('utf8').trim();
-    if (/^[0-9a-fA-F\s]+$/.test(text)) return Buffer.from(text.replace(/\s+/g, ''), 'hex');
+    if (/^[0-9a-f\s]+$/i.test(text)) return Buffer.from(text.replace(/\s+/g, ''), 'hex');
     return data;
 }
 

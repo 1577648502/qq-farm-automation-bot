@@ -12,10 +12,10 @@
  * 之后只报真正的新变化 —— 所以处理完一次更新就点一下它。
  */
 import { computed, onMounted, ref, watch } from 'vue'
-import { useAccountStore } from '@/stores/account'
 import api from '@/api'
-import { useToastStore } from '@/stores/toast'
 import LoadingState from '@/components/ui/LoadingState.vue'
+import { useAccountStore } from '@/stores/account'
+import { useToastStore } from '@/stores/toast'
 
 interface BodyField {
   no: number
@@ -72,7 +72,8 @@ const groups = computed<ActivityGroup[]>(() => overview.value.activityChange?.gr
 const rows = computed<InterfaceRow[]>(() => {
   const list = (overview.value.interfaces || []) as InterfaceRow[]
   const kw = filter.value.trim().toLowerCase()
-  if (!kw) return list
+  if (!kw)
+    return list
   return list.filter(r => r.key.toLowerCase().includes(kw))
 })
 const newInterfaces = computed<string[]>(() => overview.value.newInterfaces || [])
@@ -86,7 +87,8 @@ const hasUpdate = computed(() => newInterfaces.value.length > 0
   || groups.value.some(g => g?.isNew || (g?.children || []).some(c => c?.isNew)))
 
 function fmtTime(ms: number) {
-  if (!ms) return '-'
+  if (!ms)
+    return '-'
   return new Date(ms).toLocaleString('zh-CN', { hour12: false })
 }
 
@@ -101,14 +103,17 @@ async function refresh() {
       headers['x-account-id'] = currentAccountId.value
     const res = await api.get('/api/protocol/overview', { headers })
     const d = res.data
-    if (!d?.ok) throw new Error(d?.error || '获取失败')
+    if (!d?.ok)
+      throw new Error(d?.error || '获取失败')
     data.value = d.data
     // 后端聚合失败时会带着 error 返回空视图(而不是 500)。这条不进 error.value,
     // 否则整个数据区会被错误框替换; 单独用 dataError 显示在页面顶部。
     dataError.value = d.data?.error || ''
-  } catch (e: any) {
+  }
+  catch (e: any) {
     error.value = e?.response?.data?.error || e?.message || '获取失败'
-  } finally {
+  }
+  finally {
     loading.value = false
   }
 }
@@ -121,12 +126,15 @@ async function freeze() {
       headers['x-account-id'] = currentAccountId.value
     const res = await api.post('/api/protocol/baseline', {}, { headers })
     const d = res.data
-    if (!d?.ok) throw new Error(d?.error || '操作失败')
+    if (!d?.ok)
+      throw new Error(d?.error || '操作失败')
     toast.success(`已冻结基线：${d.data.interfaceCount} 个接口`)
     await refresh()
-  } catch (e: any) {
+  }
+  catch (e: any) {
     toast.error(e?.response?.data?.error || e?.message || '操作失败')
-  } finally {
+  }
+  finally {
     freezing.value = false
   }
 }
@@ -182,7 +190,9 @@ watch(currentAccountId, () => refresh())
     <div class="mb-4 flex flex-wrap items-center justify-between gap-3">
       <div class="flex items-center gap-2">
         <div class="i-carbon-catalog text-xl text-sky-600" />
-        <h2 class="text-lg font-bold">协议观察</h2>
+        <h2 class="text-lg font-bold">
+          协议观察
+        </h2>
         <span v-if="data" class="text-xs" :class="hasUpdate ? 'text-amber-600 dark:text-amber-400' : 'text-gray-400'">
           {{ hasUpdate ? '发现更新' : '无变化' }}
         </span>
@@ -190,7 +200,7 @@ watch(currentAccountId, () => refresh())
       <div class="flex gap-2">
         <button
           type="button"
-          class="min-h-[40px] inline-flex items-center gap-1.5 border border-gray-300 rounded-lg bg-white px-3 py-2 text-sm transition hover:bg-gray-50 disabled:opacity-50 dark:border-gray-600 dark:bg-gray-800 dark:hover:bg-gray-700"
+          class="min-h-[40px] inline-flex items-center gap-1.5 border border-gray-300 rounded-lg bg-white px-3 py-2 text-sm transition dark:border-gray-600 dark:bg-gray-800 hover:bg-gray-50 disabled:opacity-50 dark:hover:bg-gray-700"
           :disabled="loading"
           @click="refresh"
         >
@@ -211,28 +221,44 @@ watch(currentAccountId, () => refresh())
 
     <!-- 不需要选账号: 协议观察聚合所有账号的采集结果 -->
     <LoadingState v-if="loading && !data" text="加载中…" />
-    <div v-else-if="error" class="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-600 dark:border-red-800 dark:bg-red-900/20">
+    <div v-else-if="error" class="border border-red-200 rounded-lg bg-red-50 p-3 text-sm text-red-600 dark:border-red-800 dark:bg-red-900/20">
       {{ error }}
     </div>
 
     <div v-else-if="data" class="space-y-4">
       <!-- 概览 -->
-      <div class="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-        <div class="rounded-lg border border-gray-200 bg-white p-3 dark:border-gray-700 dark:bg-gray-800">
-          <div class="text-xs text-gray-500">采集账号</div>
-          <div class="mt-1 text-xl font-semibold">{{ overview.sources?.length || 0 }}</div>
+      <div class="grid gap-3 lg:grid-cols-4 sm:grid-cols-2">
+        <div class="border border-gray-200 rounded-lg bg-white p-3 dark:border-gray-700 dark:bg-gray-800">
+          <div class="text-xs text-gray-500">
+            采集账号
+          </div>
+          <div class="mt-1 text-xl font-semibold">
+            {{ overview.sources?.length || 0 }}
+          </div>
         </div>
-        <div class="rounded-lg border border-gray-200 bg-white p-3 dark:border-gray-700 dark:bg-gray-800">
-          <div class="text-xs text-gray-500">接口总数</div>
-          <div class="mt-1 text-xl font-semibold">{{ overview.interfaceCount || 0 }}</div>
+        <div class="border border-gray-200 rounded-lg bg-white p-3 dark:border-gray-700 dark:bg-gray-800">
+          <div class="text-xs text-gray-500">
+            接口总数
+          </div>
+          <div class="mt-1 text-xl font-semibold">
+            {{ overview.interfaceCount || 0 }}
+          </div>
         </div>
-        <div class="rounded-lg border px-3 py-2" :class="newInterfaces.length ? 'border-amber-300 bg-amber-50 dark:border-amber-700 dark:bg-amber-900/20' : 'border-gray-200 bg-white dark:border-gray-700 dark:bg-gray-800'">
-          <div class="text-xs text-gray-500">新接口</div>
-          <div class="mt-1 text-xl font-semibold">{{ newInterfaces.length }}</div>
+        <div class="border rounded-lg px-3 py-2" :class="newInterfaces.length ? 'border-amber-300 bg-amber-50 dark:border-amber-700 dark:bg-amber-900/20' : 'border-gray-200 bg-white dark:border-gray-700 dark:bg-gray-800'">
+          <div class="text-xs text-gray-500">
+            新接口
+          </div>
+          <div class="mt-1 text-xl font-semibold">
+            {{ newInterfaces.length }}
+          </div>
         </div>
-        <div class="rounded-lg border px-3 py-2" :class="undefinedFields.length ? 'border-red-300 bg-red-50 dark:border-red-700 dark:bg-red-900/20' : 'border-gray-200 bg-white dark:border-gray-700 dark:bg-gray-800'">
-          <div class="text-xs text-gray-500">未定义 body 字段</div>
-          <div class="mt-1 text-xl font-semibold">{{ undefinedFields.length }}</div>
+        <div class="border rounded-lg px-3 py-2" :class="undefinedFields.length ? 'border-red-300 bg-red-50 dark:border-red-700 dark:bg-red-900/20' : 'border-gray-200 bg-white dark:border-gray-700 dark:bg-gray-800'">
+          <div class="text-xs text-gray-500">
+            未定义 body 字段
+          </div>
+          <div class="mt-1 text-xl font-semibold">
+            {{ undefinedFields.length }}
+          </div>
         </div>
       </div>
 
@@ -240,20 +266,20 @@ watch(currentAccountId, () => refresh())
       <!-- 后端聚合失败的可读原因(空视图 + 原因, 而不是整个页面报错) -->
       <div
         v-if="dataError"
-        class="rounded-lg border border-red-200 bg-red-50 p-3 text-xs text-red-700 dark:border-red-800 dark:bg-red-900/20 dark:text-red-300"
+        class="border border-red-200 rounded-lg bg-red-50 p-3 text-xs text-red-700 dark:border-red-800 dark:bg-red-900/20 dark:text-red-300"
       >
         <div class="mb-1 flex items-center gap-1.5 font-semibold">
           <div class="i-carbon-warning" />
           数据汇总失败
         </div>
-        <div class="font-mono break-all">
+        <div class="break-all font-mono">
           {{ dataError }}
         </div>
       </div>
 
       <div
         v-if="!overview.hasBaseline"
-        class="rounded-lg border border-sky-200 bg-sky-50 p-3 text-xs text-sky-700 dark:border-sky-800 dark:bg-sky-900/20 dark:text-sky-300"
+        class="border border-sky-200 rounded-lg bg-sky-50 p-3 text-xs text-sky-700 dark:border-sky-800 dark:bg-sky-900/20 dark:text-sky-300"
       >
         还没有基线 —— 当前所有接口都会被算作"新"。确认现在的游戏版本是正常的之后, 点右上角「以此为准」，
         之后就能只看真正的更新。
@@ -265,9 +291,9 @@ watch(currentAccountId, () => refresh())
       <!-- 未定义字段告警 -->
       <section
         v-if="undefinedFields.length"
-        class="rounded-lg border border-red-200 bg-red-50 p-3 dark:border-red-800 dark:bg-red-900/20"
+        class="border border-red-200 rounded-lg bg-red-50 p-3 dark:border-red-800 dark:bg-red-900/20"
       >
-        <h3 class="mb-2 flex items-center gap-1.5 text-sm font-semibold text-red-700 dark:text-red-300">
+        <h3 class="mb-2 flex items-center gap-1.5 text-sm text-red-700 font-semibold dark:text-red-300">
           <div class="i-carbon-warning" />
           这些子活动的数据体在 proto 里没有定义（新玩法，需要补 .proto）
         </h3>
@@ -282,14 +308,14 @@ watch(currentAccountId, () => refresh())
       <!-- 新接口 -->
       <section
         v-if="newInterfaces.length"
-        class="rounded-lg border border-amber-200 bg-amber-50 p-3 dark:border-amber-800 dark:bg-amber-900/20"
+        class="border border-amber-200 rounded-lg bg-amber-50 p-3 dark:border-amber-800 dark:bg-amber-900/20"
       >
-        <h3 class="mb-2 flex items-center gap-1.5 text-sm font-semibold text-amber-700 dark:text-amber-300">
+        <h3 class="mb-2 flex items-center gap-1.5 text-sm text-amber-700 font-semibold dark:text-amber-300">
           <div class="i-carbon-add-alt" />
           基线之后新出现的接口
         </h3>
         <div class="space-y-1">
-          <div v-for="key in newInterfaces" :key="key" class="font-mono text-xs text-amber-700 dark:text-amber-300">
+          <div v-for="key in newInterfaces" :key="key" class="text-xs text-amber-700 font-mono dark:text-amber-300">
             {{ key }}
           </div>
         </div>
@@ -323,13 +349,13 @@ watch(currentAccountId, () => refresh())
         <section
           v-for="g in groups"
           :key="g.id"
-          class="rounded-lg border border-gray-200 bg-white p-3 dark:border-gray-700 dark:bg-gray-800"
+          class="border border-gray-200 rounded-lg bg-white p-3 dark:border-gray-700 dark:bg-gray-800"
         >
           <h3 class="mb-2 flex flex-wrap items-center gap-1.5 text-sm font-semibold">
             <div class="i-carbon-events text-sky-600" />
             {{ g.name }}
-            <span class="font-mono text-xs text-gray-400 font-normal">{{ g.id }}</span>
-            <span v-if="g.isNew" class="rounded bg-amber-100 px-1.5 text-xs font-normal text-amber-700 dark:bg-amber-900/40 dark:text-amber-300">新</span>
+            <span class="text-xs text-gray-400 font-normal font-mono">{{ g.id }}</span>
+            <span v-if="g.isNew" class="rounded bg-amber-100 px-1.5 text-xs text-amber-700 font-normal dark:bg-amber-900/40 dark:text-amber-300">新</span>
             <span class="ml-auto text-xs text-gray-400 font-normal">
               {{ fmtTime(g.startTime * 1000) }} → {{ fmtTime(g.endTime * 1000) }}
             </span>
@@ -338,10 +364,10 @@ watch(currentAccountId, () => refresh())
             <div
               v-for="c in g.children"
               :key="c.id"
-              class="rounded border border-gray-100 px-2 py-1.5 text-xs dark:border-gray-700"
+              class="border border-gray-100 rounded px-2 py-1.5 text-xs dark:border-gray-700"
             >
               <div class="flex flex-wrap items-center gap-2">
-                <span class="font-mono text-gray-400">{{ c.id }}</span>
+                <span class="text-gray-400 font-mono">{{ c.id }}</span>
                 <span class="text-gray-600 dark:text-gray-300">{{ c.name }}</span>
                 <span class="text-gray-400">type={{ c.type }}</span>
                 <span v-if="c.isNew" class="rounded bg-amber-100 px-1.5 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300">新子活动</span>
@@ -370,9 +396,9 @@ watch(currentAccountId, () => refresh())
           v-model="filter"
           type="text"
           placeholder="按接口名过滤，如 ActivityService / Notify"
-          class="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm dark:border-gray-600 dark:bg-gray-800"
+          class="w-full border border-gray-300 rounded-lg bg-white px-3 py-2 text-sm dark:border-gray-600 dark:bg-gray-800"
         >
-        <div class="max-h-[60vh] overflow-auto rounded-lg border border-gray-200 dark:border-gray-700">
+        <div class="max-h-[60vh] overflow-auto border border-gray-200 rounded-lg dark:border-gray-700">
           <table class="w-full text-left text-xs">
             <thead class="sticky top-0 bg-gray-50 dark:bg-gray-700">
               <tr>
@@ -407,16 +433,16 @@ watch(currentAccountId, () => refresh())
                   {{ r.count }}
                   <span v-if="r.errors" class="ml-1 text-red-500">err{{ r.errors }}</span>
                 </td>
-                <td class="px-2 py-1.5 font-mono text-amber-600 dark:text-amber-400">
+                <td class="px-2 py-1.5 text-amber-600 font-mono dark:text-amber-400">
                   {{ r.newFields?.length ? `+${r.newFields.join(', +')}` : '' }}
                 </td>
-                <td class="px-2 py-1.5 whitespace-nowrap text-gray-400">
+                <td class="whitespace-nowrap px-2 py-1.5 text-gray-400">
                   {{ fmtTime(r.lastSeenAt) }}
                 </td>
                 <td class="px-2 py-1.5">
                   <button
                     type="button"
-                    class="rounded border border-sky-300 px-1.5 py-0.5 text-sky-600 transition hover:bg-sky-50 dark:border-sky-700 dark:text-sky-300 dark:hover:bg-sky-900/30"
+                    class="border border-sky-300 rounded px-1.5 py-0.5 text-sky-600 transition dark:border-sky-700 hover:bg-sky-50 dark:text-sky-300 dark:hover:bg-sky-900/30"
                     @click="inspect(r.key)"
                   >
                     查看
@@ -437,12 +463,12 @@ watch(currentAccountId, () => refresh())
         <div class="max-h-[85vh] max-w-4xl w-full flex flex-col overflow-hidden rounded-xl bg-white shadow-2xl dark:bg-gray-800" @click.stop>
           <div class="flex flex-wrap items-center justify-between gap-2 border-b border-gray-200 p-3 dark:border-gray-700">
             <h3 class="text-sm font-bold">
-              字段树 · <span class="font-mono text-sky-600 dark:text-sky-300">{{ inspectKey }}</span>
+              字段树 · <span class="text-sky-600 font-mono dark:text-sky-300">{{ inspectKey }}</span>
             </h3>
             <div class="flex items-center gap-2">
               <button
                 type="button"
-                class="rounded border px-2 py-1 text-xs"
+                class="border rounded px-2 py-1 text-xs"
                 :class="inspectMode === 'tree' ? 'border-sky-400 bg-sky-50 text-sky-700 dark:bg-sky-900/30' : 'border-gray-300 text-gray-500'"
                 @click="inspect(inspectKey, 'tree')"
               >
@@ -450,13 +476,13 @@ watch(currentAccountId, () => refresh())
               </button>
               <button
                 type="button"
-                class="rounded border px-2 py-1 text-xs"
+                class="border rounded px-2 py-1 text-xs"
                 :class="inspectMode === 'strings' ? 'border-sky-400 bg-sky-50 text-sky-700 dark:bg-sky-900/30' : 'border-gray-300 text-gray-500'"
                 @click="inspect(inspectKey, 'strings')"
               >
                 文案
               </button>
-              <button type="button" class="rounded border border-gray-300 px-2 py-1 text-xs text-gray-600" @click="closeInspect">
+              <button type="button" class="border border-gray-300 rounded px-2 py-1 text-xs text-gray-600" @click="closeInspect">
                 关闭
               </button>
             </div>
@@ -479,7 +505,7 @@ watch(currentAccountId, () => refresh())
                 <div
                   v-for="(s, j) in d.samples"
                   :key="j"
-                  class="rounded border border-gray-200 p-2 dark:border-gray-700"
+                  class="border border-gray-200 rounded p-2 dark:border-gray-700"
                 >
                   <div class="mb-1 text-[11px] text-gray-400">
                     样本 {{ Number(j) + 1 }} · {{ s.accountId }} · {{ s.dir }} · {{ s.bytes }}B{{ s.truncated ? ' (截断)' : '' }}

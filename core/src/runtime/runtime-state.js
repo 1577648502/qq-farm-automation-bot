@@ -1,4 +1,4 @@
-﻿const EventEmitter = require('node:events');
+const EventEmitter = require('node:events');
 const { createModuleLogger } = require('../services/logger');
 const { getTodayKey, loadPersistedStats } = require('../services/stats');
 

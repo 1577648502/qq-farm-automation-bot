@@ -16,7 +16,7 @@ const WIRE_NAMES = { 0: 'varint', 1: 'fixed64', 2: 'len', 5: 'fixed32' };
 function tryUtf8(bytes) {
     if (bytes.length === 0) return '';
     const str = Buffer.from(bytes).toString('utf8');
-    if (/^[\x09\x0a\x0d\x20-\x7e\u00a0-\uffff]*$/.test(str) && !str.includes('\uFFFD')) {
+    if (/^[\t\n\r\x20-\x7E\u00A0-\uFFFF]*$/.test(str) && !str.includes('\uFFFD')) {
         return str;
     }
     return null;

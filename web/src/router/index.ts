@@ -57,10 +57,11 @@ const router = createRouter({
   ],
 })
 
-// ??????
+// 活动状态缓存(5 分钟过期, 避免 Transition 卡顿)
 let cachedActivityStatus: Record<string, boolean> | null = null
 async function getActivityStatus() {
-  if (cachedActivityStatus) return cachedActivityStatus
+  if (cachedActivityStatus)
+    return cachedActivityStatus
   try {
     const res = await axios.get('/api/activities/status', { timeout: 3000 })
     if (res.data?.ok) {
@@ -75,10 +76,11 @@ async function getActivityStatus() {
       }
       return cachedActivityStatus
     }
-  } catch {}
+  }
+  catch {}
   return null
 }
-// ? 5 ????????
+// 每 5 分钟清一次缓存
 setInterval(() => { cachedActivityStatus = null }, 300000)
 
 router.beforeEach(async (to, _from) => {
@@ -109,10 +111,10 @@ router.beforeEach(async (to, _from) => {
     return { name: 'login' }
   }
 
-  // ?????????????????????
+  // 活动页在活动关闭时重定向到概览
   const activityRouteMap: Record<string, string> = {
-    activity: 'heFengEnabled',
-    qingniang: 'qingNiangEnabled',
+    'activity': 'heFengEnabled',
+    'qingniang': 'qingNiangEnabled',
     'star-activity': 'qianXingEnabled',
     'weather-activity': 'yuLuoChengShiEnabled',
     'charity-activity': 'gongYiXiaoHongHuaEnabled',

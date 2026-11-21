@@ -31,7 +31,6 @@ function extractKeys(file, startMarker, indent, regionMarker = '') {
     const start = lines.findIndex((l, i) => i > from && l.includes(startMarker));
     if (start < 0) return new Set();
     const keys = new Set();
-    const pad = ' '.repeat(indent);
     for (let i = start + 1; i < lines.length; i++) {
         const line = lines[i];
         if (/^\s*$/.test(line) || /^\s*\/\//.test(line)) continue;
@@ -43,8 +42,10 @@ function extractKeys(file, startMarker, indent, regionMarker = '') {
         }
         if (cur !== indent) continue;                  // 嵌套内容
         // 兼容 `key: value` 与简写 `key,`(读取侧很多字段是简写)
-        const m = line.match(/^\s*([A-Za-z_$][\w$]*)\s*:/) || line.match(/^\s*([A-Za-z_$][\w$]*)\s*,\s*$/);
-        if (m) keys.add(m[1]);
+        const m1 = line.match(/^\s*([a-z_$][\w$]*)\s*:/i);
+        const m2 = line.match(/^\s*([a-z_$][\w$]*)\s*,\s*$/i);
+        const key = (m1 && m1[1]) || (m2 && m2[1]);
+        if (key) keys.add(key);
     }
     return keys;
 }
@@ -69,7 +70,7 @@ const WORKER_SYNC_REQUIRED = [
 ];
 
 // 只关心这些前缀(避免把 intervals/ui 等历史噪音算进来)
-const WATCH = /^(rob|buyBook|stealth|fertilizer|plant|bagSeed|steal)/;
+const WATCH = /^(?:rob|buyBook|stealth|fertilizer|plant|bagSeed|steal)/;
 
 // 前端有意做的字段别名(读取侧用短名, 前端再映射成长名)
 const ALIASES = {
@@ -87,7 +88,7 @@ const tableMatch = storeSrc.match(/const ACCOUNT_CONFIG_NORMALIZERS = \{([\s\S]*
 const normalizerKeys = new Set();
 if (tableMatch) {
     for (const line of tableMatch[1].split('\n')) {
-        const m = line.match(/^\s{4}([A-Za-z_$][\w$]*)\s*:/);
+        const m = line.match(/^\s{4}([a-z_$][\w$]*)\s*:/i);
         if (m) normalizerKeys.add(m[1]);
     }
 }
@@ -113,11 +114,11 @@ const missingInSync = WORKER_SYNC_REQUIRED.filter(k => saveKeys.has(k) && !syncK
 //   前端"页面上有输入框、类型里也有字段"但**没放进 payload** → 后端永远收不到,
 //   表现同样是"改了保存不成功"(2026-11-19 牧场幼崽策略就是这样)。
 const settingTs = fs.readFileSync(path.join(WEB, 'src/stores/setting.ts'), 'utf8');
-const payloadMatch = settingTs.match(/const settingsPayload = \{([\s\S]*?)\n      \}/);
+const payloadMatch = settingTs.match(/const settingsPayload = \{([\s\S]*?)\n {6}\}/);
 const frontPayloadKeys = new Set();
 if (payloadMatch) {
     for (const line of payloadMatch[1].split('\n')) {
-        const m = line.match(/^\s*([A-Za-z_$][\w$]*)\s*:/);
+        const m = line.match(/^\s*([a-z_$][\w$]*)\s*:/i);
         if (m) frontPayloadKeys.add(m[1]);
     }
 }

@@ -141,7 +141,7 @@ function scanFields(buf) {
     const out = [];
     if (!buf || !buf.length) return out;
     let r;
-    try { r = protobuf.Reader.create(buf); } catch (e) { return out; }
+    try { r = protobuf.Reader.create(buf); } catch { return out; }
     while (r.pos < r.len) {
         let tag;
         try { tag = r.uint64(); } catch { break; }
@@ -182,7 +182,7 @@ function pickRawField(body, fieldNo) {
 function parseTreasureBytes(bytes) {
     try {
         return normalizeTreasure(types.TreasureInfo.decode(bytes));
-    } catch (e) {
+    } catch {
         const f = scanFields(bytes);
         const get = (n) => f.find(x => x.no === n);
         // ⚠ 这里必须用 toInt: scanFields 的 varint 是字符串, toNum 会原样返回,
@@ -222,7 +222,7 @@ function parseTreasureBytes(bytes) {
 function isTreasureMessage(bytes) {
     const idField = scanFields(bytes).find(f => f.no === 1 && f.b);
     if (!idField) return false;
-    return /^[0-9]{4,}-[0-9]+-[0-9a-fA-F]{3,}$/.test(asString(idField.b));
+    return /^\d{4,}-\d+-[0-9a-f]{3,}$/i.test(asString(idField.b));
 }
 
 /**
@@ -460,7 +460,7 @@ function scanDoubles(buf) {
     let i = 0;
     while (i < buf.length) {
         let tag = 0; let shift = 0; let c = 0;
-        do { c = buf[i++]; tag += (c & 0x7f) * Math.pow(2, shift); shift += 7; } while (c & 0x80);
+        do { c = buf[i++]; tag += (c & 0x7F) * 2**shift; shift += 7; } while (c & 0x80);
         if (i > buf.length) break;
         const no = Math.floor(tag / 8);
         const wire = tag & 7;
@@ -468,7 +468,7 @@ function scanDoubles(buf) {
         else if (wire === 0) { while (i < buf.length && (buf[i] & 0x80)) i++; i += 1; }
         else if (wire === 2) {
             let len = 0; let sh = 0; let d = 0;
-            do { d = buf[i++]; len += (d & 0x7f) * Math.pow(2, sh); sh += 7; } while (d & 0x80);
+            do { d = buf[i++]; len += (d & 0x7F) * 2**sh; sh += 7; } while (d & 0x80);
             i += len;
         } else if (wire === 5) { i += 4; }
         else break;
@@ -614,7 +614,7 @@ function loadRobRecords() {
             const j = readJsonFile(file, () => ({ records: [] }));
             if (j && Array.isArray(j.records)) recordsCache = j.records;
         }
-    } catch (e) {
+    } catch {
         recordsCache = [];
     }
     return recordsCache;
@@ -837,7 +837,7 @@ async function robOnce({ gid, treasureId, bookItemId, friendName = '', verify = 
             const list = await queryFriendTreasures(targetGid);
             const hit = list.find(t => t.treasureId === treasureId);
             before = hit ? hit.stealableValue : 0;
-        } catch (e) { /* 查询失败不影响发起 */ }
+        } catch { /* 查询失败不影响发起 */ }
     }
 
     let result;
@@ -869,7 +869,7 @@ async function robOnce({ gid, treasureId, bookItemId, friendName = '', verify = 
                 const hit = list.find(t => t.treasureId === treasureId);
                 after = hit ? hit.stealableValue : 0;
                 ok = before === null ? true : (after < before || !hit);
-            } catch (e) { /* 保持 ok=true */ }
+            } catch { /* 保持 ok=true */ }
         }
     }
 
@@ -894,8 +894,8 @@ async function robOnce({ gid, treasureId, bookItemId, friendName = '', verify = 
 
     // 日志: 成功带奖励金额, 失败带原因, 便于直接看日志对账
     if (result.outcome === 'win') {
-        log('夺宝', `夺宝成功: 好友 ${friend} 用【${book}】夺得 ${rec.rewardText || '奖励'}` +
-            (result.theirCharm ? ` (对方锦囊:${result.theirCharm})` : ''), {
+        log('夺宝', `夺宝成功: 好友 ${friend} 用【${book}】夺得 ${rec.rewardText || '奖励'}${ 
+            result.theirCharm ? ` (对方锦囊:${result.theirCharm})` : ''}`, {
             module: 'activity', event: '夺宝', result: 'ok', friendGid: targetGid, bookItemId: bookId,
             rewardCount: result.reward ? result.reward.count : 0,
         });

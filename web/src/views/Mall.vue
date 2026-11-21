@@ -1,13 +1,13 @@
-﻿<script setup lang="ts">
+<script setup lang="ts">
 import { storeToRefs } from 'pinia'
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import api from '@/api'
 import ConfirmModal from '@/components/ConfirmModal.vue'
 import BaseButton from '@/components/ui/BaseButton.vue'
 import { useAccountStore } from '@/stores/account'
-import { apiError } from '@/utils/api-result'
 import { useStatusStore } from '@/stores/status'
 import { useToastStore } from '@/stores/toast'
+import { apiError } from '@/utils/api-result'
 import { formatCompactNumber } from '@/utils/number-format'
 
 interface MallPrice {
@@ -360,19 +360,19 @@ onMounted(async () => {
       </div>
 
       <div class="flex flex-wrap items-center gap-2">
-        <div class="border border-gray-200 rounded-xl bg-white px-2 sm:px-4 py-2 text-sm shadow-sm dark:border-gray-700 dark:bg-gray-800">
+        <div class="border border-gray-200 rounded-xl bg-white px-2 py-2 text-sm shadow-sm dark:border-gray-700 dark:bg-gray-800 sm:px-4">
           <span class="text-gray-500 dark:text-gray-400">金币</span>
           <strong class="ml-2 text-amber-500">{{ formatCurrencyNumber(status?.status?.gold) }}</strong>
         </div>
-        <div class="border border-gray-200 rounded-xl bg-white px-2 sm:px-4 py-2 text-sm shadow-sm dark:border-gray-700 dark:bg-gray-800">
+        <div class="border border-gray-200 rounded-xl bg-white px-2 py-2 text-sm shadow-sm dark:border-gray-700 dark:bg-gray-800 sm:px-4">
           <span class="text-gray-500 dark:text-gray-400">点券</span>
           <strong class="ml-2 text-emerald-500">{{ formatCurrencyNumber(status?.status?.coupon) }}</strong>
         </div>
-        <div class="border border-gray-200 rounded-xl bg-white px-2 sm:px-4 py-2 text-sm shadow-sm dark:border-gray-700 dark:bg-gray-800">
+        <div class="border border-gray-200 rounded-xl bg-white px-2 py-2 text-sm shadow-sm dark:border-gray-700 dark:bg-gray-800 sm:px-4">
           <span class="text-gray-500 dark:text-gray-400">钻石</span>
           <strong class="ml-2 text-blue-500">{{ formatCurrencyNumber(status?.status?.diamond) }}</strong>
         </div>
-        <div class="border border-gray-200 rounded-xl bg-white px-2 sm:px-4 py-2 text-sm shadow-sm dark:border-gray-700 dark:bg-gray-800">
+        <div class="border border-gray-200 rounded-xl bg-white px-2 py-2 text-sm shadow-sm dark:border-gray-700 dark:bg-gray-800 sm:px-4">
           <span class="text-gray-500 dark:text-gray-400">金豆豆</span>
           <strong class="ml-2 text-violet-500">{{ formatCurrencyNumber(status?.status?.goldBean) }}</strong>
         </div>
@@ -400,8 +400,9 @@ onMounted(async () => {
       </button>
     </div>
 
-    <div class="flex flex-nowrap gap-2 overflow-x-auto pb-1 snap-x snap-mandatory scrollbar-none sm:flex-wrap sm:overflow-visible sm:pb-0">
-      <button v-for="option in categoryOptions"
+    <div class="scrollbar-none flex flex-nowrap snap-x snap-mandatory gap-2 overflow-x-auto pb-1 sm:flex-wrap sm:overflow-visible sm:pb-0">
+      <button
+        v-for="option in categoryOptions"
         :key="option.key"
         class="rounded-xl px-4 py-2 text-sm font-medium transition"
         :class="activeCategory === option.key
@@ -456,7 +457,7 @@ onMounted(async () => {
             </p>
             <div
               v-if="limitText(item)"
-              class="mt-3 inline-flex items-center rounded-md border px-2.5 py-1 text-xs font-bold"
+              class="mt-3 inline-flex items-center border rounded-md px-2.5 py-1 text-xs font-bold"
               :class="limitTextClass(item)"
             >
               {{ limitText(item) }}
@@ -481,7 +482,7 @@ onMounted(async () => {
               min="1"
               :max="maxQuantity(item)"
               :disabled="item.isFree || isLimitReached(item)"
-              class="h-10 w-16 sm:w-20 border border-gray-200 rounded-lg bg-white px-2 text-center text-gray-900 outline-none dark:border-gray-600 dark:bg-gray-800 dark:text-white focus:ring-2"
+              class="h-10 w-16 border border-gray-200 rounded-lg bg-white px-2 text-center text-gray-900 outline-none sm:w-20 dark:border-gray-600 dark:bg-gray-800 dark:text-white focus:ring-2"
               style="--tw-ring-color: var(--theme-primary)"
               @blur="normalizeQuantity(item)"
             >
@@ -518,4 +519,3 @@ onMounted(async () => {
     />
   </div>
 </template>
-

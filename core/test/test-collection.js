@@ -49,7 +49,7 @@ let bagOverride = null;
 /** GetCollections 回放用: null = 抓包里第一条, 否则用指定 hex */
 let collectionReplyHex = null;
 /** 自定义背包回包(优先级高于 bagOverride) */
-let originalBagReply = null;
+const originalBagReply = null;
 /** true = ClaimCollectionReward 模拟服务端 1047006 */
 let claimNoReward = false;
 /** true = UpgradeCollection 模拟服务端"材料不足" */
@@ -65,7 +65,7 @@ function installMallStub() {
     };
     mallMod.purchaseMallGoods = async (goodsId, count = 1) => {
         mallStub.purchased.push({ goodsId: Number(goodsId), count: Number(count) });
-        return types.PurchaseResponse.decode(purchaseReply(Buffer.from([0x08, goodsId & 0xff])));
+        return types.PurchaseResponse.decode(purchaseReply(Buffer.from([0x08, goodsId & 0xFF])));
     };
     // ⚠ warehouse 在 require 时就解构了 getBag / sendMsgAsync, 换 exports 无效。
     //   所以背包内容由 installStub 里的网络桩提供(见 BAG 状态), 这里只记录 Use 调用。

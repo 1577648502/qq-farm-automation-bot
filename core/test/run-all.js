@@ -20,7 +20,7 @@ const files = fs.readdirSync(dir)
     .sort();
 
 if (!files.length) {
-    console.log('没有匹配的测试文件' + (filter ? ` (过滤: ${filter})` : ''));
+    console.log(`没有匹配的测试文件${  filter ? ` (过滤: ${filter})` : ''}`);
     process.exit(0);
 }
 

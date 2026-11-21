@@ -38,7 +38,7 @@ function makeScheduler(overrides = {}) {
         fetchCode: async (options) => {
             calls.fetch.push(options);
             if (overrides.fetchCode) return overrides.fetchCode(options, calls);
-            return { ok: true, code: 'code-' + options.protocol + '-' + (options.wxid || options.ref) };
+            return { ok: true, code: `code-${  options.protocol  }-${  options.wxid || options.ref}` };
         },
         saveAccountCode: (accountId, code) => calls.save.push({ accountId, code }),
         refreshAccountCode: async (accountId, code) => {

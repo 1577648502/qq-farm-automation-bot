@@ -1,5 +1,5 @@
 function trimZeros(value: string) {
-  return value.replace(/\.0+$/, '').replace(/(\.\d*?)0+$/, '$1')
+  return value.replace(/\.0+$/, '').replace(/(\.[1-9]*)0+$/, '$1')
 }
 
 export function formatCompactNumber(value: unknown) {

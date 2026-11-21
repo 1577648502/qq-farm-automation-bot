@@ -186,7 +186,7 @@ async function claimCharityGift() {
         if (rep && rep.claim_gift && rep.claim_gift.award) {
             awards = [normalizeItem(rep.claim_gift.award)];
         }
-    } catch (_) { /* 忽略解析失败 */ }
+    } catch { /* 忽略解析失败 */ }
     return { awards, replyLen: replyBody.length };
 }
 
@@ -199,7 +199,7 @@ async function sendCharityLove() {
     try {
         const rep = types.CharityOperateReply.decode(replyBody);
         if (rep && rep.send_love) loveTotal = toNum(rep.send_love.love_total);
-    } catch (_) { /* 忽略解析失败 */ }
+    } catch { /* 忽略解析失败 */ }
     return { loveTotal, replyLen: replyBody.length };
 }
 
@@ -220,7 +220,7 @@ async function claimCharityTier(threshold) {
         if (charity && charity.charity) {
             personalLoveTotal = toNum(charity.charity.personal_love_total);
         }
-    } catch (_) { /* 忽略解析失败 */ }
+    } catch { /* 忽略解析失败 */ }
     return { threshold, personalLoveTotal, replyLen: replyBody.length };
 }
 
@@ -247,7 +247,7 @@ async function shareCharity() {
         const results = Array.isArray(rep && rep.result) ? rep.result : [rep && rep.result].filter(Boolean);
         const success = results.find(item => toNum(item && item.code) === 1);
         code = success ? 1 : toNum(results[0] && results[0].code);
-    } catch (_) { /* 忽略 */ }
+    } catch { /* 忽略 */ }
     if (code !== 1) {
         return { shared: false, reason: `ReportShare 未成功 (code=${code})` };
     }
@@ -297,7 +297,7 @@ async function autoRunCharityTasks() {
         summary.claimed = true;
         log('活动', '公益小红花: 领取公益礼包成功', { module: 'activity', event: '公益小红花', result: 'claim_ok' });
         await randomDelay(800, 1500);
-    } catch (e) {
+    } catch {
         summary.skipped.push('公益礼包(已领或不可领)');
     }
 
@@ -326,7 +326,7 @@ async function autoRunCharityTasks() {
                 summary.tierClaims += 1;
                 log('活动', `公益小红花: 领取 ${tier.threshold} 爱心档位奖励成功`, { module: 'activity', event: '公益小红花', result: 'tier_ok' });
                 await randomDelay(800, 1500);
-            } catch (e) {
+            } catch {
                 summary.skipped.push(`${tier.threshold} 档(已领或未达标)`);
             }
         }

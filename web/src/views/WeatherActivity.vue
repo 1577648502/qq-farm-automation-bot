@@ -1,9 +1,9 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
-import { usePageRefresh } from '@/composables/usePageRefresh'
-
 import api from '@/api'
+
 import BaseButton from '@/components/ui/BaseButton.vue'
+import { usePageRefresh } from '@/composables/usePageRefresh'
 import { useToastStore } from '@/stores/toast'
 
 interface RewardItem {
@@ -92,7 +92,8 @@ const busy = ref(false)
 const weatherActive = computed(() => !!overview.value?.activity)
 
 function fmtTime(sec: number) {
-  if (!sec) return '-'
+  if (!sec)
+    return '-'
   const d = new Date(sec * 1000)
   return `${d.getMonth() + 1}/${d.getDate()} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
 }
@@ -111,12 +112,15 @@ async function loadOverview() {
     const { data } = await api.get('/api/weather/overview')
     if (data?.ok) {
       overview.value = data.data
-    } else {
+    }
+    else {
       toast.error(data?.error || '加载失败')
     }
-  } catch (e: any) {
+  }
+  catch (e: any) {
     toast.error(extractError(e) || '加载失败')
-  } finally {
+  }
+  finally {
     loading.value = false
   }
 }
@@ -127,7 +131,8 @@ async function loadFriends() {
     if (data?.ok && Array.isArray(data.data)) {
       friends.value = data.data.map((f: any) => ({ gid: Number(f.gid), name: String(f.name || f.gid) }))
     }
-  } catch {}
+  }
+  catch {}
 }
 
 async function handleBuyBottle() {
@@ -138,12 +143,15 @@ async function handleBuyBottle() {
     if (data?.ok) {
       toast.success(`购买成功 x${count}`)
       await loadOverview()
-    } else {
+    }
+    else {
       toast.error(data?.error || '购买失败')
     }
-  } catch (e: any) {
+  }
+  catch (e: any) {
     toast.error(extractError(e) || '购买失败')
-  } finally {
+  }
+  finally {
     busy.value = false
   }
 }
@@ -159,12 +167,15 @@ async function handleUseOnFriend() {
     if (data?.ok) {
       toast.success('已对好友使用采集瓶')
       await loadOverview()
-    } else {
+    }
+    else {
       toast.error(data?.error || '使用失败')
     }
-  } catch (e: any) {
+  }
+  catch (e: any) {
     toast.error(extractError(e) || '使用失败')
-  } finally {
+  }
+  finally {
     busy.value = false
   }
 }
@@ -176,12 +187,15 @@ async function handleUseThunder() {
     if (data?.ok) {
       toast.success('已使用雷雨召唤瓶')
       await loadOverview()
-    } else {
+    }
+    else {
       toast.error(data?.error || '使用失败')
     }
-  } catch (e: any) {
+  }
+  catch (e: any) {
     toast.error(extractError(e) || '使用失败')
-  } finally {
+  }
+  finally {
     busy.value = false
   }
 }
@@ -193,12 +207,15 @@ async function handleUpgradeResearch(tierId: number) {
     if (data?.ok) {
       toast.success(`档位 ${tierId} 奖励已领取`)
       await loadOverview()
-    } else {
+    }
+    else {
       toast.error(data?.error || '领取失败')
     }
-  } catch (e: any) {
+  }
+  catch (e: any) {
     toast.error(extractError(e) || '领取失败')
-  } finally {
+  }
+  finally {
     busy.value = false
   }
 }
@@ -211,12 +228,15 @@ async function handleRunTasksNow() {
       const r = data.data || {}
       toast.success(`已执行: 购买 ${r.bought || 0}, 好友使用 ${r.usedOnFriends || 0}, 雷雨瓶 ${r.thunderUsed || 0}`)
       await loadOverview()
-    } else {
+    }
+    else {
       toast.error(data?.error || '执行失败')
     }
-  } catch (e: any) {
+  }
+  catch (e: any) {
     toast.error(extractError(e) || '执行失败')
-  } finally {
+  }
+  finally {
     busy.value = false
   }
 }
@@ -230,12 +250,15 @@ async function handleRunResearchNow() {
       const cnt = (r.upgraded || r.claimed || []).length
       toast.success(cnt > 0 ? `已领取 ${cnt} 档达标奖励` : '当前无可领取的达标奖励')
       await loadOverview()
-    } else {
+    }
+    else {
       toast.error(data?.error || '执行失败')
     }
-  } catch (e: any) {
+  }
+  catch (e: any) {
     toast.error(extractError(e) || '执行失败')
-  } finally {
+  }
+  finally {
     busy.value = false
   }
 }
@@ -247,7 +270,7 @@ usePageRefresh('/weather-activity', async () => {
 </script>
 
 <template>
-  <div class="mx-auto max-w-5xl space-y-4 p-4">
+  <div class="mx-auto max-w-5xl p-4 space-y-4">
     <!-- 标题 -->
     <div class="flex items-center justify-between">
       <div>
@@ -269,13 +292,13 @@ usePageRefresh('/weather-activity', async () => {
     </div>
 
     <!-- 未开启提示 -->
-    <div v-if="!weatherActive && !loading" class="rounded border border-yellow-300 bg-yellow-50 p-4 text-yellow-800 dark:border-yellow-700 dark:bg-yellow-900/30 dark:text-yellow-200">
+    <div v-if="!weatherActive && !loading" class="border border-yellow-300 rounded bg-yellow-50 p-4 text-yellow-800 dark:border-yellow-700 dark:bg-yellow-900/30 dark:text-yellow-200">
       活动未开启或已结束。
     </div>
 
     <template v-if="weatherActive && overview">
       <!-- 天气状态 -->
-      <div class="rounded-lg border border-gray-200 bg-white p-4 shadow-sm dark:border-gray-700 dark:bg-gray-800">
+      <div class="border border-gray-200 rounded-lg bg-white p-4 shadow-sm dark:border-gray-700 dark:bg-gray-800">
         <div class="flex flex-wrap items-center justify-between gap-3">
           <div>
             <div class="text-sm text-gray-500 dark:text-gray-400">
@@ -297,15 +320,19 @@ usePageRefresh('/weather-activity', async () => {
             :loading="busy"
             @click="handleUseThunder"
           >
-            <template v-if="overview.weather?.isThunder">已是雷雨天气，无需召唤</template>
-            <template v-else>对自己使用雷雨召唤瓶（背包 {{ overview.bag.thunderBottle }}）</template>
+            <template v-if="overview.weather?.isThunder">
+              已是雷雨天气，无需召唤
+            </template>
+            <template v-else>
+              对自己使用雷雨召唤瓶（背包 {{ overview.bag.thunderBottle }}）
+            </template>
           </BaseButton>
         </div>
       </div>
 
       <!-- 背包摘要 -->
       <div class="grid grid-cols-2 gap-3 md:grid-cols-4">
-        <div class="rounded-lg border border-gray-200 bg-white p-3 dark:border-gray-700 dark:bg-gray-800">
+        <div class="border border-gray-200 rounded-lg bg-white p-3 dark:border-gray-700 dark:bg-gray-800">
           <div class="text-xs text-gray-500 dark:text-gray-400">
             天气采集瓶
           </div>
@@ -313,7 +340,7 @@ usePageRefresh('/weather-activity', async () => {
             {{ overview.bag.collectBottle }}
           </div>
         </div>
-        <div class="rounded-lg border border-gray-200 bg-white p-3 dark:border-gray-700 dark:bg-gray-800">
+        <div class="border border-gray-200 rounded-lg bg-white p-3 dark:border-gray-700 dark:bg-gray-800">
           <div class="text-xs text-gray-500 dark:text-gray-400">
             雷雨召唤瓶
           </div>
@@ -321,7 +348,7 @@ usePageRefresh('/weather-activity', async () => {
             {{ overview.bag.thunderBottle }}
           </div>
         </div>
-        <div class="rounded-lg border border-gray-200 bg-white p-3 dark:border-gray-700 dark:bg-gray-800">
+        <div class="border border-gray-200 rounded-lg bg-white p-3 dark:border-gray-700 dark:bg-gray-800">
           <div class="text-xs text-gray-500 dark:text-gray-400">
             雷电徽章
           </div>
@@ -329,7 +356,7 @@ usePageRefresh('/weather-activity', async () => {
             {{ overview.bag.thunderBadge }}
           </div>
         </div>
-        <div class="rounded-lg border border-gray-200 bg-white p-3 dark:border-gray-700 dark:bg-gray-800">
+        <div class="border border-gray-200 rounded-lg bg-white p-3 dark:border-gray-700 dark:bg-gray-800">
           <div class="text-xs text-gray-500 dark:text-gray-400">
             金豆豆
           </div>
@@ -340,7 +367,7 @@ usePageRefresh('/weather-activity', async () => {
       </div>
 
       <!-- 任务进度 -->
-      <div v-if="overview.activity?.taskProgress" class="rounded-lg border border-gray-200 bg-white p-4 dark:border-gray-700 dark:bg-gray-800">
+      <div v-if="overview.activity?.taskProgress" class="border border-gray-200 rounded-lg bg-white p-4 dark:border-gray-700 dark:bg-gray-800">
         <div class="mb-2 flex items-center justify-between">
           <h3 class="text-sm text-gray-900 font-medium dark:text-white">
             采集瓶累计进度
@@ -361,11 +388,11 @@ usePageRefresh('/weather-activity', async () => {
       </div>
 
       <!-- 商店 -->
-      <div v-if="overview.activity?.shop" class="rounded-lg border border-gray-200 bg-white p-4 dark:border-gray-700 dark:bg-gray-800">
+      <div v-if="overview.activity?.shop" class="border border-gray-200 rounded-lg bg-white p-4 dark:border-gray-700 dark:bg-gray-800">
         <h3 class="mb-3 text-sm text-gray-900 font-medium dark:text-white">
           天气商店
         </h3>
-        <div v-for="g in overview.activity.shop.goods" :key="g.id" class="mb-2 flex items-center justify-between rounded border border-gray-200 p-3 dark:border-gray-700">
+        <div v-for="g in overview.activity.shop.goods" :key="g.id" class="mb-2 flex items-center justify-between border border-gray-200 rounded p-3 dark:border-gray-700">
           <div>
             <div class="font-medium">
               {{ g.name || g.item.name || `物品 #${g.item.id}` }}
@@ -380,7 +407,7 @@ usePageRefresh('/weather-activity', async () => {
               type="number"
               min="1"
               :max="g.remaining || 1"
-              class="w-16 rounded border border-gray-300 px-2 py-1 text-sm dark:border-gray-600 dark:bg-gray-900"
+              class="w-16 border border-gray-300 rounded px-2 py-1 text-sm dark:border-gray-600 dark:bg-gray-900"
             >
             <BaseButton
               variant="primary"
@@ -396,14 +423,14 @@ usePageRefresh('/weather-activity', async () => {
       </div>
 
       <!-- 对好友使用采集瓶 -->
-      <div class="rounded-lg border border-gray-200 bg-white p-4 dark:border-gray-700 dark:bg-gray-800">
+      <div class="border border-gray-200 rounded-lg bg-white p-4 dark:border-gray-700 dark:bg-gray-800">
         <h3 class="mb-3 text-sm text-gray-900 font-medium dark:text-white">
           对好友使用天气采集瓶
         </h3>
         <div class="flex flex-wrap items-center gap-2">
           <select
             v-model="selectedFriendGid"
-            class="min-w-48 flex-1 rounded border border-gray-300 px-2 py-1 text-sm dark:border-gray-600 dark:bg-gray-900"
+            class="min-w-48 flex-1 border border-gray-300 rounded px-2 py-1 text-sm dark:border-gray-600 dark:bg-gray-900"
           >
             <option value="">
               选择好友…
@@ -428,7 +455,7 @@ usePageRefresh('/weather-activity', async () => {
       </div>
 
       <!-- 每日任务列表 -->
-      <div v-if="overview.activity?.dailyTasks" class="rounded-lg border border-gray-200 bg-white p-4 dark:border-gray-700 dark:bg-gray-800">
+      <div v-if="overview.activity?.dailyTasks" class="border border-gray-200 rounded-lg bg-white p-4 dark:border-gray-700 dark:bg-gray-800">
         <h3 class="mb-3 text-sm text-gray-900 font-medium dark:text-white">
           每日任务（奖励自动发放）
         </h3>
@@ -448,7 +475,7 @@ usePageRefresh('/weather-activity', async () => {
       </div>
 
       <!-- 气象研究 -->
-      <div v-if="overview.activity?.research" class="rounded-lg border border-gray-200 bg-white p-4 dark:border-gray-700 dark:bg-gray-800">
+      <div v-if="overview.activity?.research" class="border border-gray-200 rounded-lg bg-white p-4 dark:border-gray-700 dark:bg-gray-800">
         <div class="mb-3 flex items-center justify-between">
           <h3 class="text-sm text-gray-900 font-medium dark:text-white">
             气象研究（雷电徽章达标领奖）
@@ -461,7 +488,7 @@ usePageRefresh('/weather-activity', async () => {
           <div
             v-for="t in overview.activity.research.tiers"
             :key="t.tierId"
-            class="flex flex-col rounded border p-3 text-sm"
+            class="flex flex-col border rounded p-3 text-sm"
             :class="t.upgraded
               ? 'border-green-300 bg-green-50 dark:border-green-700 dark:bg-green-900/30'
               : t.upgradable

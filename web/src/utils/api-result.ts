@@ -21,14 +21,14 @@ export function apiResponseError(res: any, e?: any): string {
     || (e ? text(responseData?.message) : '')
     || (responseFailed
       ? text(responseData?.message)
-        || text(responseData?.reason)
-        || text(responseData?.data?.reason)
+      || text(responseData?.reason)
+      || text(responseData?.data?.reason)
       : '')
   const fromTop = text(topData?.error)
     || (topFailed
       ? text(topData?.message)
-        || text(topData?.reason)
-        || text(topData?.data?.reason)
+      || text(topData?.reason)
+      || text(topData?.data?.reason)
       : '')
   const fromAxios = text(e?.message)
   let msg = fromResp || fromTop || fromAxios

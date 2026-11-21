@@ -238,5 +238,5 @@ section('8. 按宝藏选书');
 }
 
 console.log(`\n通过 ${pass} / ${pass + fails.length}`);
-if (fails.length) { console.log('✗ 失败:'); fails.forEach(f => console.log('  - ' + f)); process.exit(1); }
+if (fails.length) { console.log('✗ 失败:'); fails.forEach(f => console.log(`  - ${  f}`)); process.exit(1); }
 console.log('✓ 全部通过');

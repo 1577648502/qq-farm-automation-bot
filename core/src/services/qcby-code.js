@@ -12,7 +12,7 @@
 const axios = require('axios');
 
 const DEFAULT_TIMEOUT_MS = 20000;
-const CODE_RE = /^[A-Za-z0-9_+/=%.-]{6,512}$/;
+const CODE_RE = /^[\w+/=%.-]{6,512}$/;
 // 优先匹配这些字段名（小写比较）
 const PREFERRED_CODE_KEYS = ['code', 'authcode', 'auth_code', 'jscode', 'js_code', 'logincode', 'login_code'];
 
@@ -24,7 +24,7 @@ function isLikelyCode(value) {
 function joinUrl(baseUrl, pathname) {
     const base = String(baseUrl || '').replace(/\/+$/, '');
     const suffix = String(pathname || '');
-    return base + (suffix.startsWith('/') ? suffix : '/' + suffix);
+    return base + (suffix.startsWith('/') ? suffix : `/${  suffix}`);
 }
 
 function getByPath(obj, dottedPath) {
@@ -160,7 +160,7 @@ async function fetchFarmCode(options = {}) {
     try {
         res = await axios(Object.assign(reqConfig, { headers, timeout: timeoutMs, validateStatus: () => true }));
     } catch (err) {
-        return { ok: false, reason: 'request_failed:' + (err && err.message ? err.message : String(err)) };
+        return { ok: false, reason: `request_failed:${  err && err.message ? err.message : String(err)}` };
     }
 
     let data = res && res.data;
@@ -168,7 +168,7 @@ async function fetchFarmCode(options = {}) {
     if (typeof data === 'string') {
         const trimmed = data.trim();
         if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
-            try { data = JSON.parse(trimmed); } catch (_) { /* 保持原始字符串 */ }
+            try { data = JSON.parse(trimmed); } catch { /* 保持原始字符串 */ }
         }
     }
 
@@ -176,7 +176,7 @@ async function fetchFarmCode(options = {}) {
         return { ok: false, reason: 'not_activated', status: res.status, raw: data };
     }
     if (res && res.status >= 400) {
-        return { ok: false, reason: 'http_' + res.status, status: res.status, raw: data };
+        return { ok: false, reason: `http_${  res.status}`, status: res.status, raw: data };
     }
 
     const code = extractCode(data, codePath);

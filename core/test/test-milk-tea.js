@@ -44,7 +44,7 @@ function encodeVarint(value) {
     if (n < 0n) throw new Error('测试编码器不支持负数');
     const out = [];
     do {
-        let byte = Number(n & 0x7fn);
+        let byte = Number(n & 0x7Fn);
         n >>= 7n;
         if (n > 0n) byte |= 0x80;
         out.push(byte);
@@ -208,7 +208,7 @@ function parsePackedVarints(buf) {
     let value = 0n;
     let shift = 0n;
     for (const byte of Buffer.from(buf || [])) {
-        value |= BigInt(byte & 0x7f) << shift;
+        value |= BigInt(byte & 0x7F) << shift;
         if (byte & 0x80) {
             shift += 7n;
         } else {
@@ -227,7 +227,7 @@ function readVarint(buf, offset = 0) {
     let pos = offset;
     while (pos < buf.length) {
         const byte = buf[pos++];
-        value |= BigInt(byte & 0x7f) << shift;
+        value |= BigInt(byte & 0x7F) << shift;
         if (!(byte & 0x80)) return { value, offset: pos };
         shift += 7n;
     }
@@ -494,7 +494,7 @@ sendImpl = async (service, method, body) => {
         check('cmd56 = 员工面板', milkTea.CMD_EMPLOYEES === 56);
         check('cmd58 = 配方菜单', milkTea.CMD_MENU === 58);
         check('cmd59 = 领取收银台收益', milkTea.CMD_CLAIM_CASHIER === 59);
-        check('cmd62 = 制作奶茶', milkTea.__testing.mainOperateCraft instanceof Function);
+        check('cmd62 = 制作奶茶', typeof milkTea.__testing.mainOperateCraft === 'function');
         check('cmd63 = 刷新/查询', milkTea.CMD_REFRESH === 63);
         check('cmd64 = 领取工资', milkTea.CMD_CLAIM_WAGE === 64);
         check('cmd65 = 互动', milkTea.CMD_WORK_INTERACT === 65);
@@ -1258,7 +1258,7 @@ sendImpl = async (service, method, body) => {
             {
                 label: '解析失败',
                 reply: () => operateReply(58, {
-                    result: Buffer.from([0x0a, 0x05, 0x01]),
+                    result: Buffer.from([0x0A, 0x05, 0x01]),
                     resultField: 163,
                 }),
             },
@@ -1409,7 +1409,7 @@ sendImpl = async (service, method, body) => {
         router = async (req) => {
             if (req.cmd === 55) {
                 return operateReply(55, {
-                    result: bytesField(1, Buffer.from([0x0a, 0x05, 0x08])),
+                    result: bytesField(1, Buffer.from([0x0A, 0x05, 0x08])),
                     resultField: 160,
                 });
             }
@@ -1862,7 +1862,7 @@ sendImpl = async (service, method, body) => {
             && latestCapturePanel.friends.every((x) => x.state === 1)
             && latestCapturePanel.friends[0].offAt === 1792396184, latestCapturePanel);
 
-        let candidateSequenceEmployees = [];
+        const candidateSequenceEmployees = [];
         let candidateSequenceSettled = true;
         router = async (req) => {
             if (req.cmd === 55) {
@@ -1941,7 +1941,7 @@ sendImpl = async (service, method, body) => {
                 sent: sent.map((x) => x.cmd),
             });
 
-        let staleCandidateEmployees = [];
+        const staleCandidateEmployees = [];
         let staleCandidateFetches = 0;
         router = async (req) => {
             if (req.cmd === 55) {
@@ -2003,7 +2003,7 @@ sendImpl = async (service, method, body) => {
                 sent: sent.map((x) => x.cmd),
             });
 
-        let twoVacanciesEmployees = [];
+        const twoVacanciesEmployees = [];
         let hireSettled = true;
         router = async (req) => {
             if (req.cmd === 55) {
@@ -2052,7 +2052,7 @@ sendImpl = async (service, method, body) => {
         check('首次雇佣成功后先刷新 cmd55，再提交第二个 cmd57',
             twoVacancyCommands.join(',') === '55,56,57,55,56,57,55', twoVacancyCommands);
 
-        let partialEmployees = [];
+        const partialEmployees = [];
         const partialFriendGid = 1300000501;
         router = async (req) => {
             if (req.cmd === 55) {
@@ -2092,7 +2092,7 @@ sendImpl = async (service, method, body) => {
             activityLogs.some((x) => x.isWarn && /已自动补位|仍有 1 个员工位空缺/.test(x.msg)),
             activityLogs);
 
-        let laggingEmployees = [];
+        const laggingEmployees = [];
         let lastHireNeedsStalePoll = false;
         let stalePolls = 0;
         router = async (req) => {
@@ -2139,7 +2139,7 @@ sendImpl = async (service, method, body) => {
                 sent: laggingCommands,
             });
 
-        let hiddenEmployees = [];
+        const hiddenEmployees = [];
         router = async (req) => {
             if (req.cmd === 55) {
                 // 模拟 cmd57 已成功但 cmd55 持续返回雇佣前旧状态。
@@ -2245,10 +2245,10 @@ sendImpl = async (service, method, body) => {
                 sent: sent.map((x) => x.cmd),
             });
 
-        let fallbackEmployees = [
+        const fallbackEmployees = [
             employee(1244632861, 1, nowSec - 3600, nowSec + 3600),
         ];
-        let fallbackAttempts = [];
+        const fallbackAttempts = [];
         router = async (req) => {
             if (req.cmd === 55) {
                 return operateReply(55, {
@@ -2289,8 +2289,8 @@ sendImpl = async (service, method, body) => {
                 attempts: fallbackAttempts,
             });
 
-        let staffFallbackEmployees = [];
-        let staffFallbackAttempts = [];
+        const staffFallbackEmployees = [];
+        const staffFallbackAttempts = [];
         router = async (req) => {
             if (req.cmd === 55) {
                 return operateReply(55, {
@@ -2334,7 +2334,7 @@ sendImpl = async (service, method, body) => {
                 attempts: staffFallbackAttempts,
             });
 
-        let emptyWhitelistEmployees = [
+        const emptyWhitelistEmployees = [
             employee(1244632861, 1, nowSec - 3600, nowSec + 3600),
         ];
         router = async (req) => {
@@ -2466,7 +2466,7 @@ sendImpl = async (service, method, body) => {
                 sent: sent.map((x) => x.cmd),
             });
 
-        let hireAllHiddenEmployees = [...oneEmployee];
+        const hireAllHiddenEmployees = [...oneEmployee];
         router = async (req) => {
             if (req.cmd === 55) {
                 return operateReply(55, {
@@ -2807,7 +2807,7 @@ sendImpl = async (service, method, body) => {
             length = tag && readVarint(packedReq.payload, tag.offset);
         } catch (e) { /* 由下方断言报告 */ }
         check('packed length >=128 时使用标准多字节 varint 长度',
-            packed && tag && Number(tag.value) === 0x0a
+            packed && tag && Number(tag.value) === 0x0A
             && length && Number(length.value) >= 128
             && Number(length.value) === packed.length,
             packed && { hex: packed.toString('hex'), tag, length });
@@ -3750,7 +3750,7 @@ sendImpl = async (service, method, body) => {
         milkTea.__testing.resetCurrencyCache();
         const originalGetBag = warehouse.getBag;
         const originalGetBagItems = warehouse.getBagItems;
-        let listedLevel = 8;
+        const listedLevel = 8;
         const buyRequests = [];
         try {
             warehouse.getBag = async () => ({});

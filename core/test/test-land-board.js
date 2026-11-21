@@ -169,7 +169,7 @@ section('8. getLandsDetail 的汇总按作物计数(2x2 只算 1 棵)');
     network.sendMsgAsync = async (_service, method) => {
         plantCallNames.push(method);
         const make = replies[method];
-        if (!make) throw new Error('unexpected ' + method);
+        if (!make) throw new Error(`unexpected ${  method}`);
         return { body: Buffer.from(make()) };
     };
     proto.loadProto().then(async () => {

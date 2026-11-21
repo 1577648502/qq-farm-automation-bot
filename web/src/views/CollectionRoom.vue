@@ -10,10 +10,10 @@
  * 展台(type=34)与典藏收藏点(3002)仍在背包里, 由后端一并汇总。
  */
 import { computed, ref } from 'vue'
-import { usePageRefresh } from '@/composables/usePageRefresh'
-
 import api from '@/api'
+
 import BaseButton from '@/components/ui/BaseButton.vue'
+import { usePageRefresh } from '@/composables/usePageRefresh'
 import { useToastStore } from '@/stores/toast'
 
 interface CollectionItem {
@@ -76,7 +76,8 @@ const overview = ref<CollectionOverview | null>(null)
 const fmtNum = (n: number) => (Number(n) || 0).toLocaleString('zh-CN')
 
 function fmtTime(sec: number) {
-  if (!sec) return '-'
+  if (!sec)
+    return '-'
   const d = new Date(sec * 1000)
   return `${d.getMonth() + 1}/${d.getDate()} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
 }
@@ -87,15 +88,16 @@ function extractError(e: any): string {
 
 const progress = computed(() => {
   const o = overview.value
-  if (!o || !o.catalogTotal) return 0
+  if (!o || !o.catalogTotal)
+    return 0
   return Math.min(100, (o.ownedTotal / o.catalogTotal) * 100)
 })
 
 const displayItem = computed(() => {
   const o = overview.value
-  if (!o || !o.display || !o.display.itemId) return null
-  const hit = o.series.flatMap(s => s.items).concat(o.extra as any[])
-    .find((x: any) => Number(x.id) === Number(o.display!.itemId))
+  if (!o || !o.display || !o.display.itemId)
+    return null
+  const hit = o.series.flatMap(s => s.items).concat(o.extra as any[]).find((x: any) => Number(x.id) === Number(o.display!.itemId))
   return hit || null
 })
 
@@ -105,7 +107,8 @@ async function loadOverview() {
   loading.value = true
   try {
     const { data } = await api.get('/api/collection/overview')
-    if (data?.ok) overview.value = data.data
+    if (data?.ok)
+      overview.value = data.data
     else toast.error(data?.error || '加载失败')
   }
   catch (e: any) {
@@ -121,7 +124,8 @@ async function post(path: string, body: any = {}, okText?: string) {
   try {
     const { data } = await api.post(path, body)
     if (data?.ok) {
-      if (okText) toast.success(okText)
+      if (okText)
+        toast.success(okText)
       await loadOverview()
       return data.data
     }
@@ -149,8 +153,10 @@ async function handleUpgrade(item: CollectionItem) {
 
 async function handleClaim() {
   const r = await post('/api/collection/claim-reward')
-  if (!r) return
-  if (r.claimed === false) toast.info(r.reason || '当前没有可领取的评分奖励')
+  if (!r)
+    return
+  if (r.claimed === false)
+    toast.info(r.reason || '当前没有可领取的评分奖励')
   else toast.success(`已领取评分奖励(覆盖到 ${r.claimedScore} 档)`)
 }
 
@@ -166,9 +172,12 @@ async function handleRunAll() {
       }
       else {
         const parts = []
-        if (r.display) parts.push('已设置展示')
-        if (r.upgraded?.length) parts.push(`升星 ${r.upgraded.length} 次`)
-        if (r.claimed) parts.push('已领评分奖励')
+        if (r.display)
+          parts.push('已设置展示')
+        if (r.upgraded?.length)
+          parts.push(`升星 ${r.upgraded.length} 次`)
+        if (r.claimed)
+          parts.push('已领评分奖励')
         toast.success(parts.length ? parts.join('，') : (r.skipped?.[0] || '没有需要处理的'))
       }
       await loadOverview()
@@ -189,7 +198,7 @@ usePageRefresh('/collection', loadOverview)
 </script>
 
 <template>
-  <div class="mx-auto max-w-5xl space-y-4 p-4">
+  <div class="mx-auto max-w-5xl p-4 space-y-4">
     <!-- 标题 -->
     <div class="flex flex-wrap items-center justify-between gap-2">
       <div>
@@ -214,7 +223,7 @@ usePageRefresh('/collection', loadOverview)
       <!-- 等级未达标 -->
       <div
         v-if="overview.locked"
-        class="rounded border border-yellow-300 bg-yellow-50 p-3 text-xs text-yellow-800 dark:border-yellow-700 dark:bg-yellow-900/30 dark:text-yellow-200"
+        class="border border-yellow-300 rounded bg-yellow-50 p-3 text-xs text-yellow-800 dark:border-yellow-700 dark:bg-yellow-900/30 dark:text-yellow-200"
       >
         典藏室 {{ overview.unlockLevel }} 级开启，当前 {{ overview.level }} 级，暂不可用。
       </div>
@@ -222,42 +231,50 @@ usePageRefresh('/collection', loadOverview)
       <!-- 服务器未连通提示 -->
       <div
         v-if="!overview.serverOk && !overview.locked"
-        class="rounded border border-yellow-300 bg-yellow-50 p-3 text-xs text-yellow-800 dark:border-yellow-700 dark:bg-yellow-900/30 dark:text-yellow-200"
+        class="border border-yellow-300 rounded bg-yellow-50 p-3 text-xs text-yellow-800 dark:border-yellow-700 dark:bg-yellow-900/30 dark:text-yellow-200"
       >
         未取到典藏室服务端数据(账号可能未运行)。下方星级/展示位信息不可用。
       </div>
 
       <!-- 概览 -->
       <div class="grid grid-cols-2 gap-3 md:grid-cols-4">
-        <div class="rounded-lg border border-gray-200 bg-white p-3 dark:border-gray-700 dark:bg-gray-800">
-          <div class="text-xs text-gray-500 dark:text-gray-400">已激活藏品</div>
+        <div class="border border-gray-200 rounded-lg bg-white p-3 dark:border-gray-700 dark:bg-gray-800">
+          <div class="text-xs text-gray-500 dark:text-gray-400">
+            已激活藏品
+          </div>
           <div class="mt-1 text-xl font-bold">
-            {{ fmtNum(overview.ownedTotal) }}<span class="text-sm font-normal text-gray-400"> / {{ fmtNum(overview.catalogTotal) }}</span>
+            {{ fmtNum(overview.ownedTotal) }}<span class="text-sm text-gray-400 font-normal"> / {{ fmtNum(overview.catalogTotal) }}</span>
           </div>
         </div>
-        <div class="rounded-lg border border-gray-200 bg-white p-3 dark:border-gray-700 dark:bg-gray-800">
-          <div class="text-xs text-gray-500 dark:text-gray-400">藏品评分</div>
+        <div class="border border-gray-200 rounded-lg bg-white p-3 dark:border-gray-700 dark:bg-gray-800">
+          <div class="text-xs text-gray-500 dark:text-gray-400">
+            藏品评分
+          </div>
           <div class="mt-1 text-xl font-bold">
             {{ fmtNum(overview.score.total) }}
-            <span class="text-sm font-normal text-gray-400">已领档位 {{ fmtNum(overview.score.claimedTier) }}</span>
+            <span class="text-sm text-gray-400 font-normal">已领档位 {{ fmtNum(overview.score.claimedTier) }}</span>
           </div>
         </div>
-        <div class="rounded-lg border border-gray-200 bg-white p-3 dark:border-gray-700 dark:bg-gray-800">
-          <div class="text-xs text-gray-500 dark:text-gray-400">典藏收藏点</div>
+        <div class="border border-gray-200 rounded-lg bg-white p-3 dark:border-gray-700 dark:bg-gray-800">
+          <div class="text-xs text-gray-500 dark:text-gray-400">
+            典藏收藏点
+          </div>
           <div class="mt-1 text-xl font-bold">
             {{ fmtNum(overview.points.collection) }}
           </div>
         </div>
-        <div class="rounded-lg border border-gray-200 bg-white p-3 dark:border-gray-700 dark:bg-gray-800">
-          <div class="text-xs text-gray-500 dark:text-gray-400">拥有展台</div>
+        <div class="border border-gray-200 rounded-lg bg-white p-3 dark:border-gray-700 dark:bg-gray-800">
+          <div class="text-xs text-gray-500 dark:text-gray-400">
+            拥有展台
+          </div>
           <div class="mt-1 text-xl font-bold">
-            {{ fmtNum(overview.ownedPedestals) }}<span class="text-sm font-normal text-gray-400"> / {{ overview.pedestals.length }}</span>
+            {{ fmtNum(overview.ownedPedestals) }}<span class="text-sm text-gray-400 font-normal"> / {{ overview.pedestals.length }}</span>
           </div>
         </div>
       </div>
 
       <!-- 评分奖励 -->
-      <div class="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-gray-200 bg-white p-4 dark:border-gray-700 dark:bg-gray-800">
+      <div class="flex flex-wrap items-center justify-between gap-3 border border-gray-200 rounded-lg bg-white p-4 dark:border-gray-700 dark:bg-gray-800">
         <div>
           <h3 class="text-sm text-gray-900 font-medium dark:text-white">
             藏品评分奖励
@@ -279,7 +296,7 @@ usePageRefresh('/collection', loadOverview)
       </div>
 
       <!-- 当前展示 -->
-      <div class="rounded-lg border border-gray-200 bg-white p-4 dark:border-gray-700 dark:bg-gray-800">
+      <div class="border border-gray-200 rounded-lg bg-white p-4 dark:border-gray-700 dark:bg-gray-800">
         <div class="mb-2 flex items-center justify-between">
           <h3 class="text-sm text-gray-900 font-medium dark:text-white">
             当前展示位
@@ -294,8 +311,12 @@ usePageRefresh('/collection', loadOverview)
         <div v-if="displayItem" class="flex items-center gap-3">
           <img v-if="displayItem.image" :src="displayItem.image" :alt="displayItem.name" class="h-16 w-16 object-contain">
           <div>
-            <div class="text-sm font-medium">{{ displayItem.name }}</div>
-            <div class="text-xs text-amber-600 dark:text-amber-400">{{ starText((displayItem as any).star) }}</div>
+            <div class="text-sm font-medium">
+              {{ displayItem.name }}
+            </div>
+            <div class="text-xs text-amber-600 dark:text-amber-400">
+              {{ starText((displayItem as any).star) }}
+            </div>
           </div>
         </div>
         <div v-else class="text-xs text-gray-500 dark:text-gray-400">
@@ -304,9 +325,9 @@ usePageRefresh('/collection', loadOverview)
       </div>
 
       <!-- 收集进度 -->
-      <div class="rounded-lg border border-gray-200 bg-white p-4 dark:border-gray-700 dark:bg-gray-800">
+      <div class="border border-gray-200 rounded-lg bg-white p-4 dark:border-gray-700 dark:bg-gray-800">
         <div class="mb-2 flex items-center justify-between text-sm">
-          <span class="font-medium text-gray-900 dark:text-white">藏品收集进度</span>
+          <span class="text-gray-900 font-medium dark:text-white">藏品收集进度</span>
           <span class="text-gray-500 dark:text-gray-400">{{ progress.toFixed(1) }}%</span>
         </div>
         <div class="h-2 w-full overflow-hidden rounded bg-gray-200 dark:bg-gray-700">
@@ -318,7 +339,7 @@ usePageRefresh('/collection', loadOverview)
       <div
         v-for="s in overview.series"
         :key="s.series"
-        class="rounded-lg border border-gray-200 bg-white p-4 dark:border-gray-700 dark:bg-gray-800"
+        class="border border-gray-200 rounded-lg bg-white p-4 dark:border-gray-700 dark:bg-gray-800"
       >
         <div class="mb-3 flex items-center justify-between">
           <h3 class="text-sm text-gray-900 font-medium dark:text-white">
@@ -332,7 +353,7 @@ usePageRefresh('/collection', loadOverview)
           <div
             v-for="it in s.items"
             :key="it.id"
-            class="flex flex-col items-center rounded border p-2 text-center transition"
+            class="flex flex-col items-center border rounded p-2 text-center transition"
             :class="it.owned
               ? 'border-amber-300 bg-amber-50 dark:border-amber-700 dark:bg-amber-900/20'
               : 'border-gray-200 bg-gray-50 opacity-60 dark:border-gray-700 dark:bg-gray-900/40'"
@@ -346,7 +367,7 @@ usePageRefresh('/collection', loadOverview)
               loading="lazy"
             >
             <div v-else class="i-carbon-image h-12 w-12 text-gray-300" />
-            <div class="mt-1 w-full truncate text-xs font-medium text-gray-800 dark:text-gray-100">
+            <div class="mt-1 w-full truncate text-xs text-gray-800 font-medium dark:text-gray-100">
               {{ it.name }}
             </div>
             <div class="text-[11px]" :class="it.owned ? 'text-amber-700 dark:text-amber-300' : 'text-gray-400'">
@@ -356,7 +377,7 @@ usePageRefresh('/collection', loadOverview)
               吞噬 {{ it.devour }} 次
             </div>
             <!-- 升星: 由服务端判定能否升(材料不足会报错提示), 不在本地预判 -->
-            <div v-if="it.owned" class="mt-1 flex w-full flex-col gap-1">
+            <div v-if="it.owned" class="mt-1 w-full flex flex-col gap-1">
               <BaseButton
                 variant="secondary"
                 size="sm"
@@ -381,7 +402,7 @@ usePageRefresh('/collection', loadOverview)
       </div>
 
       <!-- 目录未收录的藏品 -->
-      <div v-if="overview.extra.length" class="rounded-lg border border-gray-200 bg-white p-4 dark:border-gray-700 dark:bg-gray-800">
+      <div v-if="overview.extra.length" class="border border-gray-200 rounded-lg bg-white p-4 dark:border-gray-700 dark:bg-gray-800">
         <h3 class="mb-3 text-sm text-gray-900 font-medium dark:text-white">
           其他藏品
         </h3>
@@ -389,17 +410,21 @@ usePageRefresh('/collection', loadOverview)
           <div
             v-for="it in overview.extra"
             :key="it.id"
-            class="flex flex-col items-center rounded border border-amber-300 bg-amber-50 p-2 text-center dark:border-amber-700 dark:bg-amber-900/20"
+            class="flex flex-col items-center border border-amber-300 rounded bg-amber-50 p-2 text-center dark:border-amber-700 dark:bg-amber-900/20"
           >
             <img v-if="it.image" :src="it.image" :alt="it.name" class="h-12 w-12 object-contain" loading="lazy">
-            <div class="mt-1 w-full truncate text-xs font-medium">{{ it.name }}</div>
-            <div class="text-[11px] text-amber-700 dark:text-amber-300">{{ starText(it.star) }}</div>
+            <div class="mt-1 w-full truncate text-xs font-medium">
+              {{ it.name }}
+            </div>
+            <div class="text-[11px] text-amber-700 dark:text-amber-300">
+              {{ starText(it.star) }}
+            </div>
           </div>
         </div>
       </div>
 
       <!-- 展台 -->
-      <div class="rounded-lg border border-gray-200 bg-white p-4 dark:border-gray-700 dark:bg-gray-800">
+      <div class="border border-gray-200 rounded-lg bg-white p-4 dark:border-gray-700 dark:bg-gray-800">
         <h3 class="mb-3 text-sm text-gray-900 font-medium dark:text-white">
           藏品展台
         </h3>
@@ -407,7 +432,7 @@ usePageRefresh('/collection', loadOverview)
           <div
             v-for="p in overview.pedestals"
             :key="p.id"
-            class="flex flex-col items-center rounded border p-2 text-center"
+            class="flex flex-col items-center border rounded p-2 text-center"
             :class="p.owned
               ? 'border-emerald-300 bg-emerald-50 dark:border-emerald-700 dark:bg-emerald-900/20'
               : 'border-gray-200 bg-gray-50 opacity-60 dark:border-gray-700 dark:bg-gray-900/40'"
@@ -415,7 +440,7 @@ usePageRefresh('/collection', loadOverview)
           >
             <img v-if="p.image" :src="p.image" :alt="p.name" class="h-12 w-12 object-contain" loading="lazy">
             <div v-else class="i-carbon-image h-12 w-12 text-gray-300" />
-            <div class="mt-1 w-full truncate text-xs font-medium text-gray-800 dark:text-gray-100">
+            <div class="mt-1 w-full truncate text-xs text-gray-800 font-medium dark:text-gray-100">
               {{ p.name }}
             </div>
             <div class="text-[11px]" :class="p.owned ? 'text-emerald-700 dark:text-emerald-300' : 'text-gray-400'">
@@ -431,7 +456,7 @@ usePageRefresh('/collection', loadOverview)
       </div>
     </template>
 
-    <div v-else-if="!loading" class="rounded border border-yellow-300 bg-yellow-50 p-4 text-yellow-800 dark:border-yellow-700 dark:bg-yellow-900/30 dark:text-yellow-200">
+    <div v-else-if="!loading" class="border border-yellow-300 rounded bg-yellow-50 p-4 text-yellow-800 dark:border-yellow-700 dark:bg-yellow-900/30 dark:text-yellow-200">
       未取到典藏室数据（账号可能未运行）。
     </div>
   </div>

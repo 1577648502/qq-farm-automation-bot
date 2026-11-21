@@ -54,7 +54,7 @@ process.exit = function (code) {
 };
 
 for (const rel of MODULES) {
-    const f = path.join(ROOT, rel + '.js');
+    const f = path.join(ROOT, `${rel  }.js`);
     if (!fs.existsSync(f)) {
         failed.push({ rel, err: '文件不存在' });
         continue;

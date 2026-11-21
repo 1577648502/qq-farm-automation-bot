@@ -65,7 +65,7 @@ net.sendMsgAsync = stubSendMsg;
 /** 模拟"进程重启": 清模块缓存 → 重新打桩 → 重新 require mall */
 function restartMall(goldBean, sendMsgImpl = stubSendMsg) {
     for (const k of Object.keys(require.cache)) {
-        if (k.includes(SB + '/src/') && !k.includes('/utils/proto')) delete require.cache[k];
+        if (k.includes(`${SB  }/src/`) && !k.includes('/utils/proto')) delete require.cache[k];
     }
     // ⚠ 必须重新给 runtime-paths 打桩: 否则新实例会指回真实数据目录
     //   (本测试第一版就踩了这个坑, 把状态写进了 core/data/mall-state)
@@ -205,7 +205,7 @@ section('7. 手动购买与游戏限购');
             const { types: t } = require(`${SB}/src/utils/proto`);
             return { body: t.PurchaseResponse.encode(t.PurchaseResponse.create({})).finish() };
         }
-        throw new Error('未 stub: ' + service + '.' + method);
+        throw new Error(`未 stub: ${  service  }.${  method}`);
     });
     calls.length = 0;
     const r = await mall.checkAndBuyChallengeBooks(true, 2);     // force=true 也不能突破游戏限购
@@ -255,7 +255,7 @@ section('8. 默认开启的一致性');
 }
 
     console.log(`\n通过 ${pass} / ${pass + fails.length}`);
-    if (fails.length) { console.log('✗ 失败:'); fails.forEach(f => console.log('  - ' + f)); process.exit(1); }
+    if (fails.length) { console.log('✗ 失败:'); fails.forEach(f => console.log(`  - ${  f}`)); process.exit(1); }
     console.log('✓ 全部通过');
     process.exit(0);
 })().catch(e => { console.log('测试异常:', e && e.message); process.exit(1); });

@@ -23,7 +23,7 @@ function withTimeout(promise, ms, fallback) {
             (v) => { clearTimeout(timer); resolve(v); },
             (e) => {
                 clearTimeout(timer);
-                resolve({ ...(fallback || {}), reason: 'error:' + (e && e.message ? e.message : String(e)) });
+                resolve({ ...(fallback || {}), reason: `error:${  e && e.message ? e.message : String(e)}` });
             },
         );
     });
@@ -46,7 +46,7 @@ function createStealthMode(options = {}) {
     function accountOf(accountId) {
         try {
             return (typeof findAccountByAnyRef === 'function' ? findAccountByAnyRef(accountId) : null) || {};
-        } catch (e) { return {}; }
+        } catch { return {}; }
     }
 
     /** 同时写全局日志流(带账号归属)与账号日志流 */
@@ -54,7 +54,7 @@ function createStealthMode(options = {}) {
         const acc = accountOf(accountId);
         try {
             log(msg, { accountId: String(accountId), accountName: acc.name || '', module: 'system', event: '防封号', ...meta });
-        } catch (e) { /* 忽略 */ }
+        } catch { /* 忽略 */ }
         accountLog(accountId, action, msg, meta);
     }
 
@@ -64,7 +64,7 @@ function createStealthMode(options = {}) {
         try {
             const acc = (typeof findAccountByAnyRef === 'function' ? findAccountByAnyRef(accountId) : null) || {};
             addAccountLog(action, msg, String(accountId), acc.name || '', meta);
-        } catch (e) { /* 忽略 */ }
+        } catch { /* 忽略 */ }
     }
 
     const states = new Map(); // accountId -> state
@@ -270,7 +270,7 @@ function createStealthMode(options = {}) {
             return { ok: false, reason: 'account_not_found', message: '未找到该账号' };
         }
 
-        let alreadyRunning = (typeof isWorkerRunning === 'function') && !!isWorkerRunning(accountId);
+        const alreadyRunning = (typeof isWorkerRunning === 'function') && !!isWorkerRunning(accountId);
         let started = false;
         let codeRefreshed = false;
         let latestAccount = account;
@@ -374,7 +374,7 @@ function createStealthMode(options = {}) {
         try {
             const list = (typeof listAccounts === 'function') ? listAccounts() : null;
             return Array.isArray(list) ? list : [];
-        } catch (e) { return []; }
+        } catch { return []; }
     }
 
     /** 开关或参数变化时, 对所有已运行账号重排 */

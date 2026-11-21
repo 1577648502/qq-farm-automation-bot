@@ -15,7 +15,6 @@ const process = require('node:process');
 const ROOT = path.join(__dirname, '..');
 const argIdx = process.argv.indexOf('--dir');
 const scanDir = path.join(ROOT, argIdx > 0 ? process.argv[argIdx + 1] : 'src');
-const NEED_PROTO = ['services/mengchong.js', 'services/treasure-rob.js', 'services/mall.js'];
 
 function walk(dir, out = []) {
     for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
@@ -30,7 +29,7 @@ function walk(dir, out = []) {
     // 部分模块 require 时依赖 proto/types, 先加载
     try {
         await require(path.join(ROOT, 'src/utils/proto')).loadProto();
-    } catch (e) { /* 没 proto 也能查大部分 */ }
+    } catch { /* 没 proto 也能查大部分 */ }
 
     let checked = 0;
     const problems = [];
@@ -38,10 +37,12 @@ function walk(dir, out = []) {
         const src = fs.readFileSync(file, 'utf8');
         const re = /const\s*\{([^}]+)\}\s*=\s*require\((['"`])([^'"`]+)\2\)/g;
         let m;
-        while ((m = re.exec(src))) {
+        while (true) {
+            m = re.exec(src);
+            if (!m) break;
             const names = m[1].split(',')
                 .map(s => s.split(':')[0].trim())
-                .filter(n => n && /^[A-Za-z_$][\w$]*$/.test(n));
+                .filter(n => n && /^[A-Z_$][\w$]*$/i.test(n));
             const spec = m[3];
             if (!spec.startsWith('.')) continue;
             let mod = null;
@@ -62,7 +63,7 @@ function walk(dir, out = []) {
     }
     if (problems.length) {
         console.error(`✗ 检查 ${checked} 个导入名, 发现 ${problems.length} 个问题:`);
-        problems.forEach(p => console.error('  - ' + p));
+        problems.forEach(p => console.error(`  - ${  p}`));
         process.exit(1);
     }
     console.log(`✓ 检查 ${checked} 个导入名, 全部存在`);

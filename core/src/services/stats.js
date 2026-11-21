@@ -248,8 +248,6 @@ function getStats(statusData, userState, connected, limits) {
     const currentExp = Number.isFinite(Number(rawExp)) ? Number(rawExp) : 0;
     const currentCoupon = Number.isFinite(Number(rawCoupon)) ? Number(rawCoupon) : 0;
     const currentGoldBean = Number.isFinite(Number(rawGoldBean)) ? Number(rawGoldBean) : 0;
-    const rawDiamond = (userObj.diamond !== null && userObj.diamond !== undefined) ? userObj.diamond : statusObj.diamond;
-    const currentDiamond = Number.isFinite(Number(rawDiamond)) ? Number(rawDiamond) : 0;
 
     if (connected) {
         updateStats(currentGold, currentExp);

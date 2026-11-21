@@ -29,7 +29,6 @@ function parseNormalFertilizerReduceSec(growPhases) {
 function formatTime(seconds) {
     if (seconds < 60) return `秒`;
     if (seconds < 3600) return `分秒`;
-    const hours = Math.floor(seconds / 3600);
     const mins = Math.floor((seconds % 3600) / 60);
     return mins > 0 ? `时分` : `时`;
 }
@@ -125,9 +124,8 @@ function getPlantRankings(sortBy = 'exp') {
         const name = results[i].name;
         if (nameCount[name] > 1) {
             // 使用等级或变异标记做区分
-            const lv = results[i].level;
             if (results[i]._isMutant) {
-                results[i].name = name + ' ★变异'; // ★变异
+                results[i].name = `${name  } ★变异`; // ★变异
             } else {
                 results[i].name = name; // 基础版保持原名
             }

@@ -1,92 +1,52 @@
 export interface MenuItem {
-
   path: string
-
   name: string
-
   label: string
-
   icon: string
-
   component: () => Promise<any>
-
   adminOnly?: boolean
-
   activityKey?: string
-
 }
-
 export const menuRoutes: MenuItem[] = [
-
   {
-
     path: '',
-
     name: 'dashboard',
-
     label: '概览',
-
     icon: 'i-carbon-chart-pie',
-
     component: () => import('@/views/Dashboard.vue'),
-
   },
 
   {
-
     path: 'personal',
-
     name: 'personal',
-
     label: '个人',
-
     icon: 'i-carbon-user',
-
     component: () => import('@/views/Personal.vue'),
-
   },
 
   {
-
     path: 'mall',
-
     name: 'mall',
-
     label: '道具商城',
-
     icon: 'i-carbon-shopping-cart',
-
     component: () => import('@/views/Mall.vue'),
-
   },
 
   {
-
     path: 'activity',
-
     name: 'activity',
-
     label: '荷风游记',
-
     icon: 'i-carbon-events',
-
     component: () => import('@/views/Activity.vue'),
-
     activityKey: 'heFengEnabled',
   },
 
   {
-
     path: 'qingniang',
-
     name: 'qingniang',
-
     label: '青酿换万金',
-
     icon: 'i-carbon-crop-growth',
-
     component: () => import('@/views/QingniangActivity.vue'),
-
     activityKey: 'qingNiangEnabled',
   },
 
@@ -162,75 +122,43 @@ export const menuRoutes: MenuItem[] = [
   // 路由本身保留(Personal.vue 里以 embedded 模式复用 Ranch.vue,
   // 直接访问 /ranch 仍可用, 方便排查)。
   {
-
     path: 'friends',
-
     name: 'friends',
-
     label: '好友',
-
     icon: 'i-carbon-user-multiple',
-
     component: () => import('@/views/Friends.vue'),
-
   },
 
   {
-
     path: 'analytics',
-
     name: 'analytics',
-
     label: '分析',
-
     icon: 'i-carbon-analytics',
-
     component: () => import('@/views/Analytics.vue'),
-
   },
 
   {
-
     path: 'protocol',
-
     name: 'protocol',
-
     label: '协议观察',
-
     icon: 'i-carbon-catalog',
-
     component: () => import('@/views/ProtocolObserver.vue'),
-
   },
 
   {
-
     path: 'settings',
-
     name: 'Settings',
-
     label: '设置',
-
     icon: 'i-carbon-settings',
-
     component: () => import('@/views/Settings.vue'),
-
   },
 
   {
-
     path: 'admin',
-
     name: 'admin',
-
     label: '后台',
-
     icon: 'i-carbon-settings-adjust',
-
     component: () => import('@/views/AdminPanel.vue'),
-
     adminOnly: true,
-
   },
-
 ]

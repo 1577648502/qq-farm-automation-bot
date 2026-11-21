@@ -28,7 +28,7 @@ function setupSandbox() {
         fs.cpSync(path.join(CORE, 'src'), srcDst, { recursive: true, force: true });
     } catch (e) {
         // 极端情况(权限/锁): 退化成"每次换一个新目录"
-        const alt = srcDst + '-' + Date.now();
+        const alt = `${srcDst  }-${  Date.now()}`;
         fs.cpSync(path.join(CORE, 'src'), alt, { recursive: true, force: true });
         return alt.replace(/\/src.*$/, '') || SANDBOX;
     }
@@ -45,12 +45,12 @@ function setupSandbox() {
 
 /** 数据目录重定向到临时目录, 避免污染 core/data; 必须在 require 业务模块之前调用 */
 function isolateDataDir(sandbox, tag = 'test') {
-    let dir = path.join(os.tmpdir(), 'qqfarm-data-' + tag);
+    let dir = path.join(os.tmpdir(), `qqfarm-data-${  tag}`);
     try {
         fs.rmSync(dir, { recursive: true, force: true });
     } catch (e) {
         // 删除被安全策略拦下时换个新目录(数据目录本来就该是干净的)
-        dir = dir + '-' + Date.now();
+        dir = `${dir  }-${  Date.now()}`;
     }
     fs.mkdirSync(dir, { recursive: true });
     const rp = require(path.join(sandbox, 'src/config/runtime-paths'));
@@ -81,9 +81,9 @@ function makeCaptureReplayer(sandbox, captureFile) {
         /** 把沙箱 network.sendMsgAsync 换成回放实现 */
         install(network) {
             network.sendMsgAsync = async (service, method) => {
-                const key = service + '.' + method;
+                const key = `${service  }.${  method}`;
                 const list = replies[key] || [];
-                if (!list.length) throw new Error('抓包里没有 ' + key);
+                if (!list.length) throw new Error(`抓包里没有 ${  key}`);
                 const i = cursor[key] || 0;
                 cursor[key] = (i + 1) % list.length;
                 return { body: bodyOf(list[i]) };
@@ -101,16 +101,16 @@ function createChecker() {
         typeof item === 'bigint' ? item.toString() : item
     ));
     return {
-        section: (t) => console.log('\n── ' + t),
+        section: (t) => console.log(`\n── ${  t}`),
         check: (name, cond, extra) => {
             if (cond) pass += 1;
-            else fails.push(name + (extra === undefined ? '' : ' → ' + serialize(extra)));
+            else fails.push(name + (extra === undefined ? '' : ` → ${  serialize(extra)}`));
         },
         finish: () => {
-            console.log('\n通过 ' + pass + ' / ' + (pass + fails.length));
+            console.log(`\n通过 ${  pass  } / ${  pass + fails.length}`);
             if (fails.length) {
                 console.log('✗ 失败:');
-                fails.forEach(f => console.log('  - ' + f));
+                fails.forEach(f => console.log(`  - ${  f}`));
                 process.exit(1);
             }
             console.log('✓ 全部通过');

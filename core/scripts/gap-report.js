@@ -74,17 +74,17 @@ function harvestImplementedRpc(dir) {
         try { src = fs.readFileSync(file, 'utf8'); } catch { continue; }
         // SERVICE 常量 → 值
         const consts = {};
-        for (const m of src.matchAll(/(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*['"]([a-zA-Z0-9_.]+Service)['"]/g)) {
+        for (const m of src.matchAll(/(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*['"]([\w.]+Service)['"]/g)) {
             consts[m[1]] = m[2];
         }
         // sendMsgAsync(SVC, 'Method')
-        for (const m of src.matchAll(/sendMsg(?:Async)?\s*\(\s*(?:'([^']+)'|"([^"]+)"|([A-Za-z_$][\w$]*))\s*,\s*'([A-Za-z0-9_]+)'/g)) {
+        for (const m of src.matchAll(/sendMsg(?:Async)?\s*\(\s*(?:'([^']+)'|"([^"]+)"|([A-Za-z_$][\w$]*))\s*,\s*'(\w+)'/g)) {
             const svc = m[1] || m[2] || consts[m[3]];
             if (svc) impl.add(`${svc}.${m[4]}`);
         }
         // call('Method') 动态封装(ranch-facility 那种)
         for (const val of Object.values(consts)) {
-            for (const m of src.matchAll(/\bcall(?:Rpc|Service)?\s*\(\s*'([A-Za-z0-9_]+)'/g)) {
+            for (const m of src.matchAll(/\bcall(?:Rpc|Service)?\s*\(\s*'(\w+)'/g)) {
                 impl.add(`${val}.${m[1]}`);
             }
         }
@@ -167,7 +167,7 @@ function harvestFrontendOps() {
         for (const m of src.matchAll(/op:\s*'([a-z]+)'/g)) ops.add(m[1]);
         for (const m of src.matchAll(/runOp\('([a-z]+)'/g)) ops.add(m[1]);
         for (const m of src.matchAll(/runBatch\('([a-z]+)'/g)) ops.add(`batch:${m[1]}`);
-        for (const m of src.matchAll(/['"`](\/api\/[a-zA-Z0-9/_-]+)['"`]/g)) apis.add(m[1]);
+        for (const m of src.matchAll(/['"`](\/api\/[\w/-]+)['"`]/g)) apis.add(m[1]);
     }
     return { ops, apis };
 }

@@ -1,5 +1,4 @@
 // 诊断: 同一账号分别试探「直接 0802」与「0801 → 0802」，确认 1045002 的真实触发条件
-const path = require('path');
 
 const network = require('../src/utils/network');
 const protobuf = require('protobufjs');

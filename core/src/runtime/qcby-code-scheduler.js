@@ -52,11 +52,11 @@ function createQcbyCodeScheduler(options = {}) {
                 if (!result.ok) return { ok: false, reason: result.reason };
                 // 存到 store(只存 code, 不动 worker) —— 上线时会用到最新 code
                 if (saveAccountCode) {
-                    try { saveAccountCode(id, result.code); } catch (e) { /* 忽略 */ }
+                    try { saveAccountCode(id, result.code); } catch { /* 忽略 */ }
                 }
                 return { ok: true, code: result.code };
             } catch (err) {
-                return { ok: false, reason: 'exception:' + (err && err.message ? err.message : String(err)) };
+                return { ok: false, reason: `exception:${  err && err.message ? err.message : String(err)}` };
             }
         })();
         inFlightFetch.set(id, task);
@@ -121,7 +121,7 @@ function createQcbyCodeScheduler(options = {}) {
         } catch (err) {
             const reason = err && err.message ? err.message : String(err);
             logInfo(`账号 ${accountId} 处理异常: ${reason}`);
-            return { ok: false, reason: 'exception:' + reason };
+            return { ok: false, reason: `exception:${  reason}` };
         } finally {
             running.delete(accountId);
         }
@@ -138,7 +138,7 @@ function createQcbyCodeScheduler(options = {}) {
 
     function start() {
         if (!config.enabled) {
-            logInfo('未启用（enabled=false），已跳过。配置文件: ' + (config.configFile || 'data/qcby-code.json'));
+            logInfo(`未启用（enabled=false），已跳过。配置文件: ${  config.configFile || 'data/qcby-code.json'}`);
             return false;
         }
         if (!config.baseUrl || !config.appid) {

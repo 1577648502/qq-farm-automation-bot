@@ -1,15 +1,15 @@
 <script setup lang="ts">
 import { storeToRefs } from 'pinia'
 import { computed, ref, watch } from 'vue'
-import { usePageRefresh } from '@/composables/usePageRefresh'
-
 import api from '@/api'
+
 import ConfirmModal from '@/components/ConfirmModal.vue'
 import BaseButton from '@/components/ui/BaseButton.vue'
+import { usePageRefresh } from '@/composables/usePageRefresh'
 import { useAccountStore } from '@/stores/account'
-import { apiError } from '@/utils/api-result'
 import { useStatusStore } from '@/stores/status'
 import { useToastStore } from '@/stores/toast'
+import { apiError } from '@/utils/api-result'
 
 interface RewardItem {
   id: number
@@ -361,7 +361,7 @@ watch(currentAccountId, refreshAll)
       <div class="flex flex-wrap items-center gap-2">
         <div
           v-if="currency"
-          class="h-11 flex items-center gap-2 border border-gray-200 rounded-xl bg-white px-2 text-sm shadow-sm sm:px-3 dark:border-gray-700 dark:bg-gray-800"
+          class="h-11 flex items-center gap-2 border border-gray-200 rounded-xl bg-white px-2 text-sm shadow-sm dark:border-gray-700 dark:bg-gray-800 sm:px-3"
         >
           <img v-if="currency.image" :src="currency.image" :alt="currency.name" class="h-6 w-6 object-contain">
           <span v-else class="i-carbon-wallet text-lg text-gray-400" />
@@ -463,7 +463,7 @@ watch(currentAccountId, refreshAll)
           </div>
         </div>
 
-        <div class="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-7">
+        <div class="grid grid-cols-2 gap-3 lg:grid-cols-4 sm:grid-cols-3 xl:grid-cols-7">
           <article
             v-for="day in register.days"
             :key="day.day"
@@ -500,7 +500,7 @@ watch(currentAccountId, refreshAll)
           <span class="text-sm text-gray-500 dark:text-gray-400">{{ solarTerms.length }} 个节令</span>
         </div>
 
-        <div class="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-7">
+        <div class="grid grid-cols-2 gap-3 lg:grid-cols-4 sm:grid-cols-3 xl:grid-cols-7">
           <article
             v-for="term in solarTerms"
             :key="term.id"

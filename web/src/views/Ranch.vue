@@ -463,11 +463,15 @@ function stageProgress(a: any) {
 /** 当前阶段剩余秒数(与卡片上的倒计时同源) */
 function stageRemainSec(a: any): number | null {
   const stage = Number(a?.stage) || 0
-  const pick = stage === 1 ? a.infantInSec
-    : stage === 2 ? a.growInSec
-      : stage === 3 ? (a.producing ? a.produceInSec : a.deliveringInSec)
-        : (stage === 4 || stage === 5) ? a.matureInSec
-          : null
+  const pick = stage === 1
+    ? a.infantInSec
+    : stage === 2
+      ? a.growInSec
+      : stage === 3
+        ? (a.producing ? a.produceInSec : a.deliveringInSec)
+        : (stage === 4 || stage === 5)
+            ? a.matureInSec
+            : null
   return typeof pick === 'number' ? pick : null
 }
 
@@ -1587,10 +1591,10 @@ onUnmounted(() => {
              独立 v-if 节点, 否则会把上面那条 "空态 v-else-if" 链切断。 -->
           <div v-else class="space-y-4">
             <!-- 批量操作条: 按"自己 / 好友 / 建筑"分 3 组, 手机上各自成网格不横向滚动 -->
-            <div class="space-y-2.5 border-b border-gray-100 pb-2.5 dark:border-gray-700">
+            <div class="border-b border-gray-100 pb-2.5 space-y-2.5 dark:border-gray-700">
               <!-- 第 1 组: 牧场操作(自己的动物/桶/游商) -->
               <div>
-                <div class="mb-1 text-[10px] tracking-wide text-gray-400">
+                <div class="mb-1 text-[10px] text-gray-400 tracking-wide">
                   牧场操作
                 </div>
                 <div class="grid grid-cols-3 gap-2 sm:flex sm:flex-wrap">
@@ -1610,7 +1614,7 @@ onUnmounted(() => {
                        autoBuyRotationShop 会自己判断是否营业/有没有便便。 -->
                   <button
                     type="button"
-                    class="min-h-[44px] inline-flex items-center justify-center gap-1.5 border border-violet-300 rounded-lg bg-violet-50 px-2 py-2 text-sm text-violet-700 font-medium transition active:scale-[0.98] disabled:cursor-not-allowed sm:px-3 disabled:opacity-50 dark:border-violet-700 dark:bg-violet-900/30 hover:bg-violet-100 dark:text-violet-300"
+                    class="min-h-[44px] inline-flex items-center justify-center gap-1.5 border border-violet-300 rounded-lg bg-violet-50 px-2 py-2 text-sm text-violet-700 font-medium transition active:scale-[0.98] disabled:cursor-not-allowed dark:border-violet-700 dark:bg-violet-900/30 hover:bg-violet-100 sm:px-3 dark:text-violet-300 disabled:opacity-50"
                     :disabled="opBusy !== ''"
                     @click="runOp('rotation')"
                   >
@@ -1621,13 +1625,13 @@ onUnmounted(() => {
               </div>
               <!-- 第 2 组: 好友互动(自动流程由设置里的 ranch_stroke/ranch_hazard/ranch_steal 开关控制, 这里手动补跑) -->
               <div>
-                <div class="mb-1 text-[10px] tracking-wide text-gray-400">
+                <div class="mb-1 text-[10px] text-gray-400 tracking-wide">
                   好友互动
                 </div>
                 <div class="grid grid-cols-3 gap-2 sm:flex sm:flex-wrap">
                   <button
                     type="button"
-                    class="min-h-[44px] inline-flex items-center justify-center gap-1.5 border border-emerald-300 rounded-lg bg-emerald-50 px-2 py-2 text-sm text-emerald-700 font-medium transition active:scale-[0.98] disabled:cursor-not-allowed sm:px-3 disabled:opacity-50 dark:border-emerald-700 dark:bg-emerald-900/30 hover:bg-emerald-100 dark:text-emerald-300"
+                    class="min-h-[44px] inline-flex items-center justify-center gap-1.5 border border-emerald-300 rounded-lg bg-emerald-50 px-2 py-2 text-sm text-emerald-700 font-medium transition active:scale-[0.98] disabled:cursor-not-allowed dark:border-emerald-700 dark:bg-emerald-900/30 hover:bg-emerald-100 sm:px-3 dark:text-emerald-300 disabled:opacity-50"
                     :disabled="opBusy !== ''"
                     @click="runOp('autostroke')"
                   >
@@ -1636,7 +1640,7 @@ onUnmounted(() => {
                   </button>
                   <button
                     type="button"
-                    class="min-h-[44px] inline-flex items-center justify-center gap-1.5 border border-rose-300 rounded-lg bg-rose-50 px-2 py-2 text-sm text-rose-700 font-medium transition active:scale-[0.98] disabled:cursor-not-allowed sm:px-3 disabled:opacity-50 dark:border-rose-700 dark:bg-rose-900/30 hover:bg-rose-100 dark:text-rose-300"
+                    class="min-h-[44px] inline-flex items-center justify-center gap-1.5 border border-rose-300 rounded-lg bg-rose-50 px-2 py-2 text-sm text-rose-700 font-medium transition active:scale-[0.98] disabled:cursor-not-allowed dark:border-rose-700 dark:bg-rose-900/30 hover:bg-rose-100 sm:px-3 dark:text-rose-300 disabled:opacity-50"
                     :disabled="opBusy !== ''"
                     @click="runOp('autohazard')"
                   >
@@ -1645,7 +1649,7 @@ onUnmounted(() => {
                   </button>
                   <button
                     type="button"
-                    class="min-h-[44px] inline-flex items-center justify-center gap-1.5 border border-pink-300 rounded-lg bg-pink-50 px-2 py-2 text-sm text-pink-700 font-medium transition active:scale-[0.98] disabled:cursor-not-allowed sm:px-3 disabled:opacity-50 dark:border-pink-700 dark:bg-pink-900/30 hover:bg-pink-100 dark:text-pink-300"
+                    class="min-h-[44px] inline-flex items-center justify-center gap-1.5 border border-pink-300 rounded-lg bg-pink-50 px-2 py-2 text-sm text-pink-700 font-medium transition active:scale-[0.98] disabled:cursor-not-allowed dark:border-pink-700 dark:bg-pink-900/30 hover:bg-pink-100 sm:px-3 dark:text-pink-300 disabled:opacity-50"
                     :disabled="opBusy !== ''"
                     @click="stealConfirming = true"
                   >
@@ -1727,9 +1731,9 @@ onUnmounted(() => {
                   :key="a.slot"
                   class="relative min-h-[150px] flex flex-col items-center border rounded-lg p-2 transition sm:min-h-[170px]"
                   :class="[a.mutant
-                    ? 'border-fuchsia-300 bg-fuchsia-50/80 dark:border-fuchsia-700 dark:bg-fuchsia-900/20'
-                    : 'border-gray-200 bg-white dark:border-gray-700 dark:bg-gray-800',
-                  animalAlerts(a).length ? 'animal-tile--active' : '']"
+                             ? 'border-fuchsia-300 bg-fuchsia-50/80 dark:border-fuchsia-700 dark:bg-fuchsia-900/20'
+                             : 'border-gray-200 bg-white dark:border-gray-700 dark:bg-gray-800',
+                           animalAlerts(a).length ? 'animal-tile--active' : '']"
                 >
                   <div class="absolute left-1 top-1 text-[10px] text-gray-400 font-mono">
                     槽{{ a.slot }}
@@ -1802,7 +1806,7 @@ onUnmounted(() => {
                   </div>
 
                   <!-- 操作按钮: 2x2 网格(一行 4 个在窄卡上挤成一坨, 2x2 每个按钮都有可点宽度) -->
-                  <div class="mt-auto grid w-full grid-cols-2 gap-1 pt-2">
+                  <div class="grid grid-cols-2 mt-auto w-full gap-1 pt-2">
                     <button
                       v-if="a.canProduce"
                       type="button"
@@ -1935,6 +1939,7 @@ onUnmounted(() => {
     />
   </div>
 </template>
+
 <style scoped>
 .animal-tile--active {
   box-shadow: 0 0 0 2px rgb(251 191 36 / 0.55);

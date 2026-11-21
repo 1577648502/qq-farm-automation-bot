@@ -30,7 +30,7 @@ function currentClientVersion() {
         // ⚠ 模块导出的是 { CONFIG, ... } 对象, 必须解构(直接 require 出来的是模块本身)
         const { CONFIG } = require('../config/config');
         return String((CONFIG && CONFIG.clientVersion) || '');
-    } catch (e) { return ''; }
+    } catch { return ''; }
 }
 
 const AD_SERVICE = 'gamepb.iaapb.IaaService';
@@ -57,11 +57,11 @@ function isQQPlatform() {
             const p = String(acc.platform || '').trim();
             if (p) return p === 'qq';
         }
-    } catch (e) { /* 忽略, 走下面的 CONFIG 兜底 */ }
+    } catch { /* 忽略, 走下面的 CONFIG 兜底 */ }
     try {
         const { CONFIG } = require('../config/config');
         return String((CONFIG && CONFIG.platform) || '').trim() === 'qq';
-    } catch (e) { return false; }
+    } catch { return false; }
 }
 
 /** 拉广告位列表 */
@@ -84,7 +84,7 @@ async function requestAd(unitId) {
     if (!token || !token.length) throw new Error('RequestAd 没有返回 token');
     return {
         token,
-        tokenText: token.toString('utf8').replace(/[^\x20-\x7e]/g, ''),
+        tokenText: token.toString('utf8').replace(/[^\x20-\x7E]/g, ''),
         payloadLen: reply.ad_payload ? Buffer.from(reply.ad_payload).length : 0,
         field4: toNum(reply.field4),
     };
@@ -106,7 +106,7 @@ async function getFertilizerCount(itemId = AD_GIFT_ITEM_ID) {
         for (const it of getBagItems(bag)) {
             if (toNum(it && it.id) === toNum(itemId)) return toNum(it.count) || 0;
         }
-    } catch (e) { /* 读不到就按 0 处理(不阻断) */ }
+    } catch { /* 读不到就按 0 处理(不阻断) */ }
     return 0;
 }
 
@@ -180,8 +180,8 @@ async function claimDailyAdGift(force = false, opts = {}) {
         return result;
     }
     if (quota.ok) {
-        log('商城', `看广告礼包: 接口限购 周期=${quota.limitType} 已购=${quota.boughtNum} 上限=${quota.limitCount} 剩余=${quota.remaining}` +
-            (quota.rawLimitHex ? ` (raw #7=${quota.rawLimitHex})` : ''), { module: 'mall', event: '看广告礼包', result: 'check' });
+        log('商城', `看广告礼包: 接口限购 周期=${quota.limitType} 已购=${quota.boughtNum} 上限=${quota.limitCount} 剩余=${quota.remaining}${ 
+            quota.rawLimitHex ? ` (raw #7=${quota.rawLimitHex})` : ''}`, { module: 'mall', event: '看广告礼包', result: 'check' });
     }
     if (quota.ok === false) {
         result.quotaError = quota.reason;
@@ -251,9 +251,9 @@ async function claimDailyAdGift(force = false, opts = {}) {
                 result.reason = `服务端拒绝(code=${code || '不可用'})：${quota ? quota.reason : '接口未读到'}`;
             }
             if (result.hint) result.hint += `；当前客户端版本 ${currentClientVersion()}（过旧会被服务端限制功能）`;
-            log('商城', `看广告礼包: 服务端拒绝 code=${code || '?'} — ${result.reason}` +
-                (quota && quota.rawLimitHex ? ` (raw #7=${quota.rawLimitHex})` : '') +
-                ` [clientVersion=${currentClientVersion()}]`, {
+            log('商城', `看广告礼包: 服务端拒绝 code=${code || '?'} — ${result.reason}${ 
+                quota && quota.rawLimitHex ? ` (raw #7=${quota.rawLimitHex})` : '' 
+                } [clientVersion=${currentClientVersion()}]`, {
                 module: 'mall', event: '看广告礼包', result: 'skip', serverCode: code,
                 clientVersion: currentClientVersion(),
                 quota: quota ? { limitType: quota.limitType, boughtNum: quota.boughtNum, limitCount: quota.limitCount, claimable: quota.claimable } : null,

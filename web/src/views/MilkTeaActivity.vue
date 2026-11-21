@@ -70,7 +70,7 @@ const autoHire = ref(false)
 const autoInteract = ref(false)
 const autoBuySeed = ref(false)
 const seedBuyCount = ref(1)
-const friendsOpen = ref(false)   // 只折叠「好友列表」
+const friendsOpen = ref(false) // 只折叠「好友列表」
 const hireSaving = ref(false)
 /** 互动事项(与后端一致) */
 const INTERACT_OPTIONS = [
@@ -82,11 +82,12 @@ const INTERACT_OPTIONS = [
 ]
 
 function interactionName(type: any) {
-  return INTERACT_OPTIONS.find((op) => op.id === Number(type))?.name || `类型 ${type || 0}`
+  return INTERACT_OPTIONS.find(op => op.id === Number(type))?.name || `类型 ${type || 0}`
 }
 
 function formatWageChange(wage: any) {
-  if (!wage || wage.change === null || wage.change === undefined) return ''
+  if (!wage || wage.change === null || wage.change === undefined)
+    return ''
   const change = Number(wage.change)
   const signed = `${change >= 0 ? '+' : ''}${change}`
   if (wage.before !== null && wage.before !== undefined && wage.after !== null && wage.after !== undefined) {
@@ -122,7 +123,7 @@ const hireConfigDirty = computed(() => hireConfigSnapshot() !== hireConfigBaseli
 /** 营业记录(cmd=67, 按天): 日期/售卖杯数/收益/奖励物品/雇员记录 */
 const sales = ref<any>(null)
 const salesLoading = ref(false)
-const salesDay = ref<number>(0)   // 0 = 尚未读取
+const salesDay = ref<number>(0) // 0 = 尚未读取
 const pendingSalesDay = ref<number>(0)
 let salesRequestId = 0
 /** 店铺等级进度(来自 cmd=55: #1 等级 / #2 累计营业额 / #3 下一级所需) */
@@ -225,7 +226,8 @@ const todayStart = ref(beijingDayStart(Math.floor(Date.now() / 1000)))
 /** 等级进度百分比(0~100) */
 function upgradePercent() {
   const i = upgradeInfo.value
-  if (!i || !i.ok || !i.required) return 0
+  if (!i || !i.ok || !i.required)
+    return 0
   return Math.max(0, Math.min(100, Math.round((Number(i.revenue) || 0) / Number(i.required) * 100)))
 }
 async function loadUpgradeInfo() {
@@ -245,7 +247,8 @@ async function loadUpgradeInfo() {
       return
     }
     upgradeInfo.value = d
-  } catch (e: any) {
+  }
+  catch (e: any) {
     if (!isRequestCurrent(context, requestId, upgradeRequestId))
       return
     const err = apiError(null, null, e)
@@ -281,19 +284,21 @@ function goodsUnlockLevel(g: any) {
 }
 function purchaseRemaining(g: any): number | null {
   const direct = firstCount(g, ['remainingCount', 'remainCount', 'remaining', 'leftCount', 'purchasableCount'])
-  if (direct !== null) return direct
+  if (direct !== null)
+    return direct
   const lim = purchaseLimit(g)
-  if (lim <= 0) return null
+  if (lim <= 0)
+    return null
   const bought = firstCount(g, ['boughtCount', 'purchasedCount', 'buyCount']) || 0
   return Math.max(0, lim - bought)
 }
-const maxQty = (g: any) => {
+function maxQty(g: any) {
   const remain = purchaseRemaining(g)
   if (remain !== null)
     return remain > 0 ? remain : 1
   return 9999
 }
-const clampQty = (g: any) => {
+function clampQty(g: any) {
   const n = Math.floor(Number(shopQty.value[g.goodsId]) || 1)
   return Math.min(Math.max(1, n), maxQty(g))
 }
@@ -301,8 +306,10 @@ const totalCost = (g: any) => Number(g.unitPrice || 0) * clampQty(g)
 
 /** 待领取/收益条目统一成「名称×数量」；兼容后端旧字段里的 `name` 已带数量。 */
 function rewardText(r: any) {
-  if (!r) return ''
-  if (typeof r === 'string') return r
+  if (!r)
+    return ''
+  if (typeof r === 'string')
+    return r
   const id = Number(r.id) || 0
   const count = Number(r.count) || 0
   const base = String(r.name || '').replace(/×\d+$/, '')
@@ -341,28 +348,37 @@ function upgradeRewardsText(reward: any) {
 /** 在岗员工按班次结束时间实时倒计时；静态 remainSeconds 仅作为缺少 endAt 时的回退。 */
 function employeeRemainSeconds(e: any) {
   const endAt = Number(e?.endAt) || 0
-  if (endAt > 0) return Math.max(0, endAt - nowTick.value)
+  if (endAt > 0)
+    return Math.max(0, endAt - nowTick.value)
   const remainSeconds = Number(e?.remainSeconds)
   return Number.isFinite(remainSeconds) ? Math.max(0, remainSeconds) : 0
 }
 
 /** 在岗判断：有 endAt 时以实时班次结束时间为准，避免跨班后仍显示在岗。 */
 function employeeOnDuty(e: any) {
-  if (!e) return false
+  if (!e)
+    return false
   const endAt = Number(e.endAt) || 0
-  if (endAt > 0) return endAt > nowTick.value
-  if (typeof e.onDuty === 'boolean') return e.onDuty
+  if (endAt > 0)
+    return endAt > nowTick.value
+  if (typeof e.onDuty === 'boolean')
+    return e.onDuty
   return Number(e.remainSeconds) > 0
 }
 
 /** 员工来源优先读明确类型字段；旧数据没有类型标记时统一标为“员工”，不再按 gid 猜测。 */
 function employeeTypeLabel(e: any) {
   const type = String(e?.employeeType || '').toLowerCase()
-  if (type === 'friend') return '好友'
-  if (type === 'npc') return 'NPC'
-  if (type === 'unknown') return ''
-  if (e?.isFriend === true) return '好友'
-  if (e?.isNpc === true) return 'NPC'
+  if (type === 'friend')
+    return '好友'
+  if (type === 'npc')
+    return 'NPC'
+  if (type === 'unknown')
+    return ''
+  if (e?.isFriend === true)
+    return '好友'
+  if (e?.isNpc === true)
+    return 'NPC'
   return '员工'
 }
 
@@ -385,8 +401,10 @@ const featuredRecipe = computed(() => {
 })
 
 function pendingListFrom(source: any) {
-  if (Array.isArray(source?.pendingRewards)) return source.pendingRewards
-  if (Array.isArray(source?.pending)) return source.pending
+  if (Array.isArray(source?.pendingRewards))
+    return source.pendingRewards
+  if (Array.isArray(source?.pending))
+    return source.pending
   return []
 }
 
@@ -415,7 +433,8 @@ const currentEmployees = computed(() => {
   const seen = new Set<string>()
   return list.filter((e: any) => {
     const key = String(e?.shiftUid || `${e?.gid || ''}-${e?.startAt || ''}`)
-    if (!key || seen.has(key)) return false
+    if (!key || seen.has(key))
+      return false
     seen.add(key)
     return true
   })
@@ -429,7 +448,8 @@ const employeeCount = computed(() => {
 const employeeCapacity = computed(() => {
   const value = Number(status.value?.employeeCapacity ?? status.value?.employees?.employeeCapacity
     ?? cashierDetail.value.employeeCapacity)
-  if (Number.isFinite(value) && value > 0) return value
+  if (Number.isFinite(value) && value > 0)
+    return value
   return storeLevel.value >= 3 ? 2 : 1
 })
 const employeesFull = computed(() => employeeCount.value >= employeeCapacity.value)
@@ -440,9 +460,12 @@ const hasEmployer = computed(() => work.value.hasEmployer === true
 const interactionCompleted = computed(() => work.value.interactionCompleted === true)
 const canInteract = computed(() => hasEmployer.value && !interactionCompleted.value)
 const workStateText = computed(() => {
-  if (!status.value || !status.value.work) return '未读取'
-  if (work.value.ok === false) return '读取失败'
-  if (!hasEmployer.value) return '未受雇'
+  if (!status.value || !status.value.work)
+    return '未读取'
+  if (work.value.ok === false)
+    return '读取失败'
+  if (!hasEmployer.value)
+    return '未受雇'
   return interactionCompleted.value ? '已受雇，本班已互动' : '已受雇，可互动'
 })
 const selectedSalesDay = computed(() => Number(salesDay.value) || Number(todayStart.value))
@@ -504,14 +527,16 @@ const shopGroups = computed(() => {
   const map = new Map<number, any>()
   for (const g of shop.value) {
     const k = Number(g.currencyId) || 0
-    if (!map.has(k)) map.set(k, { currencyId: k, currencyName: g.currencyName || `货币#${k}`, items: [] as any[] })
+    if (!map.has(k))
+      map.set(k, { currencyId: k, currencyName: g.currencyName || `货币#${k}`, items: [] as any[] })
     map.get(k).items.push(g)
   }
   return Array.from(map.values())
 })
 
 function fmtTime(sec: number) {
-  if (!sec) return '-'
+  if (!sec)
+    return '-'
   const normalized = Number(sec) > 1_000_000_000_000 ? Number(sec) : Number(sec) * 1000
   const d = new Date(normalized + BEIJING_OFFSET_SECONDS * 1000)
   const pad = (n: number) => String(n).padStart(2, '0')
@@ -520,11 +545,14 @@ function fmtTime(sec: number) {
 
 function fmtDuration(sec: any) {
   const total = Math.max(0, Math.round(Number(sec) || 0))
-  if (!total) return '0分钟'
+  if (!total)
+    return '0分钟'
   const hours = Math.floor(total / 3600)
   const minutes = Math.floor((total % 3600) / 60)
-  if (hours && minutes) return `${hours}小时${minutes}分钟`
-  if (hours) return `${hours}小时`
+  if (hours && minutes)
+    return `${hours}小时${minutes}分钟`
+  if (hours)
+    return `${hours}小时`
   return minutes ? `${minutes}分钟` : '不足1分钟'
 }
 
@@ -548,12 +576,14 @@ async function loadStatus() {
     }
     status.value = d
     nowTick.value = Math.floor(Date.now() / 1000)
-  } catch (e: any) {
+  }
+  catch (e: any) {
     if (!isRequestCurrent(context, requestId, statusRequestId))
       return
     statusError.value = apiError(null, null, e)
     reportError('读取经营状态', statusError.value)
-  } finally {
+  }
+  finally {
     if (isRequestCurrent(context, requestId, statusRequestId))
       statusBusy.value = false
   }
@@ -575,7 +605,8 @@ async function loadWorkStatus() {
       return
     }
     status.value = { ...(status.value || {}), work: d }
-  } catch (e: any) {
+  }
+  catch (e: any) {
     if (!isRequestCurrent(context, requestId, workRequestId))
       return
     status.value = {
@@ -605,14 +636,19 @@ async function loadShop() {
       return
     }
     shop.value = Array.isArray(d.goods) ? d.goods : []
-    for (const g of shop.value) if (!shopQty.value[g.goodsId]) shopQty.value[g.goodsId] = 1
-  } catch (e: any) {
+    for (const g of shop.value) {
+      if (!shopQty.value[g.goodsId])
+        shopQty.value[g.goodsId] = 1
+    }
+  }
+  catch (e: any) {
     if (!isRequestCurrent(context, requestId, shopRequestId))
       return
     shop.value = []
     shopError.value = apiError(null, null, e)
     reportError('读取商店', shopError.value)
-  } finally {
+  }
+  finally {
     if (isRequestCurrent(context, requestId, shopRequestId))
       shopBusy.value = false
   }
@@ -637,12 +673,14 @@ async function loadTasks() {
       return
     }
     tasks.value = Array.isArray(d.tasks) ? d.tasks : Array.isArray(d) ? d : []
-  } catch (e: any) {
+  }
+  catch (e: any) {
     if (!isRequestCurrent(context, requestId, tasksRequestId))
       return
     tasks.value = []
     tasksError.value = apiError(null, null, e)
-  } finally {
+  }
+  finally {
     if (isRequestCurrent(context, requestId, tasksRequestId))
       tasksLoading.value = false
   }
@@ -673,11 +711,13 @@ async function loadRankings(page = rankingCurrentPage.value) {
     rankingCurrentPage.value = Math.max(1, Number(d.currentPage) || targetPage)
     rankingHasNext.value = d.hasNext === true
     rankingServerTime.value = Number(d.serverTime) || 0
-  } catch (e: any) {
+  }
+  catch (e: any) {
     if (!isRequestCurrent(context, requestId, rankingsRequestId))
       return
     rankingsError.value = apiError(null, null, e) || '排行榜读取失败'
-  } finally {
+  }
+  finally {
     if (isRequestCurrent(context, requestId, rankingsRequestId))
       rankingsLoading.value = false
   }
@@ -685,7 +725,8 @@ async function loadRankings(page = rankingCurrentPage.value) {
 
 function shiftRankingPage(delta: number) {
   const target = rankingCurrentPage.value + delta
-  if (target < 1 || (delta > 0 && !rankingHasNext.value)) return
+  if (target < 1 || (delta > 0 && !rankingHasNext.value))
+    return
   void loadRankings(target)
 }
 
@@ -715,12 +756,14 @@ async function loadSales(day?: number) {
     if (!d || d.ok !== true) { sales.value = { ok: false, reason: d.reason || '营业记录接口未返回有效数据（后台可能未更新）' }; return }
     sales.value = d
     salesDay.value = Number(d.day) || requested
-  } catch (e: any) {
+  }
+  catch (e: any) {
     if (!isRequestCurrent(context, requestId, salesRequestId))
       return
     const st = e.response?.status ? `HTTP ${e.response.status}` : ''
     sales.value = { ok: false, reason: `营业记录请求失败：${st} ${e.response?.data?.error || e.message || '未知错误'}` }
-  } finally {
+  }
+  finally {
     if (isRequestCurrent(context, requestId, salesRequestId)) {
       salesLoading.value = false
       flushPendingSalesRefresh()
@@ -770,26 +813,30 @@ function shiftSalesDay(delta: number) {
 }
 /** 日期戳 → YYYY-MM-DD(北京时间) */
 function fmtDay(ts: number) {
-  if (!ts) return '—'
+  if (!ts)
+    return '—'
   const d = new Date((Number(ts) + 8 * 3600) * 1000)
   return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}-${String(d.getUTCDate()).padStart(2, '0')}`
 }
 /** 时刻 → HH点MM分(北京时间) */
 function fmtClock(ts: number) {
-  if (!ts) return ''
+  if (!ts)
+    return ''
   const d = new Date((Number(ts) + 8 * 3600) * 1000)
   return `${d.getUTCHours()}点${String(d.getUTCMinutes()).padStart(2, '0')}分`
 }
 
 /** 日期戳 → MM/DD(北京时间) */
 function fmtMonthDay(ts: number) {
-  if (!ts) return ''
+  if (!ts)
+    return ''
   const d = new Date((Number(ts) + BEIJING_OFFSET_SECONDS) * 1000)
   return `${String(d.getUTCMonth() + 1).padStart(2, '0')}/${String(d.getUTCDate()).padStart(2, '0')}`
 }
 
 function fmtHourStart(ts: number) {
-  if (!ts) return ''
+  if (!ts)
+    return ''
   const d = new Date((Number(ts) + BEIJING_OFFSET_SECONDS) * 1000)
   return `${String(d.getUTCMonth() + 1).padStart(2, '0')}-${String(d.getUTCDate()).padStart(2, '0')} ${String(d.getUTCHours()).padStart(2, '0')}:00`
 }
@@ -806,8 +853,10 @@ const activityPeriodText = computed(() => {
 const settlementPeriodText = computed(() => {
   const settleAt = Number(status.value?.settleAt) || 0
   const endAt = Number(status.value?.endAt) || 0
-  if (settleAt > 0 && endAt > settleAt) return `${fmtMonthDay(settleAt)}–${fmtMonthDay(endAt - 1)}`
-  if (settleAt > 0) return `${fmtMonthDay(settleAt)}起`
+  if (settleAt > 0 && endAt > settleAt)
+    return `${fmtMonthDay(settleAt)}–${fmtMonthDay(endAt - 1)}`
+  if (settleAt > 0)
+    return `${fmtMonthDay(settleAt)}起`
   return '结算时间以游戏内为准'
 })
 
@@ -820,7 +869,8 @@ function salesHourLabel(hour: any) {
     return fmtHourStart(hourStart)
   }
   const hours = Math.max(0, Math.floor(Number(hour?.hoursAgo) || 0))
-  if (hours === 0) return '最近时段'
+  if (hours === 0)
+    return '最近时段'
   return `${hours} 小时前`
 }
 
@@ -860,10 +910,13 @@ async function loadHireConfig() {
     autoBuySeed.value = !!d.autoBuySeed
     seedBuyCount.value = Math.max(1, Math.min(9999, Number(d.seedBuyCount) || 1))
     hireDuration.value = normalizeMilkTeaHireDuration(d.hireDuration ?? d.duration)
-    if (d.interactType) interactType.value = Number(d.interactType) || 2
-    if (d.storeName) storeName.value = String(d.storeName)
+    if (d.interactType)
+      interactType.value = Number(d.interactType) || 2
+    if (d.storeName)
+      storeName.value = String(d.storeName)
     hireConfigBaseline.value = hireConfigSnapshot()
-  } catch (e: any) {
+  }
+  catch (e: any) {
     if (!isRequestCurrent(context, requestId, hireConfigRequestId))
       return
     reportError('读取雇佣设置', apiError(null, null, e))
@@ -890,13 +943,15 @@ async function loadFriends() {
       return
     }
     friends.value = Array.isArray(d.friends) ? d.friends : []
-  } catch (e: any) {
+  }
+  catch (e: any) {
     if (!isRequestCurrent(context, requestId, friendsRequestId))
       return
     friends.value = []
     friendsError.value = apiError(null, null, e)
     reportError('读取好友', friendsError.value)
-  } finally {
+  }
+  finally {
     if (isRequestCurrent(context, requestId, friendsRequestId))
       friendsBusy.value = false
   }
@@ -940,11 +995,13 @@ async function buy(g: any) {
     if (!isAccountContextCurrent(context))
       return
     await loadStatus()
-  } catch (e: any) {
+  }
+  catch (e: any) {
     if (!isAccountContextCurrent(context))
       return
     reportError(`兑换「${g.name}」`, apiError(null, null, e))
-  } finally {
+  }
+  finally {
     if (isAccountContextCurrent(context))
       busy.value = ''
   }
@@ -989,11 +1046,13 @@ async function claimCashierNow() {
     actionResult.value = got ? `已领收银台收益 → ${got}` : '已领收银台收益'
     toast.success(actionResult.value)
     await loadStatus()
-  } catch (e: any) {
+  }
+  catch (e: any) {
     if (!isAccountContextCurrent(context))
       return
     reportError('领收银台收益', apiError(null, null, e))
-  } finally {
+  }
+  finally {
     if (isAccountContextCurrent(context))
       busy.value = ''
   }
@@ -1023,11 +1082,13 @@ async function craftNow() {
     }
     actionResult.value = d.usedUnits ? `已制作奶茶（投入 ${d.usedUnits} 个果实）` : '制作奶茶完成'
     toast.success(actionResult.value)
-  } catch (e: any) {
+  }
+  catch (e: any) {
     if (!isAccountContextCurrent(context))
       return
     reportError('制作奶茶', apiError(null, null, e))
-  } finally {
+  }
+  finally {
     if (isAccountContextCurrent(context))
       busy.value = ''
   }
@@ -1066,18 +1127,21 @@ async function upgradeNow() {
       if (!isAccountContextCurrent(context))
         return
       await loadUpgradeInfo()
-    } else {
+    }
+    else {
       actionResult.value = '升级店铺接口返回异常：缺少业务结果'
       toast.error(actionResult.value)
     }
-  } catch (e: any) {
+  }
+  catch (e: any) {
     if (!isAccountContextCurrent(context))
       return
     const failure = apiFailure(null, null, e)
     const st = e.response?.status ? `HTTP ${e.response.status}` : ''
     actionResult.value = `升级店铺请求失败：${st} ${failure.error || '未知错误'}`.trim()
     toast.error(actionResult.value)
-  } finally {
+  }
+  finally {
     if (isAccountContextCurrent(context))
       busy.value = ''
   }
@@ -1106,11 +1170,13 @@ async function claimWageNow() {
     actionResult.value = d.gained ? `已领工资 ${d.gained.count} 奶茶券` : '领工资完成'
     toast.success(actionResult.value)
     await loadStatus()
-  } catch (e: any) {
+  }
+  catch (e: any) {
     if (!isAccountContextCurrent(context))
       return
     reportError('领工资', apiError(null, null, e))
-  } finally {
+  }
+  finally {
     if (isAccountContextCurrent(context))
       busy.value = ''
   }
@@ -1150,11 +1216,13 @@ async function interactNow() {
     actionResult.value = `已与老板 ${d.friendGid || '当前雇主'} 互动${wage}`
     toast.success(actionResult.value)
     await loadWorkStatus()
-  } catch (e: any) {
+  }
+  catch (e: any) {
     if (!isAccountContextCurrent(context))
       return
     reportError('互动', apiError(null, null, e))
-  } finally {
+  }
+  finally {
     if (isAccountContextCurrent(context))
       busy.value = ''
   }
@@ -1203,11 +1271,13 @@ async function hireAllNow() {
         toast.success(actionResult.value)
     }
     await loadStatus()
-  } catch (e: any) {
+  }
+  catch (e: any) {
     if (!isAccountContextCurrent(context))
       return
     reportError('批量雇佣', apiError(null, null, e))
-  } finally {
+  }
+  finally {
     if (isAccountContextCurrent(context))
       busy.value = ''
   }
@@ -1215,7 +1285,8 @@ async function hireAllNow() {
 
 function toggleGid(gid: string) {
   const i = hireGids.value.indexOf(gid)
-  if (i >= 0) hireGids.value.splice(i, 1)
+  if (i >= 0)
+    hireGids.value.splice(i, 1)
   else hireGids.value.push(gid)
 }
 
@@ -1237,11 +1308,13 @@ async function saveHireConfig() {
     if (err) { reportError('保存设置', err); return }
     hireConfigBaseline.value = JSON.stringify(payload)
     toast.success(`已保存：优先员工 ${payload.hireGids.length} 位${payload.autoHire ? '，自动雇佣开' : ''}${payload.autoBuySeed ? '，自动购种开' : ''}`)
-  } catch (e: any) {
+  }
+  catch (e: any) {
     if (!isAccountContextCurrent(context))
       return
     reportError('保存设置', apiError(null, null, e))
-  } finally {
+  }
+  finally {
     if (isAccountContextCurrent(context))
       hireSaving.value = false
   }
@@ -1289,11 +1362,13 @@ async function hireNow() {
     else
       toast.success(actionResult.value)
     await loadStatus()
-  } catch (e: any) {
+  }
+  catch (e: any) {
     if (!isAccountContextCurrent(context))
       return
     reportError('自动补位', apiError(null, null, e))
-  } finally {
+  }
+  finally {
     if (isAccountContextCurrent(context))
       busy.value = ''
   }
@@ -1311,7 +1386,8 @@ async function refreshAll() {
   const context = captureAccountContext()
   if (!isAccountContextCurrent(context))
     return
-  if (refreshing.value) return
+  if (refreshing.value)
+    return
   const requestId = ++refreshRequestId
   refreshing.value = true
   syncSalesClock(Math.floor(Date.now() / 1000), false)
@@ -1320,34 +1396,49 @@ async function refreshAll() {
   const requestCurrent = () => isRequestCurrent(context, requestId, refreshRequestId)
   try {
     await loadStatus()
-    if (!requestCurrent()) return
-    await new Promise((r) => setTimeout(r, 300))
-    if (!requestCurrent()) return
+    if (!requestCurrent())
+      return
+    await new Promise(r => setTimeout(r, 300))
+    if (!requestCurrent())
+      return
     await loadSales(salesDayToLoad)
-    if (!requestCurrent()) return
-    await new Promise((r) => setTimeout(r, 300))
-    if (!requestCurrent()) return
+    if (!requestCurrent())
+      return
+    await new Promise(r => setTimeout(r, 300))
+    if (!requestCurrent())
+      return
     await loadUpgradeInfo()
-    if (!requestCurrent()) return
-    await new Promise((r) => setTimeout(r, 300))
-    if (!requestCurrent()) return
+    if (!requestCurrent())
+      return
+    await new Promise(r => setTimeout(r, 300))
+    if (!requestCurrent())
+      return
     await loadShop()
-    if (!requestCurrent()) return
-    await new Promise((r) => setTimeout(r, 300))
-    if (!requestCurrent()) return
+    if (!requestCurrent())
+      return
+    await new Promise(r => setTimeout(r, 300))
+    if (!requestCurrent())
+      return
     await loadTasks()
-    if (!requestCurrent()) return
-    await new Promise((r) => setTimeout(r, 300))
-    if (!requestCurrent()) return
+    if (!requestCurrent())
+      return
+    await new Promise(r => setTimeout(r, 300))
+    if (!requestCurrent())
+      return
     await loadRankings(rankingCurrentPage.value)
-    if (!requestCurrent()) return
-    await new Promise((r) => setTimeout(r, 300))
-    if (!requestCurrent()) return
+    if (!requestCurrent())
+      return
+    await new Promise(r => setTimeout(r, 300))
+    if (!requestCurrent())
+      return
     await loadHireConfig()
-    if (!requestCurrent()) return
+    if (!requestCurrent())
+      return
     // 好友列表首次会做重同步(约 6 个请求) → 只在展开"雇佣好友"时按需拉
-    if (friendsOpen.value) await loadFriends()
-  } finally {
+    if (friendsOpen.value)
+      await loadFriends()
+  }
+  finally {
     if (requestCurrent())
       refreshing.value = false
   }
@@ -1369,7 +1460,8 @@ onMounted(() => {
     syncSalesClock(tick)
   }, 30_000)
   workRefreshTimer = setInterval(() => {
-    if (document.hidden || statusBusy.value || busy.value || isSettling.value) return
+    if (document.hidden || statusBusy.value || busy.value || isSettling.value)
+      return
     void loadWorkStatus()
   }, 60_000)
 })
@@ -1377,15 +1469,17 @@ onMounted(() => {
 onUnmounted(() => {
   invalidateMilkTeaRequests()
   document.removeEventListener('visibilitychange', handleVisibilityChange)
-  if (clockTimer) clearInterval(clockTimer)
+  if (clockTimer)
+    clearInterval(clockTimer)
   clockTimer = null
-  if (workRefreshTimer) clearInterval(workRefreshTimer)
+  if (workRefreshTimer)
+    clearInterval(workRefreshTimer)
   workRefreshTimer = null
 })
 </script>
 
 <template>
-  <div class="mx-auto grid w-full max-w-[1500px] grid-cols-1 items-start gap-4 xl:grid-cols-2">
+  <div class="grid grid-cols-1 mx-auto max-w-[1500px] w-full items-start gap-4 xl:grid-cols-2">
     <header class="col-span-full flex flex-wrap items-center justify-between gap-3">
       <div class="min-w-0">
         <h2 class="text-xl text-gray-900 font-bold dark:text-gray-100">
@@ -1403,36 +1497,42 @@ onUnmounted(() => {
 
     <div
       v-if="isSettling"
-      class="col-span-full rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-800 dark:border-amber-800 dark:bg-amber-900/20 dark:text-amber-300"
+      class="col-span-full border border-amber-300 rounded-lg bg-amber-50 px-4 py-3 text-sm text-amber-800 dark:border-amber-800 dark:bg-amber-900/20 dark:text-amber-300"
     >
       已进入结算期（{{ settlementPeriodText }}）：自动营业、宣传、雇佣、互动、购买专属种子都会停止；
       未领收益会通过邮件补发，请在结算期结束前完成兑换。
     </div>
 
     <!-- 经营状态 -->
-    <section class="order-1 col-span-full rounded-lg border border-gray-200 bg-white p-4 shadow-sm dark:border-gray-700 dark:bg-gray-800">
+    <section class="order-1 col-span-full border border-gray-200 rounded-lg bg-white p-4 shadow-sm dark:border-gray-700 dark:bg-gray-800">
       <div class="mb-3 flex flex-wrap items-center justify-between gap-2">
-        <h3 class="text-sm text-gray-900 font-medium dark:text-white">经营状态</h3>
+        <h3 class="text-sm text-gray-900 font-medium dark:text-white">
+          经营状态
+        </h3>
         <span v-if="status" class="text-xs text-gray-400">更新于 {{ fmtTime(status.at) }}</span>
       </div>
 
       <template v-if="status">
         <div
           v-if="statusError"
-          class="mb-3 min-w-0 break-words rounded border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-700 dark:border-amber-800 dark:bg-amber-900/20 dark:text-amber-300"
+          class="mb-3 min-w-0 break-words border border-amber-200 rounded bg-amber-50 px-3 py-2 text-xs text-amber-700 dark:border-amber-800 dark:bg-amber-900/20 dark:text-amber-300"
         >
           状态刷新失败：{{ statusError }}。当前显示的是上次成功读取的数据。
         </div>
-        <div class="grid grid-cols-1 gap-x-5 gap-y-4 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-6">
+        <div class="grid grid-cols-1 gap-x-5 gap-y-4 2xl:grid-cols-6 sm:grid-cols-2 xl:grid-cols-3">
           <div class="min-w-0">
-            <div class="text-xs text-gray-500 dark:text-gray-400">店铺</div>
+            <div class="text-xs text-gray-500 dark:text-gray-400">
+              店铺
+            </div>
             <div class="mt-0.5 truncate text-base text-gray-900 font-bold dark:text-gray-100">
               {{ status.storeName || '未开业' }}
               <span v-if="status.storeLevel" class="ml-1 text-xs text-gray-500 font-normal">Lv{{ status.storeLevel }}</span>
             </div>
           </div>
           <div class="min-w-0">
-            <div class="text-xs text-gray-500 dark:text-gray-400">待领取收益</div>
+            <div class="text-xs text-gray-500 dark:text-gray-400">
+              待领取收益
+            </div>
             <div
               class="mt-0.5 min-w-0 break-words text-base font-bold"
               :class="hasPending ? 'text-amber-600 dark:text-amber-400' : 'text-gray-900 dark:text-gray-100'"
@@ -1441,17 +1541,25 @@ onUnmounted(() => {
             </div>
           </div>
           <div class="min-w-0">
-            <div class="text-xs text-gray-500 dark:text-gray-400">奶茶券余额</div>
-            <div class="mt-0.5 break-all text-base text-gray-900 font-bold leading-tight tabular-nums dark:text-gray-100">{{ milkCoupon.toLocaleString() }}</div>
+            <div class="text-xs text-gray-500 dark:text-gray-400">
+              奶茶券余额
+            </div>
+            <div class="mt-0.5 break-all text-base text-gray-900 font-bold leading-tight tabular-nums dark:text-gray-100">
+              {{ milkCoupon.toLocaleString() }}
+            </div>
           </div>
           <div class="min-w-0">
-            <div class="text-xs text-gray-500 dark:text-gray-400">累计营业额</div>
+            <div class="text-xs text-gray-500 dark:text-gray-400">
+              累计营业额
+            </div>
             <div class="mt-0.5 break-all text-base text-gray-900 font-bold leading-tight tabular-nums dark:text-gray-100">
               {{ totalRevenue.toLocaleString() }}
             </div>
           </div>
           <div class="min-w-0">
-            <div class="text-xs text-gray-500 dark:text-gray-400">当前主推配方</div>
+            <div class="text-xs text-gray-500 dark:text-gray-400">
+              当前主推配方
+            </div>
             <div
               class="mt-0.5 min-w-0 break-words text-base font-bold"
               :class="featuredRecipe.resolved ? 'text-gray-900 dark:text-gray-100' : 'text-amber-600 dark:text-amber-400'"
@@ -1461,17 +1569,21 @@ onUnmounted(() => {
             </div>
           </div>
           <div class="min-w-0">
-            <div class="text-xs text-gray-500 dark:text-gray-400">结算期开始</div>
-            <div class="mt-0.5 text-sm text-gray-900 font-medium dark:text-gray-100">{{ fmtTime(status.settleAt) }}</div>
+            <div class="text-xs text-gray-500 dark:text-gray-400">
+              结算期开始
+            </div>
+            <div class="mt-0.5 text-sm text-gray-900 font-medium dark:text-gray-100">
+              {{ fmtTime(status.settleAt) }}
+            </div>
           </div>
         </div>
 
-        <div class="mt-4 grid gap-4 border-t border-gray-100 pt-4 dark:border-gray-700 md:grid-cols-2">
+        <div class="grid mt-4 gap-4 border-t border-gray-100 pt-4 md:grid-cols-2 dark:border-gray-700">
           <div class="min-w-0">
             <div class="mb-1.5 flex flex-wrap items-center justify-between gap-1 text-xs">
               <span class="text-gray-500 dark:text-gray-400">
                 店铺等级
-                <span class="ml-1 font-medium text-gray-900 dark:text-gray-100">
+                <span class="ml-1 text-gray-900 font-medium dark:text-gray-100">
                   Lv{{ upgradeInfo && upgradeInfo.ok ? upgradeInfo.level : (status.storeLevel || '—') }}
                 </span>
                 <template v-if="upgradeInfo && upgradeInfo.ok && upgradeInfo.required">
@@ -1489,7 +1601,7 @@ onUnmounted(() => {
               <div
                 class="h-full rounded transition-all"
                 :class="upgradePercent() >= 100 ? 'bg-emerald-500' : 'bg-blue-500'"
-                :style="{ width: upgradePercent() + '%' }"
+                :style="{ width: `${upgradePercent()}%` }"
               />
             </div>
             <div v-if="upgradeInfo && upgradeInfo.ok && upgradeInfo.canUpgrade" class="mt-1 text-[11px] text-emerald-600 dark:text-emerald-400">
@@ -1501,7 +1613,9 @@ onUnmounted(() => {
           </div>
 
           <div class="min-w-0">
-            <div class="text-xs text-gray-500 dark:text-gray-400">受雇状态</div>
+            <div class="text-xs text-gray-500 dark:text-gray-400">
+              受雇状态
+            </div>
             <div
               class="mt-0.5 text-sm font-medium"
               :class="hasEmployer
@@ -1541,9 +1655,9 @@ onUnmounted(() => {
             <div
               v-for="e in currentEmployees"
               :key="e.shiftUid || `${e.gid}-${e.startAt}`"
-              class="min-w-0 rounded border border-gray-100 px-2.5 py-2 dark:border-gray-700"
+              class="min-w-0 border border-gray-100 rounded px-2.5 py-2 dark:border-gray-700"
             >
-              <div class="flex min-w-0 flex-wrap items-center gap-1 text-xs">
+              <div class="min-w-0 flex flex-wrap items-center gap-1 text-xs">
                 <span class="min-w-0 break-words text-gray-900 font-medium dark:text-gray-100">
                   {{ e.name || `GID:${e.gid}` }}
                 </span>
@@ -1563,22 +1677,26 @@ onUnmounted(() => {
                   {{ employeeTypeLabel(e) }}
                 </span>
               </div>
-              <div class="mt-1 flex min-w-0 flex-wrap gap-x-2 gap-y-1 text-[11px] text-gray-500 dark:text-gray-400">
+              <div class="mt-1 min-w-0 flex flex-wrap gap-x-2 gap-y-1 text-[11px] text-gray-500 dark:text-gray-400">
                 <span v-if="e.titleName">特长 {{ e.titleName }}</span>
                 <span>班次 {{ fmtTime(e.startAt) }} 至 {{ fmtTime(e.endAt) }}</span>
                 <span>{{ employeeOnDuty(e) ? `剩余 ${fmtDuration(employeeRemainSeconds(e))}` : '本班已结束' }}</span>
               </div>
             </div>
           </div>
-          <div v-else class="text-xs text-gray-500 dark:text-gray-400">暂无员工</div>
+          <div v-else class="text-xs text-gray-500 dark:text-gray-400">
+            暂无员工
+          </div>
         </div>
 
         <div v-if="hasPending" class="mt-3 rounded bg-amber-50 px-3 py-2 text-xs text-amber-700 dark:bg-amber-900/20 dark:text-amber-300">
-          <div class="flex min-w-0 flex-wrap items-start gap-x-2 gap-y-1">
+          <div class="min-w-0 flex flex-wrap items-start gap-x-2 gap-y-1">
             <span class="shrink-0 font-medium">待领取：</span>
             <span class="min-w-0 break-words">{{ pendingSummary }}</span>
           </div>
-          <div class="mt-1">满载会暂停营业且不补发。</div>
+          <div class="mt-1">
+            满载会暂停营业且不补发。
+          </div>
         </div>
       </template>
       <div v-else class="text-xs text-gray-500 dark:text-gray-400">
@@ -1587,10 +1705,12 @@ onUnmounted(() => {
     </section>
 
     <!-- 员工与操作 -->
-    <section class="order-2 col-span-full rounded-lg border border-gray-200 bg-white shadow-sm dark:border-gray-700 dark:bg-gray-800">
+    <section class="order-2 col-span-full border border-gray-200 rounded-lg bg-white shadow-sm dark:border-gray-700 dark:bg-gray-800">
       <div class="flex flex-wrap items-center justify-between gap-2 border-b border-gray-100 px-4 py-3 dark:border-gray-700/60">
         <div>
-          <h3 class="text-sm text-gray-900 font-medium dark:text-white">员工与操作</h3>
+          <h3 class="text-sm text-gray-900 font-medium dark:text-white">
+            员工与操作
+          </h3>
           <p class="mt-0.5 text-xs text-gray-500 dark:text-gray-400">
             优先好友 {{ hireGids.length }} 位{{ autoHire ? ' · 自动雇佣已开启' : '' }}
           </p>
@@ -1619,7 +1739,7 @@ onUnmounted(() => {
         </div>
       </div>
 
-      <div class="space-y-4 px-4 py-3">
+      <div class="px-4 py-3 space-y-4">
         <div class="grid grid-cols-2 gap-2 sm:grid-cols-3 xl:grid-cols-5">
           <BaseButton
             variant="secondary"
@@ -1666,32 +1786,32 @@ onUnmounted(() => {
           {{ actionResult }}
         </div>
 
-        <div class="grid gap-3 rounded border border-gray-200 p-3 dark:border-gray-700 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-end">
+        <div class="grid gap-3 border border-gray-200 rounded p-3 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-end dark:border-gray-700">
           <div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
-            <label class="flex min-w-0 flex-col gap-1 text-xs text-gray-600 dark:text-gray-300">
+            <label class="min-w-0 flex flex-col gap-1 text-xs text-gray-600 dark:text-gray-300">
               店名
               <input
                 v-model="storeName"
                 type="text"
-                class="w-full rounded border border-gray-300 bg-white px-2 py-1.5 text-sm dark:border-gray-600 dark:bg-gray-900"
+                class="w-full border border-gray-300 rounded bg-white px-2 py-1.5 text-sm dark:border-gray-600 dark:bg-gray-900"
               >
             </label>
-            <label class="flex min-w-0 flex-col gap-1 text-xs text-gray-600 dark:text-gray-300">
+            <label class="min-w-0 flex flex-col gap-1 text-xs text-gray-600 dark:text-gray-300">
               互动事项
               <select
                 v-model.number="interactType"
-                class="w-full rounded border border-gray-300 bg-white px-2 py-1.5 text-sm dark:border-gray-600 dark:bg-gray-900"
+                class="w-full border border-gray-300 rounded bg-white px-2 py-1.5 text-sm dark:border-gray-600 dark:bg-gray-900"
               >
                 <option v-for="op in INTERACT_OPTIONS" :key="op.id" :value="op.id">
                   {{ op.name }}{{ op.recommended ? '（推荐）' : '' }}
                 </option>
               </select>
             </label>
-            <label class="flex min-w-0 flex-col gap-1 text-xs text-gray-600 dark:text-gray-300">
+            <label class="min-w-0 flex flex-col gap-1 text-xs text-gray-600 dark:text-gray-300">
               招聘班次
               <select
                 v-model.number="hireDuration"
-                class="w-full rounded border border-gray-300 bg-white px-2 py-1.5 text-sm dark:border-gray-600 dark:bg-gray-900"
+                class="w-full border border-gray-300 rounded bg-white px-2 py-1.5 text-sm dark:border-gray-600 dark:bg-gray-900"
               >
                 <option v-for="option in MILK_TEA_HIRE_DURATION_OPTIONS" :key="option.value" :value="option.value">
                   {{ option.label }}
@@ -1704,7 +1824,7 @@ onUnmounted(() => {
               <BaseSwitch v-model="autoBuySeed" label="自动购买森野种子" />
               <label
                 v-if="autoBuySeed"
-                class="flex min-w-0 items-center gap-2 text-xs text-gray-600 dark:text-gray-300"
+                class="min-w-0 flex items-center gap-2 text-xs text-gray-600 dark:text-gray-300"
               >
                 每种份数
                 <input
@@ -1712,7 +1832,7 @@ onUnmounted(() => {
                   type="number"
                   min="1"
                   max="9999"
-                  class="w-20 rounded border border-gray-300 bg-white px-2 py-1.5 text-sm dark:border-gray-600 dark:bg-gray-900"
+                  class="w-20 border border-gray-300 rounded bg-white px-2 py-1.5 text-sm dark:border-gray-600 dark:bg-gray-900"
                 >
               </label>
             </div>
@@ -1728,14 +1848,20 @@ onUnmounted(() => {
             <i :class="friendsOpen ? 'i-carbon-chevron-up' : 'i-carbon-chevron-down'" class="ml-1 text-base" />
           </BaseButton>
 
-          <div v-if="friendsOpen" class="mt-2 rounded border border-gray-200 dark:border-gray-700">
+          <div v-if="friendsOpen" class="mt-2 border border-gray-200 rounded dark:border-gray-700">
             <div class="flex flex-wrap items-center gap-2 border-b border-gray-100 px-3 py-2 dark:border-gray-700">
               <BaseButton variant="secondary" size="sm" :loading="friendsBusy" @click="loadFriends">
                 刷新好友
               </BaseButton>
-              <BaseButton variant="secondary" size="sm" :disabled="!friends.length" @click="selectAllFriends">全选</BaseButton>
-              <BaseButton variant="secondary" size="sm" :disabled="!hireGids.length" @click="clearAllFriends">清空</BaseButton>
-              <BaseButton variant="secondary" size="sm" :disabled="!friends.length" @click="invertFriends">反选</BaseButton>
+              <BaseButton variant="secondary" size="sm" :disabled="!friends.length" @click="selectAllFriends">
+                全选
+              </BaseButton>
+              <BaseButton variant="secondary" size="sm" :disabled="!hireGids.length" @click="clearAllFriends">
+                清空
+              </BaseButton>
+              <BaseButton variant="secondary" size="sm" :disabled="!friends.length" @click="invertFriends">
+                反选
+              </BaseButton>
               <span class="text-xs text-gray-500 dark:text-gray-400">
                 已勾选 {{ hireGids.length }} 位
               </span>
@@ -1747,11 +1873,11 @@ onUnmounted(() => {
             <div v-else-if="!friends.length" class="px-3 py-4 text-xs text-gray-500 dark:text-gray-400">
               {{ friendsError || '未读到好友列表，账号在线后重试' }}
             </div>
-            <div v-else class="grid grid-cols-1 gap-1 p-2 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4">
+            <div v-else class="grid grid-cols-1 gap-1 p-2 2xl:grid-cols-4 lg:grid-cols-3 sm:grid-cols-2">
               <label
                 v-for="f in friends"
                 :key="f.gid"
-                class="flex min-w-0 cursor-pointer items-center gap-2 rounded border border-gray-200 px-2 py-1.5 text-xs dark:border-gray-700"
+                class="min-w-0 flex cursor-pointer items-center gap-2 border border-gray-200 rounded px-2 py-1.5 text-xs dark:border-gray-700"
               >
                 <input
                   type="checkbox"
@@ -1769,15 +1895,17 @@ onUnmounted(() => {
     </section>
 
     <!-- 营业记录 -->
-    <section class="order-3 col-span-full rounded-lg border border-gray-200 bg-white p-4 shadow-sm dark:border-gray-700 dark:bg-gray-800 xl:col-span-1">
+    <section class="order-3 col-span-full border border-gray-200 rounded-lg bg-white p-4 shadow-sm xl:col-span-1 dark:border-gray-700 dark:bg-gray-800">
       <div class="mb-3 flex flex-wrap items-start justify-between gap-2">
         <div>
-          <h3 class="text-sm text-gray-900 font-medium dark:text-white">营业记录</h3>
+          <h3 class="text-sm text-gray-900 font-medium dark:text-white">
+            营业记录
+          </h3>
           <p class="mt-0.5 text-xs text-gray-500 dark:text-gray-400">
             {{ isTodaySales ? '今日售卖' : '当日售卖' }}
           </p>
         </div>
-        <div class="flex max-w-full items-center gap-1">
+        <div class="max-w-full flex items-center gap-1">
           <BaseButton variant="secondary" size="sm" title="前一天" aria-label="前一天" @click="shiftSalesDay(-1)">
             <i class="i-carbon-chevron-left text-base" />
           </BaseButton>
@@ -1808,18 +1936,30 @@ onUnmounted(() => {
       </div>
 
       <template v-if="sales && sales.ok">
-        <div class="grid grid-cols-3 divide-x divide-gray-200 rounded bg-gray-50 py-2 text-center dark:divide-gray-700 dark:bg-gray-900/40">
+        <div class="grid grid-cols-3 rounded bg-gray-50 py-2 text-center divide-x divide-gray-200 dark:bg-gray-900/40 dark:divide-gray-700">
           <div class="min-w-0 px-1.5">
-            <div class="text-[11px] text-gray-500 dark:text-gray-400">总杯数</div>
-            <div class="mt-0.5 break-all text-sm text-gray-900 font-bold leading-tight tabular-nums dark:text-gray-100 sm:text-base">{{ Number(sales.cups || 0).toLocaleString() }}</div>
+            <div class="text-[11px] text-gray-500 dark:text-gray-400">
+              总杯数
+            </div>
+            <div class="mt-0.5 break-all text-sm text-gray-900 font-bold leading-tight tabular-nums sm:text-base dark:text-gray-100">
+              {{ Number(sales.cups || 0).toLocaleString() }}
+            </div>
           </div>
           <div class="min-w-0 px-1.5">
-            <div class="text-[11px] text-gray-500 dark:text-gray-400">金币收益</div>
-            <div class="mt-0.5 break-all text-sm text-amber-600 font-bold leading-tight tabular-nums dark:text-amber-400 sm:text-base">{{ Number(sales.gold || 0).toLocaleString() }}</div>
+            <div class="text-[11px] text-gray-500 dark:text-gray-400">
+              金币收益
+            </div>
+            <div class="mt-0.5 break-all text-sm text-amber-600 font-bold leading-tight tabular-nums sm:text-base dark:text-amber-400">
+              {{ Number(sales.gold || 0).toLocaleString() }}
+            </div>
           </div>
           <div class="min-w-0 px-1.5">
-            <div class="text-[11px] text-gray-500 dark:text-gray-400">奶茶券收益</div>
-            <div class="mt-0.5 break-all text-sm text-emerald-600 font-bold leading-tight tabular-nums dark:text-emerald-400 sm:text-base">{{ Number(sales.coupon || 0).toLocaleString() }}</div>
+            <div class="text-[11px] text-gray-500 dark:text-gray-400">
+              奶茶券收益
+            </div>
+            <div class="mt-0.5 break-all text-sm text-emerald-600 font-bold leading-tight tabular-nums sm:text-base dark:text-emerald-400">
+              {{ Number(sales.coupon || 0).toLocaleString() }}
+            </div>
           </div>
         </div>
 
@@ -1835,17 +1975,21 @@ onUnmounted(() => {
             <div
               v-for="h in sales.hourly"
               :key="h.hourStart || h.hoursAgo"
-              class="flex min-w-0 items-baseline justify-between gap-2"
+              class="min-w-0 flex items-baseline justify-between gap-2"
             >
               <span class="min-w-0 break-words text-gray-500 dark:text-gray-400">{{ salesHourLabel(h) }}</span>
               <span class="shrink-0 text-gray-900 font-medium dark:text-gray-100">{{ Number(h.cups || 0).toLocaleString() }} 杯</span>
             </div>
           </div>
-          <div v-else class="text-xs text-gray-500 dark:text-gray-400">暂无分时数据</div>
+          <div v-else class="text-xs text-gray-500 dark:text-gray-400">
+            暂无分时数据
+          </div>
         </div>
 
         <div class="mt-4">
-          <div class="mb-2 text-xs text-gray-500 dark:text-gray-400">品类销售</div>
+          <div class="mb-2 text-xs text-gray-500 dark:text-gray-400">
+            品类销售
+          </div>
           <div v-if="sales.items && sales.items.length" class="flex flex-wrap gap-2">
             <span
               v-for="c in sales.items"
@@ -1855,11 +1999,15 @@ onUnmounted(() => {
               {{ c.name }} {{ Number(c.cups || 0).toLocaleString() }} 杯
             </span>
           </div>
-          <div v-else class="text-xs text-gray-500 dark:text-gray-400">当日无售卖</div>
+          <div v-else class="text-xs text-gray-500 dark:text-gray-400">
+            当日无售卖
+          </div>
         </div>
 
         <div v-if="sales.rewards && sales.rewards.length" class="mt-4">
-          <div class="mb-2 text-xs text-gray-500 dark:text-gray-400">额外收益</div>
+          <div class="mb-2 text-xs text-gray-500 dark:text-gray-400">
+            额外收益
+          </div>
           <div class="flex flex-wrap gap-2">
             <span
               v-for="rw in sales.rewards"
@@ -1872,18 +2020,20 @@ onUnmounted(() => {
         </div>
 
         <div class="mt-4">
-          <div class="mb-2 text-xs text-gray-500 dark:text-gray-400">雇员记录</div>
+          <div class="mb-2 text-xs text-gray-500 dark:text-gray-400">
+            雇员记录
+          </div>
           <div v-if="sales.records && sales.records.length" class="space-y-1.5">
             <div
               v-for="r in sales.records"
               :key="`${r.gid}-${r.startAt}`"
-              class="rounded border border-gray-100 px-2.5 py-2 text-xs dark:border-gray-700"
+              class="border border-gray-100 rounded px-2.5 py-2 text-xs dark:border-gray-700"
             >
               <div class="flex items-center justify-between gap-2 text-[11px] text-gray-400">
                 <span>{{ fmtClock(r.startAt) }}</span>
                 <span class="shrink-0 whitespace-nowrap">{{ fmtDuration(r.workSeconds) }}</span>
               </div>
-              <div class="mt-1 flex min-w-0 flex-wrap items-center gap-1">
+              <div class="mt-1 min-w-0 flex flex-wrap items-center gap-1">
                 <span class="min-w-0 break-words text-gray-900 font-medium dark:text-gray-100">{{ r.name }}</span>
                 <span
                   v-if="r.titleName"
@@ -1894,30 +2044,34 @@ onUnmounted(() => {
               </div>
             </div>
           </div>
-          <div v-else class="text-xs text-gray-500 dark:text-gray-400">暂无记录</div>
+          <div v-else class="text-xs text-gray-500 dark:text-gray-400">
+            暂无记录
+          </div>
         </div>
       </template>
-      <div v-else class="min-w-0 break-all rounded border border-dashed border-gray-200 px-3 py-4 text-xs text-gray-500 dark:border-gray-700 dark:text-gray-400">
+      <div v-else class="min-w-0 break-all border border-gray-200 rounded border-dashed px-3 py-4 text-xs text-gray-500 dark:border-gray-700 dark:text-gray-400">
         {{ salesLoading ? '读取中…' : (sales && sales.reason ? sales.reason : '暂无营业记录') }}
       </div>
     </section>
 
     <!-- 活动种子商店 -->
-    <section class="order-4 col-span-full rounded-lg border border-gray-200 bg-white p-4 shadow-sm dark:border-gray-700 dark:bg-gray-800 xl:col-span-1">
+    <section class="order-4 col-span-full border border-gray-200 rounded-lg bg-white p-4 shadow-sm xl:col-span-1 dark:border-gray-700 dark:bg-gray-800">
       <div class="mb-3 flex flex-wrap items-center justify-between gap-2">
-        <h3 class="text-sm text-gray-900 font-medium dark:text-white">活动种子商店</h3>
+        <h3 class="text-sm text-gray-900 font-medium dark:text-white">
+          活动种子商店
+        </h3>
         <BaseButton variant="secondary" size="sm" class="shrink-0 whitespace-nowrap" :loading="shopBusy" @click="loadShop">
           <i class="i-carbon-renew mr-1 text-base" />
           刷新商品
         </BaseButton>
       </div>
-      <div v-if="shopBusy && !shop.length" class="rounded border border-dashed border-gray-200 px-3 py-4 text-xs text-gray-500 dark:border-gray-700 dark:text-gray-400">
+      <div v-if="shopBusy && !shop.length" class="border border-gray-200 rounded border-dashed px-3 py-4 text-xs text-gray-500 dark:border-gray-700 dark:text-gray-400">
         读取中…
       </div>
-      <div v-else-if="shopError" class="min-w-0 break-words rounded border border-dashed border-amber-200 px-3 py-4 text-xs text-amber-700 dark:border-amber-800 dark:text-amber-300">
+      <div v-else-if="shopError" class="min-w-0 break-words border border-amber-200 rounded border-dashed px-3 py-4 text-xs text-amber-700 dark:border-amber-800 dark:text-amber-300">
         {{ shopError }}
       </div>
-      <div v-else-if="!shop.length" class="rounded border border-dashed border-gray-200 px-3 py-4 text-xs text-gray-500 dark:border-gray-700 dark:text-gray-400">
+      <div v-else-if="!shop.length" class="border border-gray-200 rounded border-dashed px-3 py-4 text-xs text-gray-500 dark:border-gray-700 dark:text-gray-400">
         暂无商品，账号需要在线
       </div>
       <div v-else class="space-y-4">
@@ -1928,17 +2082,17 @@ onUnmounted(() => {
             </span>
             <span class="text-xs text-gray-400">{{ grp.items.length }} 件</span>
           </div>
-          <div class="grid grid-cols-1 gap-3 sm:grid-cols-2 2xl:grid-cols-3">
+          <div class="grid grid-cols-1 gap-3 2xl:grid-cols-3 sm:grid-cols-2">
             <div
               v-for="g in grp.items"
               :key="g.goodsId"
-              class="flex min-w-0 flex-col rounded border p-3"
+              class="min-w-0 flex flex-col border rounded p-3"
               :class="isDisabled(g)
                 ? 'border-gray-200 bg-gray-50 dark:border-gray-700 dark:bg-gray-900/40'
                 : 'border-gray-200 dark:border-gray-700'"
             >
               <div class="flex items-start justify-between gap-2">
-                <div class="flex min-w-0 items-center gap-2">
+                <div class="min-w-0 flex items-center gap-2">
                   <img
                     v-if="g.image"
                     :src="g.image"
@@ -1964,28 +2118,32 @@ onUnmounted(() => {
                 </div>
               </div>
               <div class="mt-1 flex-1 text-xs text-gray-500 dark:text-gray-400">
-                <template v-if="g.itemNameKnown">内容：{{ g.itemName }}<br></template>
-                <template v-if="purchaseLimit(g)">限购 {{ purchaseLimit(g) }}</template>
+                <template v-if="g.itemNameKnown">
+                  内容：{{ g.itemName }}<br>
+                </template>
+                <template v-if="purchaseLimit(g)">
+                  限购 {{ purchaseLimit(g) }}
+                </template>
                 <span v-if="isLocked(g)" class="text-amber-600 dark:text-amber-400">
                   · {{ lockReason(g) }}
                 </span>
                 <span v-else-if="isSoldOut(g)" class="text-red-500 dark:text-red-400"> · 已限购</span>
               </div>
-              <div class="mt-2 flex min-w-0 flex-wrap items-end justify-between gap-2">
-                <div class="flex min-w-0 flex-1 basis-24 flex-col gap-1">
+              <div class="mt-2 min-w-0 flex flex-wrap items-end justify-between gap-2">
+                <div class="min-w-0 flex flex-1 basis-24 flex-col gap-1">
                   <span class="truncate text-sm text-amber-600 dark:text-amber-400">
                     {{ Number(g.unitPrice).toLocaleString() }} {{ g.currencyName }}
                   </span>
                   <span class="text-[10px] text-gray-400">合计 {{ totalCost(g).toLocaleString() }}</span>
                 </div>
-                <div class="flex w-full shrink-0 items-center justify-end gap-1.5 sm:w-auto">
+                <div class="w-full flex shrink-0 items-center justify-end gap-1.5 sm:w-auto">
                   <input
                     v-model.number="shopQty[g.goodsId]"
                     type="number"
                     min="1"
                     :disabled="isDisabled(g)"
                     :max="maxQty(g)"
-                    class="w-16 rounded border border-gray-300 bg-white px-1.5 py-1 text-xs dark:border-gray-600 dark:bg-gray-900"
+                    class="w-16 border border-gray-300 rounded bg-white px-1.5 py-1 text-xs dark:border-gray-600 dark:bg-gray-900"
                     title="兑换数量"
                   >
                   <BaseButton
@@ -2006,10 +2164,12 @@ onUnmounted(() => {
     </section>
 
     <!-- 店铺升级奖励 -->
-    <section class="order-5 col-span-full rounded-lg border border-gray-200 bg-white p-4 shadow-sm dark:border-gray-700 dark:bg-gray-800 xl:col-span-1">
+    <section class="order-5 col-span-full border border-gray-200 rounded-lg bg-white p-4 shadow-sm xl:col-span-1 dark:border-gray-700 dark:bg-gray-800">
       <div class="mb-3 flex flex-wrap items-center justify-between gap-2">
         <div class="min-w-0">
-          <h3 class="text-sm text-gray-900 font-medium dark:text-white">店铺升级奖励</h3>
+          <h3 class="text-sm text-gray-900 font-medium dark:text-white">
+            店铺升级奖励
+          </h3>
           <p class="mt-0.5 break-words text-xs text-gray-500 dark:text-gray-400">
             共 {{ tasks.length }} 档
             <span v-if="upgradeRewardLevel"> · 当前 Lv{{ upgradeRewardLevel }}</span>
@@ -2021,22 +2181,22 @@ onUnmounted(() => {
         </BaseButton>
       </div>
 
-      <div v-if="tasksLoading && !tasks.length" class="rounded border border-dashed border-gray-200 px-3 py-4 text-xs text-gray-500 dark:border-gray-700 dark:text-gray-400">
+      <div v-if="tasksLoading && !tasks.length" class="border border-gray-200 rounded border-dashed px-3 py-4 text-xs text-gray-500 dark:border-gray-700 dark:text-gray-400">
         读取中…
       </div>
-      <div v-else-if="tasksError" class="min-w-0 break-words rounded border border-dashed border-amber-200 px-3 py-4 text-xs text-amber-700 dark:border-amber-800 dark:text-amber-300">
+      <div v-else-if="tasksError" class="min-w-0 break-words border border-amber-200 rounded border-dashed px-3 py-4 text-xs text-amber-700 dark:border-amber-800 dark:text-amber-300">
         {{ tasksError }}
       </div>
-      <div v-else-if="!tasks.length" class="rounded border border-dashed border-gray-200 px-3 py-4 text-xs text-gray-500 dark:border-gray-700 dark:text-gray-400">
+      <div v-else-if="!tasks.length" class="border border-gray-200 rounded border-dashed px-3 py-4 text-xs text-gray-500 dark:border-gray-700 dark:text-gray-400">
         暂无升级奖励
       </div>
       <div v-else class="space-y-2">
         <div
           v-for="reward in tasks"
           :key="reward.id"
-          class="min-w-0 rounded border border-gray-200 px-3 py-2.5 dark:border-gray-700"
+          class="min-w-0 border border-gray-200 rounded px-3 py-2.5 dark:border-gray-700"
         >
-          <div class="flex min-w-0 items-start justify-between gap-2">
+          <div class="min-w-0 flex items-start justify-between gap-2">
             <div class="min-w-0">
               <div class="break-words text-sm text-gray-900 font-medium dark:text-gray-100">
                 升级至 Lv{{ upgradeRewardLevelOf(reward) }}
@@ -2049,7 +2209,7 @@ onUnmounted(() => {
               {{ upgradeRewardState(reward).text }}
             </span>
           </div>
-          <div class="mt-2 flex min-w-0 flex-wrap items-start gap-x-2 gap-y-1 text-xs">
+          <div class="mt-2 min-w-0 flex flex-wrap items-start gap-x-2 gap-y-1 text-xs">
             <span class="shrink-0 text-gray-500 dark:text-gray-400">奖励</span>
             <span class="min-w-0 break-words text-gray-700 dark:text-gray-200">{{ upgradeRewardsText(reward) }}</span>
           </div>
@@ -2058,10 +2218,12 @@ onUnmounted(() => {
     </section>
 
     <!-- 店铺排行榜 -->
-    <section class="order-6 col-span-full rounded-lg border border-gray-200 bg-white p-4 shadow-sm dark:border-gray-700 dark:bg-gray-800 xl:col-span-1">
+    <section class="order-6 col-span-full border border-gray-200 rounded-lg bg-white p-4 shadow-sm xl:col-span-1 dark:border-gray-700 dark:bg-gray-800">
       <div class="mb-3 flex flex-wrap items-center justify-between gap-2">
         <div class="min-w-0">
-          <h3 class="text-sm text-gray-900 font-medium dark:text-white">店铺排行榜</h3>
+          <h3 class="text-sm text-gray-900 font-medium dark:text-white">
+            店铺排行榜
+          </h3>
           <p class="mt-0.5 break-words text-xs text-gray-500 dark:text-gray-400">
             <span v-if="rankingMyRank">我的排名第 {{ rankingMyRank }} 名</span>
             <span v-else>我的排名暂未上榜</span>
@@ -2074,24 +2236,24 @@ onUnmounted(() => {
         </BaseButton>
       </div>
 
-      <div v-if="rankingsError" class="min-w-0 break-words rounded border border-dashed border-amber-200 px-3 py-4 text-xs text-amber-700 dark:border-amber-800 dark:text-amber-300">
+      <div v-if="rankingsError" class="min-w-0 break-words border border-amber-200 rounded border-dashed px-3 py-4 text-xs text-amber-700 dark:border-amber-800 dark:text-amber-300">
         {{ rankingsError }}
       </div>
-      <div v-if="rankingsLoading && !rankings.length" class="rounded border border-dashed border-gray-200 px-3 py-4 text-xs text-gray-500 dark:border-gray-700 dark:text-gray-400">
+      <div v-if="rankingsLoading && !rankings.length" class="border border-gray-200 rounded border-dashed px-3 py-4 text-xs text-gray-500 dark:border-gray-700 dark:text-gray-400">
         读取中…
       </div>
-      <div v-else-if="!rankings.length && !rankingsError" class="rounded border border-dashed border-gray-200 px-3 py-4 text-xs text-gray-500 dark:border-gray-700 dark:text-gray-400">
+      <div v-else-if="!rankings.length && !rankingsError" class="border border-gray-200 rounded border-dashed px-3 py-4 text-xs text-gray-500 dark:border-gray-700 dark:text-gray-400">
         暂无排行数据
       </div>
       <div v-if="rankings.length" class="space-y-2" :class="{ 'mt-2': rankingsError }">
         <div
           v-for="(entry, index) in rankings"
           :key="rankingKey(entry, index)"
-          class="min-w-0 rounded border border-gray-200 px-3 py-2.5 dark:border-gray-700"
+          class="min-w-0 border border-gray-200 rounded px-3 py-2.5 dark:border-gray-700"
         >
-          <div class="flex min-w-0 items-start gap-2">
+          <div class="min-w-0 flex items-start gap-2">
             <span
-              class="flex h-7 w-7 shrink-0 items-center justify-center rounded text-xs font-bold"
+              class="h-7 w-7 flex shrink-0 items-center justify-center rounded text-xs font-bold"
               :class="Number(entry.rank) <= 3
                 ? 'bg-amber-50 text-amber-700 dark:bg-amber-900/20 dark:text-amber-300'
                 : 'bg-gray-100 text-gray-500 dark:bg-gray-700 dark:text-gray-300'"
@@ -2099,7 +2261,7 @@ onUnmounted(() => {
               {{ entry.rank }}
             </span>
             <div class="min-w-0 flex-1">
-              <div class="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
+              <div class="min-w-0 flex flex-wrap items-center gap-x-2 gap-y-1">
                 <span class="min-w-0 break-words text-sm text-gray-900 font-medium dark:text-gray-100">
                   {{ entry.storeName || '未命名店铺' }}
                 </span>
@@ -2119,7 +2281,7 @@ onUnmounted(() => {
                   好友
                 </span>
               </div>
-              <div class="mt-1 flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-1 text-[11px] text-gray-500 dark:text-gray-400">
+              <div class="mt-1 min-w-0 flex flex-wrap items-baseline gap-x-2 gap-y-1 text-[11px] text-gray-500 dark:text-gray-400">
                 <span class="min-w-0 break-words">{{ rankingNickname(entry) }}</span>
                 <span v-if="entry.playerLevel" class="shrink-0">玩家 Lv{{ entry.playerLevel }}</span>
                 <span v-if="entry.gid" class="min-w-0 break-all text-gray-400">GID {{ entry.gid }}</span>
@@ -2129,7 +2291,9 @@ onUnmounted(() => {
               <div class="break-all text-sm text-emerald-600 font-bold leading-tight tabular-nums dark:text-emerald-400">
                 {{ Number(entry.revenue || 0).toLocaleString() }}
               </div>
-              <div class="text-[10px] text-gray-400">营业额</div>
+              <div class="text-[10px] text-gray-400">
+                营业额
+              </div>
             </div>
           </div>
         </div>

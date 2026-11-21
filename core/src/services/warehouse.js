@@ -501,8 +501,7 @@ async function autoOpenGiftPacks(opts = {}) {
             const itemName = itemInfo && itemInfo.name ? String(itemInfo.name) : `礼包#${itemId}`;
             try {
                 // 抓包实测: Use { item_id, count } 一次可整包打开(如 101622 x10)
-                const reply = await useItem(itemId, count);
-                const gotItems = (reply && reply.items) || [];
+                await useItem(itemId, count);
                 opened += count;
                 details.push(`${itemName}x${count}`);
             } catch (e) {
@@ -611,11 +610,11 @@ function getItemMutantTypes(item, id) {
                 const mtv = Number(item.mutant_types[mi]);
                 if (mtv > 0) {
                     const mutation = getMutantByEnumId(mtv);
-                    const mapped = mutation && String(mutation.name || '').replace(/_(天工|珍品|稀有)$/, '');
+                    const mapped = mutation && String(mutation.name || '').replace(/_(?:天工|珍品|稀有)$/, '');
                     itemMutantTypes.push(mapped || `mutant_${mtv}`);
                 }
             }
-        } catch (e) {}
+        } catch {}
     }
     if (itemMutantTypes.length === 0) {
         try {
@@ -623,7 +622,7 @@ function getItemMutantTypes(item, id) {
             if (fm && fm.type) {
                 itemMutantTypes.push(fm.type);
             }
-        } catch (e) {}
+        } catch {}
     }
     return Array.from(new Set(itemMutantTypes));
 }
@@ -899,13 +898,13 @@ async function sellAllFruits() {
             const itemType = itemInfo ? (Number(itemInfo.type) || 0) : 0;
             if (itemType !== 6 && itemType !== 17) continue;
             // 品质变异果实默认保留, 是否出售由品种和设置决定
-            var hasQualityMutant = false;
+            let hasQualityMutant = false;
             if (item.mutant_types && item.mutant_types.length > 0) {
                 try {
-                    for (var smi = 0; smi < item.mutant_types.length; smi++) {
-                        var smId = Number(item.mutant_types[smi]);
+                    for (let smi = 0; smi < item.mutant_types.length; smi++) {
+                        const smId = Number(item.mutant_types[smi]);
                         if (smId <= 0) continue;
-                        var mutation = getMutantByEnumId(smId);
+                        const mutation = getMutantByEnumId(smId);
                         if (mutation && (mutation.quality === '天工' || mutation.quality === '珍品' || mutation.quality === '稀有')) {
                             hasQualityMutant = true;
                             log('仓库', `品质变异物品: ${getFruitName(id)} x${count} (${mutation.name}) — 是否出售取决于"连黄金果实一起卖"设置`, {
@@ -913,12 +912,12 @@ async function sellAllFruits() {
                                 event: 'quality_mutant_item',
                                 result: 'evaluated',
                                 itemId: id,
-                                count: count,
+                                count,
                             });
                             break;
                         }
                     }
-                } catch (e) {}
+                } catch {}
             }
             // 黄金果实: 默认保留(含普通"黄金果"与黄金_天工等变异果实),
             // 只有设置里勾了"连黄金果实一起卖"才会进入出售流程
@@ -930,7 +929,7 @@ async function sellAllFruits() {
             const allowGolden = goldenItem && sellGolden;
             if ((!hasQualityMutant || allowGolden) && isSellableItem(item) && count > 0) {
                 toSell.push(item);
-                var suffix = (item.mutant_types && item.mutant_types.length > 0) ? '(变异)' : '';
+                const suffix = (item.mutant_types && item.mutant_types.length > 0) ? '(变异)' : '';
                 names.push(`${getFruitName(id)}x${count}${suffix}${goldenItem ? '[黄金]' : ''}`);
                 if (goldenItem) {
                     goldenSoldCount += count;

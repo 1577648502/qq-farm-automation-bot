@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, ref, computed, watch } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import api from '@/api'
 import BaseButton from '@/components/ui/BaseButton.vue'
 import BaseInput from '@/components/ui/BaseInput.vue'
@@ -30,28 +30,38 @@ const claimModalContent = ref({
   title: '',
   message: '',
   cardCode: '',
-  days: 0
+  days: 0,
 })
 
 const passwordStrength = computed(() => {
   const pwd = password.value
-  if (!pwd) return { score: 0, level: '', valid: false }
+  if (!pwd)
+    return { score: 0, level: '', valid: false }
 
   let score = 0
 
-  if (pwd.length >= 6) score++
-  if (pwd.length >= 10) score++
+  if (pwd.length >= 6)
+    score++
+  if (pwd.length >= 10)
+    score++
 
   let typeCount = 0
-  if (/[a-z]/.test(pwd)) typeCount++
-  if (/[A-Z]/.test(pwd)) typeCount++
-  if (/[0-9]/.test(pwd)) typeCount++
-  if (/[!@#$%^&*(),.?":{}|<>_\-+=\[\]\\;'/`~]/.test(pwd)) typeCount++
+  if (/[a-z]/.test(pwd))
+    typeCount++
+  if (/[A-Z]/.test(pwd))
+    typeCount++
+  if (/\d/.test(pwd))
+    typeCount++
+  if (/[!@#$%^&*(),.?":{}|<>_\-+=[\]\\;'/`~]/.test(pwd))
+    typeCount++
 
-  if (typeCount >= 2) score += 2
+  if (typeCount >= 2)
+    score += 2
 
-  if (typeCount >= 3) score++
-  if (typeCount >= 4) score++
+  if (typeCount >= 3)
+    score++
+  if (typeCount >= 4)
+    score++
 
   const commonPasswords = ['password', '123456', 'qwerty', 'abc123', '111111']
   if (commonPasswords.some(p => pwd.toLowerCase().includes(p))) {
@@ -67,10 +77,14 @@ const passwordStrength = computed(() => {
 
 const usernameValid = computed(() => {
   const name = username.value
-  if (!name) return { valid: false, message: '' }
-  if (name.length < 3) return { valid: false, message: '用户名至少3位' }
-  if (name.length > 32) return { valid: false, message: '用户名最多32位' }
-  if (!/^[a-zA-Z0-9_]+$/.test(name)) return { valid: false, message: '只能包含字母、数字、下划线' }
+  if (!name)
+    return { valid: false, message: '' }
+  if (name.length < 3)
+    return { valid: false, message: '用户名至少3位' }
+  if (name.length > 32)
+    return { valid: false, message: '用户名最多32位' }
+  if (!/^\w+$/.test(name))
+    return { valid: false, message: '只能包含字母、数字、下划线' }
   return { valid: true, message: '' }
 })
 
@@ -117,7 +131,8 @@ function validateForm(): boolean {
 }
 
 async function handleSubmit() {
-  if (!validateForm()) return
+  if (!validateForm())
+    return
 
   loading.value = true
   error.value = ''
@@ -140,12 +155,14 @@ async function handleSubmit() {
           if (result.remainingMs) {
             rateLimitRemaining.value = Math.ceil(result.remainingMs / 1000)
           }
-        } else if (result.errorType === 'locked') {
+        }
+        else if (result.errorType === 'locked') {
           error.value = result.error || '账户已被锁定'
           if (result.remainingMs) {
             lockoutRemaining.value = Math.ceil(result.remainingMs / 1000 / 60)
           }
-        } else {
+        }
+        else {
           error.value = result.error || '登录失败'
         }
       }
@@ -170,12 +187,14 @@ async function handleSubmit() {
       if (data.remainingMs) {
         rateLimitRemaining.value = Math.ceil(data.remainingMs / 1000)
       }
-    } else if (data?.errorType === 'locked') {
+    }
+    else if (data?.errorType === 'locked') {
       error.value = data.error || '账户已被锁定'
       if (data.remainingMs) {
         lockoutRemaining.value = Math.ceil(data.remainingMs / 1000 / 60)
       }
-    } else {
+    }
+    else {
       error.value = data?.error || e.message || '操作异常'
     }
   }
@@ -222,7 +241,7 @@ async function claimFreeCard() {
         title: '领取成功',
         message: `成功领取 ${res.data.days} 天卡密！`,
         cardCode: res.data.cardCode,
-        days: res.data.days
+        days: res.data.days,
       }
       showClaimModal.value = true
     }
@@ -232,7 +251,7 @@ async function claimFreeCard() {
         title: '领取失败',
         message: res.data.error || '领取失败，请稍后重试',
         cardCode: '',
-        days: 0
+        days: 0,
       }
       showClaimModal.value = true
     }
@@ -244,7 +263,7 @@ async function claimFreeCard() {
       title: '领取失败',
       message: data?.error || e.message || '领取失败',
       cardCode: '',
-      days: 0
+      days: 0,
     }
     showClaimModal.value = true
   }
@@ -358,7 +377,7 @@ async function fetchGameVersion() {
             <div class="strength-bar">
               <div
                 class="strength-fill"
-                :style="{ width: Math.min(passwordStrength.score * 12.5, 100) + '%', backgroundColor: passwordStrength.color }"
+                :style="{ width: `${Math.min(passwordStrength.score * 12.5, 100)}%`, backgroundColor: passwordStrength.color }"
               />
             </div>
             <span class="strength-text" :style="{ color: passwordStrength.color }">
@@ -807,7 +826,9 @@ async function fetchGameVersion() {
 
 .strength-fill {
   height: 100%;
-  transition: width 0.3s ease, background-color 0.3s ease;
+  transition:
+    width 0.3s ease,
+    background-color 0.3s ease;
 }
 
 .strength-text {

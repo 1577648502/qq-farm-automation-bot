@@ -49,9 +49,9 @@ function exportConfigs() {
             continue;
         }
         let text = '';
-        try { text = fs.readFileSync(fp, 'utf8'); } catch (e) { text = ''; }
+        try { text = fs.readFileSync(fp, 'utf8'); } catch { text = ''; }
         // 只接受合法 JSON，避免导出坏文件
-        try { JSON.parse(text); } catch (e) { text = ''; }
+        try { JSON.parse(text); } catch { text = ''; }
         if (text) {
             files[f.name] = text;
             manifest.push({ name: f.name, desc: f.desc, required: f.required, present: true, bytes: Buffer.byteLength(text) });
@@ -84,7 +84,7 @@ function validatePayload(payload) {
             continue;
         }
         if (typeof txt !== 'string') return { ok: false, reason: `${f.name} 不是文本` };
-        try { JSON.parse(txt); } catch (e) { return { ok: false, reason: `${f.name} 不是合法 JSON` }; }
+        try { JSON.parse(txt); } catch { return { ok: false, reason: `${f.name} 不是合法 JSON` }; }
     }
     // 结构化校验：store.json 至少要有 accountConfigs（防呆：避免导入空配置把系统打空）
     try {
@@ -92,7 +92,7 @@ function validatePayload(payload) {
         if (!st || typeof st !== 'object' || !('accountConfigs' in st)) {
             return { ok: false, reason: 'store.json 结构异常（缺少 accountConfigs）' };
         }
-    } catch (e) {
+    } catch {
         return { ok: false, reason: 'store.json 解析失败' };
     }
     return { ok: true };
@@ -111,7 +111,7 @@ function snapshotCurrent() {
         try {
             fs.copyFileSync(src, path.join(dst, f.name));
             copied.push(f.name);
-        } catch (e) { /* 单个复制失败不阻断 */ }
+        } catch { /* 单个复制失败不阻断 */ }
     }
     return { dir: dst, copied };
 }
@@ -136,7 +136,7 @@ function importConfigs(payload, opts = {}) {
     const dir = getDataDir();
     let backupDir = '';
     if (!opts.skipSnapshot) {
-        try { backupDir = snapshotCurrent().dir; } catch (e) { /* 快照失败不阻断，但要提示 */ }
+        try { backupDir = snapshotCurrent().dir; } catch { /* 快照失败不阻断，但要提示 */ }
     }
     const written = [];
     const skipped = [];

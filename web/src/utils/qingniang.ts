@@ -1,4 +1,4 @@
-﻿export const QINGMEI_SEED_ID = 21221
+export const QINGMEI_SEED_ID = 21221
 export const QINGMEI_FRUIT_ID = 41221
 
 interface QingniangCropLike {
@@ -59,4 +59,3 @@ export function getQingmeiFruitCount(overview?: QingniangOverviewLike | null) {
 
   return countOf(findQingmeiCrop(overview)?.fruitCount)
 }
-
