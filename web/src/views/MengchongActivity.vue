@@ -140,6 +140,9 @@ const luckyStarImage = computed(() => {
   const hit = (overview.value?.pet?.items || []).find(i => i.id === 1029)
   return (hit && hit.image) || '/game-config/seed_images_named/1029_幸运星_icon_s3luckyStar.png'
 })
+/** 比熊头像图(extract 自客户端 avatarDetail/img_avatar_bichon, game-config-sync 同步) */
+const BICHON_IMAGE = '/game-config/mengchong_images/img_avatar_bichon.png'
+const petImageOk = ref(true)
 const rulesLoading = ref(false)
 // 说明里的关键数值 (摘自活动说明) — 便于对照操作
 const CHALLENGE_TIERS = [
@@ -613,7 +616,14 @@ onMounted(fetchRules)
 
         <!-- 比熊宠物 + 投喂 -->
         <div v-if="overview.pet" class="border border-gray-200 rounded-lg bg-white p-4 shadow-sm dark:border-gray-700 dark:bg-gray-800">
-          <h3 class="mb-2 text-sm text-gray-900 font-medium dark:text-white">
+          <h3 class="mb-2 flex items-center gap-2 text-sm text-gray-900 font-medium dark:text-white">
+            <img
+              v-if="petImageOk"
+              :src="BICHON_IMAGE"
+              alt="比熊犬"
+              class="h-10 w-10 border border-gray-200 rounded-full object-cover dark:border-gray-600"
+              @error="petImageOk = false"
+            >
             比熊萌宠
             <span class="ml-2 rounded px-1.5 py-0.5 text-xs" :class="overview.pet.adult ? 'bg-rose-50 text-rose-600 dark:bg-rose-900/30 dark:text-rose-300' : 'bg-gray-100 text-gray-500 dark:bg-gray-700 dark:text-gray-300'">
               {{ overview.pet.adult ? '已成年' : '幼年' }}

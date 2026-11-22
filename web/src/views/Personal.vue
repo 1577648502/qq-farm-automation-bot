@@ -4,6 +4,7 @@ import { useRoute } from 'vue-router'
 import BagPanel from '@/components/BagPanel.vue'
 import FarmPanel from '@/components/FarmPanel.vue'
 import IllustratedPanel from '@/components/IllustratedPanel.vue'
+import RanchTasksCard from '@/components/RanchTasksCard.vue'
 import SeedShopPanel from '@/components/SeedShopPanel.vue'
 import TaskPanel from '@/components/TaskPanel.vue'
 import Ranch from '@/views/Ranch.vue'
@@ -120,7 +121,11 @@ watch(() => route.query.tab, () => {
         <!-- embedded: 只显示牧场总览, 隐藏牧场页自己的页签栏(避免页签套页签) -->
         <Ranch v-else-if="currentTab === 'ranch'" embedded />
         <BagPanel v-else-if="currentTab === 'bag'" />
-        <TaskPanel v-else-if="currentTab === 'task'" />
+        <!-- 2026-11-22: 牧场任务合并到任务页签(原来是 Ranch.vue 内部页签) -->
+        <div v-else-if="currentTab === 'task'" class="space-y-4">
+          <TaskPanel />
+          <RanchTasksCard />
+        </div>
         <IllustratedPanel v-else-if="currentTab === 'illustrated'" />
         <SeedShopPanel v-else-if="currentTab === 'seedShop'" />
       </Transition>

@@ -54,3 +54,44 @@ message ClaimAllRewardsV2Reply {
 }
 
 message IllustratedRewardRedDotNotifyV2 {}
+
+// ===== 巨大图鉴总奖励(牧场重量分档位奖励) =====
+// 2026-11-22 抓包(20261120-232455_领奖励)定案。官方客户端流程:
+//   PlayerSceneLogin{1:2} 切牧场场景 → GetRanchWeightScoreV2(空 body)
+//   → 对 tiers 中 claimable=1 的档逐个 ClaimRanchWeightScoreRewardV2 {1:档号}
+// 响应: {1:当前重量分, 2:2, 3:1, 4:repeated 各档}
+//   每档: {1:档号, 2:所需重量分, 3:repeated 奖励{1:itemId,2:count}, 4:1=当前可领}
+//   #4 领完即消失(下一次查询该档不再返回), 这就是"已领"判定, 无需客户端记状态。
+// 实测档位表: 所需分 20/40/60/90/120/160/200/250/310/380/... 递增;
+//   档1 奖励 = 点券(1002)×300 + 物品80023×5。
+message GetRanchWeightScoreV2Request {}
+
+message RanchWeightReward {
+    int64 item_id = 1;
+    int64 count = 2;
+}
+
+message RanchWeightTier {
+    int32 tier = 1;               // 档位号(1 起)
+    int32 required_score = 2;     // 该档所需重量分
+    repeated RanchWeightReward rewards = 3;
+    int32 claimable = 4;          // 1=当前可领(重量分达标且未领)
+}
+
+message GetRanchWeightScoreV2Reply {
+    int32 score = 1;              // 当前重量分
+    int32 tier_count = 2;         // 观测恒=2, 含义未定(保留)
+    int32 unknown3 = 3;           // 观测恒=1, 含义未定(保留)
+    repeated RanchWeightTier tiers = 4;
+}
+
+message ClaimRanchWeightScoreRewardV2Request {
+    int32 tier = 1;               // 要领取的档位号
+}
+
+// 抓包实测回显 wire = 120101 = {1:[奖励们], 2:[1]} —— #2 是 **packed repeated int32**
+// (档号列表, 长度前缀包裹), 不是嵌套消息也不是标量; 标量编码会是 1001。
+message ClaimRanchWeightScoreRewardV2Reply {
+    repeated RanchWeightReward rewards = 1;
+    repeated int32 claimed = 2;   // 本次领取的档位号(packed)
+}

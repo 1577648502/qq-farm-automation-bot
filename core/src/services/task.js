@@ -233,6 +233,16 @@ async function checkAndClaimIllustratedRewards(force = false) {
                 allItems.push(...got);
             } catch { /* 单类失败不影响另一类 */ }
         }
+        // ⭐ 总奖励档位(巨大图鉴「重量分」分档奖励, 2026-11-22 抓包定案) ——
+        //   与上面的单条目奖励完全独立: 每档一份(点券+物品), score 达标且未领时
+        //   GetRanchWeightScoreV2 返回 claimable=1。查询是空 body 请求, 每轮都查不亏。
+        let weightClaimedTiers = [];
+        try {
+            const { claimAllRanchWeightScoreRewards } = require('./illustrated');
+            const wr = await claimAllRanchWeightScoreRewards();
+            weightClaimedTiers = wr.claimedTiers || [];
+            allItems.push(...(wr.items || []));
+        } catch { /* 总奖励失败不影响单条目 */ }
         const items = allItems;
         // ⭐ 成功判定不能只看点券(2026-11-22): 巨大(牧场动物)图鉴的奖励是收藏点(3003),
         //   不涨点券 —— 旧判定 gainTicket>=200 让牧场图鉴领奖**永远静默**(领了也不记日志/统计)。
@@ -241,7 +251,8 @@ async function checkAndClaimIllustratedRewards(force = false) {
         const afterTicket = await getTicketBalanceFromBag();
         const gainTicket = Math.max(0, afterTicket - beforeTicket);
 
-        log('任务', `图鉴奖励领取成功 ${items.length} 项${gainTicket > 0 ? `, 点券+${gainTicket}` : ''}${claimedByType[101] > 0 ? `(含巨大图鉴 ${claimedByType[101]})` : ''}`, {
+        const weightNote = weightClaimedTiers.length ? `, 总奖励档${weightClaimedTiers.join('/')}` : '';
+        log('任务', `图鉴奖励领取成功 ${items.length} 项${gainTicket > 0 ? `, 点券+${gainTicket}` : ''}${claimedByType[101] > 0 ? `(含巨大图鉴 ${claimedByType[101]})` : ''}${weightNote}`, {
             module: 'task',
             event: '图鉴奖励',
             result: 'ok',
@@ -253,6 +264,8 @@ async function checkAndClaimIllustratedRewards(force = false) {
         recordOperation('taskClaim', 1);
         // 巨大(牧场动物)图鉴单独计数, 便于观察「巨大」页签的领取情况
         if (claimedByType[101] > 0) recordOperation('ranchIllustrated', claimedByType[101]);
+        // 总奖励档位单独计数
+        if (weightClaimedTiers.length) recordOperation('ranchWeightReward', weightClaimedTiers.length);
         return true;
     } catch {
         return false;

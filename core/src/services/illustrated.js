@@ -7,7 +7,7 @@
 
 const { sendMsgAsync } = require('../utils/network');
 const { types } = require('../utils/proto');
-const { toNum, log } = require('../utils/utils');
+const { toNum, log, logWarn } = require('../utils/utils');
 
 const SERVICE = 'gamepb.illustratedpb.IllustratedService';
 
@@ -151,11 +151,73 @@ async function claimIllustratedRewards() {
     return { claimed: all.length, items: all };
 }
 
+/**
+ * ===== 巨大图鉴总奖励(牧场重量分档位) =====
+ * 2026-11-22 抓包定案(20261120-232455_领奖励): 单条目奖励(claimAllRewards)之外,
+ * 牧场图鉴还有**按重量分分档的总奖励** —— 收集动物的重量分达 20/40/60/... 各档
+ * 各有一份奖励(点券+物品), 官方客户端在牧场场景用 GetRanchWeightScoreV2/Claim*
+ * 领取。此前自动任务只领了单条目, 档位奖励一直没领。
+ */
+
+/** 查询牧场重量分与各档状态(空 body 请求) */
+async function getRanchWeightScore() {
+    const body = types.GetRanchWeightScoreV2Request.encode(
+        types.GetRanchWeightScoreV2Request.create({}),
+    ).finish();
+    const { body: replyBody } = await sendMsgAsync(SERVICE, 'GetRanchWeightScoreV2', body);
+    return types.GetRanchWeightScoreV2Reply.decode(replyBody);
+}
+
+/** 领取指定档位的总奖励 {1:档号} */
+async function claimRanchWeightScoreReward(tier) {
+    const body = types.ClaimRanchWeightScoreRewardV2Request.encode(
+        types.ClaimRanchWeightScoreRewardV2Request.create({ tier: Number(tier) }),
+    ).finish();
+    const { body: replyBody } = await sendMsgAsync(SERVICE, 'ClaimRanchWeightScoreRewardV2', body);
+    return types.ClaimRanchWeightScoreRewardV2Reply.decode(replyBody);
+}
+
+/**
+ * 领取全部已达标未领的档位总奖励。
+ * ⭐ 必须先切牧场场景(官方客户端在 PlayerSceneLogin{1:2} 之后才发这两个请求)。
+ * @returns {Promise<{score:number, claimedTiers:number[], items:object[]}>}
+ */
+async function claimAllRanchWeightScoreRewards() {
+    const { enterRanchSceneForApi } = require('./ranch');
+    if (!(await enterRanchSceneForApi())) {
+        return { score: 0, claimedTiers: [], items: [], skipped: 'scene_locked' };
+    }
+    const rep = await getRanchWeightScore();
+    const tiers = (rep && rep.tiers) || [];
+    const claimable = tiers.filter(t => Number(t && t.claimable) === 1);
+    const items = [];
+    const claimedTiers = [];
+    for (const t of claimable) {
+        try {
+            const r = await claimRanchWeightScoreReward(toNum(t.tier));
+            const got = (r && r.rewards) || [];
+            items.push(...got);
+            claimedTiers.push(toNum(t.tier));
+            log('图鉴', `巨大图鉴总奖励档${toNum(t.tier)}领取成功: ${got.map(formatItem).join(', ') || `${got.length} 项`}`, {
+                module: 'task', event: 'illustrated_weight_claim', result: 'ok', tier: toNum(t.tier),
+            });
+        } catch (e) {
+            logWarn('图鉴', `巨大图鉴档${toNum(t.tier)}领取失败: ${e.message}`, {
+                module: 'task', event: 'illustrated_weight_claim', result: 'error', tier: toNum(t.tier),
+            });
+        }
+    }
+    return { score: toNum(rep && rep.score), claimedTiers, items };
+}
+
 module.exports = {
     LIST_TYPE,
     getIllustratedList,
     claimAllRewards,
     getIllustratedOverview,
     claimIllustratedRewards,
+    getRanchWeightScore,
+    claimRanchWeightScoreReward,
+    claimAllRanchWeightScoreRewards,
     formatItem,
 };

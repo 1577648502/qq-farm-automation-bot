@@ -202,6 +202,11 @@ async function loadProto() {
     types.ClaimShareRewardReply = root.lookupType('gamepb.sharepb.ClaimShareRewardReply');
     types.GetIllustratedListV2Request = root.lookupType('gamepb.illustratedpb.GetIllustratedListV2Request');
     types.GetIllustratedListV2Reply = root.lookupType('gamepb.illustratedpb.GetIllustratedListV2Reply');
+    // 巨大图鉴总奖励(牧场重量分档位): 2026-11-22 抓包定案
+    types.GetRanchWeightScoreV2Request = root.lookupType('gamepb.illustratedpb.GetRanchWeightScoreV2Request');
+    types.GetRanchWeightScoreV2Reply = root.lookupType('gamepb.illustratedpb.GetRanchWeightScoreV2Reply');
+    types.ClaimRanchWeightScoreRewardV2Request = root.lookupType('gamepb.illustratedpb.ClaimRanchWeightScoreRewardV2Request');
+    types.ClaimRanchWeightScoreRewardV2Reply = root.lookupType('gamepb.illustratedpb.ClaimRanchWeightScoreRewardV2Reply');
 
     // 典藏室(珍藏室): 2026-11-07 抓包 20261107-155647_典藏室
     types.GetCollectionsRequest = root.lookupType('gamepb.collectionpb.GetCollectionsRequest');
