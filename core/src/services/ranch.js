@@ -44,6 +44,7 @@ const RANCH_ERR = {
     HAZARD_ENOUGH: 1045230,      // 这里的蚊子已经够多啦 —— 同一栏舍连放太多次, 要换栏舍/换好友
     STROKE_ALREADY: 1045246,     // 你已经照料过这只动物啦 —— 每只动物每天只能照料一次
     STROKE_MUTANT: 1045244,      // 已经巨大化的动物不能再照料啦 —— 变异/巨大化不可照料
+    STEAL_TOLD_STOP: 1045221,    // 别拿啦，给我留点吧！—— 该好友产物已被偷完/达偷取上限(正常业务态)
 };
 
 /** 日志用短错误(去掉 gamepb.xxx 前缀, 超 40 字截断) —— 与 milk-tea 的 shortErr 同款 */
@@ -70,7 +71,8 @@ function isExpectedRanchError(e) {
         || code === RANCH_ERR.ANIMAL_MISSING
         || code === RANCH_ERR.HAZARD_ENOUGH
         || code === RANCH_ERR.STROKE_ALREADY
-        || code === RANCH_ERR.STROKE_MUTANT;
+        || code === RANCH_ERR.STROKE_MUTANT
+        || code === RANCH_ERR.STEAL_TOLD_STOP;
 }
 
 // 场景类型(抓包 20261116: PlayerSceneLogin 请求体 {1:1}=农场(0801), {1:2}=牧场(0802))
@@ -741,7 +743,8 @@ async function cleanOwnRanch() {
  * 偷好友牧场产物(AnimalService.StealProduce, 20261117 抓包)。
  * 客户端流程: EnterHomestead{1:gid, 2:2} → GetRanchDetail{1:gid, 2:{}}
  *             → [有可偷产物才发] StealProduce{1:gid} → (下家)
- * @returns {Promise<{ok: boolean, ranch: object}>}
+ * @returns {Promise<{ok: boolean, gid: number, gains: Array<{itemId: number, name: string, count: number}>}>}
+ *          gains = 偷到的物品明细(偷前/偷后产物架差值, ShelfStealDetail.item_id 是产物模板)
  */
 async function stealFriendProduce(hostGid) {
     const gid = toNum(hostGid);
@@ -767,11 +770,39 @@ async function stealFriendProduce(hostGid) {
         const shelves = ranches.flatMap(r => r.shelves || []);
         const hasStealable = shelves.some(s => toNum(s.remain_num) > 0);
         if (!hasStealable) return { ok: false, reason: 'nothing_to_steal', gid };
+        // 偷前快照(按产物模板聚合): 用于偷后差值算"偷到了啥"
+        const beforeRemain = new Map();
+        for (const s of shelves) {
+            const tpl = toNum(s.detail && s.detail.item_id);
+            if (tpl) beforeRemain.set(tpl, (beforeRemain.get(tpl) || 0) + toNum(s.remain_num));
+        }
         const stealBody = types.StealProduceRequest.encode(types.StealProduceRequest.create({
             host_gid: toLong(gid),
         })).finish();
         const { body: replyBody } = await network.sendMsgAsync('gamepb.animalpb.AnimalService', 'StealProduce', stealBody);
-        return { ok: true, gid, ranches: types.StealProduceReply.decode(replyBody).ranches || [] };
+        const afterRanches = types.StealProduceReply.decode(replyBody).ranches || [];
+        // 偷到明细 = 偷前 remain - 偷后 remain, 按产物模板聚合
+        const gainMap = new Map();
+        for (const r of afterRanches) {
+            for (const s of (r.shelves || [])) {
+                const tpl = toNum(s.detail && s.detail.item_id);
+                if (!tpl) continue;
+                const got = (beforeRemain.get(tpl) || 0) - toNum(s.remain_num);
+                if (got > 0) gainMap.set(tpl, (gainMap.get(tpl) || 0) + got);
+            }
+        }
+        if (gainMap.size === 0) {
+            // 兜底: 架上没有 detail(拿不到产物模板)时按总量差值报"产物"
+            const beforeTotal = [...beforeRemain.values()].reduce((a, b) => a + b, 0);
+            const afterTotal = afterRanches.flatMap(r => r.shelves || []).reduce((a, s) => a + toNum(s.remain_num), 0);
+            if (beforeTotal - afterTotal > 0) gainMap.set(0, beforeTotal - afterTotal);
+        }
+        const getItemById = (() => { try { return require('../config/gameConfig').getItemById; } catch { return null; } })();
+        const gains = [...gainMap.entries()].map(([tpl, n]) => {
+            const info = tpl && getItemById ? getItemById(tpl) : null;
+            return { itemId: tpl, name: (info && info.name) || (tpl ? `物品#${tpl}` : '产物'), count: n };
+        });
+        return { ok: gains.length > 0, gid, gains };
     } finally {
         await sleep(300);
         const leaveBody = (() => {
@@ -3537,17 +3568,14 @@ async function autoPutHazardOnFriends(opts = {}) {
 /**
  * 自动偷好友牧场产物(AnimalService.StealProduce, 20261117 抓包)。
  * 流程: EnterHomestead{gid,2} → GetRanchDetail{gid,2:{}} → feed_state==4 才发 StealProduce{gid}。
- * 节流: 每个好友每天偷一次(内存记录; 偷过的产物有冷却, 服务端也有每日上限)。
- * @returns {{cleaned: number, details: string[]}} cleaned = 偷到的次数(沿用字段名)
+ * 节流: 每个好友按冷却反复检查(内存记录; 偷过的产物有冷却, 服务端也有每日上限)。
+ * @returns {{cleaned: number, details: string[]}} cleaned = 偷到的好友数; details = "好友名: 物品×数量"
  */
 const _stealToday = new Map();   // gid -> 下次可偷的时刻(ms)
-// 空手轮日志节流: 偷取组与偷菜同频(默认 20~25 秒一轮 × 4 账号),
-// 每轮都打会把日志墙刷爆(线上 2026-11-21 实测 5 分钟 36 条)。
-// 空手 summary 最多 10 分钟一条; 偷到/出错仍立即打。
-let _lastStealPatrolLogAt = 0;
-const STEAL_PATROL_LOG_MIN_INTERVAL_MS = 10 * 60 * 1000;
+// 2026-11-22 用户定案: 偷取只显示成功(带偷到明细), 空手/失败一律静默。
+// 「别拿啦，给我留点吧！」(1045221) 是正常业务态 → 归入空货短冷却, 不算失败。
 async function autoStealFriendProduce(opts = {}) {
-    const result = { cleaned: 0, details: [], checked: 0, skipped: 0, empty: 0, errors: 0, errorSample: '' };
+    const result = { cleaned: 0, details: [], checked: 0, skipped: 0, empty: 0, errors: 0 };
     const maxPerRound = Math.max(1, toNum(opts.maxStealPerRound) || 10);
 
     // ⭐ 2026-11-21 修复「自动偷从来没跑」:
@@ -3576,7 +3604,9 @@ async function autoStealFriendProduce(opts = {}) {
             const r = await stealFriendProduce(gid);
             if (r.ok) {
                 result.cleaned += 1;
-                result.details.push(f.name || gid);
+                // 成功要带"偷到了啥": gains 由偷前/偷后产物架差值算出
+                const gainStr = (r.gains || []).map(g => `${g.name}×${g.count}`).join('、') || '(明细未知)';
+                result.details.push(`${f.name || gid}: ${gainStr}`);
                 _stealToday.set(gid, Date.now() + cooldownOk);
             } else {
                 // nothing_to_steal: 稍后再看(产物架会回涨)
@@ -3585,26 +3615,16 @@ async function autoStealFriendProduce(opts = {}) {
             }
             await sleep(800);
         } catch (e) {
-            // 失败(进不去/权限)也退避, 别每轮都撞
-            result.errors += 1;
-            if (!result.errorSample) result.errorSample = e && e.message || String(e);
+            // 业务态(别拿啦 1045221/场景态等) = 没得偷, 短冷却后再看;
+            // 真失败只内部计数 + 退避, 不打日志(巡检只显示成功)
+            if (isExpectedRanchError(e)) {
+                result.empty += 1;
+            } else {
+                result.errors += 1;
+            }
             _stealToday.set(gid, Date.now() + cooldownEmpty);
             await sleep(500);
         }
-    }
-    // ⭐ 诊断日志(带节流): 旧实现偷不到时完全静默, "从未偷成功过"排查了一轮才发现
-    //   是 gate 永假。但偷取组 20~25 秒一轮, 每轮都打 = 刷屏(线上实测 5 分钟 36 条)。
-    //   规则: 全冷却轮(checked=0)不打; 空手轮 10 分钟最多一条; 偷到/出错立即打。
-    const nowMs = Date.now();
-    const hasSignal = result.cleaned > 0 || result.errors > 0;
-    if ((result.checked > 0 || result.skipped > 0)
-        && (hasSignal || nowMs - _lastStealPatrolLogAt >= STEAL_PATROL_LOG_MIN_INTERVAL_MS)) {
-        _lastStealPatrolLogAt = nowMs;
-        const errPart = result.errors > 0 && result.errorSample ? ` 首错:${result.errorSample}` : '';
-        log('牧场', `偷取巡检: 查${result.checked}家 偷${result.cleaned} 空货${result.empty} 冷却${result.skipped} 失败${result.errors}${errPart}`, {
-            module: 'ranch', event: '偷取巡检', result: result.cleaned > 0 ? 'ok' : 'skip',
-            checked: result.checked, stolen: result.cleaned,
-        });
     }
     if (result.cleaned > 0) {
         log('牧场', `偷好友产物 x${result.cleaned}: ${result.details.slice(0, 6).join('，')}`, {

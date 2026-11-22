@@ -476,7 +476,9 @@ proto.loadProto().then(async () => {
         check('不再依赖不存在的 can_steal(gate 代码里没有)', !/s\.can_steal/.test(src), null);
         check('不再用 animals.can_harvest 判定可偷',
             !/\|\| animals\.some\(a => toNum\(a\.can_harvest\) === 1\)/.test(src), null);
-        check('空手轮有诊断日志(偷取巡检)', /偷取巡检/.test(src), null);
+        check('巡检只显示成功(空手/失败不打日志)', !/偷取巡检/.test(src), null);
+        check('业务态 1045221(别拿啦)归类为正常态', /STEAL_TOLD_STOP: 1045221/.test(src) && /RANCH_ERR\.STEAL_TOLD_STOP/.test(src), null);
+        check('成功明细用偷前/偷后差值算(偷到了啥)', /beforeRemain/.test(src) && /gainMap/.test(src), null);
         const protoSrc = fs.readFileSync(require('node:path').join(SB, 'src/proto/animalpb.proto'), 'utf8');
         check('proto ShelfInfo #2 是嵌套消息(非 varint base_num)',
             /ShelfStealDetail detail = 2/.test(protoSrc) && !/int64 base_num = 2/.test(protoSrc), null);
