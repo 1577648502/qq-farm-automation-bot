@@ -988,6 +988,33 @@ proto.loadProto().then(async () => {
         check('等级一变 → 立即重试(第 2 次请求)', activateCount === 2, activateCount);
     }
 
+    section('25. 一键喂/全场喂必须窝+棚各喂一次(修"喂棚的有机罐头喂到窝去了")');
+    {
+        const ranch = freshRanch();
+        const pf = ranch.__privateRanchFns;
+        // 实例缓存: 窝 10001 + 棚 10003(带类型)
+        pf.rememberRanchInstIds({
+            coops: [{ ranchInstId: 10001, husbandryType: 1 }],
+            pens: [{ ranchInstId: 10003, husbandryType: 2 }],
+        });
+        const calls = installStub({
+            FeedAnimal: () => types.FeedAnimalReply.encode(types.FeedAnimalReply.create({})).finish(),
+        });
+        const r = await pf.feedAllFacilities('organic');
+        const feedCalls = calls.filter(c => c.method === 'FeedAnimal');
+        check('全场喂 = 每个栏舍各一条 FeedAnimal(2 条)', feedCalls.length === 2, feedCalls.length);
+        const gids = feedCalls.map(c => Number(types.FeedAnimalRequest.decode(c.body).target.host_gid));
+        check('分别喂到窝(10001)和棚(10003)', gids.includes(10001) && gids.includes(10003), gids);
+        const kinds = feedCalls.map(c => Number(types.FeedAnimalRequest.decode(c.body).feed_type));
+        check('#2 喂食方式 = 1(有机扣7004)', kinds.every(k => k === 1), kinds);
+        check('fed = 2', r.fed === 2, r);
+
+        // resolveRanchHostGid 按 husbandryType 精确挑
+        check('ht=1 → 窝实例', pf.resolveRanchHostGid(0, 1) === 10001, pf.resolveRanchHostGid(0, 1));
+        check('ht=2 → 棚实例', pf.resolveRanchHostGid(0, 2) === 10003, pf.resolveRanchHostGid(0, 2));
+        check('无 ht → 兼容旧行为回窝', pf.resolveRanchHostGid(0) === 10001, pf.resolveRanchHostGid(0));
+    }
+
     finish();
 }).catch((e) => {
     console.error('测试异常:', e);

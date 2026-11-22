@@ -724,14 +724,30 @@ function invalidateCanBucketCache() {
 //   以前写死 10001, 于是养殖棚动物(羊/牛…)时服务端回"动物不存在" —— 它在 10003 那个栏舍里。
 //   这里缓存最近一次 GetRanchDetail 拿到的实例, 让 feedAnimal 等接口能选对栏舍。
 let lastRanchInstIds = [];
+// ⭐ 2026-11-22 修"喂棚的有机罐头喂到窝去了": 实例缓存必须带栏舍类型。
+//   旧的 lastRanchInstIds 只是无类型 gid 数组, resolveRanchHostGid(0) 永远取
+//   排序最小(窝 10001) —— 一键喂/全场喂罐头因此**只喂窝**, 棚根本没喂到。
+let lastRanchInsts = [];
 
-/** 记录最近一次详情里的栏舍实例(窝/棚) */
+/** 记录最近一次详情里的栏舍实例(窝/棚, 带 husbandry_type: 1=窝 2=棚) */
 function rememberRanchInstIds(view) {
     if (!view) return;
-    const ids = [];
-    for (const g of (view.coops || [])) if (toNum(g.ranchInstId) > 0) ids.push(toNum(g.ranchInstId));
-    for (const g of (view.pens || [])) if (toNum(g.ranchInstId) > 0) ids.push(toNum(g.ranchInstId));
-    if (ids.length) lastRanchInstIds = Array.from(new Set(ids));
+    const list = [];
+    for (const g of (view.coops || [])) {
+        const gid = toNum(g.ranchInstId);
+        if (gid > 0) list.push({ gid, ht: 1 });
+    }
+    for (const g of (view.pens || [])) {
+        const gid = toNum(g.ranchInstId);
+        // pens 数组本身语义就是棚(toRanchView 只把 husbandryType===2 的放进来);
+        // 条目没带字段时按 2 兜底, 别把棚实例错标成窝
+        if (gid > 0) list.push({ gid, ht: g.husbandryType ? (toNum(g.husbandryType) === 2 ? 2 : 1) : 2 });
+    }
+    if (list.length) {
+        const seen = new Set();
+        lastRanchInsts = list.filter(x => (seen.has(x.gid) ? false : (seen.add(x.gid), true)));
+        lastRanchInstIds = lastRanchInsts.map(x => x.gid);
+    }
 }
 
 /**
@@ -745,13 +761,43 @@ function resolveRanchHostGid(hostGid, husbandryType = 0) {
     if (explicit > 0) return explicit;
     const ht = toNum(husbandryType);
     if (ht > 0) {
-        // 栏舍实例按大小排序: 窝通常是 10001, 棚是 10003(不写死, 以服务端为准)
-        const ids = lastRanchInstIds.slice().sort((a, b) => a - b);
-        if (ht === 2 && ids.length > 1) return ids[ids.length - 1];
-        if (ids.length) return ids[0];
+        // 按详情里的 husbandry_type 精确挑(窝/棚实例号不写死, 以服务端为准)
+        const hit = lastRanchInsts.find(x => x.ht === ht);
+        if (hit) return hit.gid;
     }
     if (lastRanchInstIds.length) return lastRanchInstIds[0];
     return RANCH_SELF_HOST_GID;
+}
+
+/**
+ * 全场喂罐头: 对**每个栏舍实例**(窝+棚)各发一次 FeedAnimal(target{1:gid}, 无 target#2)。
+ * FeedAnimal 的"全场"语义 = 指定 host_gid 那个栏舍的全部动物 —— 官方客户端一次只喂一个栏舍,
+ * 所以喂全场必须逐栏舍发。旧的只发 lastRanchInstIds[0](窝), 有机罐头全喂到窝(2026-11-22 用户报障)。
+ * 桶 7003/7004 是全局的(农场背包), 窝/棚共扣同一个桶。
+ * @returns {Promise<{fed:number, gids:number[], errors:string[]}>}
+ */
+async function feedAllFacilities(kind, _opts = {}) {
+    const out = { fed: 0, gids: [], errors: [] };
+    // 实例缓存为空时先拉一次总览(rememberRanchInstIds 在 overview 内部会被调用)
+    if (!lastRanchInsts.length) {
+        try { await getRanchOverview(); } catch { /* 拿不到就按旧默认实例喂 */ }
+    }
+    const gids = lastRanchInsts.length ? lastRanchInsts.map(x => x.gid) : [RANCH_SELF_HOST_GID];
+    for (const gid of gids) {
+        try {
+            await feedAnimal(kind, gid);
+            out.fed += 1;
+            out.gids.push(gid);
+        } catch (e) {
+            // 某个栏舍没动物/桶空等 → 记下来继续喂下一个栏舍
+            out.errors.push(`${gid}:${String(e.message || '').slice(0, 40)}`);
+            if (!isExpectedRanchError(e)) {
+                logWarn('牧场', `喂栏舍 ${gid} 失败: ${e.message}`, { module: '牧场', event: '喂食', result: 'error', gid });
+            }
+        }
+        await sleep(300);
+    }
+    return out;
 }
 
 /**
@@ -2351,9 +2397,15 @@ async function runRanchCare(opts = {}) {
         try {
             // 自动巡牧场不做单只投喂(没必要), 只支持"全场投喂"
             // ⭐ #2 是喂食方式: 4=普通罐头→2 / 5,6=有机→1
+            // ⭐ 2026-11-22 修: 全场 = 窝+棚逐栏舍各喂一次(旧的只喂窝, 棚没喂到)
             const feedKind = Number(opts.feedType) === FEED_TYPE.NORMAL_CAN ? 'normal' : 'organic';
-            await feedAnimal(feedKind);
-            result.fed += 1;
+            const fr = await feedAllFacilities(feedKind);
+            result.fed += fr.fed;
+            if (fr.errors.length) {
+                log('牧场', `全场投喂部分栏舍未喂: ${fr.errors.join('；')}`, {
+                    module: 'ranch', event: '喂食', result: 'partial', gids: fr.gids,
+                });
+            }
         } catch (e) {
             // 1045234 罐头耗尽 = 正常状态(等用户买罐头/加牧草)
             if (parseRanchErrorCode(e) === RANCH_ERR.FEED_REJECTED) {
@@ -4921,7 +4973,10 @@ async function operateRanch(opts = {}) {
                     });
                 }
             }
-            const doFeed = async () => feedAnimal(wantKind, feedHostGid, feedAnimalInstId);
+            const doFeed = async () => (slot > 0
+                ? feedAnimal(wantKind, feedHostGid, feedAnimalInstId)
+                // 无槽位 = 全场(窝+棚逐栏舍各一次; 旧的落回窝 10001, 棚没喂到)
+                : feedAllFacilities(wantKind).then(r => ({ _fed: r.fed })));
             try {
                 await doFeed();
                 recordOperation('ranchFeed', count);
@@ -5188,7 +5243,8 @@ async function operateRanch(opts = {}) {
                 // 批量默认用有机罐头(5): 普通罐头对多数动物已用过, 全喂必然大面积失败。
                 const ft = toNum(opts.feedType) || FEED_TYPE.ORGANIC_A;
                 try {
-                    // ⭐ #2 是喂食方式: 4=普通→2 / 5,6=有机→1(全场批量, 不带 target#2)
+                    // ⭐ #2 是喂食方式: 4=普通→2 / 5,6=有机→1(逐栏舍全场: 窝+棚各一次)
+                    //   2026-11-22 修"喂棚的有机罐头喂到窝去了": 旧的单发 lastRanchInstIds[0]=窝
                     const ftKind = ft === FEED_TYPE.NORMAL_CAN ? 'normal' : 'organic';
                     // 预灌目标桶(与单只喂食一致): 桶没余量才灌, 省一次必失败的请求
                     if (opts.autoFillCans !== false) {
@@ -5200,20 +5256,23 @@ async function operateRanch(opts = {}) {
                             });
                         }
                     }
-                    await feedAnimal(ftKind);
-                    recordOperation('ranchFeed', 1);
-                    return { ok: true, action: '全场喂罐头', detail: FEED_TYPE_LABEL[ft] || '罐头' };
+                    const fr = await feedAllFacilities(ftKind);
+                    recordOperation('ranchFeed', fr.fed || 1);
+                    return {
+                        ok: true, action: '全场喂罐头',
+                        detail: `${FEED_TYPE_LABEL[ft] || '罐头'}：${fr.fed} 个栏舍(窝+棚)${fr.errors.length ? `，${fr.errors.length} 个未喂` : ''}`,
+                    };
                 } catch (e) {
                     const code = parseRanchErrorCode(e);
-                    // 桶空 → 先灌罐头再重试(与单只路径一致)
+                    // 桶空 → 先灌罐头再重试(与单只路径一致; 同样逐栏舍窝+棚)
                     if (code === RANCH_ERR.CANS_EMPTY && opts.autoFillCans !== false) {
                         const kind = ft === FEED_TYPE.NORMAL_CAN ? 'normal' : 'organic';
                         const filled = await fillCanBuckets(kind, { maxItems: 2 });
                         if (filled.used > 0) {
                             try {
-                                await feedAnimal(kind);
-                                recordOperation('ranchFeed', 1);
-                                return { ok: true, action: '全场喂罐头', detail: `自动灌入 ${filled.used} 个罐头后喂食成功` };
+                                const fr2 = await feedAllFacilities(kind);
+                                recordOperation('ranchFeed', fr2.fed || 1);
+                                return { ok: true, action: '全场喂罐头', detail: `自动灌入 ${filled.used} 个罐头后喂食成功(${fr2.fed} 个栏舍)` };
                             } catch (e2) {
                                 return { ok: false, action: '全场喂罐头', error: feedFailureHint(ft, e2) };
                             }
@@ -5394,7 +5453,7 @@ module.exports = {
         // 缓存: 供测试验证"写操作后 overview 必须失效"(收获后入栏读到满栏的事故)
         invalidateRanchOverviewCache,
         // 栏舍实例: 供测试验证"棚动物要用 10003 而不是写死的 10001"
-        rememberRanchInstIds,
+        rememberRanchInstIds, feedAllFacilities,
         planRanchDueActions, runRanchDueActions,
         // 好友牧场: 照顾 target#2 必须用 animal_inst_id(线上 1045207)
         listFriendAnimals, strokeAnimal, putHazard,
