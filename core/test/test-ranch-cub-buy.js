@@ -603,11 +603,11 @@ proto.loadProto().then(async () => {
             { id: 80021, count: 5, uid: 13831 },  // 罐头 type=109 → 排除
         ]);
         const r = await ranch.autoUseRanchBagItems({ onlyIds: [80021] });
-        // 罐头(type=109)不在这里自动灌 —— 桶空了由 feed 分支按需灌 1~2 个,
-        // 避免"一次性把背包里 72 个罐头全灌光"(线上踩过)
-        check('罐头不被自动使用', calls.filter(c => c.method === 'Use').length === 0,
-            calls.map(c => c.method));
-        check('used = 0', r.used === 0, r);
+        // ⭐ 2026-11-22 用户定案"直接全部一次使用完": 罐头走 autoFillCansToWatermark,
+        //   每格一条 Use {id, count=整格数量, uid} 整批灌桶(旧"水位/排除罐头"语义已删)
+        const useCalls = calls.filter(c => c.method === 'Use');
+        check('罐头整格自动灌桶(1 条 Use)', useCalls.length === 1, calls.map(c => c.method));
+        check('used = 5(整格一次)', r.used === 5, r);
     }
 
     section('13. 农场背包的排除表仍保留 109(避免与牧场抢)');

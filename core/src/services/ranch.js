@@ -295,28 +295,16 @@ function feedFailureHint(feedType, e) {
  * @returns {Promise<{used:number, details:string[]}>}
  */
 /**
- * 罐头"水位自动灌桶"(2026-11-22): 背包罐头(普通+有机)按 大罐优先 逐罐灌进对应桶,
- * 直到桶余量达到 CAN_BUCKET_WATERMARK_SEC(3 天)或背包罐头用完。
- * 两个桶独立算水位。只灌 1 格的 1 罐用 useItemWithUid(id,1,uid) ——
- * 桶满会报错, 当作"这格灌不动"跳过继续下一格。
+ * 罐头自动使用(2026-11-22 用户定案"直接全部一次使用完"): 背包罐头(普通+有机)按 大罐优先,
+ * 每格一条 Use {id, count=整格数量, uid} 一次性灌进对应桶。桶满报错 → 该格留在背包跳过。
  * @returns {Promise<{used:number, details:string[]}>}
  */
 async function autoFillCansToWatermark() {
     const out = { used: 0, details: [] };
     const wh = require('./warehouse');
 
-    // 桶余量: 7003/7004 在农场背包 count=剩余秒数
-    const bucketSecOf = async (bucketId) => {
-        try {
-            const farmReply = await wh.getBag();
-            const items = wh.getBagItems(farmReply) || [];
-            const b = items.find(it => toNum(it.id) === bucketId);
-            return b ? Math.max(0, toNum(b.count)) : 0;
-        } catch { return -1; }   // 读不到 → 不灌(保守)
-    };
-
     // 背包罐头: 农场背包 + 牧场背包合并(与 fillCanBuckets 同口径)
-    let all = [];
+    const all = [];
     try {
         const farmReply = await wh.getBag();
         all.push(...(wh.getBagItems(farmReply) || []).map(it => ({ id: toNum(it.id), count: toNum(it.count), uid: toNum(it.uid) })));
@@ -325,36 +313,33 @@ async function autoFillCansToWatermark() {
         all.push(...(await wh.getRanchBagItems()).map(it => ({ id: toNum(it.id), count: toNum(it.count), uid: toNum(it.uid) })));
     } catch { }
 
+    // ⭐ 2026-11-22 用户定案: "直接全部一次使用完" — 每格一条 Use {id, count=整格数量, uid},
+    //   服务端一次把整格灌进桶(线上实测 count=N 就是 N 个全用掉); 桶满报错自然止损, 剩的留背包。
+    //   不再逐罐灌(193 个罐头逐罐 = 193 次请求 + 38s sleep, 纯浪费)。
     for (const kind of ['organic', 'normal']) {
         const isNormal = kind === 'normal';
         const ids = isNormal ? [80021, 80022, 80023, 80024] : [80031, 80032, 80033, 80034];
-        const bucketId = isNormal ? CAN_BUCKET_NORMAL : CAN_BUCKET_ORGANIC;
-        let sec = await bucketSecOf(bucketId);
-        if (sec < 0 || sec >= CAN_BUCKET_WATERMARK_SEC) continue;   // 读不到或水位够 → 跳过
         const cans = all
             .filter(it => ids.includes(it.id) && it.count > 0 && it.uid > 0)
             .sort((a, b) => (CAN_ITEM_HOURS[b.id] || 0) - (CAN_ITEM_HOURS[a.id] || 0));
         for (const can of cans) {
-            if (sec >= CAN_BUCKET_WATERMARK_SEC) break;
-            let nThis = 0;
-            for (let k = 0; k < can.count && sec < CAN_BUCKET_WATERMARK_SEC; k++) {
-                try {
-                    await useItemWithUid(can.id, 1, can.uid);
-                    nThis += 1;
-                    out.used += 1;
-                    sec += (CAN_ITEM_HOURS[can.id] || 0) * 3600;
-                } catch (e) {
-                    break;   // 这格灌不动(桶满/格子问题) → 换下一格
-                }
-                await sleep(200);
+            try {
+                await useItemWithUid(can.id, can.count, can.uid);
+                out.used += can.count;
+                out.details.push(`${CAN_ITEM_HOURS[can.id] || can.id}h罐x${can.count}`);
+            } catch (e) {
+                // 桶满/格子问题 → 这格留在背包, 换下一格
+                log('牧场', `罐头整格灌入失败 #${can.id}x${can.count}: ${String(e.message || '').slice(0, 60)}`, {
+                    module: 'ranch', event: '罐头自动灌桶', result: 'skip', itemId: can.id,
+                });
             }
-            if (nThis > 0) out.details.push(`${CAN_ITEM_HOURS[can.id] || can.id}h罐x${nThis}`);
+            await sleep(250);
         }
-        if (out.used > 0) {
-            log('牧场', `罐头自动灌桶(${isNormal ? '普通' : '有机'}): ${out.details.join('，')}, 桶余量约 ${Math.round(sec / 3600)}h`, {
-                module: 'ranch', event: '罐头自动灌桶', result: 'ok', kind, used: out.used,
-            });
-        }
+    }
+    if (out.used > 0) {
+        log('牧场', `罐头自动使用(整格灌桶): ${out.details.join('，')}, 共 ${out.used} 个`, {
+            module: 'ranch', event: '罐头自动灌桶', result: 'ok', used: out.used,
+        });
     }
     if (out.used > 0) invalidateCanBucketCache();
     return out;
@@ -402,7 +387,7 @@ async function autoUseRanchBagItems(opts = {}) {
         if (!info || Number(info.can_use) !== 1) continue;
         const type = Number(info.type) || 0;
         if (RANCH_AUTO_USE_EXCLUDED_TYPES.has(type)) continue;
-        // 罐头(type=109)单独走"水位自动灌桶"(见下方 autoFillCansToWatermark), 不混进普通 targets
+        // 罐头(type=109)单独走整格灌桶 autoFillCansToWatermark(2026-11-22 定案"一次用完"), 不混进普通 targets
         if (type === 109) continue;
         targets.push({ id, count, uid, name: info.name || `#${id}` });
     }
@@ -431,8 +416,7 @@ async function autoUseRanchBagItems(opts = {}) {
     }
     // ⭐ 罐头自动灌桶(2026-11-22 用户定案: "背包有可用的道具也是要自动使用, 跟农场一样"):
     //   罐头 Use 的服务端语义就是进桶(不存在直达动物的接口), 所以"自动使用罐头"="自动灌桶"。
-    //   与旧实现的区别: 加了**桶水位控制** —— 桶余量 ≥3 天就不灌, 一格一格灌到水位,
-    //   不再"一口气把 72 个灌光"(旧版把桶堆爆才是真正的浪费)。
+    //   2026-11-22 再定案"直接全部一次使用完": 每格一条 Use count=整格, 桶满报错自然止损。
     try {
         const canR = await autoFillCansToWatermark();
         if (canR.used > 0) {
@@ -459,10 +443,7 @@ const CAN_ITEM_HOURS = {
     80021: 1, 80022: 4, 80023: 8, 80024: 12,
     80031: 1, 80032: 4, 80033: 8, 80034: 12,
 };
-// 桶自动灌桶水位(秒): 桶余量低于 3 天才灌, 灌到水位为止。
-// 2026-11-22 用户要求背包罐头"跟农场一样自动使用" —— 罐头 Use 的服务端语义就是进桶,
-// 水位控制避免几百个罐头一口气堆进桶。
-const CAN_BUCKET_WATERMARK_SEC = 3 * 24 * 3600;
+// (旧水位控制已删: 2026-11-22 用户定案"直接全部一次使用完", 桶满由服务端报错自然止损)
 
 /** onlyIds 为空时不过滤; 给了就只处理列表内的 */
 function ids_contains(onlyIds, id) {
@@ -580,30 +561,19 @@ async function useCanFillBucket(itemId, count = 1, uid = 0) {
     if (!isNormal && !isOrganic) {
         return { ok: false, error: `不是罐头道具(${id})` };
     }
-    const kind = isNormal ? 'normal' : 'organic';
     const n = Math.max(1, toNum(count) || 1);
-    // 逐罐灌(n 个), 每罐一条 Use —— useItemWithUid 的 count 是"用几个",
-    // 同格连用 n 个一次发也行, 但分次能拿到桶余量变化并精确止损(桶满报错即停)
-    let used = 0;
-    let lastErr = '';
-    for (let i = 0; i < n; i++) {
-        try {
-            await useItemWithUid(id, 1, toNum(uid) || 0);
-            used += 1;
-        } catch (e) {
-            lastErr = e.message || '';
-            break;   // 桶满/格子空了就停, 剩余的留着
-        }
-        await sleep(200);
-    }
-    if (used > 0) {
+    // ⭐ 一条 Use {id, count=n, uid} 整批灌入(2026-11-22 用户定案"直接全部一次使用完"),
+    //   服务端 count=N 就是 N 个全用掉; 桶满报错即整体失败, 罐头留在背包。
+    try {
+        await useItemWithUid(id, n, toNum(uid) || 0);
         invalidateCanBucketCache();
-        log('牧场', `罐头入桶: ${isNormal ? '普通' : '有机'}罐头 x${used}(点用), ${lastErr ? `剩余未灌: ${lastErr.slice(0, 50)}` : '全部灌入'}`, {
-            module: 'ranch', event: '罐头入桶', result: 'ok', itemId: id, used,
+        log('牧场', `罐头入桶: ${isNormal ? '普通' : '有机'}罐头 x${n}(点用)`, {
+            module: 'ranch', event: '罐头入桶', result: 'ok', itemId: id, used: n,
         });
-        return { ok: true, action: '灌桶', detail: `${isNormal ? '普通' : '有机'}罐头桶 +${used} 罐`, used };
+        return { ok: true, action: '灌桶', detail: `${isNormal ? '普通' : '有机'}罐头桶 +${n} 罐`, used: n };
+    } catch (e) {
+        return { ok: false, error: `灌桶失败: ${e.message || '未知原因'}` };
     }
-    return { ok: false, error: `灌桶失败: ${lastErr || '未知原因'}` };
 }
 
 /**
@@ -5384,7 +5354,6 @@ module.exports = {
     autoFillCansToWatermark,
     getRanchShop,
     buyGrass,
-    fillCanBuckets,
     readCanBucketSecs,
     invalidateCanBucketCache,
     collectThenHarvest,
