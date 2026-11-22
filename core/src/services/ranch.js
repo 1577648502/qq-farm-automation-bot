@@ -2907,7 +2907,9 @@ async function runRanchDueActions(view, opts = {}) {
                 }
             } else if (action === 'feed') {
                 if (!isAutomationOn('ranch_feedmachine')) continue;
-                const fm = await autoFeedMachine(opts);
+                // ⭐ feed 到点动作由 grassBlocked=true 触发 → force=true(2026-11-22 残草死锁修复):
+                //   机器剩 1~19 根也必须补满, 否则 stored>0 跳过 + 冷却 → 动物永远饿着
+                const fm = await autoFeedMachine({ ...opts, force: true });
                 if (fm.fed + (fm.bought || 0) > 0) {
                     out.feedMachineAdded = fm.fed + (fm.bought || 0);
                     out.details.push(`牧草机+${fm.fed + (fm.bought || 0)}`);
@@ -4013,16 +4015,23 @@ let _feedSkipUntil = 0;
  * 流程: 余量为 0(或 ≤threshold) → 算缺口 → 背包有多少补多少 → 还缺就买满 → AddFeed 补满。
  * 背包的散草先用掉, 不够的部分自动从牧场商店买(受 automation.ranch_buy_grass 控制, 默认开)。
  *
+ * ⚠ force 语义(2026-11-22 线上 bug 修复): 到点 feed 动作是由 animals.grassBlocked=true
+ *   触发的 —— 此时哪怕机器里还剩 1~19 根残草, 动物也已经吃不到(blocked)了,
+ *   旧逻辑 `stored > threshold → 跳过 + 10min 冷却` 造成**残草死锁**:
+ *   每次 feed 到点都因 stored>0 空跑, 永远不补, 动物饿到天荒地老。
+ *   所以 grassBlocked 触发的 feed 必须传 force=true, 无视残草直接补满。
+ *
  * @returns {{fed:number, stored:number, bought:number, spent:number}}
  */
 async function autoFeedMachine(opts = {}) {
     const threshold = Math.max(0, toNum(opts.threshold) || 0);   // 默认 0 = 耗尽才补
+    const force = opts.force === true;                            // grassBlocked 触发: 动物已断粮, 残草也补满
     const machine = await getFeedMachine();
-    if (machine.stored > threshold) {
-        // 草还没耗尽(grassBlocked 是滞后信号, 不代表真断草):
-        // 冷却 10 分钟 —— 期间 planRanchDueActions 不再因 grassBlocked 排 feed 动作,
-        // 避免 [到点] feed 每 15s 空跑一次(2026-11-22 线上刷屏根因)
-        _feedSkipUntil = Date.now() + FEED_SKIP_COOLDOWN_MS;
+    if (!force && machine.stored > threshold) {
+        // 草还没耗尽, 巡查轮直接跳过。
+        // ⚠ 不再在这里设 _feedSkipUntil(2026-11-22 残草死锁修复): 这个冷却会挡住
+        //   planRanchDueActions 的到点 feed 动作 —— grassBlocked=true + 残草>0 时
+        //   巡查轮每轮跳过并续 10min 冷却, 到点动作永远被闸住, 动物饿死。
         return { fed: 0, stored: machine.stored, bought: 0, spent: 0 };
     }
     // 补满缺口: 容量未知时按 100 兜底(老账号实测容量 100)
@@ -4072,15 +4081,19 @@ async function autoFeedMachine(opts = {}) {
         const parts = [];
         if (bought > 0) parts.push(`买 ${bought}(花 ${spent})`);
         if (fed > 0) parts.push(`背包补 ${fed}`);
-        log('牧场', `牧草没了 → 一次性补满: ${parts.join(' + ')}, 牧草机现在 ${stored}/${capacity}`, {
+        log('牧场', `${force ? `动物断粮(残草 ${machine.stored})` : '牧草没了'} → 一次性补满: ${parts.join(' + ')}, 牧草机现在 ${stored}/${capacity}`, {
             module: 'ranch', event: '牧草机加草', result: 'ok',
-            bought, spent, fed, stored,
+            bought, spent, fed, stored, force,
         });
     } else if (!bought && !fed) {
         // 一根都没补上: 有缺口但背包无草且购买失败/未开
+        // ⭐ 冷却设在这里(2026-11-22 残草死锁修复): 只有"真没补上"才冷却 10 分钟,
+        //   防止 grassBlocked 每 15s 触发的 feed 到点动作空跑刷屏;
+        //   补满成功不设 —— 服务端 grass_blocked 清除有滞后, 短时间内可能再来一次。
         logWarn('牧场', `牧草机空了但没补上: 背包 ${have} 根${buyFail ? `, 购买失败: ${buyFail}` : '(自动购买未开启)'}`, {
             module: 'ranch', event: '牧草机加草', result: 'skip',
         });
+        _feedSkipUntil = Date.now() + FEED_SKIP_COOLDOWN_MS;
     }
     return { fed, stored, bought, spent };
 }
