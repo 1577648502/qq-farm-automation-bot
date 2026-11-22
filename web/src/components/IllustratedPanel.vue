@@ -172,6 +172,13 @@ useIntervalFn(load, 60000)
               class="absolute right-1 top-1 h-2 w-2 rounded-full bg-red-500"
               title="有可领取奖励"
             />
+            <span
+              v-else-if="item.hasReward"
+              class="absolute right-1 top-1 rounded bg-emerald-100 px-1 py-0.5 text-[9px] text-emerald-600 dark:bg-emerald-900/40 dark:text-emerald-300"
+              title="奖励已领取"
+            >
+              已领
+            </span>
             <div class="h-12 w-12 flex items-center justify-center">
               <img
                 v-if="item.image && !imageErrors[item.seedId]"

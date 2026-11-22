@@ -212,22 +212,36 @@ async function checkAndClaimIllustratedRewards(force = false) {
     try {
         const beforeTicket = await getTicketBalanceFromBag();
         // ⭐ 两类图鉴都要领(抓包: 领奖请求 #1 = 类别, 1=植物 / 101=牧场动物「巨大」页签)
+        // 先查有没有可领的再发领奖请求(无可领时省一半请求; 2026-11-22)
+        const { getIllustratedList, claimAllRewards } = require('./illustrated');
         const allItems = [];
+        const claimedByType = { 1: 0, 101: 0 };
         for (const listType of [1, 101]) {
             try {
-                const reply = await claimAllIllustratedRewards(listType);
-                allItems.push(
+                const list = await getIllustratedList({ listType });
+                const arr = (list && list.items) || [];
+                const hasClaimable = arr.some(it => it && it.planted && !it.has_reward
+                    && Number(it.planted_count) > 0
+                    && Number(it.harvest_count) >= Number(it.planted_count));
+                if (!hasClaimable) continue;
+                const reply = await claimAllRewards(listType);
+                const got = [
                     ...(Array.isArray(reply && reply.items) ? reply.items : []),
                     ...(Array.isArray(reply && reply.bonus_items) ? reply.bonus_items : []),
-                );
+                ];
+                claimedByType[listType] = got.length;
+                allItems.push(...got);
             } catch { /* 单类失败不影响另一类 */ }
         }
         const items = allItems;
+        // ⭐ 成功判定不能只看点券(2026-11-22): 巨大(牧场动物)图鉴的奖励是收藏点(3003),
+        //   不涨点券 —— 旧判定 gainTicket>=200 让牧场图鉴领奖**永远静默**(领了也不记日志/统计)。
+        //   只要服务端返回了奖励条目就算成功。
+        if (!items.length) return false;
         const afterTicket = await getTicketBalanceFromBag();
         const gainTicket = Math.max(0, afterTicket - beforeTicket);
-        if (gainTicket < 200) return false;
 
-        log('任务', `领取成功: 点券${gainTicket}`, {
+        log('任务', `图鉴奖励领取成功 ${items.length} 项${gainTicket > 0 ? `, 点券+${gainTicket}` : ''}${claimedByType[101] > 0 ? `(含巨大图鉴 ${claimedByType[101]})` : ''}`, {
             module: 'task',
             event: '图鉴奖励',
             result: 'ok',
@@ -237,6 +251,8 @@ async function checkAndClaimIllustratedRewards(force = false) {
         taskClaimDoneDateKey = getDateKey();
         taskClaimLastAt = Date.now();
         recordOperation('taskClaim', 1);
+        // 巨大(牧场动物)图鉴单独计数, 便于观察「巨大」页签的领取情况
+        if (claimedByType[101] > 0) recordOperation('ranchIllustrated', claimedByType[101]);
         return true;
     } catch {
         return false;
