@@ -36,6 +36,7 @@ const { initStatusBar, setStatusPlatform, statusData } = require('../services/st
 const { setRecordGoldExpHook } = require('../services/status');
 const { cleanupTaskSystem, checkAndClaimTasks, getTaskClaimDailyState, getTaskDailyStateLikeApp, getGrowthTaskStateLikeApp } = require('../services/task');
 const { getActiveMysteryShop, buyMysteryGoods, checkAndBuyMysteryShop } = require('../services/mystery-shop');
+const { createFailureBreaker } = require('../utils/failure-breaker');
 const { getSolarTerms, claimSolarTerms, checkAndClaimSolarTerms } = require('../services/solarterms');
 const { sellAllFruits, getBag, getBagItems, openFertilizerGiftPacksSilently, openGiftPacksSilently, autoUseBagItems } = require('../services/warehouse');
 if (parentPort && workerData && workerData.accountId && !process.env.FARM_ACCOUNT_ID) {
@@ -231,6 +232,16 @@ let lastTreasureRobAt = 0;
 let lastBuyBookSkipLog = '';
 let lastLimitedPackSkipLog = '';
 
+// 周期自查任务熔断(防未知错误每轮刷失败日志): 连续 3 轮失败 → 静默 30 分钟, 半开试探成功自动恢复
+const BUY_BOOK_BREAKER = createFailureBreaker();
+const LIMITED_PACK_BREAKER = createFailureBreaker();
+const COLLECTION_BREAKER = createFailureBreaker();
+const AUTUMN_WISH_BREAKER = createFailureBreaker();
+const FIREWORK_BREAKER = createFailureBreaker();
+const HAPPY_SHARE_BREAKER = createFailureBreaker();
+const AD_GIFT_BREAKER = createFailureBreaker();
+const MILK_TEA_BREAKER = createFailureBreaker();
+
 function stopDailyRoutineTimer() {
     workerScheduler.clear('daily_routine_interval');
     workerScheduler.clear('mystery_shop_interval');
@@ -251,6 +262,7 @@ function stopDailyRoutineTimer() {
  */
 async function runAutumnWish(reason = 'interval') {
     if (!canRunTasks()) return { skipped: true, reason: 'offline' };
+    if (AUTUMN_WISH_BREAKER.isOpen()) return { skipped: true, reason: '熔断中' };
     const cfg = getAutumnWishConfig();
     const out = { wish: null, firework: null };
 
@@ -264,11 +276,14 @@ async function runAutumnWish(reason = 'interval') {
                 });
             }
         } catch (e) {
-            log('活动', `秋祈良愿处理失败: ${e.message}`, { module: 'activity', event: '秋祈良愿', result: 'error', trigger: reason });
+            const st = AUTUMN_WISH_BREAKER.failure();
+            if (st === 'open') log('活动', `秋祈良愿连续失败, 暂停30分钟后重试: ${e.message}`, { module: 'activity', event: '秋祈良愿', result: 'error', trigger: reason });
+            else if (!st) log('活动', `秋祈良愿处理失败: ${e.message}`, { module: 'activity', event: '秋祈良愿', result: 'error', trigger: reason });
         }
     }
 
     if (cfg.fireworkEnabled && cfg.fireworkCount > 0) {
+        if (FIREWORK_BREAKER.isOpen()) return out;
         try {
             const have = await autumnWish.getFireworkCount().catch(() => 0);
             if (have > 0) {
@@ -286,7 +301,9 @@ async function runAutumnWish(reason = 'interval') {
                 }
             }
         } catch (e) {
-            log('活动', `放烟花失败: ${e.message}`, { module: 'activity', event: '放烟花', result: 'error', trigger: reason });
+            const st = FIREWORK_BREAKER.failure();
+            if (st === 'open') log('活动', `放烟花连续失败, 暂停30分钟后重试: ${e.message}`, { module: 'activity', event: '放烟花', result: 'error', trigger: reason });
+            else if (!st) log('活动', `放烟花失败: ${e.message}`, { module: 'activity', event: '放烟花', result: 'error', trigger: reason });
         }
     }
     return out;
@@ -297,6 +314,7 @@ async function runAutumnWish(reason = 'interval') {
  */
 async function runAdGift(reason = 'interval') {
     if (!canRunTasks()) return { skipped: true, reason: 'offline' };
+    if (AD_GIFT_BREAKER.isOpen()) return { skipped: true, reason: '熔断中' };
     if (!getAdGiftEnabled()) return { skipped: true, reason: 'disabled' };
     try {
         const r = await adGift.claimDailyAdGift(false);
@@ -310,7 +328,9 @@ async function runAdGift(reason = 'interval') {
         }
         return r;
     } catch (e) {
-        log('商城', `看广告礼包失败: ${e.message}`, { module: 'mall', event: '看广告礼包', result: 'error', trigger: reason });
+        const st = AD_GIFT_BREAKER.failure();
+        if (st === 'open') log('商城', `看广告礼包连续失败, 暂停30分钟后重试: ${e.message}`, { module: 'mall', event: '看广告礼包', result: 'error', trigger: reason });
+        else if (!st) log('商城', `看广告礼包失败: ${e.message}`, { module: 'mall', event: '看广告礼包', result: 'error', trigger: reason });
         return { ok: false, reason: e.message };
     }
 }
@@ -321,6 +341,7 @@ async function runAdGift(reason = 'interval') {
  */
 async function runMilkTea(reason = 'interval') {
     if (!canRunTasks()) return { skipped: true, reason: 'offline' };
+    if (MILK_TEA_BREAKER.isOpen()) return { skipped: true, reason: '熔断中' };
     if (!getActivityStatus().milkTeaEnabled) return { skipped: true, reason: 'disabled' };
     const cfg = getMilkTeaConfig();
     if (!cfg.enabled) return { skipped: true, reason: 'disabled' };
@@ -348,7 +369,9 @@ async function runMilkTea(reason = 'interval') {
         }
         return r;
     } catch (e) {
-        log('活动', `奶茶热销中处理失败: ${e.message}`, { module: 'activity', event: '奶茶热销中', result: 'error', trigger: reason });
+        const st = MILK_TEA_BREAKER.failure();
+        if (st === 'open') log('活动', `奶茶热销中连续失败, 暂停30分钟后重试: ${e.message}`, { module: 'activity', event: '奶茶热销中', result: 'error', trigger: reason });
+        else if (!st) log('活动', `奶茶热销中处理失败: ${e.message}`, { module: 'activity', event: '奶茶热销中', result: 'error', trigger: reason });
         return { ok: false, reason: e.message };
     }
 }
@@ -358,6 +381,7 @@ async function runMilkTea(reason = 'interval') {
  */
 async function runHappyShare(reason = 'interval') {
     if (!canRunTasks()) return { skipped: true, reason: 'offline' };
+    if (HAPPY_SHARE_BREAKER.isOpen()) return { skipped: true, reason: '熔断中' };
     if (!getHappyShareEnabled()) return { skipped: true, reason: 'disabled' };
     try {
         const r = await happyShare.checkAndRunHappyShare(false);
@@ -374,7 +398,9 @@ async function runHappyShare(reason = 'interval') {
         }
         return r;
     } catch (e) {
-        log('活动', `快乐不独享处理失败: ${e.message}`, { module: 'activity', event: '快乐不独享', result: 'error', trigger: reason });
+        const st = HAPPY_SHARE_BREAKER.failure();
+        if (st === 'open') log('活动', `快乐不独享连续失败, 暂停30分钟后重试: ${e.message}`, { module: 'activity', event: '快乐不独享', result: 'error', trigger: reason });
+        else if (!st) log('活动', `快乐不独享处理失败: ${e.message}`, { module: 'activity', event: '快乐不独享', result: 'error', trigger: reason });
         return { ok: false, reason: e.message };
     }
 }
@@ -392,6 +418,7 @@ async function runHappyShare(reason = 'interval') {
  */
 async function runCollection(reason = 'interval') {
     if (!canRunTasks()) return { skipped: true, reason: 'offline' };
+    if (COLLECTION_BREAKER.isOpen()) return { skipped: true, reason: '熔断中' };
     if (!getCollectionEnabled()) return { skipped: true, reason: 'disabled' };
     try {
         const r = await require('../services/collection').runCollectionTasks({});
@@ -418,7 +445,9 @@ async function runCollection(reason = 'interval') {
         }
         return r;
     } catch (e) {
-        log('典藏室', `典藏室处理失败: ${e.message}`, { module: 'activity', event: '典藏室', result: 'error', trigger: reason });
+        const st = COLLECTION_BREAKER.failure();
+        if (st === 'open') log('典藏室', `典藏室连续失败, 暂停30分钟后重试: ${e.message}`, { module: 'activity', event: '典藏室', result: 'error', trigger: reason });
+        else if (!st) log('典藏室', `典藏室处理失败: ${e.message}`, { module: 'activity', event: '典藏室', result: 'error', trigger: reason });
         return { ok: false, reason: e.message };
     }
 }
@@ -430,6 +459,7 @@ async function runCollection(reason = 'interval') {
  */
 async function runBuyLimitedPacks(reason = 'interval') {
     if (!canRunTasks()) return { skipped: true, reason: 'offline' };
+    if (LIMITED_PACK_BREAKER.isOpen()) return { skipped: true, reason: '熔断中' };
     const cfg = getLimitedPackConfig();
     if (!cfg.enabled) return { skipped: true, reason: 'disabled' };
     try {
@@ -449,13 +479,16 @@ async function runBuyLimitedPacks(reason = 'interval') {
         }
         return r;
     } catch (e) {
-        log('商城', `限时礼包购买失败: ${e.message}`, { module: 'mall', event: '限时礼包', result: 'error', trigger: reason });
+        const st = LIMITED_PACK_BREAKER.failure();
+        if (st === 'open') log('商城', `限时礼包连续失败, 暂停30分钟后重试: ${e.message}`, { module: 'mall', event: '限时礼包', result: 'error', trigger: reason });
+        else if (!st) log('商城', `限时礼包购买失败: ${e.message}`, { module: 'mall', event: '限时礼包', result: 'error', trigger: reason });
         return { ok: false, error: e.message };
     }
 }
 
 async function runBuyChallengeBooks(reason = 'interval') {
     if (!canRunTasks()) return { skipped: true, reason: 'offline' };
+    if (BUY_BOOK_BREAKER.isOpen()) return { skipped: true, reason: '熔断中' };
     const cfg = getBuyBookConfig();
     if (!cfg.enabled || cfg.count <= 0) return { skipped: true, reason: 'disabled' };
     try {
@@ -478,7 +511,9 @@ async function runBuyChallengeBooks(reason = 'interval') {
         }
         return r;
     } catch (e) {
-        log('商城', `每日购买中级挑战书失败: ${e.message}`, { module: 'mall', event: '购买挑战书', result: 'error', trigger: reason });
+        const st = BUY_BOOK_BREAKER.failure();
+        if (st === 'open') log('商城', `购买挑战书连续失败, 暂停30分钟后重试: ${e.message}`, { module: 'mall', event: '购买挑战书', result: 'error', trigger: reason });
+        else if (!st) log('商城', `每日购买中级挑战书失败: ${e.message}`, { module: 'mall', event: '购买挑战书', result: 'error', trigger: reason });
         return { ok: false, error: e.message };
     }
 }

@@ -204,6 +204,7 @@ const {
 } = require('../config/gameConfig');
 const { sendMsgAsync } = require('../utils/network');
 const { types } = require('../utils/proto');
+const { shortNetErr } = require('../utils/biz-error');
 const { toLong, toNum, log, logWarn } = require('../utils/utils');
 const { isAutomationOn, getActivityStatus } = require('../models/store');
 const path = require('node:path');
@@ -1485,20 +1486,18 @@ async function getMugeOverview() {
 //   1034162 档位奖励已领取(85 全服档位/84 助力/83 成长值档位)
 //   1034164 任务奖励已领取(82 活动任务)
 //   1034166 分享任务无可领(87 前置探测, 分享做完后)
+// 消息压缩/业务态识别的通用实现见 utils/biz-error.js, 这里牧歌专用精确码表。
 const MUGE_NOTHING_CODES = new Set(['1034162', '1034164', '1034166']);
 
-/** 压缩网络层错误消息: "gamepb...Operate 错误: code=1034162 该档位奖励已领取" → "code=1034162 该档位奖励已领取" */
+/** 压缩网络层错误消息("gamepb...Operate 错误: code=1034162 ..." → "code=1034162 ...") */
 function shortMugeErr(e) {
-    const msg = String((e && e.message) || e);
-    const i = msg.indexOf('code=');
-    if (i === -1) return msg;
-    // 切片代替贪婪正则(避免多项式回溯); 码后多个空格压成一个
-    return msg.slice(i).replace(/^(code=\d+)\s+/, '$1 ').trim();
+    return shortNetErr(e);
 }
 
 /** 是否「无可领」类业务态错误 */
 function isNothingToClaim(e) {
-    const m = String((e && e.message) || e).match(/code=(\d+)/);
+    const msg = String((e && e.message) || e);
+    const m = msg.match(/code=(\d+)/);
     return !!(m && MUGE_NOTHING_CODES.has(m[1]));
 }
 

@@ -5,6 +5,7 @@
 const { sendMsgAsync } = require('../utils/network');
 const { types } = require('../utils/proto');
 const { log, toNum } = require('../utils/utils');
+const { isBizStateError, shortNetErr } = require('../utils/biz-error');
 
 const DAILY_KEY = 'email_rewards';
 let doneDateKey = '';
@@ -165,12 +166,12 @@ async function checkAndClaimEmails(force = false) {
                     items: items.map(it => ({ id: toNum(it.id), count: toNum(it.count) })),
                 });
             } catch (e) {
-                log('邮箱', `[邮箱领取] 《${String((m && m.title) || '')}》失败: ${e.message}`, {
-                    module: 'task',
-                    event: DAILY_KEY,
-                    result: 'error',
-                    emailId: String(m.id || ''),
-                });
+                // 「已领取」是正常业务态(邮件可能已被另一端领取), 静音; 真失败压缩后告警
+                if (!isBizStateError(e)) {
+                    log('邮箱', `[邮箱领取] 《${String((m && m.title) || '')}》失败: ${shortNetErr(e)}`, {
+                        module: 'task', event: DAILY_KEY, result: 'error',
+                    });
+                }
             }
         }
 
@@ -188,11 +189,14 @@ async function checkAndClaimEmails(force = false) {
 
         return { claimed, rewardItems: rewards.length };
     } catch (e) {
-        log('邮箱', `领取邮箱奖励失败: ${e.message}`, {
-            module: 'task',
-            event: DAILY_KEY,
-            result: 'error',
-        });
+        // 顶层: 「已领取/不可领」业务态静音; 真失败压缩后告警
+        if (!isBizStateError(e)) {
+            log('邮箱', `领取邮箱奖励失败: ${shortNetErr(e)}`, {
+                module: 'task',
+                event: DAILY_KEY,
+                result: 'error',
+            });
+        }
         return { claimed: 0, rewardItems: 0 };
     }
 }

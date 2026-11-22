@@ -18,10 +18,13 @@
 const { sendMsgAsync } = require('../utils/network');
 const { types } = require('../utils/proto');
 const { log, toNum } = require('../utils/utils');
+const { createFailureBreaker } = require('../utils/failure-breaker');
 
 const DAILY_KEY = 'red_packet_daily';
 const CHECK_COOLDOWN_MS = 10 * 60 * 1000;
 const SERVICE = 'gamepb.redpacketpb.RedPacketService';
+// 查询/领取连续失败熔断(防未知错误每 20 分钟刷一条 error): 3 次 → 静默 30 分钟
+const RED_PACKET_BREAKER = createFailureBreaker();
 
 let doneDateKey = '';
 let lastCheckAt = 0;
@@ -92,6 +95,7 @@ async function performDailyRedPacket(force = false) {
     const now = Date.now();
     if (!force && isDoneToday()) return false;
     if (!force && now - lastCheckAt < CHECK_COOLDOWN_MS) return false;
+    if (RED_PACKET_BREAKER.isOpen()) return false;
     lastCheckAt = now;
 
     let status;
@@ -99,11 +103,20 @@ async function performDailyRedPacket(force = false) {
         status = await getTodayClaimStatus();
     } catch (e) {
         lastResult = 'error';
-        log('红包', `查询红包状态失败: ${e.message}`, {
-            module: 'task',
-            event: DAILY_KEY,
-            result: 'error',
-        });
+        const st = RED_PACKET_BREAKER.failure();
+        if (st === 'open') {
+            log('红包', `查询红包状态连续失败, 暂停30分钟后重试: ${e.message}`, {
+                module: 'task',
+                event: DAILY_KEY,
+                result: 'error',
+            });
+        } else if (!st) {
+            log('红包', `查询红包状态失败: ${e.message}`, {
+                module: 'task',
+                event: DAILY_KEY,
+                result: 'error',
+            });
+        }
         return false;
     }
 
@@ -147,6 +160,19 @@ async function performDailyRedPacket(force = false) {
                     redPacketId: id,
                 });
             } else {
+                const st = RED_PACKET_BREAKER.failure();
+                if (st) {
+                    // 'open'(达到阈值)或 'extend'(半开试探又失败): 停止本轮后续红包, 30 分钟后再试
+                    if (st === 'open') {
+                        log('红包', `领取红包连续失败, 暂停30分钟后重试: ${e.message}`, {
+                            module: 'task',
+                            event: DAILY_KEY,
+                            result: 'error',
+                            redPacketId: id,
+                        });
+                    }
+                    break;
+                }
                 log('红包', `领取红包 #${id} 失败: ${e.message}`, {
                     module: 'task',
                     event: DAILY_KEY,

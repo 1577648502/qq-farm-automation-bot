@@ -5,6 +5,7 @@
 const { sendMsgAsync } = require('../utils/network');
 const { types } = require('../utils/proto');
 const { log, toNum } = require('../utils/utils');
+const { isBizStateError, shortNetErr } = require('../utils/biz-error');
 
 const DAILY_KEY = 'month_card_gift';
 const CHECK_COOLDOWN_MS = 10 * 60 * 1000;
@@ -107,12 +108,22 @@ async function performDailyMonthCardGift(force = false) {
                 });
                 claimed += 1;
             } catch (e) {
-                log('月卡', `领取失败(gid=${Number(info.goods_id || 0)}): ${e.message}`, {
-                    module: 'task',
-                    event: DAILY_KEY,
-                    result: 'error',
-                    goodsId: Number(info.goods_id || 0),
-                });
+                // 「已领取/不可领」是正常业务态(礼包当天领过后服务端会拒绝), 降级为提示
+                if (isBizStateError(e)) {
+                    log('月卡', `今日已领取(gid=${Number(info.goods_id || 0)}): ${shortNetErr(e)}`, {
+                        module: 'task',
+                        event: DAILY_KEY,
+                        result: 'none',
+                        goodsId: Number(info.goods_id || 0),
+                    });
+                } else {
+                    log('月卡', `领取失败(gid=${Number(info.goods_id || 0)}): ${shortNetErr(e)}`, {
+                        module: 'task',
+                        event: DAILY_KEY,
+                        result: 'error',
+                        goodsId: Number(info.goods_id || 0),
+                    });
+                }
             }
         }
         if (claimed > 0) {

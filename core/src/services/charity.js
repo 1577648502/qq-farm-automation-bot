@@ -18,6 +18,7 @@ const protobuf = require('protobufjs');
 const { sendMsgAsync } = require('../utils/network');
 const { types } = require('../utils/proto');
 const { toLong, toNum, log, logWarn, randomDelay } = require('../utils/utils');
+const { isBizStateError, shortNetErr } = require('../utils/biz-error');
 const { isAutomationOn, getActivityStatus } = require('../models/store');
 const { getBag, getBagItems } = require('./warehouse');
 const { getItemImageById, getItemById } = require('../config/gameConfig');
@@ -268,8 +269,10 @@ async function shareCharity() {
             };
         }
     } catch (e) {
-        // 领奖失败不视为分享失败 (可能已领过)
-        logWarn('活动', `公益小红花: ClaimShareReward 失败(可能已领): ${e.message}`);
+        // 领奖失败不视为分享失败; 「已领取/不可领」是正常业务态, 静音不刷日志
+        if (!isBizStateError(e)) {
+            logWarn('活动', `公益小红花: ClaimShareReward 失败: ${shortNetErr(e)}`);
+        }
     }
     return { shared: true, code, reward };
 }

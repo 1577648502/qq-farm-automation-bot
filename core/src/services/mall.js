@@ -6,6 +6,7 @@ const { Buffer } = require('node:buffer');
 const protobuf = require('protobufjs');
 const { sendMsgAsync, getUserState } = require('../utils/network');
 const { types } = require('../utils/proto');
+const { isBizStateError, shortNetErr } = require('../utils/biz-error');
 const { toNum, log, sleep } = require('../utils/utils');
 const { getItemById, getAllItems, getItemImageById } = require('../config/gameConfig');
 
@@ -1077,11 +1078,14 @@ async function buyFreeGifts(force = false) {
         }
         return bought;
     } catch (e) {
-        log('商城', `领取免费礼包失败: ${e.message}`, {
-            module: 'task',
-            event: FREE_GIFTS_DAILY_KEY,
-            result: 'error',
-        });
+        // 「已领取/不可领」是正常业务态(免费礼包每天一次), 静音; bought=0 时下方已有提示
+        if (!isBizStateError(e)) {
+            log('商城', `领取免费礼包失败: ${shortNetErr(e)}`, {
+                module: 'task',
+                event: FREE_GIFTS_DAILY_KEY,
+                result: 'error',
+            });
+        }
         return 0;
     }
 }
@@ -1181,7 +1185,7 @@ function parseSlot0Limit(limitField, _goodsName) {
 /**
  * 买一个限时礼包商品到"服务端上限", 然后开包
  * @param goods  { goods_id, name, price, limit } 原始 MallGoods
- * @returns { ok, goodsId, name, bought, opened, rewards, skipped }
+ * @returns {{ ok: boolean, goodsId: number, name: string, bought: number, opened: number, rewards: Array, skipped?: string }} 购买/开包结果
  */
 async function buyLimitedPackToLimit(goods) {
     const goodsId = toNum(goods && goods.goods_id);
