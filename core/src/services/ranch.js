@@ -406,7 +406,12 @@ async function autoUseRanchBagItems(opts = {}) {
         if (type === 109) continue;
         targets.push({ id, count, uid, name: info.name || `#${id}` });
     }
-    if (!targets.length) return finish({ used: 0, details: [] });
+    if (!targets.length) {
+        // ⭐ 普通道具没有可用的 ≠ 没活干: 背包可能全是罐头(type=109 被上面 continue 跳过),
+        //   自动灌桶仍要跑(2026-11-22 线上实测: acc3 无机桶 3.8h < 水位却没灌, 就是这里提前 return 了)
+        const canR = await autoFillCansToWatermark().catch(() => ({ used: 0, details: [] }));
+        return finish({ used: canR.used, details: canR.details });
+    }
 
     let used = 0;
     const details = [];
