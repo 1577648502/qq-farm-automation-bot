@@ -97,6 +97,10 @@ onMounted(reload)
     </div>
     <div class="p-3 sm:p-4">
       <LoadingState v-if="loading && !tasks.length" />
+      <!-- 账号未运行是常态(未启动/被踢下线), 显示友好空态而不是红色错误框(2026-11-22 修"我的任务大片空白") -->
+      <div v-else-if="error && /账号未运行/.test(error)" class="py-10 text-center text-sm text-gray-400">
+        账号未运行 — 启动账号后这里会显示牧场任务
+      </div>
       <div v-else-if="error" class="border border-red-200 rounded-lg bg-red-50 p-3 text-sm text-red-600 dark:border-red-800 dark:bg-red-900/20">
         {{ error }}
       </div>
