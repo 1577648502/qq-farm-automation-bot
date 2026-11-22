@@ -650,6 +650,12 @@ function buildBagDetailFromItems(rawItems, opts = {}) {
     //  牧场背包里「罐头(type=109)」是**可以使用**的 —— 用掉就是灌进罐头桶,
     //  这是牧场唯一的消费方式; 农场背包里 109 不出售也不手动用。
     const isRanchScene = String(opts.scene || '') === 'ranch';
+    // ⭐ 农场背包排除牧场专属条目(2026-11-22 用户反馈"其他"里出现松果/牧场经验/金券):
+    //   服务端 ItemService.Bag(农场场景)返回的是**全局物品表**, 混着牧场侧的计数器/货币
+    //   (实测 3 号号农场 bag 里有 松果1008 / 牧场经验1102 / 金券1007 / 动物收藏点3003)。
+    //   ⚠ 7003/7004 罐头桶**不能**过滤: 农场 bag 是它们唯一数据源(牧场 GetBag scene=2
+    //   没有), Dashboard 牧场区的罐头时长卡就靠这两个(见 test-ranch 罐头桶用例)。
+    const RANCH_ONLY_BAG_IDS = new Set([1007, 1008, 1102, 3003]);
     const originalItems = [];
     const merged = new Map();
 
@@ -658,6 +664,7 @@ function buildBagDetailFromItems(rawItems, opts = {}) {
         const count = toNum(it.count);
         const uid = toNum(it.uid);
         if (id <= 0 || count <= 0) continue;
+        if (!isRanchScene && RANCH_ONLY_BAG_IDS.has(id)) continue;
         const itemMutantTypes = getItemMutantTypes(it, id);
         const bagGroupKey = getMutationGroupKey(it, id, itemMutantTypes);
         originalItems.push({ id, count, uid, bagGroupKey });
@@ -667,6 +674,7 @@ function buildBagDetailFromItems(rawItems, opts = {}) {
         const id = toNum(it.id);
         const count = toNum(it.count);
         if (id <= 0 || count <= 0) continue;
+        if (!isRanchScene && RANCH_ONLY_BAG_IDS.has(id)) continue;
         const info = getItemById(id) || null;
         let name = info && info.name ? String(info.name) : '';
         let category = 'item';
