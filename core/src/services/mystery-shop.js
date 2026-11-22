@@ -10,6 +10,10 @@ const { sendMsgAsync } = require('../utils/network');
 const { types } = require('../utils/proto');
 const { toNum, toLong, log, logWarn, sleep } = require('../utils/utils');
 const { isAutomationOn } = require('../models/store');
+const { createFailureBreaker } = require('../utils/failure-breaker');
+
+// 独立定时器的周期检测: 连挂 3 次 → 暂停30分钟, 防持续故障刷屏(2026-11-22)
+const MYSTERY_BUY_BREAKER = createFailureBreaker();
 
 const SERVICE = 'gamepb.mysteryshoppb.MysteryShopService';
 
@@ -77,6 +81,7 @@ async function buyMysteryGoods(goodsId) {
 
 // ============ 自动购买 ============
 async function checkAndBuyMysteryShop() {
+    if (MYSTERY_BUY_BREAKER.isOpen()) return { bought: 0 };   // 连续失败熔断中: 静默跳过, 不发请求
     if (!isAutomationOn('mystery_shop')) return { bought: 0 };
     let bought = 0;
     try {
@@ -104,9 +109,14 @@ async function checkAndBuyMysteryShop() {
             }
         }
     } catch (e) {
-        logWarn('神秘商店', `自动购买检测失败: ${e.message}`, {
-            module: 'mystery_shop', event: '扫描神秘商店', result: 'error',
-        });
+        // 独立定时器的周期检测: 连挂 3 次 → 暂停30分钟, 防持续故障刷屏
+        const st = MYSTERY_BUY_BREAKER.failure();
+        if (st !== 'extend') {
+            const tip = st === 'open' ? '连续失败, 暂停30分钟后重试: ' : '';
+            logWarn('神秘商店', `自动购买检测${tip}失败: ${e.message}`, {
+                module: 'mystery_shop', event: '扫描神秘商店', result: 'error',
+            });
+        }
     }
     return { bought };
 }

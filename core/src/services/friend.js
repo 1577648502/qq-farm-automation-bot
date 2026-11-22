@@ -16,6 +16,9 @@ const {
     applyConfigSnapshot,
 } = require('../models/store');
 const { sendMsgAsync, getUserState, networkEvents } = require('../utils/network');
+const { createFailureBreaker } = require('../utils/failure-breaker');
+// 好友巡查整轮异常的连续失败熔断
+const FRIEND_CHECK_BREAKER = createFailureBreaker();
 const { types } = require('../utils/proto');
 const { buildLandBoard } = require('./land-layout');
 const { buildLockedLand, buildEmptyLand, buildPlantedLand } = require('./land-view');
@@ -1577,6 +1580,7 @@ async function visitFriendForHelp(friend, totalActions, myGid, accountId, ignore
 // ============ 好友巡查主循环 ============
 
 async function checkFriends(options = {}) {
+    if (FRIEND_CHECK_BREAKER.isOpen()) return false;   // 连续失败熔断中: 静默跳过
     const state = getUserState();
     if (!isAutomationOn('friend')) return false;
     
@@ -1785,7 +1789,13 @@ async function checkFriends(options = {}) {
         return summary.length > 0;
 
     } catch (err) {
-        logWarn('好友', `巡查异常: ${err.message}`);
+        // 好友巡查整轮异常熔断: 连挂 3 次 → 暂停30分钟(防持续故障每轮刷屏)
+        const st = FRIEND_CHECK_BREAKER.failure();
+        if (st === 'open') {
+            logWarn('好友', `好友巡查连续失败, 暂停30分钟后重试: ${err.message}`);
+        } else if (!st) {
+            logWarn('好友', `巡查异常: ${err.message}`);
+        }
         return false;
     } finally {
         isCheckingFriends = false;

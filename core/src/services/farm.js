@@ -7,6 +7,11 @@ const { CONFIG, PlantPhase, PHASE_NAMES } = require('../config/config');
 const { getPlantNameBySeedId, formatGrowTime, getPlantGrowTime, getAllSeeds, getPlantById, getPlantBySeedId, resolveMutationInfo, isGoldenPlant } = require('../config/gameConfig');
 const { isAutomationOn, getPreferredSeed, getAutomation, getPlantingStrategy, getBagSeedPriority, getBagSeedFallbackStrategy, getPlantSeedExclude, getFertilizerBuyOrganicCount, getFertilizerBuyOrganicThresholdHours, getFertilizerBuyNormalCount, getFertilizerBuyNormalThresholdHours, getFertilizerBuyCheckIntervalMinutes } = require('../models/store');
 const { sendMsgAsync, getUserState, networkEvents, getWsErrorState } = require('../utils/network');
+const { createFailureBreaker } = require('../utils/failure-breaker');
+// 巡田整轮异常的连续失败熔断: 连挂 3 次暂停 30 分钟(防未知故障每轮刷屏)
+const FARM_CHECK_BREAKER = createFailureBreaker();
+// 化肥自动购买检测(独立定时器)的连续失败熔断
+const FERTILIZER_BUY_BREAKER = createFailureBreaker();
 const { types } = require('../utils/proto');
 const { toLong, toNum, getServerTimeSec, toTimeSec, log, logWarn, sleep, randomDelay } = require('../utils/utils');
 const { getPlantRankings } = require('./analytics');
@@ -1747,6 +1752,7 @@ async function resolveRemovableHarvestedLands(harvestedLandIds, harvestReply) {
 async function checkFarm() {
     const state = getUserState();
     if (isCheckingFarm || !state.gid || !isAutomationOn('farm')) return false;
+    if (FARM_CHECK_BREAKER.isOpen()) return false;   // 连续失败熔断中: 静默跳过
     isCheckingFarm = true;
 
     try {
@@ -1755,7 +1761,13 @@ async function checkFarm() {
         isFirstFarmCheck = false;
         return !!(result && result.hadWork);
     } catch (err) {
-        logWarn('巡田', `检查失败: ${err.message}`);
+        // 周期任务连续失败熔断(2026-11-22 全系统防刷屏): 连挂 3 次 → 暂停30分钟
+        const st = FARM_CHECK_BREAKER.failure();
+        if (st === 'open') {
+            logWarn('巡田', `巡田连续失败, 暂停30分钟后重试: ${err.message}`);
+        } else if (!st) {
+            logWarn('巡田', `检查失败: ${err.message}`);
+        }
         return false;
     } finally {
         isCheckingFarm = false;
@@ -2320,6 +2332,7 @@ function restartFertilizerBuyCheckTimer() {
 }
 
 async function checkFertilizerBuyOnce() {
+    if (FERTILIZER_BUY_BREAKER.isOpen()) return;   // 连续失败熔断中: 静默跳过, 不发请求
     if (!isAutomationOn('fertilizer_buy_organic') && !isAutomationOn('fertilizer_buy_normal')) {
         return;
     }
@@ -2336,12 +2349,17 @@ async function checkFertilizerBuyOnce() {
 
         await checkAndBuyFertilizerBoth(options);
     } catch (e) {
-        logWarn('农场', `化肥自动购买检测失败: ${e.message}`, {
-            module: 'farm',
-            event: 'fertilizer_auto_buy',
-            result: 'error',
-            error: e.message,
-        });
+        // 独立定时器的周期检测: 连挂 3 次 → 暂停30分钟, 防持续故障刷屏
+        const st = FERTILIZER_BUY_BREAKER.failure();
+        const tip = st === 'open' ? '连续失败, 暂停30分钟后重试: ' : '';
+        if (st !== 'extend') {
+            logWarn('农场', `化肥自动购买检测${tip}失败: ${e.message}`, {
+                module: 'farm',
+                event: 'fertilizer_auto_buy',
+                result: 'error',
+                error: e.message,
+            });
+        }
     }
 }
 

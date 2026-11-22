@@ -14,6 +14,7 @@
  */
 const protobuf = require('protobufjs');
 const network = require('../utils/network');
+const { createFailureBreaker } = require('../utils/failure-breaker');
 const { networkEvents } = network;
 const { getShopGoodsList, purchaseShopGoods } = require('./mall');
 const { types } = require('../utils/proto');
@@ -1973,6 +1974,29 @@ async function checkAndBuyCansIfLow(opts = {}) {
     });
 }
 
+// 周期子操作的失败熔断表(2026-11-22 全系统防刷屏):
+// 每个子操作连挂 3 次 → 暂停 30 分钟(熔断期内不发请求不打日志, 到点半开试探)。
+// 单只动物/单只目标的细粒度 skip 由各操作自己的表(_strokeSkip 等)处理。
+const RANCH_CARE_BREAKERS = {
+    feedMachine: createFailureBreaker(),
+    harvest: createFailureBreaker(),
+    produce: createFailureBreaker(),
+    feedManual: createFailureBreaker(),
+    feedStrategy: createFailureBreaker(),
+    sell: createFailureBreaker(),
+    placeCubs: createFailureBreaker(),
+    buyCubs: createFailureBreaker(),
+    cleanOwn: createFailureBreaker(),
+    stealFriends: createFailureBreaker(),
+    strokeFriends: createFailureBreaker(),
+    hazardFriends: createFailureBreaker(),
+    upgradeBuildings: createFailureBreaker(),
+    unlockRegions: createFailureBreaker(),
+    rotationShop: createFailureBreaker(),
+    ranchTasks: createFailureBreaker(),
+    canBuy: createFailureBreaker(),
+};
+
 /**
  * 一键巡牧场: 收获可收的 → 催产 → 喂食。
  * 顺序有讲究: 先收获腾出产出位, 再催产, 最后喂食让动物恢复生产。
@@ -2015,7 +2039,7 @@ async function runRanchCare(opts = {}) {
     await gap();
 
     // 0. 牧草机补草(任务"给牧草机添加牧草"也靠它驱动)
-    if (want('feed') && opts.feedMachine !== false && isAutomationOn('ranch_feedmachine')) {
+    if (want('feed') && opts.feedMachine !== false && isAutomationOn('ranch_feedmachine') && !RANCH_CARE_BREAKERS.feedMachine.isOpen()) {
         try {
             const fm = await autoFeedMachine(opts);
             result.feedMachineAdded = fm.fed;
@@ -2023,7 +2047,12 @@ async function runRanchCare(opts = {}) {
         } catch (e) {
             // 1045115 建筑不存在 = 牧场还没摆放牧草机, 每轮都报一遍只会刷屏
             if (!isExpectedRanchError(e)) {
-                logWarn('牧场', `牧草机检查失败: ${e.message}`, { module: 'ranch', event: '牧草机加草', result: 'error' });
+                const st = RANCH_CARE_BREAKERS.feedMachine.failure();
+                if (st === 'open') {
+                    logWarn('牧场', `牧草机检查连续失败, 暂停30分钟后重试: ${e.message}`, { module: 'ranch', event: '牧草机加草', result: 'error' });
+                } else if (!st) {
+                    logWarn('牧场', `牧草机检查失败: ${e.message}`, { module: 'ranch', event: '牧草机加草', result: 'error' });
+                }
             }
         }
     }
@@ -2032,7 +2061,7 @@ async function runRanchCare(opts = {}) {
     // 1. 收获(蛋/崽/整只; 任务"完成1次收获""收获鸡蛋N个""收获整鸡N次"靠它驱动)
     //    ⭐ 官方操作顺序: 收副产物(CollectProduce, 架上的蛋) → 催产 → 收获(HarvestRanch)
     //    只发 HarvestRanch 收不到架上的蛋(鹅 feed=3/#6≥1 就是蛋在架上)
-    if (want('core') && isAutomationOn('ranch_harvest')) try {
+    if (want('core') && isAutomationOn('ranch_harvest') && !RANCH_CARE_BREAKERS.harvest.isOpen()) try {
         for (const s of [1, 2, 3, 4, 5, 6]) {
             try {
                 await collectProduce(s);
@@ -2065,13 +2094,20 @@ async function runRanchCare(opts = {}) {
             return result;
         }
         if (!isExpectedRanchError(e)) {
-            logWarn('牧场', `收获失败: ${e.message}`, { module: 'ranch', event: '收获牧场', result: 'error' });
+            const st = RANCH_CARE_BREAKERS.harvest.failure();
+            if (st === 'open') {
+                logWarn('牧场', `收获连续失败, 暂停30分钟后重试: ${e.message}`, { module: 'ranch', event: '收获牧场', result: 'error' });
+            } else if (!st) {
+                logWarn('牧场', `收获失败: ${e.message}`, { module: 'ranch', event: '收获牧场', result: 'error' });
+            }
         }
+        // expected 错误(没有可收的等正常状态)不计入熔断
+        else RANCH_CARE_BREAKERS.harvest.success();
     }
     await gap();
 
     // 2. 催产(空请求 = 全部槽位; 任务"生产N次"靠它驱动)
-    if (want('core') && isAutomationOn('ranch_produce')) try {
+    if (want('core') && isAutomationOn('ranch_produce') && !RANCH_CARE_BREAKERS.produce.isOpen()) try {
         const produceReply = await triggerProduce(0);
         for (const r of (produceReply.receipts || [])) {
             result.produced += toNum(r.count);
@@ -2091,8 +2127,14 @@ async function runRanchCare(opts = {}) {
             return result;
         }
         if (!isExpectedRanchError(e)) {
-            logWarn('牧场', `催产失败: ${e.message}`, { module: 'ranch', event: '催产', result: 'error' });
+            const st = RANCH_CARE_BREAKERS.produce.failure();
+            if (st === 'open') {
+                logWarn('牧场', `催产连续失败, 暂停30分钟后重试: ${e.message}`, { module: 'ranch', event: '催产', result: 'error' });
+            } else if (!st) {
+                logWarn('牧场', `催产失败: ${e.message}`, { module: 'ranch', event: '催产', result: 'error' });
+            }
         }
+        else RANCH_CARE_BREAKERS.produce.success();
     }
     await gap();
 
@@ -2101,7 +2143,7 @@ async function runRanchCare(opts = {}) {
     //   b) 罐头策略(automation.ranch_can, 与农场施肥策略同构): core 组每轮巡查执行
     // ⚠ 20261117 抓包: 真实客户端全程没调 FeedAnimal —— 动物吃牧草机里的草是自动的,
     //   这个接口是"投喂罐头加速"用的(消耗罐头 80021+)。
-    if (want('feed') && opts.feedCount && toNum(opts.feedCount) > 0) {
+    if (want('feed') && opts.feedCount && toNum(opts.feedCount) > 0 && !RANCH_CARE_BREAKERS.feedManual.isOpen()) {
         try {
             // 自动巡牧场不做单只投喂(没必要), 只支持"全场投喂"
             // ⭐ #2 是喂食方式: 4=普通罐头→2 / 5,6=有机→1
@@ -2118,11 +2160,16 @@ async function runRanchCare(opts = {}) {
                 return result;
             }
             if (!isExpectedRanchError(e)) {
+                const st = RANCH_CARE_BREAKERS.feedManual.failure();
+            if (st === 'open') {
+                logWarn('牧场', `喂食连续失败, 暂停30分钟后重试: ${e.message}`, { module: 'ranch', event: '喂食', result: 'error' });
+            } else if (!st) {
                 logWarn('牧场', `喂食失败: ${e.message}`, { module: 'ranch', event: '喂食', result: 'error' });
+            }
             }
         }
     }
-    else if (want('core') && isAutomationOn('ranch_auto')) {
+    else if (want('core') && isAutomationOn('ranch_auto') && !RANCH_CARE_BREAKERS.feedStrategy.isOpen()) {
         // 罐头策略: none 不喂 / normal 仅普通(每只一次) / organic 仅有机(每轮每只一次)
         // / both 普通+有机 / smart 普通+快成熟有机(≤ ranch_can_smart_seconds, 默认 300s)
         try {
@@ -2146,7 +2193,12 @@ async function runRanchCare(opts = {}) {
                 return result;
             }
             if (!isExpectedRanchError(e)) {
-                logWarn('牧场', `罐头策略喂食失败: ${e.message}`, { module: 'ranch', event: '喂罐头', result: 'error' });
+                const st = RANCH_CARE_BREAKERS.feedStrategy.failure();
+                if (st === 'open') {
+                    logWarn('牧场', `罐头策略喂食连续失败, 暂停30分钟后重试: ${e.message}`, { module: 'ranch', event: '喂罐头', result: 'error' });
+                } else if (!st) {
+                    logWarn('牧场', `罐头策略喂食失败: ${e.message}`, { module: 'ranch', event: '喂罐头', result: 'error' });
+                }
             }
         }
     }
@@ -2159,14 +2211,19 @@ async function runRanchCare(opts = {}) {
     await gap();
 
     // 4. 出售产物(任务"出售鸡蛋"靠它驱动; type=107 的蛋/崽)
-    if (want('daily') && opts.sell !== false && isAutomationOn('ranch_sell')) {
+    if (want('daily') && opts.sell !== false && isAutomationOn('ranch_sell') && !RANCH_CARE_BREAKERS.sell.isOpen()) {
         try {
             const r = await autoSellRanchProducts(opts);
             result.sold = r.sold;
             result.earned = r.earned;
             if (r.sold > 0) result.details.push(`卖出${r.sold}→金券${r.earned}`);
         } catch (e) {
-            logWarn('牧场', `出售产物失败: ${e.message}`, { module: 'ranch', event: '出售产物', result: 'error' });
+            const st = RANCH_CARE_BREAKERS.sell.failure();
+            if (st === 'open') {
+                logWarn('牧场', `出售产物连续失败, 暂停30分钟后重试: ${e.message}`, { module: 'ranch', event: '出售产物', result: 'error' });
+            } else if (!st) {
+                logWarn('牧场', `出售产物失败: ${e.message}`, { module: 'ranch', event: '出售产物', result: 'error' });
+            }
         }
     }
 
@@ -2177,14 +2234,19 @@ async function runRanchCare(opts = {}) {
     //   幼崽只是进了背包(itemType=105)。不补这一步, 槽位永远算作"空",
     //   于是每轮巡检都再买 4 只 → 实测背包里堆了 1242 只鸡。
     //   抓包证实: 客户端买完后会调 AnimalService.PlaceAnimal 入栏。
-    if (want('core') && opts.placeCubs !== false) {
+    if (want('core') && opts.placeCubs !== false && !RANCH_CARE_BREAKERS.placeCubs.isOpen()) {
         try {
             const placed = await autoPlaceCubs(opts);
             result.cubsPlaced = placed.placed;
             if (placed.placed > 0) result.details.push(`入栏${placed.placed}只`);
         } catch (e) {
             if (!isExpectedRanchError(e)) {
-                logWarn('牧场', `幼崽入栏失败: ${e.message}`, { module: 'ranch', event: '幼崽入栏', result: 'error' });
+                const st = RANCH_CARE_BREAKERS.placeCubs.failure();
+                if (st === 'open') {
+                    logWarn('牧场', `幼崽入栏连续失败, 暂停30分钟后重试: ${e.message}`, { module: 'ranch', event: '幼崽入栏', result: 'error' });
+                } else if (!st) {
+                    logWarn('牧场', `幼崽入栏失败: ${e.message}`, { module: 'ranch', event: '幼崽入栏', result: 'error' });
+                }
             }
         }
     }
@@ -2192,7 +2254,7 @@ async function runRanchCare(opts = {}) {
     await gap();
 
     // 6. 买幼崽(任务"领养鸡幼崽N个"靠它驱动; 按收益比优先)
-    if (want('core') && opts.buyCubs !== false && isAutomationOn('ranch_buy_cubs')) {
+    if (want('core') && opts.buyCubs !== false && isAutomationOn('ranch_buy_cubs') && !RANCH_CARE_BREAKERS.buyCubs.isOpen()) {
         try {
             let careView = null;
             try { careView = await getRanchOverview(); } catch { careView = null; }
@@ -2200,33 +2262,48 @@ async function runRanchCare(opts = {}) {
             result.boughtCubs = r.bought;
             if (r.bought > 0) result.details.push(`买${r.details.join('/')}`);
         } catch (e) {
-            logWarn('牧场', `买幼崽失败: ${e.message}`, { module: 'ranch', event: '买幼崽', result: 'error' });
+            const st = RANCH_CARE_BREAKERS.buyCubs.failure();
+            if (st === 'open') {
+                logWarn('牧场', `买幼崽连续失败, 暂停30分钟后重试: ${e.message}`, { module: 'ranch', event: '买幼崽', result: 'error' });
+            } else if (!st) {
+                logWarn('牧场', `买幼崽失败: ${e.message}`, { module: 'ranch', event: '买幼崽', result: 'error' });
+            }
         }
     }
 
     await gap();
 
     // 5.5a 清理自己的牧场(20261117 抓包: CleanAllRanch 清自己, 产便便 → 游商货币)
-    if (want('daily') && opts.cleanOwn !== false && isAutomationOn('ranch_clean')) {
+    if (want('daily') && opts.cleanOwn !== false && isAutomationOn('ranch_clean') && !RANCH_CARE_BREAKERS.cleanOwn.isOpen()) {
         try {
             const r = await autoCleanOwnRanch();
             result.cleanedFriends += r.cleaned;   // 沿用统计字段
             if (r.cleaned > 0) result.details.push('清理牧场');
         } catch (e) {
-            logWarn('牧场', `清理牧场失败: ${e.message}`, { module: 'ranch', event: '清理牧场', result: 'error' });
+            const st = RANCH_CARE_BREAKERS.cleanOwn.failure();
+            if (st === 'open') {
+                logWarn('牧场', `清理牧场连续失败, 暂停30分钟后重试: ${e.message}`, { module: 'ranch', event: '清理牧场', result: 'error' });
+            } else if (!st) {
+                logWarn('牧场', `清理牧场失败: ${e.message}`, { module: 'ranch', event: '清理牧场', result: 'error' });
+            }
         }
     }
 
     await gap();
 
     // 5.5b 偷好友牧场产物(20261117 抓包: StealProduce{gid}, feed_state==4 才偷)
-    if (want('steal') && opts.stealFriends !== false && isAutomationOn('ranch_steal')) {
+    if (want('steal') && opts.stealFriends !== false && isAutomationOn('ranch_steal') && !RANCH_CARE_BREAKERS.stealFriends.isOpen()) {
         try {
             const r = await autoStealFriendProduce(opts);
             result.stolenFriends = r.cleaned;
             if (r.cleaned > 0) result.details.push(`偷${r.cleaned}家`);
         } catch (e) {
-            logWarn('牧场', `偷好友产物失败: ${e.message}`, { module: 'ranch', event: '偷好友产物', result: 'error' });
+            const st = RANCH_CARE_BREAKERS.stealFriends.failure();
+            if (st === 'open') {
+                logWarn('牧场', `偷好友产物连续失败, 暂停30分钟后重试: ${e.message}`, { module: 'ranch', event: '偷好友产物', result: 'error' });
+            } else if (!st) {
+                logWarn('牧场', `偷好友产物失败: ${e.message}`, { module: 'ranch', event: '偷好友产物', result: 'error' });
+            }
         }
     }
 
@@ -2234,13 +2311,18 @@ async function runRanchCare(opts = {}) {
 
     // 5.5c 照顾好友动物(StrokeAnimal) —— 牧歌初启"累计照料好友动物 N 次"靠它
     //   抓包(20261120-001457)定案: {1:好友gid, 2:{1:栏舍实例,2:槽位}}; 每日上限 op 11009 = 10 次
-    if (want('steal') && opts.strokeFriends !== false && isAutomationOn('ranch_stroke')) {
+    if (want('steal') && opts.strokeFriends !== false && isAutomationOn('ranch_stroke') && !RANCH_CARE_BREAKERS.strokeFriends.isOpen()) {
         try {
             const r = await autoStrokeFriendAnimals(opts);
             result.strokedFriends = r.count;
             if (r.count > 0) result.details.push(`照顾${r.count}只`);
         } catch (e) {
-            logWarn('牧场', `照顾好友动物失败: ${e.message}`, { module: 'ranch', event: '照顾好友动物', result: 'error' });
+            const st = RANCH_CARE_BREAKERS.strokeFriends.failure();
+            if (st === 'open') {
+                logWarn('牧场', `照顾好友动物连续失败, 暂停30分钟后重试: ${e.message}`, { module: 'ranch', event: '照顾好友动物', result: 'error' });
+            } else if (!st) {
+                logWarn('牧场', `照顾好友动物失败: ${e.message}`, { module: 'ranch', event: '照顾好友动物', result: 'error' });
+            }
         }
     }
 
@@ -2248,13 +2330,18 @@ async function runRanchCare(opts = {}) {
 
     // 5.5d 对好友使坏(PutHazard) —— 牧歌初启"累计使坏好友 N 次"靠它
     //   抓包定案: {1:栏舍实例, 2:好友gid, 3:11003, 4:1}; 每日上限 op 11003 = 100
-    if (want('steal') && opts.hazardFriends !== false && isAutomationOn('ranch_hazard')) {
+    if (want('steal') && opts.hazardFriends !== false && isAutomationOn('ranch_hazard') && !RANCH_CARE_BREAKERS.hazardFriends.isOpen()) {
         try {
             const r = await autoPutHazardOnFriends(opts);
             result.hazardedFriends = r.count;
             if (r.count > 0) result.details.push(`使坏${r.count}`);
         } catch (e) {
-            logWarn('牧场', `使坏好友失败: ${e.message}`, { module: 'ranch', event: '使坏好友', result: 'error' });
+            const st = RANCH_CARE_BREAKERS.hazardFriends.failure();
+            if (st === 'open') {
+                logWarn('牧场', `使坏好友连续失败, 暂停30分钟后重试: ${e.message}`, { module: 'ranch', event: '使坏好友', result: 'error' });
+            } else if (!st) {
+                logWarn('牧场', `使坏好友失败: ${e.message}`, { module: 'ranch', event: '使坏好友', result: 'error' });
+            }
         }
     }
 
@@ -2268,7 +2355,7 @@ async function runRanchCare(opts = {}) {
         facility = require('./ranch-facility');
     } catch { facility = null; }
 
-    if (want('daily') && facility && opts.upgradeBuildings !== false && isAutomationOn('ranch_upgrade')) {
+    if (want('daily') && facility && opts.upgradeBuildings !== false && isAutomationOn('ranch_upgrade') && !RANCH_CARE_BREAKERS.upgradeBuildings.isOpen()) {
         try {
             const r = await facility.autoUpgradeBuildings(opts);
             result.buildingsCompleted = r.completed;
@@ -2277,13 +2364,18 @@ async function runRanchCare(opts = {}) {
                 result.details.push(`建筑竣工${r.completed}/升级${r.upgraded}`);
             }
         } catch (e) {
-            logWarn('牧场', `建筑升级失败: ${e.message}`, { module: 'ranch', event: '建筑升级', result: 'error' });
+            const st = RANCH_CARE_BREAKERS.upgradeBuildings.failure();
+            if (st === 'open') {
+                logWarn('牧场', `建筑升级连续失败, 暂停30分钟后重试: ${e.message}`, { module: 'ranch', event: '建筑升级', result: 'error' });
+            } else if (!st) {
+                logWarn('牧场', `建筑升级失败: ${e.message}`, { module: 'ranch', event: '建筑升级', result: 'error' });
+            }
         }
     }
 
     await gap();
 
-    if (want('daily') && facility && opts.unlockRegions !== false && isAutomationOn('ranch_unlock')) {
+    if (want('daily') && facility && opts.unlockRegions !== false && isAutomationOn('ranch_unlock') && !RANCH_CARE_BREAKERS.unlockRegions.isOpen()) {
         try {
             const r = await facility.autoUnlockRegions(opts);
             result.regionsCompleted = r.completed;
@@ -2292,20 +2384,30 @@ async function runRanchCare(opts = {}) {
                 result.details.push(`地块竣工${r.completed}/发起${r.unlocked}`);
             }
         } catch (e) {
-            logWarn('牧场', `地块解锁失败: ${e.message}`, { module: 'ranch', event: '地块解锁', result: 'error' });
+            const st = RANCH_CARE_BREAKERS.unlockRegions.failure();
+            if (st === 'open') {
+                logWarn('牧场', `地块解锁连续失败, 暂停30分钟后重试: ${e.message}`, { module: 'ranch', event: '地块解锁', result: 'error' });
+            } else if (!st) {
+                logWarn('牧场', `地块解锁失败: ${e.message}`, { module: 'ranch', event: '地块解锁', result: 'error' });
+            }
         }
     }
 
     await gap();
 
     // 6. 游商兑换(便便换有机化肥, 纯赚)
-    if (want('daily') && opts.rotationShop !== false && isAutomationOn('ranch_rotation')) {
+    if (want('daily') && opts.rotationShop !== false && isAutomationOn('ranch_rotation') && !RANCH_CARE_BREAKERS.rotationShop.isOpen()) {
         try {
             const r = await autoBuyRotationShop(opts);
             result.rotationBought = r.bought;
             if (r.bought > 0) result.details.push(`游商x${r.bought}`);
         } catch (e) {
-            logWarn('牧场', `游商兑换失败: ${e.message}`, { module: 'ranch', event: '游商购买', result: 'error' });
+            const st = RANCH_CARE_BREAKERS.rotationShop.failure();
+            if (st === 'open') {
+                logWarn('牧场', `游商兑换连续失败, 暂停30分钟后重试: ${e.message}`, { module: 'ranch', event: '游商购买', result: 'error' });
+            } else if (!st) {
+                logWarn('牧场', `游商兑换失败: ${e.message}`, { module: 'ranch', event: '游商购买', result: 'error' });
+            }
         }
     }
 
@@ -2313,14 +2415,19 @@ async function runRanchCare(opts = {}) {
     // ⚠ 修正: 牧场任务与农场任务完全独立, 必须用 TaskInfo{scene_id:2} 拉列表
     //   (见 docs/mc-ranch/牧场任务系统功能文档.md); 之前调 checkAndClaimTasks()
     //   拉的是农场任务列表, 牧场任务从来没领过。
-    if (want('daily') && isAutomationOn('ranch_task')) {   // 统一由开关决定(原来 checkRanch 传 claimTasks:false 导致永不执行)
+    if (want('daily') && isAutomationOn('ranch_task') && !RANCH_CARE_BREAKERS.ranchTasks.isOpen()) {   // 统一由开关决定(原来 checkRanch 传 claimTasks:false 导致永不执行)
         try {
             const { checkAndClaimRanchTasks } = require('./task');
             const r = await checkAndClaimRanchTasks();
             result.ranchTasksClaimed = r.claimed;
             if (r.claimed > 0) result.details.push(`任务${r.claimed}`);
         } catch (e) {
-            logWarn('牧场', `牧场任务领取失败: ${e.message}`, { module: 'ranch', event: '牧场任务', result: 'error' });
+            const st = RANCH_CARE_BREAKERS.ranchTasks.failure();
+            if (st === 'open') {
+                logWarn('牧场', `牧场任务领取连续失败, 暂停30分钟后重试: ${e.message}`, { module: 'ranch', event: '牧场任务', result: 'error' });
+            } else if (!st) {
+                logWarn('牧场', `牧场任务领取失败: ${e.message}`, { module: 'ranch', event: '牧场任务', result: 'error' });
+            }
         }
     }
 
@@ -2740,6 +2847,7 @@ function onRanchFacilitiesChanged() {
 let canBuyCheckTimer = null;
 
 async function checkCanBuyOnce() {
+    if (RANCH_CARE_BREAKERS.canBuy.isOpen()) return;   // 连续失败熔断中: 静默跳过, 不发请求
     if (!isAutomationOn('ranch_can_buy_organic') && !isAutomationOn('ranch_can_buy_normal')) return;
     try {
         const br = await checkAndBuyCansIfLow();
@@ -2754,7 +2862,12 @@ async function checkCanBuyOnce() {
             });
         }
     } catch (e) {
-        logWarn('牧场', `罐头自动购买检测失败: ${e.message}`, { module: 'ranch', event: '买罐头', result: 'error' });
+        // 独立定时器的周期检测: 连挂 3 次 → 暂停30分钟
+        const st = RANCH_CARE_BREAKERS.canBuy.failure();
+        if (st !== 'extend') {
+            const tip = st === 'open' ? '连续失败, 暂停30分钟后重试: ' : '';
+            logWarn('牧场', `罐头自动购买检测${tip}失败: ${e.message}`, { module: 'ranch', event: '买罐头', result: 'error' });
+        }
     }
 }
 
@@ -3260,9 +3373,7 @@ const _strokeToday = new Map();  // dateKey -> 次数(本地累计, 防重启后
  * 记下来后本次进程内直接跳过, 避免每轮把同样的动物重试一遍刷屏。
  */
 const _strokeSkip = new Map();   // `${dateKey}:${gid}:${animalInstId}` -> true
-// 未知错误码的连续失败计数: 同一动物连挂 2 次 → 今日跳过(第一次可能是瞬时故障,
-// 第二次还挂说明是未收录的业务态, 继续重试只会每轮刷屏 —— 2026-11-22 线上
-// "风动物#33/#34 每 40s 失败一次"教训)。
+// 未知错误码的连续失败计数(单只动物粒度): 连挂 2 次 → 今日跳过
 const _strokeFailCount = new Map();   // skipKey -> 连续失败次数
 async function autoStrokeFriendAnimals(opts = {}) {
     const result = { count: 0, details: [], remaining: -1 };
