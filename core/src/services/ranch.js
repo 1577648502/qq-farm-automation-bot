@@ -2837,7 +2837,7 @@ function planRanchDueActions(view) {
         if (!actions.includes('trigger')) actions.push('trigger');
         if (!actions.includes('harvest')) actions.push('harvest');
     }
-    if (animals.some(a => a.grassBlocked)) actions.push('feed');
+    if (animals.some(a => a.grassBlocked) && Date.now() >= _feedSkipUntil) actions.push('feed');
     return actions;
 }
 
@@ -3123,8 +3123,8 @@ function scheduleRanchFromCountdowns(view) {
     const hasActionableNow = plan.length > 0 && dueTimes.some(t => t <= now2 + 1500);
     lastDueNotBeforeAt = hasActionableNow ? now2 + 15 * 1000 : now2 + 5 * 1000;
     pullRanchGroupForward('core', soonest + 1500, '动物倒计时到点');
-    // 牧草断了也要尽快补
-    if ((view.animals || []).some(a => a.grassBlocked)) {
+    // 牧草断了也要尽快补(空跑冷却内不提前 —— grassBlocked 滞后, 存量>0 时反复提前没意义)
+    if ((view.animals || []).some(a => a.grassBlocked) && Date.now() >= _feedSkipUntil) {
         pullRanchGroupForward('core', now + 1500, '牧草断了');
     }
     // 记下此刻"到点该做什么", 到点后只跑这几步(不跑整套巡检)
@@ -3165,7 +3165,11 @@ async function runRanchDueTick() {
         if (out.harvested > 0) recordOperation('ranchHarvest', out.harvested);
         if (out.produced > 0) recordOperation('ranchProduce', out.produced);
         if (out.feedMachineAdded > 0) recordOperation('ranchGrass', out.feedMachineAdded);
-        if (out.actions.length) {
+        // ⭐ 只在真干出实事时打日志: grassBlocked 是滞后信号, 常在牧草机还有草时触发
+        //   feed 动作 → 查了存量>0 不补 → 此时 [到点] feed 没有任何信息量, 每 15s 刷一条
+        //   (2026-11-22 用户定案: 空跑不打)。补了草/收了东西才打。
+        const hasWork = out.harvested > 0 || out.produced > 0 || out.feedMachineAdded > 0 || out.details.length > 0;
+        if (out.actions.length && hasWork) {
             const parts = [];
             if (out.harvested > 0) parts.push(`收:${out.harvested}`);
             if (out.produced > 0) parts.push(`产:${out.produced}`);
@@ -3247,7 +3251,19 @@ async function getRotationShop() {
     const reqBody = protobuf.Writer.create().uint32((1 << 3) | 0).int64(toLong(ROTATION_SHOP_ID)).finish();
     const { body: replyBody } = await network.sendMsgAsync('gamepb.shoppb.ShopService', 'RotationShopInfo', reqBody);
     // RotationShopInfoReply 尚无 proto 定义, 用通用 wire 解析提取关键字段
-    return parseRotationShopReply(replyBody);
+    const shop = parseRotationShopReply(replyBody);
+    // 商品名字(ItemInfo 配置): 面板与日志显示名字, 不再显示 #80011 编号
+    const nameOf = (() => { try { return require('../config/gameConfig').getItemById; } catch { return null; } })();
+    for (const g of shop.goods) {
+        const it = nameOf ? nameOf(g.itemId) : null;
+        g.name = (it && it.name) || '';
+    }
+    return shop;
+}
+
+/** 游商商品显示名(带兜底): 有机化肥(1小时) / 物品#80011 */
+function rotationGoodsLabel(g) {
+    return g.name || `物品#${g.itemId}`;
 }
 
 /**
@@ -3842,17 +3858,17 @@ async function autoBuyRotationShop(_opts = {}) {
                 const priceNote = isPine
                     ? `松果币${spent}${g.discounted ? '(折扣价)' : ''}`
                     : `便便${spent}`;
-                result.details.push(`#${g.itemId}x${count}(${priceNote})`);
+                result.details.push(`${rotationGoodsLabel(g)}x${count}(${priceNote})`);
             }
         } catch (e) {
             // 1004012 等"当前买不了"(等级/限购/已过期)属正常业务状态, 不是故障:
             // 记 info 而不是 warn, 否则每轮刷一条 error 日志。
             if (isRotationNotPurchasable(e)) {
-                log('游商', `商品 #${g.itemId} 当前不可购买(${rotationErrorHint(e)})，跳过`, {
+                log('游商', `${rotationGoodsLabel(g)} 当前不可购买(${rotationErrorHint(e)})，跳过`, {
                     module: 'ranch', event: '游商购买', result: 'skip', itemId: g.itemId,
                 });
             } else {
-                logWarn('游商', `购买失败 #${g.itemId}: ${e.message}`, {
+                logWarn('游商', `购买失败 ${rotationGoodsLabel(g)}: ${e.message}`, {
                     module: 'ranch', event: '游商购买', result: 'error', itemId: g.itemId,
                 });
             }
@@ -3955,6 +3971,10 @@ async function addFeedToMachine(count = 100, opts = {}) {
     return { ok: true, stored };
 }
 
+// grassBlocked 空跑冷却: 查到存量>0 后这段时间不再因 grassBlocked 排 feed 动作
+const FEED_SKIP_COOLDOWN_MS = 10 * 60 * 1000;
+let _feedSkipUntil = 0;
+
 /**
  * 牧草机补草(2026-11-22 用户定案: 检测到没草 → 一次性补满, 不再留 20 阈值)。
  *
@@ -3966,7 +3986,13 @@ async function addFeedToMachine(count = 100, opts = {}) {
 async function autoFeedMachine(opts = {}) {
     const threshold = Math.max(0, toNum(opts.threshold) || 0);   // 默认 0 = 耗尽才补
     const machine = await getFeedMachine();
-    if (machine.stored > threshold) return { fed: 0, stored: machine.stored, bought: 0, spent: 0 };
+    if (machine.stored > threshold) {
+        // 草还没耗尽(grassBlocked 是滞后信号, 不代表真断草):
+        // 冷却 10 分钟 —— 期间 planRanchDueActions 不再因 grassBlocked 排 feed 动作,
+        // 避免 [到点] feed 每 15s 空跑一次(2026-11-22 线上刷屏根因)
+        _feedSkipUntil = Date.now() + FEED_SKIP_COOLDOWN_MS;
+        return { fed: 0, stored: machine.stored, bought: 0, spent: 0 };
+    }
     // 补满缺口: 容量未知时按 100 兜底(老账号实测容量 100)
     const capacity = machine.capacity > 0 ? machine.capacity : 100;
     const gap = Math.max(0, capacity - machine.stored);

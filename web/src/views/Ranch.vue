@@ -776,7 +776,7 @@ const ranchClaimableCount = computed(() => ranchTasks.value.filter(t => t.canCla
 // 之前只有"一键自动兑换"按钮, 没有界面 —— 用户看不到卖什么、也没法手动挑。
 const rotationOpen = ref(false)
 const rotationRefreshAt = ref(0)
-const rotationGoods = ref<Array<{ group: number, seq: number, itemId: number, currencyId: number, price: number, discountPrice?: number, limit: number, uid: number }>>([])
+const rotationGoods = ref<Array<{ group: number, seq: number, itemId: number, name?: string, currencyId: number, price: number, discountPrice?: number, discountFrom?: number, discountTo?: number, limit: number, uid: number }>>([])
 const rotationLoading = ref(false)
 const rotationError = ref('')
 const rotationBusy = ref(0)
@@ -791,6 +791,17 @@ const ROTATION_CURRENCY: Record<number, string> = {
 
 function rotationCurrencyName(id: number) {
   return ROTATION_CURRENCY[Number(id)] || `#${id}`
+}
+
+/** 折扣是否生效: 有折后价且低于原价, 折扣窗口(#9=结束ms)内才显示 */
+function rotationDiscountActive(g: any) {
+  const dp = Number(g.discountPrice) || 0
+  const to = Number(g.discountTo) || 0
+  if (!dp || dp >= Number(g.price))
+    return false
+  if (to > 0 && Date.now() > to)
+    return false
+  return true
 }
 
 async function openRotation() {
@@ -1014,10 +1025,18 @@ onUnmounted(() => {
               </span>
               <div class="min-w-0">
                 <div class="truncate text-sm text-gray-700 font-medium dark:text-gray-200">
-                  {{ itemLabel(g.itemId) }}
+                  {{ g.name || itemLabel(g.itemId) }}
                 </div>
                 <div class="text-xs text-gray-400">
-                  {{ rotationCurrencyName(g.currencyId) }} {{ g.discountPrice || g.price }}
+                  <span
+                    v-if="rotationDiscountActive(g)"
+                    class="mr-1 rounded bg-rose-50 px-1 py-0.5 text-[10px] text-rose-600 dark:bg-rose-900/40 dark:text-rose-300"
+                  >折扣</span>
+                  <del
+                    v-if="rotationDiscountActive(g)"
+                    class="mr-1 text-gray-300 dark:text-gray-600"
+                  >{{ rotationCurrencyName(g.currencyId) }} {{ g.price }}</del>
+                  {{ rotationCurrencyName(g.currencyId) }} {{ rotationDiscountActive(g) ? g.discountPrice : g.price }}
                   <span v-if="Number(g.limit) > 0" class="ml-1">· 限购 {{ g.limit }}</span>
                 </div>
               </div>

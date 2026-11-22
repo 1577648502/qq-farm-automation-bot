@@ -227,7 +227,8 @@ proto.loadProto().then(async () => {
 
         check('松果币商品被购买', r.bought > 0, r.bought);
         // 折扣中的 80012(实付 2280)应第一个买: 2500 只够买 1 件
-        check('第一个买的是折扣商品 80012', r.details[0] && /80012/.test(r.details[0]), r.details);
+        // (2026-11-22 日志定案: 编号→名字, ItemInfo 里 80012=有机化肥(4小时))
+        check('第一个买的是折扣商品 80012', r.details[0] && /80012|有机化肥/.test(r.details[0]), r.details);
         check('detail 标注折扣', r.details[0] && /折扣/.test(r.details[0]), r.details);
         check('购买按折扣价记账(2280 而非 2850)', /2280/.test(r.details[0] || ''), r.details);
     }
