@@ -1522,20 +1522,25 @@ async function claimMugeActivity(options = {}) {
     }
     await sleep(500);
 
-    // ---- 1704 活动任务 (cmd=82 + cmd=83) ----
-    // 抓包证实 82/83 是两个并存的领取命令(请求体都是 {1:0}),
-    // 只发 82 会漏掉一部分可领任务, 所以两个都发一遍。
+    // ---- 1704 活动任务 + 成长值档位 (cmd=82 + cmd=83) ----
+    // cmd=82 与 cmd=83 是两个不同的领取入口(20261120 抓包对照):
+    //   82 = 任务列表领取(参数在 field 182 muge_task_claim)
+    //   83 = 成长值档位领取(参数在 field 183 muge_task_claim2) —— 手册顶部领奖条
+    // ⚠ 2026-11-22 修正: 之前发 83 时参数也塞在 muge_task_claim(182) → 服务器解析
+    //   183 字段为空 → 档位领取从不执行, 档位永远卡在"可领"(账号1 实测卡 120 点档)。
+    //   现在按 cmd 选对应字段。
     try {
         // 两个命令各发一次, 用最后一次的响应统计(它带最新的任务状态)。
         let reply = null;
         for (const cmd of [ACTIVITY_OPERATE.MUGE_TASK_CLAIM, ACTIVITY_OPERATE.MUGE_TASK_CLAIM2]) {
             try {
+                const reqField = cmd === ACTIVITY_OPERATE.MUGE_TASK_CLAIM ? 'muge_task_claim' : 'muge_task_claim2';
                 reply = await operateActivity(MUGE_SUB_IDS.TASKS, cmd, {
-                    muge_task_claim: { claim_all: 0 },
+                    [reqField]: { claim_all: 0 },
                 });
                 await sleep(400);
             } catch (e) {
-                // 主命令(82)失败才算真失败; 备用命令(83)不被支持时忽略
+                // 主命令(82)失败才算真失败; 档位命令(83)不被支持时忽略
                 if (cmd === ACTIVITY_OPERATE.MUGE_TASK_CLAIM) throw e;
             }
         }
