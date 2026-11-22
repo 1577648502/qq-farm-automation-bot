@@ -1905,7 +1905,9 @@ onUnmounted(() => {
                     未解锁
                   </span>
                 </h4>
-                <div v-if="pen.facility || pen.building" class="flex items-center gap-1 text-[11px] text-gray-400">
+                <!-- 未解锁时不渲染等级: 建筑虽已放置(AllCells 有 6002001 Lv7), 但服务端没开放棚组,
+                     显示 Lv7 会被误读成"已解锁" —— 解锁说明在下方占位里 -->
+                <div v-if="!pen.locked && (pen.facility || pen.building)" class="flex items-center gap-1 text-[11px] text-gray-400">
                   <span v-if="pen.facility">{{ pen.facility.name || pen.title }}{{ pen.facility.level ? ` Lv${pen.facility.level}` : '' }}</span>
                   <span v-else-if="pen.building">{{ pen.title.slice(0, 1) }} Lv{{ pen.building.level }}</span>
                   <span

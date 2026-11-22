@@ -532,9 +532,19 @@ function getPlantItemAssetCandidates(item) {
 
 function getIconAssetCandidates(item) {
     const iconRes = String(item && item.icon_res || '').trim().replace(/^\/+|\/+$/g, '');
-    if (!iconRes) return [];
+    if (!iconRes) {
+        // 牧场动物产物(ItemInfo type=106, asset_name 形如 60001_4)没有 icon_res,
+        // 图标在 **animal bundle** 的 texture/ 目录下 —— 没有这条候选, 牧场动物图鉴永远抽不到图。
+        const assetName = String(item && item.asset_name || '').trim();
+        if (assetName && /^\d{5}_\d+$/.test(assetName)) return [`texture/${assetName}`];
+        return [];
+    }
     const base = iconRes.replace(/\/(?:spriteFrame|texture)$/, '');
-    return base ? [base] : [];
+    const candidates = base ? [base] : [];
+    // 动物产物同时带上 texture 路径兜底(有的条目 icon_res 和 asset_name 都能命中)
+    const assetName = String(item && item.asset_name || '').trim();
+    if (assetName && /^\d{5}_\d+$/.test(assetName)) candidates.push(`texture/${assetName}`);
+    return candidates;
 }
 
 async function syncOtherItemImages(cache, cacheList, bundles, items, outputDir) {
@@ -736,6 +746,9 @@ async function syncGameConfigFromQQCache(options = {}) {
     const delayBundle = findBundleConfig(cacheList, cache, 'delayRes');
     const plantBundle = findBundleConfig(cacheList, cache, 'plant');
     const extraResBundle = findBundleConfig(cacheList, cache, 'extraRes');
+    // animal bundle(牧场动物模型/图标): 部分旧缓存可能没有, 缺了只影响动物图, 不阻塞主同步
+    let animalBundle = null;
+    try { animalBundle = findBundleConfig(cacheList, cache, 'animal'); } catch { /* 旧缓存无 animal */ }
     const itemInfoUrl = resolveJsonAsset(delayBundle.config, delayBundle.sourceUrl, 'config/ItemInfo');
     const plantUrl = resolveJsonAsset(delayBundle.config, delayBundle.sourceUrl, 'config/Plant');
 
@@ -777,6 +790,7 @@ async function syncGameConfigFromQQCache(options = {}) {
         && previousState.plantUrl === plantUrl
         && previousState.plantBundleUrl === plantBundle.sourceUrl
         && previousState.extraResBundleUrl === extraResBundle.sourceUrl
+        && (previousState.animalBundleUrl || '') === (animalBundle ? animalBundle.sourceUrl : '')
         && Number(previousState.imageCount) > 0
         && fs.existsSync(itemOutputPath)
         && fs.existsSync(plantOutputPath)
@@ -819,7 +833,7 @@ async function syncGameConfigFromQQCache(options = {}) {
     const itemImages = await syncOtherItemImages(
         cache,
         cacheList,
-        [plantBundle, extraResBundle, delayBundle],
+        [plantBundle, extraResBundle, delayBundle].concat(animalBundle ? [animalBundle] : []),
         mergedItems,
         imageOutputDir,
     );
@@ -840,6 +854,7 @@ async function syncGameConfigFromQQCache(options = {}) {
         plantUrl,
         plantBundleUrl: plantBundle.sourceUrl,
         extraResBundleUrl: extraResBundle.sourceUrl,
+        animalBundleUrl: animalBundle ? animalBundle.sourceUrl : '',
         officialItemCount: officialItems.length,
         officialPlantCount: validPlants.length,
         mergedItemCount: mergedItems.length,

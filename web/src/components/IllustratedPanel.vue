@@ -11,10 +11,20 @@ const illustratedStore = useIllustratedStore()
 const statusStore = useStatusStore()
 
 const { currentAccountId, currentAccount } = storeToRefs(accountStore)
-const { items, total, unlocked, claimable, loading } = storeToRefs(illustratedStore)
+const { items, loading } = storeToRefs(illustratedStore)
 const { status, realtimeConnected } = storeToRefs(statusStore)
 
 const imageErrors = ref<Record<number, boolean>>({})
+
+// 图鉴分两大类(服务端 list_type): 1=农场植物/花卉, 101=牧场动物(2026-11-20 抓包定案)。
+// 2026-11-22 用户要求: 牧场图鉴别和农场混在一起, 加页签区分。
+const SCOPES = [
+  { label: '农场图鉴', value: 'farm', listType: 1 },
+  { label: '牧场图鉴', value: 'ranch', listType: 101 },
+] as const
+type ScopeValue = typeof SCOPES[number]['value']
+const selectedScope = ref<ScopeValue>('farm')
+const currentListType = computed(() => SCOPES.find(s => s.value === selectedScope.value)?.listType ?? 1)
 
 const FILTERS = [
   { label: '全部', value: 'all' },
@@ -26,16 +36,24 @@ const FILTERS = [
 type FilterValue = typeof FILTERS[number]['value']
 const selectedFilter = ref<FilterValue>('all')
 
+// 当前图鉴类别的条目(农场/牧场页签)
+const scopedItems = computed(() => items.value.filter(i => Number(i.listType) === currentListType.value))
+
+// 页签内各自统计(总计/已解锁/可领奖按当前类别算)
+const scopeTotal = computed(() => scopedItems.value.length)
+const scopeUnlocked = computed(() => scopedItems.value.filter(i => i.planted).length)
+const scopeClaimable = computed(() => scopedItems.value.filter(i => i.canClaim).length)
+
 const filteredItems = computed(() => {
   switch (selectedFilter.value) {
     case 'unlocked':
-      return items.value.filter(i => i.planted)
+      return scopedItems.value.filter(i => i.planted)
     case 'locked':
-      return items.value.filter(i => !i.planted)
+      return scopedItems.value.filter(i => !i.planted)
     case 'claimable':
-      return items.value.filter(i => i.canClaim)
+      return scopedItems.value.filter(i => i.canClaim)
     default:
-      return items.value
+      return scopedItems.value
   }
 })
 
@@ -70,19 +88,35 @@ useIntervalFn(load, 60000)
         </h3>
       </div>
 
+      <!-- 图鉴类别页签: 农场(植物/花卉) | 牧场(动物) -->
+      <div class="flex gap-2 border-b border-gray-100 p-3 dark:border-gray-700 sm:p-4">
+        <button
+          v-for="s in SCOPES"
+          :key="s.value"
+          class="rounded-full px-3 py-1.5 text-sm font-medium transition-colors"
+          :class="selectedScope === s.value
+            ? 'text-white shadow-md'
+            : 'bg-gray-100 text-gray-600 hover:bg-gray-200 dark:bg-gray-700 dark:text-gray-300'"
+          :style="selectedScope === s.value ? { backgroundColor: 'var(--theme-primary)' } : {}"
+          @click="selectedScope = s.value"
+        >
+          {{ s.label }}
+        </button>
+      </div>
+
       <!-- Summary -->
       <div class="flex flex-wrap gap-2 border-b border-gray-100 bg-gray-50 p-3 text-xs sm:gap-4 dark:border-gray-700 dark:bg-gray-900/50 sm:p-4 sm:text-sm">
         <div class="flex items-center gap-1 rounded-full bg-blue-100 px-3 py-1 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400">
           <div class="i-carbon-catalog" />
-          <span class="font-medium">总计: {{ total }}</span>
+          <span class="font-medium">总计: {{ scopeTotal }}</span>
         </div>
         <div class="flex items-center gap-1 rounded-full bg-green-100 px-3 py-1 text-green-700 dark:bg-green-900/30 dark:text-green-400">
           <div class="i-carbon-unlocked" />
-          <span class="font-medium">已解锁: {{ unlocked }}</span>
+          <span class="font-medium">已解锁: {{ scopeUnlocked }}</span>
         </div>
         <div class="flex items-center gap-1 rounded-full bg-amber-100 px-3 py-1 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400">
           <div class="i-carbon-gift" />
-          <span class="font-medium">可领奖: {{ claimable }}</span>
+          <span class="font-medium">可领奖: {{ scopeClaimable }}</span>
         </div>
       </div>
 

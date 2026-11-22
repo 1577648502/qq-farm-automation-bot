@@ -1560,17 +1560,21 @@ async function handleApiCall(msg) {
                 break;
             case 'getIllustrated': {
                 const { getIllustratedOverview } = require('../services/illustrated');
-                const { getPlantNameBySeedId, getSeedImageBySeedId, getPlantBySeedId, getPlantByFruitId } = require('../config/gameConfig');
+                const { getPlantNameBySeedId, getSeedImageBySeedId, getPlantBySeedId, getPlantByFruitId, getItemById, getItemImageById } = require('../config/gameConfig');
                 const overview = await getIllustratedOverview();
                 overview.items = (overview.items || []).map((it) => {
+                    // 牧场动物图鉴(listType=101)的条目是**产物 id**(2060001=鸡蛋...), 植物配置查不到,
+                    // 名字/图片走 ItemInfo 兜底(2060001 name=鸡, 图片经 seedImageMap 的动物产物文件)
                     const plant = getPlantBySeedId(it.seedId) || getPlantByFruitId(it.seedId);
+                    const itemInfo = getItemById(it.seedId) || null;
                     return {
                         ...it,
-                        name: getPlantNameBySeedId(it.seedId),
-                        image: getSeedImageBySeedId(it.seedId),
+                        name: getPlantNameBySeedId(it.seedId) || (itemInfo && itemInfo.name) || '',
+                        image: getSeedImageBySeedId(it.seedId) || getItemImageById(it.seedId) || '',
                         requiredLevel: plant ? (Number(plant.land_level_need) || 0) : 0,
                     };
-                }).sort((a, b) => (a.requiredLevel - b.requiredLevel) || (a.seedId - b.seedId));
+                }).sort((a, b) => ((a.listType || 0) - (b.listType || 0))
+                    || (a.requiredLevel - b.requiredLevel) || (a.seedId - b.seedId));
                 result = overview;
                 break;
             }
