@@ -3260,6 +3260,10 @@ const _strokeToday = new Map();  // dateKey -> 次数(本地累计, 防重启后
  * 记下来后本次进程内直接跳过, 避免每轮把同样的动物重试一遍刷屏。
  */
 const _strokeSkip = new Map();   // `${dateKey}:${gid}:${animalInstId}` -> true
+// 未知错误码的连续失败计数: 同一动物连挂 2 次 → 今日跳过(第一次可能是瞬时故障,
+// 第二次还挂说明是未收录的业务态, 继续重试只会每轮刷屏 —— 2026-11-22 线上
+// "风动物#33/#34 每 40s 失败一次"教训)。
+const _strokeFailCount = new Map();   // skipKey -> 连续失败次数
 async function autoStrokeFriendAnimals(opts = {}) {
     const result = { count: 0, details: [], remaining: -1 };
     const maxTotal = Math.max(1, toNum(opts.maxStrokePerRound) || 10);
@@ -3302,15 +3306,27 @@ async function autoStrokeFriendAnimals(opts = {}) {
                         // ⚠ "已照料过 / 巨大化" 是**正常状态**, 不是故障:
                         //   记下来跳过, 且**不消耗预算**(没真正照料成功)
                         const code = parseRanchErrorCode(e);
+                        const sk = skipKey(gid, t.animalInstId);
                         if (code === RANCH_ERR.STROKE_ALREADY || code === RANCH_ERR.STROKE_MUTANT) {
-                            _strokeSkip.set(skipKey(gid, t.animalInstId), true);
+                            _strokeSkip.set(sk, true);
                         } else if (!isExpectedRanchError(e)) {
-                            logWarn('牧场', `照顾动物失败 ${f.name || gid}动物#${t.animalInstId}: ${shortErr(e)}`, {
+                            // code 拼进正文: 日志 meta 的 code 字段会被脱敏遮掉,
+                            // 正文里的 "code=10452xx" 不受影响(短错误 40 字会截掉它, 必须补)
+                            logWarn('牧场', `照顾动物失败 ${f.name || gid}动物#${t.animalInstId}: ${shortErr(e)}${code ? ` (code=${code})` : ' (无code)'}`, {
                                 module: 'ranch', event: '照顾好友动物', result: 'error', code,
                             });
                             budget -= 1;   // 真失败才消耗预算, 防止无限重试
+                            const fails = (toNum(_strokeFailCount.get(sk)) || 0) + 1;
+                            _strokeFailCount.set(sk, fails);
+                            if (fails >= 2) {
+                                _strokeSkip.set(sk, true);
+                                _strokeFailCount.delete(sk);
+                                logWarn('牧场', `动物#${t.animalInstId} 连续${fails}次照顾失败(code=${code}), 今日跳过`, {
+                                    module: 'ranch', event: '照顾好友动物', result: 'skip', code,
+                                });
+                            }
                         } else {
-                            _strokeSkip.set(skipKey(gid, t.animalInstId), true);
+                            _strokeSkip.set(sk, true);
                         }
                     }
                     await sleep(600);
