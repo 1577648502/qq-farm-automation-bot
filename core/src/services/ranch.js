@@ -1418,6 +1418,18 @@ for (const [id, name] of Object.entries(ANIMAL_NAMES)) {
 }
 ANIMAL_NAMES[1102] = '牧场经验';
 
+/**
+ * 动物图标 URL: animalId(60xxx 幼崽) / 产物整只(206xxxx) 都能查到
+ * (seed_images_named 里的动物图标 2026-11-22 实抽入库)。
+ * 取不到返回 '', 前端回退到 emoji。
+ */
+function getAnimalImage(animalId) {
+    const { getItemImageById } = require('../config/gameConfig');
+    return getItemImageById(animalId) || '';
+}
+
+const getItemImageByIdOf = getAnimalImage;   // 道具图标同一条查找链(名字不同语义而已)
+
 function getAnimalName(animalId) {
     return ANIMAL_NAMES[toNum(animalId)] || `动物#${toNum(animalId)}`;
 }
@@ -1541,6 +1553,7 @@ function toRanchView(reply) {
                 animalInstId: toNum(a.animal_inst_id),
                 animalId,
                 name: getAnimalName(animalId),
+                image: getAnimalImage(animalId),
                 ranchInstId,
                 husbandryType,
                 stage,
@@ -3257,6 +3270,7 @@ async function getRotationShop() {
     for (const g of shop.goods) {
         const it = nameOf ? nameOf(g.itemId) : null;
         g.name = (it && it.name) || '';
+        g.image = getAnimalImage(g.itemId);   // 道具图标同一查找链(化肥/便便等都有)
     }
     return shop;
 }
@@ -4128,6 +4142,8 @@ async function getRanchShop(category = 'all') {
                     goodsId: toNum(g.id),
                     itemId,
                     name: (info && info.name) || (itemId === GRASS_ITEM_ID ? '牧草' : `道具#${itemId}`),
+                    // 道具图标(牧草/罐头等, seed_images_named 按物品 id 命中)
+                    image: getItemById ? (getItemImageByIdOf(itemId)) : '',
                     price: toNum(g.price),
                     currencyId: toNum(g.price_id) || 1007,
                     limit: toNum(g.limit_count),
@@ -4217,10 +4233,13 @@ async function getCubShop() {
         const requiredLevel = cubRequiredLevel(g);
         const serverUnlocked = !!g.unlocked;
         const levelLocked = playerLevel > 0 && requiredLevel > playerLevel;
+        const { getItemImageById } = require('../config/gameConfig');
         return {
             goodsId: toNum(g.id),
             animalId,
             name: getAnimalName(animalId),
+            // 幼崽图标(2026-11-22: 所有牧场展示动物的页面都带图)
+            image: getItemImageById(animalId) || '',
             price: toNum(g.price),
             limit: toNum(g.limit_count),
             bought: toNum(g.bought_num),
@@ -5160,6 +5179,7 @@ module.exports = {
     ranchIntervalRangeSec,
     toRanchView,
     getAnimalName,
+    getAnimalImage,
     ANIMAL_NAMES,
     getRotationShop,
     autoBuyRotationShop,

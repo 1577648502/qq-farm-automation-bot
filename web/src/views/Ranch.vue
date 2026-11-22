@@ -41,6 +41,10 @@ const shopTab = ref<'cub' | 'rotation'>('cub')
 const cubShopLoading = ref(false)
 const cubShopError = ref('')
 const cubShopList = ref<any[]>([])
+// 动物槽位图加载失败标记(key=实例id或槽位): 失败后回退 emoji
+const slotImageErrors = ref<Record<string | number, boolean>>({})
+// 商城/游商商品图加载失败标记
+const shopImageErrors = ref<Record<string | number, boolean>>({})
 
 // ===== 牧场商城(道具/幼崽分类) =====
 // 商店分工(抓包实证): shop5=幼崽, shop6=道具(牧草)
@@ -409,8 +413,7 @@ async function runBatch(batch: string, extra: Record<string, any> = {}) {
   }
 }
 
-// 动物视觉标识: 游戏里动物是 Spine/3D 模型, 没有可用的静态图标资源
-// → 用 emoji + 配色区分(用户确认先这样)
+// 动物视觉标识: 服务端现在带 image(动物图标), emoji 作加载失败兜底
 const ANIMAL_VISUAL: Record<string, { emoji: string, bg: string }> = {
   鸡: { emoji: '🐔', bg: 'bg-amber-100/60 dark:bg-amber-900/25' },
   鸭: { emoji: '🦆', bg: 'bg-yellow-100/60 dark:bg-yellow-900/25' },
@@ -826,7 +829,7 @@ const ranchClaimableCount = computed(() => ranchTasks.value.filter(t => t.canCla
 // 之前只有"一键自动兑换"按钮, 没有界面 —— 用户看不到卖什么、也没法手动挑。
 const rotationOpen = ref(false)
 const rotationRefreshAt = ref(0)
-const rotationGoods = ref<Array<{ group: number, seq: number, itemId: number, name?: string, currencyId: number, price: number, discountPrice?: number, discountFrom?: number, discountTo?: number, limit: number, uid: number }>>([])
+const rotationGoods = ref<Array<{ group: number, seq: number, itemId: number, name?: string, image?: string, currencyId: number, price: number, discountPrice?: number, discountFrom?: number, discountTo?: number, limit: number, uid: number }>>([])
 const rotationLoading = ref(false)
 const rotationError = ref('')
 const rotationBusy = ref(0)
@@ -1088,7 +1091,14 @@ onUnmounted(() => {
           >
             <div class="min-w-0 flex items-center gap-2">
               <span class="h-9 w-9 flex shrink-0 items-center justify-center rounded bg-violet-50 text-xs text-violet-600 dark:bg-violet-900/30 dark:text-violet-300">
-                {{ itemLabel(g.itemId).slice(0, 2) }}
+                <img
+                  v-if="g.image && !shopImageErrors[g.uid || g.itemId]"
+                  :src="g.image"
+                  :alt="g.name || itemLabel(g.itemId)"
+                  class="h-8 w-8 object-contain"
+                  @error="shopImageErrors[g.uid || g.itemId] = true"
+                >
+                <template v-else>{{ itemLabel(g.itemId).slice(0, 2) }}</template>
               </span>
               <div class="min-w-0">
                 <div class="truncate text-sm text-gray-700 font-medium dark:text-gray-200">
@@ -1434,8 +1444,17 @@ onUnmounted(() => {
                 <span class="rounded bg-emerald-100 px-1.5 py-0.5 text-[10px] text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300">道具</span>
                 <span class="text-[10px] text-gray-400">#{{ g.goodsId }}</span>
               </div>
-              <div class="text-sm text-gray-800 font-bold dark:text-gray-100">
-                {{ g.name }}
+              <div class="flex items-center gap-2">
+                <img
+                  v-if="g.image && !shopImageErrors[`item-${g.goodsId}`]"
+                  :src="g.image"
+                  :alt="g.name"
+                  class="h-8 w-8 shrink-0 object-contain"
+                  @error="shopImageErrors[`item-${g.goodsId}`] = true"
+                >
+                <div class="text-sm text-gray-800 font-bold dark:text-gray-100">
+                  {{ g.name }}
+                </div>
               </div>
               <div class="mt-0.5 text-[11px] text-gray-500">
                 单价 {{ g.price }} 金券
@@ -1496,7 +1515,14 @@ onUnmounted(() => {
               </div>
 
               <div class="mb-1 mt-1 h-10 w-10 flex items-center self-center justify-center">
-                <div class="i-fas-paw text-3xl text-amber-500" />
+                <img
+                  v-if="g.image && !shopImageErrors[g.goodsId]"
+                  :src="g.image"
+                  :alt="g.name"
+                  class="h-10 w-10 object-contain"
+                  @error="shopImageErrors[g.goodsId] = true"
+                >
+                <div v-else class="i-fas-paw text-3xl text-amber-500" />
               </div>
               <div class="text-xs font-bold">
                 {{ g.name }}
@@ -1952,7 +1978,15 @@ onUnmounted(() => {
                   </div>
 
                   <div class="mb-1 mt-3 h-10 w-10 flex items-center justify-center rounded-full sm:h-12 sm:w-12" :class="animalVisual(a.name)?.bg || 'bg-gray-100/60'">
-                    <span class="text-2xl leading-none sm:text-3xl">{{ animalVisual(a.name)?.emoji || '🐾' }}</span>
+                    <!-- 服务端有动物图标(seed_images_named 动物图标)就上图, 否则回退 emoji -->
+                    <img
+                      v-if="a.image && !slotImageErrors[a.animalInstId || a.slot]"
+                      :src="a.image"
+                      :alt="a.name"
+                      class="h-10 w-10 rounded-full object-contain sm:h-12 sm:w-12"
+                      @error="slotImageErrors[a.animalInstId || a.slot] = true"
+                    >
+                    <span v-else class="text-2xl leading-none sm:text-3xl">{{ animalVisual(a.name)?.emoji || '🐾' }}</span>
                   </div>
 
                   <div class="w-full truncate px-1 text-center text-xs font-bold" :title="`#${a.animalId}`">

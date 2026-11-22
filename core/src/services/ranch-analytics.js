@@ -384,6 +384,8 @@ function getCubRankings(shop, sortBy = 'ratio') {
             goodsId: Number(g.goodsId) || 0,
             animalId,
             name: String(g.name || '') || String(cubInfo.name || ''),
+            // 幼崽图标(2026-11-22 用户要求: 所有牧场展示动物的页面都带图)
+            image: gameConfig.getItemImageById(animalId) || '',
             level,
             cost,
             grownValue,

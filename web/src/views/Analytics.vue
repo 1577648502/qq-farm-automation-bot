@@ -806,8 +806,19 @@ function formatGrowTime(seconds: any) {
                   class="transition-colors hover:bg-gray-50 dark:hover:bg-gray-700/50"
                 >
                   <td class="px-4 py-2 font-medium">
-                    {{ r.name }}
-                    <span class="text-xs text-gray-400">Lv{{ r.level ?? '-' }}</span>
+                    <div class="flex items-center gap-2">
+                      <img
+                        v-if="r.image && !imageErrors[r.animalId]"
+                        :src="r.image"
+                        :alt="r.name"
+                        class="h-8 w-8 shrink-0 rounded object-contain"
+                        @error="imageErrors[r.animalId] = true"
+                      >
+                      <div>
+                        {{ r.name }}
+                        <span class="text-xs text-gray-400">Lv{{ r.level ?? '-' }}</span>
+                      </div>
+                    </div>
                   </td>
                   <td class="px-4 py-2 text-gray-500">
                     <span class="inline-flex items-center gap-1">

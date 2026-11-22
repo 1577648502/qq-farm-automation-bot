@@ -575,7 +575,7 @@ const preferredSeedOptions = computed(() => {
 // 牧场幼崽选项 —— ⭐ 与农场"背包种子优先顺序"同构:
 //   列表展示的是**牧场背包里实际有的幼崽**(itemType 105), 不是商店列表。
 //   用户可以拖拽排序(入栏顺序)、点"排外"(不买也不入栏)。
-const ranchCubs = ref<Array<{ animalId: number, name: string, count: number }>>([])
+const ranchCubs = ref<Array<{ animalId: number, name: string, count: number, image: string }>>([])
 const ranchCubsLoading = ref(false)
 const ranchCubsError = ref<string | null>(null)
 
@@ -596,7 +596,7 @@ async function loadRanchCubs() {
     }
     // 牧场的幼崽页签对应 itemType=105(/api/ranch/bag 已经按背包分组返回)
     const items: any[] = res.data?.data?.items || []
-    const merged = new Map<number, { animalId: number, name: string, count: number }>()
+    const merged = new Map<number, { animalId: number, name: string, count: number, image: string }>()
     for (const it of items) {
       if (Number(it.itemType) !== 105)
         continue
@@ -605,6 +605,7 @@ async function loadRanchCubs() {
         animalId,
         name: String(it.name || `#${animalId}`),
         count: 0,
+        image: String(it.image || ''),
       }
       cur.count += Number(it.count) || 0
       merged.set(animalId, cur)
@@ -2868,8 +2869,17 @@ async function onBackupFileChange(ev: Event) {
                     class="flex items-center gap-2 border border-amber-200 rounded-lg bg-white p-2 dark:border-amber-700/50 dark:bg-gray-800"
                     :class="isRanchCubExcluded(cub.animalId) ? 'opacity-70' : ''"
                   >
-                    <div class="h-8 w-8 flex shrink-0 items-center justify-center rounded bg-amber-100 text-xs text-amber-700 font-bold dark:bg-amber-900/50 dark:text-amber-300">
-                      {{ index + 1 }}
+                    <div class="flex shrink-0 items-center gap-1">
+                      <img
+                        v-if="cub.image"
+                        :src="cub.image"
+                        :alt="cub.name"
+                        class="h-8 w-8 rounded object-contain"
+                        @error="($event.target as HTMLImageElement).style.display = 'none'"
+                      >
+                      <div class="h-8 w-8 flex shrink-0 items-center justify-center rounded bg-amber-100 text-xs text-amber-700 font-bold dark:bg-amber-900/50 dark:text-amber-300">
+                        {{ index + 1 }}
+                      </div>
                     </div>
                     <div class="min-w-0 flex-1">
                       <div class="min-w-0 flex items-center gap-1.5">
