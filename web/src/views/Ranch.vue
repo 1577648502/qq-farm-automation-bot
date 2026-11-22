@@ -533,6 +533,8 @@ interface PenView {
   building?: { instId: number, buildingId: number, level: number, status: number, kind: string }
   /** 服务端 GetRanchDetail 里有没有这一组(没有=该栏舍未解锁) */
   exists?: boolean
+  /** 锁定时的原因说明(棚: 建筑已放置但牧场等级不够) */
+  lockedHint?: string
 }
 
 const pensView = computed<PenView[]>(() => {
@@ -568,6 +570,10 @@ const pensView = computed<PenView[]>(() => {
     // 服务端没有这一组 = 该栏舍还没解锁(棚要更高等级)
     p.emptySlots = Math.max(0, (p.capacity || 0) - p.animals.length)
     p.locked = !p.exists || (p.capacity === 0 && p.animals.length === 0)
+    // 棚锁定提示: 建筑已放置(AllCells 有 6002001)但服务端不返回棚组 = 牧场等级不够
+    // 2026-11-22 实测: 牧场 Lv12/Lv18 的号 penCount 都是 0 → 未解锁档位在 Lv18 以上
+    if (p.locked && p.key === 'pen')
+      p.lockedHint = ov.ranchLevel ? `建筑已放置，需更高牧场等级解锁（当前牧场 Lv${ov.ranchLevel}，实测 Lv18 仍未开放）` : '建筑已放置，需更高牧场等级解锁'
   }
   return pens
 })
@@ -1720,7 +1726,7 @@ onUnmounted(() => {
               >
                 <div class="i-carbon-lock text-2xl" />
                 <div class="mt-2 text-[11px] text-gray-400">
-                  该栏舍尚未建造或未解锁
+                  {{ pen.lockedHint || '该栏舍尚未建造或未解锁' }}
                 </div>
               </div>
 

@@ -165,6 +165,7 @@ async function loadProto() {
     types.RotationBuyGoodsRequest = root.lookupType('gamepb.shoppb.RotationBuyGoodsRequest');
     types.RotationBuyGoodsReply = root.lookupType('gamepb.shoppb.RotationBuyGoodsReply');
     types.ShopInfoReply = root.lookupType('gamepb.shoppb.ShopInfoReply');
+    types.GoodsInfo = root.lookupType('gamepb.shoppb.GoodsInfo');
     types.BuyGoodsRequest = root.lookupType('gamepb.shoppb.BuyGoodsRequest');
     types.BuyGoodsReply = root.lookupType('gamepb.shoppb.BuyGoodsReply');
     types.GetMonthCardInfosRequest = root.lookupType('gamepb.mallpb.GetMonthCardInfosRequest');

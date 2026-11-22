@@ -2092,7 +2092,8 @@ async function runRanchCare(opts = {}) {
         try {
             const fm = await autoFeedMachine(opts);
             result.feedMachineAdded = fm.fed;
-            if (fm.fed > 0) result.details.push(`牧草机+${fm.fed}`);
+            // bought 也算"做了事": bought 走 auto_add 直进牧草机, fed 可能是 0
+            if (fm.fed + (fm.bought || 0) > 0) result.details.push(`牧草机+${fm.fed + (fm.bought || 0)}`);
         } catch (e) {
             // 1045115 建筑不存在 = 牧场还没摆放牧草机, 每轮都报一遍只会刷屏
             if (!isExpectedRanchError(e)) {
@@ -2876,9 +2877,9 @@ async function runRanchDueActions(view, opts = {}) {
             } else if (action === 'feed') {
                 if (!isAutomationOn('ranch_feedmachine')) continue;
                 const fm = await autoFeedMachine(opts);
-                if (fm.fed > 0) {
-                    out.feedMachineAdded = fm.fed;
-                    out.details.push(`牧草机+${fm.fed}`);
+                if (fm.fed + (fm.bought || 0) > 0) {
+                    out.feedMachineAdded = fm.fed + (fm.bought || 0);
+                    out.details.push(`牧草机+${fm.fed + (fm.bought || 0)}`);
                 }
             }
         } catch (e) {
@@ -3954,47 +3955,76 @@ async function addFeedToMachine(count = 100, opts = {}) {
     return { ok: true, stored };
 }
 
-/** 牧草机缺草时自动从背包补(留 20 余量防清空) */
+/**
+ * 牧草机补草(2026-11-22 用户定案: 检测到没草 → 一次性补满, 不再留 20 阈值)。
+ *
+ * 流程: 余量为 0(或 ≤threshold) → 算缺口 → 背包有多少补多少 → 还缺就买满 → AddFeed 补满。
+ * 背包的散草先用掉, 不够的部分自动从牧场商店买(受 automation.ranch_buy_grass 控制, 默认开)。
+ *
+ * @returns {{fed:number, stored:number, bought:number, spent:number}}
+ */
 async function autoFeedMachine(opts = {}) {
-    const threshold = Math.max(1, toNum(opts.threshold) || 20);
+    const threshold = Math.max(0, toNum(opts.threshold) || 0);   // 默认 0 = 耗尽才补
     const machine = await getFeedMachine();
-    if (machine.stored > threshold) return { fed: 0, stored: machine.stored };
-    // 背包里的散装牧草
-    const { getRanchBagDetail } = require('./warehouse');
-    const bag = await getRanchBagDetail();
-    const grass = bag.items.find(it => Number(it.id) === GRASS_ITEM_ID);
-    const have = grass ? Number(grass.count) : 0;
+    if (machine.stored > threshold) return { fed: 0, stored: machine.stored, bought: 0, spent: 0 };
+    // 补满缺口: 容量未知时按 100 兜底(老账号实测容量 100)
+    const capacity = machine.capacity > 0 ? machine.capacity : 100;
+    const gap = Math.max(0, capacity - machine.stored);
+    if (gap <= 0) return { fed: 0, stored: machine.stored, bought: 0, spent: 0 };
 
-    // 背包没草 → 自动去牧场商店买(2026-11-18 抓包实证: shop6 / goods 10001 / 单价 60)
-    // 受 automation.ranch_buy_grass 控制(默认开), 避免有人不想花金券
-    if (have <= 0 && opts.buyGrass !== false && isAutomationOn('ranch_buy_grass')) {
-        const capacityLeft = machine.capacity > 0 ? Math.max(0, machine.capacity - machine.stored) : 100;
-        const wantCount = Math.min(Math.max(1, toNum(opts.buyGrassCount) || 10), Math.max(1, capacityLeft));
-        const r = await buyGrass(wantCount).catch(() => null);
+    // 背包里的散装牧草(先用掉, 不白花钱)
+    const { getRanchBagDetail } = require('./warehouse');
+    let useFromBag = 0;
+    let have = 0;
+    try {
+        const bag = await getRanchBagDetail();
+        const grass = bag.items.find(it => Number(it.id) === GRASS_ITEM_ID);
+        have = grass ? Number(grass.count) : 0;
+        useFromBag = Math.min(have, gap);
+    } catch { /* 背包查不到就全按买 */ }
+
+    // 还缺的数量 → 买(买的时候限购/单价由 buyGrass 自己查)
+    let bought = 0;
+    let spent = 0;
+    let buyFail = '';
+    const stillGap = gap - useFromBag;
+    if (stillGap > 0 && opts.buyGrass !== false && isAutomationOn('ranch_buy_grass')) {
+        // 未显式指定 buyGrassCount → 直接买满缺口
+        const wantCount = toNum(opts.buyGrassCount) > 0 ? Math.floor(toNum(opts.buyGrassCount)) : stillGap;
+        const r = await buyGrass(Math.min(wantCount, stillGap)).catch(e => ({ ok: false, bought: 0, spent: 0, error: e && e.message }));
         if (r && r.ok) {
-            // 买完 auto_add=1 已直接进牧草机, 不用再 AddFeed
-            const after = await getFeedMachine().catch(() => null);
-            const stored = after ? after.stored : machine.stored;
-            log('牧场', `牧草断了 → 自动买 ${r.bought} 个(花 ${r.spent}), 牧草机现在 ${stored}`, {
-                module: 'ranch', event: '牧草机加草', result: 'ok', bought: r.bought, spent: r.spent, stored,
-            });
-            return { fed: r.bought, stored };
+            bought = r.bought;
+            spent = r.spent;
+            // 买完 auto_add=1 已直接进牧草机 → 存量已含 bought, 不用再 AddFeed 这部分
+        } else {
+            buyFail = (r && r.error) || '未知原因';
         }
-        log('牧场', `牧草断了且自动购买失败: ${r && r.error ? r.error : '未知原因'}`, {
-            module: 'ranch', event: '牧草机加草', result: 'error',
-        });
     }
 
-    if (have <= 0) {
-        log('牧场', `牧草机存量 ${machine.stored} 但背包没有牧草(自动购买未开启或失败)`, {
+    // 背包的散草 + auto_add 没吃进去的部分 → 一次 AddFeed 补上
+    // auto_add 只把买的直接进机, 背包原有的散草仍要 AddFeed
+    let fed = 0;
+    let stored = machine.stored + bought;
+    const addCount = useFromBag;
+    if (addCount > 0) {
+        const r = await addFeedToMachine(addCount).catch(() => null);
+        if (r) { fed += addCount; stored = r.stored; }
+    }
+    if (fed + bought > 0) {
+        const parts = [];
+        if (bought > 0) parts.push(`买 ${bought}(花 ${spent})`);
+        if (fed > 0) parts.push(`背包补 ${fed}`);
+        log('牧场', `牧草没了 → 一次性补满: ${parts.join(' + ')}, 牧草机现在 ${stored}/${capacity}`, {
+            module: 'ranch', event: '牧草机加草', result: 'ok',
+            bought, spent, fed, stored,
+        });
+    } else if (!bought && !fed) {
+        // 一根都没补上: 有缺口但背包无草且购买失败/未开
+        logWarn('牧场', `牧草机空了但没补上: 背包 ${have} 根${buyFail ? `, 购买失败: ${buyFail}` : '(自动购买未开启)'}`, {
             module: 'ranch', event: '牧草机加草', result: 'skip',
         });
-        return { fed: 0, stored: machine.stored };
     }
-    const add = Math.min(have, machine.capacity > 0 ? Math.max(0, machine.capacity - machine.stored) : have, 100);
-    if (add <= 0) return { fed: 0, stored: machine.stored };
-    const r = await addFeedToMachine(add);
-    return { fed: add, stored: r.stored };
+    return { fed, stored, bought, spent };
 }
 
 /**

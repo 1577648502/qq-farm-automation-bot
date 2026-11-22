@@ -256,6 +256,60 @@ proto.loadProto().then(async () => {
         check('容量 = 100', parsed.capacity === 100, parsed);
     }
 
+    section('8.5 牧草机补草: 检测到没草 → 一次性补满(2026-11-22 定案)');
+    {
+        const ranch = require(`${SB}/src/services/ranch`);
+        // ⚠ warehouse.js 在加载时解构 sendMsgAsync, 替换 network.sendMsgAsync 对它无效 ——
+        //   GetBag 会走顶层回放桩, 抓包帧里背包有 2660 根草。
+        //   所以这里直接把 warehouse 的 getRanchBagDetail 打桩成"背包 30 根"。
+        // ⚠ mall.js 同理解构 — ShopInfo 走顶层回放桩, 断言只看最终行为 bought/spent。
+        const warehouse = require(`${SB}/src/services/warehouse`);
+        const savedBag = warehouse.getRanchBagDetail;
+        const savedSend = network.sendMsgAsync;
+        let addFeedCount = -1;
+        let bagQueried = false;
+        // 背包 30 根散草 + 缺口 100 → 期望: AddFeed 30 + 买 70(60*70=4200)
+        warehouse.getRanchBagDetail = async () => {
+            bagQueried = true;
+            return { items: [{ id: 7001, count: 30, uid: 0 }] };
+        };
+        network.sendMsgAsync = async (_s, method, body) => {
+            const m = String(method).split('.').pop();
+            if (m === 'GetFacilityDetail') {
+                const P = require('protobufjs');
+                const storedBuf = P.Writer.create().uint32((1 << 3) | 0).uint64(0).finish();
+                const fac = P.Writer.create()
+                    .uint32((1 << 3) | 2).bytes(P.Writer.create().uint32((2 << 3) | 2).string('牧草机').finish())
+                    .uint32((14 << 3) | 0).uint64(100)
+                    .uint32((21 << 3) | 2).bytes(storedBuf)
+                    .finish();
+                return { body: fac };
+            }
+            if (m === 'AddFeed') {
+                // 解析请求 #2 = 加草数量; 回 {1:存量} = 加的数量(模拟从 0 加到 count)
+                const r = require('protobufjs').Reader.create(Buffer.from(body));
+                while (r.pos < r.len) {
+                    const tag = r.uint32();
+                    const f = tag >>> 3;
+                    if (f === 2) addFeedCount = Number(r.int64());
+                    else r.skipType(tag & 7);
+                }
+                return { body: require('protobufjs').Writer.create().uint32((1 << 3) | 0).uint64(addFeedCount).finish() };
+            }
+            throw new Error(`桩里没有该方法的响应: ${m}`);
+        };
+        try {
+            const r = await ranch.autoFeedMachine({});
+            check('查了背包', bagQueried === true, bagQueried);
+            check('背包 30 根走 AddFeed', addFeedCount === 30, addFeedCount);
+            check('缺口 70 根自动买', r.bought === 70, r);
+            check('花费 = 70 * 60 = 4200', r.spent === 4200, r);
+        } finally {
+            network.sendMsgAsync = savedSend;
+            warehouse.getRanchBagDetail = savedBag;
+        }
+    }
+
     section('9. 照顾好友动物 / 使坏: 请求字节必须与抓包逐字节一致');
     {
         // 依据: wx-code-grabber/captures/20261120-001457_活动1.decoded.jsonl
