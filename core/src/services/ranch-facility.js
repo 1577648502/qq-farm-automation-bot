@@ -237,11 +237,26 @@ async function activateFacility(slot) {
     };
 }
 
+// 棚解锁有服务端等级门槛(2026-11-22 用户定案"到等级自动解锁就行"):
+// 1045134 牧场等级不足时记下当时玩家等级, 30 分钟窗口内不再发请求;
+// 玩家等级一变(升级了)立即放行重试 —— 等级一到就自动解锁, 不空打请求。
+const SHED_LEVEL_RETRY_MS = 30 * 60 * 1000;
+let _shedLevelBlock = { until: 0, levelSeen: 0 };
+
+function getPlayerLevelForShed() {
+    try {
+        const { getUserState } = require('../utils/network');
+        return Number((getUserState() || {}).level) || 0;
+    } catch {
+        return 0;
+    }
+}
+
 /**
  * 自动解锁棚(跟窝一样纳入 autoUpgradeBuildings 的自动升级/竣工):
  * AllCells.buildings 里出现棚(gid 6002001) = 已解锁, 不发请求;
  * 没有才发 ActivateFacility(10003)。解锁后下一轮 autoUpgradeBuildings 自然轮到它。
- * @returns {Promise<{activated:boolean, alreadyUnlocked:boolean}>}
+ * @returns {Promise<{activated:boolean, alreadyUnlocked:boolean, skipped?:string}>}
  */
 async function autoActivateShed() {
     const result = { activated: false, alreadyUnlocked: false };
@@ -258,16 +273,25 @@ async function autoActivateShed() {
         result.alreadyUnlocked = true;
         return result;
     }
+    // 等级不足窗口: 等级没变就不发请求(到等级立即放行)
+    if (Date.now() < _shedLevelBlock.until && getPlayerLevelForShed() === _shedLevelBlock.levelSeen) {
+        result.skipped = '等级不足(等待升级)';
+        return result;
+    }
     try {
         const r = await activateFacility(FACILITY_SHED_SLOT);
         result.activated = true;
+        _shedLevelBlock = { until: 0, levelSeen: 0 };
         log('牧场', `棚已解锁(slot=${r.slot || FACILITY_SHED_SLOT}, gid=${r.gid || FACILITY_SHED_GID}, Lv${r.level || '?'})`, {
             module: 'ranch', event: '棚解锁', result: 'ok',
         });
         await sleep(400);
     } catch (e) {
-        // 等级不足(1045134)/材料不足/已激活等都是正常态, 本轮跳过
-        if (!isExpectedHomeError(e)) {
+        const code = parseHomeErrorCode(e);
+        if (code === HOME_ERR.FARM_LEVEL_LOW) {
+            // 到等级自动解锁: 记住"当前等级还不够", 升级后(等级变化)立即重试
+            _shedLevelBlock = { until: Date.now() + SHED_LEVEL_RETRY_MS, levelSeen: getPlayerLevelForShed() };
+        } else if (!isExpectedHomeError(e)) {
             logWarn('牧场', `棚解锁失败: ${e.message}`, { module: 'ranch', event: '棚解锁', result: 'error' });
         }
     }

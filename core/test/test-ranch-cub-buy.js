@@ -47,6 +47,13 @@ function freshRanch() {
     return require(`${SB}/src/services/ranch`);
 }
 
+function freshFacility() {
+    for (const key of Object.keys(require.cache)) {
+        if (/services\/ranch-facility\.js$/.test(key)) delete require.cache[key];
+    }
+    return require(`${SB}/src/services/ranch-facility`);
+}
+
 const SHOP = 'gamepb.shoppb.ShopService';
 
 function shopReply() {
@@ -949,6 +956,36 @@ proto.loadProto().then(async () => {
         r = await facility.autoActivateShed();
         check('已有棚 → 不调 ActivateFacility', !calls.some(c => c.method === 'ActivateFacility'), calls.map(c => c.method));
         check('结果 alreadyUnlocked = true', r.alreadyUnlocked === true, r);
+    }
+
+    section('24. 棚解锁"到等级自动解锁"(2026-11-22 用户定案): 1045134 进窗口, 升级立即放行');
+    {
+        const facility = freshFacility();
+        const allCellsNoShed = () => types.AllCellsReply.encode(types.AllCellsReply.create({
+            buildings: [{ inst_id: 11, building_id: 6001001, level: 3, status: 9 }],
+        })).finish();
+        let activateCount = 0;
+        const calls = installStub({
+            AllCells: allCellsNoShed,
+            ActivateFacility: () => {
+                activateCount += 1;
+                // 抛服务端同款错误: code=1045134 牧场等级不足
+                const err = new Error('rpc error code=1045134');
+                err.code = 1045134;
+                throw err;
+            },
+        });
+        network.getUserState = () => ({ level: 20 });
+        await facility.autoActivateShed();
+        check('等级不足 → 发了 1 次 ActivateFacility', activateCount === 1, activateCount);
+        await facility.autoActivateShed();
+        check('等级没变 → 窗口内不再发', activateCount === 1, activateCount);
+        await facility.autoActivateShed();
+        check('窗口稳定(不发)', activateCount === 1, activateCount);
+        // 升级: 等级 20 → 25, 窗口立即放行
+        network.getUserState = () => ({ level: 25 });
+        await facility.autoActivateShed();
+        check('等级一变 → 立即重试(第 2 次请求)', activateCount === 2, activateCount);
     }
 
     finish();
