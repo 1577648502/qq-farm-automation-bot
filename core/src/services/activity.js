@@ -1480,6 +1480,28 @@ async function getMugeOverview() {
     return out;
 }
 
+// 「无可领」类业务错误码(2026-11-22 定性): 领取接口在"全部已领/无可领"时回这些码,
+// 是正常业务态不是故障 —— 不计入 skipped, 不打 warn(否则每轮刷一条超长日志)。
+//   1034162 档位奖励已领取(85 全服档位/84 助力/83 成长值档位)
+//   1034164 任务奖励已领取(82 活动任务)
+//   1034166 分享任务无可领(87 前置探测, 分享做完后)
+const MUGE_NOTHING_CODES = new Set(['1034162', '1034164', '1034166']);
+
+/** 压缩网络层错误消息: "gamepb...Operate 错误: code=1034162 该档位奖励已领取" → "code=1034162 该档位奖励已领取" */
+function shortMugeErr(e) {
+    const msg = String((e && e.message) || e);
+    const i = msg.indexOf('code=');
+    if (i === -1) return msg;
+    // 切片代替贪婪正则(避免多项式回溯); 码后多个空格压成一个
+    return msg.slice(i).replace(/^(code=\d+)\s+/, '$1 ').trim();
+}
+
+/** 是否「无可领」类业务态错误 */
+function isNothingToClaim(e) {
+    const m = String((e && e.message) || e).match(/code=(\d+)/);
+    return !!(m && MUGE_NOTHING_CODES.has(m[1]));
+}
+
 async function claimMugeActivity(options = {}) {
     const result = { tiers: 0, invites: 0, tasks: 0, shares: 0, growth: 0, growthValue: 0, details: [], skipped: [] };
     if (options.enabled === false) return result;
@@ -1503,7 +1525,7 @@ async function claimMugeActivity(options = {}) {
             result.details.push(`档位${claimed.length}/${tiers.length}档(全服重量${total}${nextTier ? `, 下一档需${toNum(nextTier.requiredWeight)}` : ''})`);
         }
     } catch (e) {
-        result.skipped.push(`档位奖励: ${e.message}`);
+        if (!isNothingToClaim(e)) result.skipped.push(`档位奖励: ${shortMugeErr(e)}`);
     }
     await sleep(500);
 
@@ -1518,7 +1540,7 @@ async function claimMugeActivity(options = {}) {
         result.invites = claimed.length;
         if (tiers.length > 0) result.details.push(`助力${claimed.length}/${tiers.length}档`);
     } catch (e) {
-        result.skipped.push(`助力奖励: ${e.message}`);
+        if (!isNothingToClaim(e)) result.skipped.push(`助力奖励: ${shortMugeErr(e)}`);
     }
     await sleep(500);
 
@@ -1538,7 +1560,7 @@ async function claimMugeActivity(options = {}) {
         tasksBody = r && r.activity && r.activity.muge_tasks;
         await sleep(400);
     } catch (e) {
-        result.skipped.push(`活动任务: ${e.message}`);
+        if (!isNothingToClaim(e)) result.skipped.push(`活动任务: ${shortMugeErr(e)}`);
     }
 
     let growthBody = null;
@@ -1549,7 +1571,7 @@ async function claimMugeActivity(options = {}) {
         growthBody = r && r.activity && r.activity.muge_tasks;
         await sleep(400);
     } catch (e) {
-        result.skipped.push(`成长值档位: ${e.message}`);
+        if (!isNothingToClaim(e)) result.skipped.push(`成长值档位: ${shortMugeErr(e)}`);
     }
 
     // 两个回复都带完整 muge_tasks(任务+成长值), 取最后一个成功的做统计
@@ -1590,7 +1612,7 @@ async function claimMugeActivity(options = {}) {
         }
         if (shareTasks.length > 0) result.details.push(`分享奖励${result.shares}/${shareTasks.length}个`);
     } catch (e) {
-        result.skipped.push(`分享任务: ${e.message}`);
+        if (!isNothingToClaim(e)) result.skipped.push(`分享任务: ${shortMugeErr(e)}`);
     }
 
     const summary = result.details.join(', ');
