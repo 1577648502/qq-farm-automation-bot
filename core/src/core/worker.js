@@ -1607,10 +1607,10 @@ async function handleApiCall(msg) {
                 const uid = Number(args[2]) || 0;
                 const info = require('../config/gameConfig').getItemById(itemId);
                 if (info && Number(info.type) === 109) {
-                    // ⭐ 2026-11-21 用户要求: 点罐头要**直接喂到动物**, 不是"入桶"。
-                    //   服务端没有罐头直达动物的接口(官方两步: Use/BatchUse 装桶 → FeedAnimal 扣桶),
-                    //   所以这里串起来: 必要时先灌桶 → 自动挑可喂动物 → FeedAnimal。
-                    result = await ranch.useCanOnAnimal(itemId, count, uid);
+                    // ⭐ 2026-11-22 用户定案(推翻 11-21 的"直接喂动物"): 点罐头"用"= **进罐头桶**,
+                    //   喂动物是喂食按钮/自动喂食的事 —— 用户点用直接喂出去, 桶里反而没货。
+                    //   服务端事实: 罐头 Use 的效果就是把桶时长加上(无直达动物接口)。
+                    result = await ranch.useCanFillBucket(itemId, count, uid);
                 } else {
                     const { useItem: _useRanch } = require('../services/warehouse');
                     result = await _useRanch(itemId, count, []);
