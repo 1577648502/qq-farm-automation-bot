@@ -33,7 +33,11 @@ const { currentAccountId, currentAccount } = storeToRefs(accountStore)
 const { status, loading: statusLoading, realtimeConnected } = storeToRefs(statusStore)
 void currentAccount
 
-const currentTab = ref<'overview' | 'cubShop' | 'rotation' | 'tiers' | 'tasks' | 'buildings'>('overview')
+const currentTab = ref<'overview' | 'shop' | 'tiers' | 'tasks' | 'buildings'>('overview')
+// 商城页签内部的子分区: 幼崽商城(cub) / 游商兑换(rotation)。
+// 两者同属"牧场花金券/便便换货"场景, 合并成一个页签(2026-11-22);
+// 游商不营业时不再占一个空页签。
+const shopTab = ref<'cub' | 'rotation'>('cub')
 const cubShopLoading = ref(false)
 const cubShopError = ref('')
 const cubShopList = ref<any[]>([])
@@ -212,8 +216,8 @@ async function openTiers() {
   }
 }
 
-async function openCubShop() {
-  currentTab.value = 'cubShop'
+async function openShop() {
+  currentTab.value = 'shop' // 子分区保持上次选择(shopTab)
   await Promise.all([reloadCubShop(), loadRanchShop()])
 }
 
@@ -538,43 +542,6 @@ const canOrganicText = computed(() => (canBucket.value ? fmtBucketSec(canBucket.
 const canNormalEmpty = computed(() => canBucket.value?.normalSec === 0)
 const canOrganicEmpty = computed(() => canBucket.value?.organicSec === 0)
 
-/** 卡 3 建筑行: 窝/棚/牧草机 的等级与状态(pensView 有棚未解锁判定, AllCells 有真实建筑) */
-const buildingRows = computed(() => {
-  const ov = overview.value as any
-  if (!ov)
-    return []
-  const coopB = (ov.coopBuildings || [])[0]
-  const penB = (ov.penBuildings || [])[0]
-  const fm = feedMachine.value as any
-  const penPen = pensView.value.find(p => p.key === 'pen')
-  return [
-    {
-      key: 'coop',
-      label: '窝',
-      locked: !coopB,
-      value: coopB ? `Lv${coopB.level}` : '',
-      upgrading: false,
-      hint: '',
-    },
-    {
-      key: 'pen',
-      label: '棚',
-      locked: !!(penPen && penPen.locked) || !penB,
-      value: penB ? `Lv${penB.level}` : '',
-      upgrading: false,
-      hint: penPen?.lockedHint || '',
-    },
-    {
-      key: 'feed',
-      label: '牧草机',
-      locked: !fm,
-      value: fm ? `Lv${fm.level || (fm.buildingId ? fm.buildingId % 10 : '?')}` : '',
-      upgrading: !!fm?.upgrading,
-      hint: '',
-    },
-  ]
-})
-
 /** 窝/棚分组视图(对应农场的田地) */
 interface PenView {
   key: string
@@ -633,6 +600,43 @@ const pensView = computed<PenView[]>(() => {
       p.lockedHint = ov.ranchLevel ? `建筑已放置，需更高牧场等级解锁（当前牧场 Lv${ov.ranchLevel}，实测 Lv18 仍未开放）` : '建筑已放置，需更高牧场等级解锁'
   }
   return pens
+})
+
+/** 卡 3 建筑行: 窝/棚/牧草机 的等级与状态(pensView 有棚未解锁判定, AllCells 有真实建筑) */
+const buildingRows = computed(() => {
+  const ov = overview.value as any
+  if (!ov)
+    return []
+  const coopB = (ov.coopBuildings || [])[0]
+  const penB = (ov.penBuildings || [])[0]
+  const fm = feedMachine.value as any
+  const penPen = pensView.value.find(p => p.key === 'pen')
+  return [
+    {
+      key: 'coop',
+      label: '窝',
+      locked: !coopB,
+      value: coopB ? `Lv${coopB.level}` : '',
+      upgrading: false,
+      hint: '',
+    },
+    {
+      key: 'pen',
+      label: '棚',
+      locked: !!(penPen && penPen.locked) || !penB,
+      value: penB ? `Lv${penB.level}` : '',
+      upgrading: false,
+      hint: penPen?.lockedHint || '',
+    },
+    {
+      key: 'feed',
+      label: '牧草机',
+      locked: !fm,
+      value: fm ? `Lv${fm.level || (fm.buildingId ? fm.buildingId % 10 : '?')}` : '',
+      upgrading: !!fm?.upgrading,
+      hint: '',
+    },
+  ]
 })
 
 // 刷新防抖: 挂载/切账号/每次操作都会触发 refresh, 连点按钮会叠加请求;
@@ -851,7 +855,8 @@ function rotationDiscountActive(g: any) {
 }
 
 async function openRotation() {
-  currentTab.value = 'rotation'
+  currentTab.value = 'shop'
+  shopTab.value = 'rotation'
   await reloadRotation()
 }
 
@@ -945,15 +950,16 @@ onUnmounted(() => {
   <div class="space-y-4">
     <!-- 牧场内部页签栏。
          嵌入模式(个人 → 我的牧场)下**保留**这排页签 —— 牧场的全部功能
-         (总览/幼崽商城/兴牧档位/牧场任务/建筑与地块)都通过它切换,
-         这样个人页只需要一个"我的牧场"入口就够, 不用再摊成 5 个顶级页签。
-         嵌入时做成小一号, 与个人页的顶级页签形成视觉层级区分。 -->
+         都通过它切换, 这样个人页只需要一个"我的牧场"入口就够。
+         2026-11-22 重排: 幼崽商城+游商兑换合并成"商城"(内部子分区);
+         按使用频率排序(总览 → 商城 → 任务 → 建筑 → 档位);
+         窄屏改横向滑动, 不再换行成两排。 -->
     <div
-      class="mb-1 flex flex-wrap gap-2"
+      class="mb-1 flex flex-nowrap gap-2 overflow-x-auto"
       :class="embedded ? 'rounded-lg bg-white p-1.5 dark:bg-gray-800' : ''"
     >
       <button
-        class="flex items-center rounded-lg font-medium transition-colors space-x-2"
+        class="flex shrink-0 items-center rounded-lg font-medium transition-colors space-x-2"
         :class="[embedded ? 'min-h-[36px] px-3 py-1.5 text-sm' : 'min-h-[44px] px-4 py-2',
                  currentTab === 'overview' ? 'text-white shadow-md' : 'bg-white text-gray-600 hover:bg-gray-100 dark:bg-gray-800 dark:text-gray-300 dark:hover:bg-gray-700']"
         :style="currentTab === 'overview' ? { backgroundColor: 'var(--theme-primary)' } : {}"
@@ -963,37 +969,17 @@ onUnmounted(() => {
         <span>牧场总览</span>
       </button>
       <button
-        class="flex items-center rounded-lg font-medium transition-colors space-x-2"
+        class="flex shrink-0 items-center rounded-lg font-medium transition-colors space-x-2"
         :class="[embedded ? 'min-h-[36px] px-3 py-1.5 text-sm' : 'min-h-[44px] px-4 py-2',
-                 currentTab === 'cubShop' ? 'text-white shadow-md' : 'bg-white text-gray-600 hover:bg-gray-100 dark:bg-gray-800 dark:text-gray-300 dark:hover:bg-gray-700']"
-        :style="currentTab === 'cubShop' ? { backgroundColor: 'var(--theme-primary)' } : {}"
-        @click="openCubShop"
+                 currentTab === 'shop' ? 'text-white shadow-md' : 'bg-white text-gray-600 hover:bg-gray-100 dark:bg-gray-800 dark:text-gray-300 dark:hover:bg-gray-700']"
+        :style="currentTab === 'shop' ? { backgroundColor: 'var(--theme-primary)' } : {}"
+        @click="openShop"
       >
         <div class="i-carbon-shopping-cart text-lg" />
-        <span>牧场商城</span>
+        <span>商城</span>
       </button>
       <button
-        class="flex items-center rounded-lg font-medium transition-colors space-x-2"
-        :class="[embedded ? 'min-h-[36px] px-3 py-1.5 text-sm' : 'min-h-[44px] px-4 py-2',
-                 currentTab === 'rotation' ? 'text-white shadow-md' : 'bg-white text-gray-600 hover:bg-gray-100 dark:bg-gray-800 dark:text-gray-300 dark:hover:bg-gray-700']"
-        :style="currentTab === 'rotation' ? { backgroundColor: 'var(--theme-primary)' } : {}"
-        @click="openRotation"
-      >
-        <div class="i-carbon-store text-lg" />
-        <span>游商兑换</span>
-      </button>
-      <button
-        class="flex items-center rounded-lg font-medium transition-colors space-x-2"
-        :class="[embedded ? 'min-h-[36px] px-3 py-1.5 text-sm' : 'min-h-[44px] px-4 py-2',
-                 currentTab === 'tiers' ? 'text-white shadow-md' : 'bg-white text-gray-600 hover:bg-gray-100 dark:bg-gray-800 dark:text-gray-300 dark:hover:bg-gray-700']"
-        :style="currentTab === 'tiers' ? { backgroundColor: 'var(--theme-primary)' } : {}"
-        @click="openTiers"
-      >
-        <div class="i-carbon-chart-bar text-lg" />
-        <span>兴牧档位</span>
-      </button>
-      <button
-        class="flex items-center rounded-lg font-medium transition-colors space-x-2"
+        class="flex shrink-0 items-center rounded-lg font-medium transition-colors space-x-2"
         :class="[embedded ? 'min-h-[36px] px-3 py-1.5 text-sm' : 'min-h-[44px] px-4 py-2',
                  currentTab === 'tasks' ? 'text-white shadow-md' : 'bg-white text-gray-600 hover:bg-gray-100 dark:bg-gray-800 dark:text-gray-300 dark:hover:bg-gray-700']"
         :style="currentTab === 'tasks' ? { backgroundColor: 'var(--theme-primary)' } : {}"
@@ -1007,7 +993,7 @@ onUnmounted(() => {
         >{{ ranchClaimableCount }}</span>
       </button>
       <button
-        class="flex items-center rounded-lg font-medium transition-colors space-x-2"
+        class="flex shrink-0 items-center rounded-lg font-medium transition-colors space-x-2"
         :class="[embedded ? 'min-h-[36px] px-3 py-1.5 text-sm' : 'min-h-[44px] px-4 py-2',
                  currentTab === 'buildings' ? 'text-white shadow-md' : 'bg-white text-gray-600 hover:bg-gray-100 dark:bg-gray-800 dark:text-gray-300 dark:hover:bg-gray-700']"
         :style="currentTab === 'buildings' ? { backgroundColor: 'var(--theme-primary)' } : {}"
@@ -1016,12 +1002,47 @@ onUnmounted(() => {
         <div class="i-carbon-building text-lg" />
         <span>建筑与地块</span>
       </button>
+      <button
+        class="flex shrink-0 items-center rounded-lg font-medium transition-colors space-x-2"
+        :class="[embedded ? 'min-h-[36px] px-3 py-1.5 text-sm' : 'min-h-[44px] px-4 py-2',
+                 currentTab === 'tiers' ? 'text-white shadow-md' : 'bg-white text-gray-600 hover:bg-gray-100 dark:bg-gray-800 dark:text-gray-300 dark:hover:bg-gray-700']"
+        :style="currentTab === 'tiers' ? { backgroundColor: 'var(--theme-primary)' } : {}"
+        @click="openTiers"
+      >
+        <div class="i-carbon-chart-bar text-lg" />
+        <span>兴牧档位</span>
+      </button>
+    </div>
+
+    <!-- 商城子分区: 幼崽商城 | 游商兑换(仅商城页签下显示) -->
+    <div
+      v-if="currentTab === 'shop'"
+      class="mb-1 inline-flex rounded-lg bg-white p-1 dark:bg-gray-800"
+    >
+      <button
+        class="flex items-center rounded-md px-3 py-1.5 text-sm font-medium transition-colors"
+        :class="[embedded ? 'min-h-[32px]' : 'min-h-[36px]',
+                 shopTab === 'cub' ? 'text-white shadow-sm' : 'text-gray-500 hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-gray-700']"
+        :style="shopTab === 'cub' ? { backgroundColor: 'var(--theme-primary)' } : {}"
+        @click="shopTab = 'cub'"
+      >
+        <span class="i-fas-paw mr-1.5 text-base" />幼崽商城
+      </button>
+      <button
+        class="flex items-center rounded-md px-3 py-1.5 text-sm font-medium transition-colors"
+        :class="[embedded ? 'min-h-[32px]' : 'min-h-[36px]',
+                 shopTab === 'rotation' ? 'text-white shadow-sm' : 'text-gray-500 hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-gray-700']"
+        :style="shopTab === 'rotation' ? { backgroundColor: 'var(--theme-primary)' } : {}"
+        @click="openRotation"
+      >
+        <span class="i-carbon-store mr-1.5 text-base" />游商兑换
+      </button>
     </div>
 
     <!-- ===== 游商兑换(仓鼠驿站) =====
          官方规则(MCRotationShop.tips): 每天 6:00-23:59 出摊, 每次出摊换一批货。
          这里给出手动兑换界面 —— 之前只有"一键自动兑换", 用户看不到卖什么。 -->
-    <div v-if="currentTab === 'rotation'" class="rounded-lg bg-white shadow dark:bg-gray-800">
+    <div v-if="currentTab === 'shop' && shopTab === 'rotation'" class="rounded-lg bg-white shadow dark:bg-gray-800">
       <div class="border-b border-gray-100 p-3 dark:border-gray-700 sm:p-4">
         <div class="flex flex-wrap items-center justify-between gap-2">
           <h3 class="flex items-center gap-2 text-lg font-bold">
@@ -1288,7 +1309,7 @@ onUnmounted(() => {
       </div>
     </div>
 
-    <div v-if="currentTab === 'cubShop'" class="rounded-lg bg-white shadow dark:bg-gray-800">
+    <div v-if="currentTab === 'shop' && shopTab === 'cub'" class="rounded-lg bg-white shadow dark:bg-gray-800">
       <div class="border-b border-gray-100 p-3 dark:border-gray-700 sm:p-4">
         <div class="flex flex-wrap items-center justify-between gap-2">
           <h3 class="flex items-center gap-2 text-lg font-bold">
@@ -1329,7 +1350,7 @@ onUnmounted(() => {
           <span class="text-xs text-gray-400">
             {{ ranchShopCategory === 'cub' ? '按收益比排序（整只回收 ÷ 幼崽成本）' : '牧场道具（牧草等）' }}
           </span>
-          <BaseButton variant="secondary" size="sm" :loading="cubShopLoading || ranchShopLoading" @click="openCubShop">
+          <BaseButton variant="secondary" size="sm" :loading="cubShopLoading || ranchShopLoading" @click="openShop">
             <span class="i-carbon-renew mr-1" />刷新
           </BaseButton>
         </div>
@@ -1557,9 +1578,9 @@ onUnmounted(() => {
         <!-- 头部 -->
         <!-- 顶部 3 卡网格(对齐首页牧场区 cb071fd 的分区模式):
              账号卡 / 牧草罐头卡 / 建筑设施卡 —— 原来头部一行小字+摘要条信息密度太低 -->
-        <div v-if="overview" class="grid grid-cols-1 gap-4 p-3 sm:p-4 lg:grid-cols-3 sm:grid-cols-2">
+        <div v-if="overview" class="grid grid-cols-1 gap-4 p-3 lg:grid-cols-3 sm:grid-cols-2 sm:p-4">
           <!-- 卡 1: 牧场账号(等级/在养/EXP/窝棚) -->
-          <div class="min-w-0 flex flex-col rounded-lg border border-gray-100 bg-gray-50/60 p-3 dark:border-gray-700 dark:bg-gray-900/40">
+          <div class="min-w-0 flex flex-col border border-gray-100 rounded-lg bg-gray-50/60 p-3 dark:border-gray-700 dark:bg-gray-900/40">
             <div class="mb-2 flex items-start justify-between">
               <div class="flex items-center gap-1.5 text-sm text-gray-500">
                 <div class="i-fas-paw" />
@@ -1615,7 +1636,7 @@ onUnmounted(() => {
           </div>
 
           <!-- 卡 2: 牧草与罐头(牧草机存量/罐头桶余量) -->
-          <div class="min-w-0 flex flex-col rounded-lg border border-gray-100 bg-gray-50/60 p-3 dark:border-gray-700 dark:bg-gray-900/40">
+          <div class="min-w-0 flex flex-col border border-gray-100 rounded-lg bg-gray-50/60 p-3 dark:border-gray-700 dark:bg-gray-900/40">
             <div class="mb-2 flex items-start justify-between">
               <div class="flex items-center gap-1.5 text-sm text-gray-500">
                 <div class="i-carbon-zap text-amber-500" />
@@ -1651,7 +1672,7 @@ onUnmounted(() => {
                 />
               </div>
             </div>
-            <div class="mt-3 mb-1 flex items-center gap-1.5 text-sm text-gray-500">
+            <div class="mb-1 mt-3 flex items-center gap-1.5 text-sm text-gray-500">
               <div class="i-carbon-restaurant text-orange-400" />
               罐头容器
             </div>
@@ -1678,7 +1699,7 @@ onUnmounted(() => {
           </div>
 
           <!-- 卡 3: 建筑与设施(窝/棚/牧草机等级) -->
-          <div class="min-w-0 flex flex-col rounded-lg border border-gray-100 bg-gray-50/60 p-3 dark:border-gray-700 dark:bg-gray-900/40">
+          <div class="min-w-0 flex flex-col border border-gray-100 rounded-lg bg-gray-50/60 p-3 dark:border-gray-700 dark:bg-gray-900/40">
             <div class="mb-2 flex items-start justify-between">
               <div class="flex items-center gap-1.5 text-sm text-gray-500">
                 <div class="i-carbon-building text-indigo-500" />
@@ -1686,13 +1707,13 @@ onUnmounted(() => {
               </div>
               <button
                 type="button"
-                class="text-[11px] text-indigo-600 hover:underline dark:text-indigo-300"
+                class="text-[11px] text-indigo-600 dark:text-indigo-300 hover:underline"
                 @click="openBuildings"
               >
                 详情 <span class="i-carbon-arrow-right inline-block align-[-1px]" />
               </button>
             </div>
-            <div class="space-y-1.5 text-xs">
+            <div class="text-xs space-y-1.5">
               <div
                 v-for="b in buildingRows"
                 :key="b.key"
