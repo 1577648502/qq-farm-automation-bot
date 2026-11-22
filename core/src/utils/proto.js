@@ -98,6 +98,9 @@ async function loadProto() {
     types.CompleteRegionUnlockRequest = root.lookupType('gamepb.homesteadpb.CompleteRegionUnlockRequest');
     types.CompleteRegionUnlockReply = root.lookupType('gamepb.homesteadpb.CompleteRegionUnlockReply');
     types.SpeedUpRegionUnlockRequest = root.lookupType('gamepb.homesteadpb.SpeedUpRegionUnlockRequest');
+    types.ActivateFacilityRequest = root.lookupType('gamepb.homesteadpb.ActivateFacilityRequest');
+    types.ActivateFacilityReply = root.lookupType('gamepb.homesteadpb.ActivateFacilityReply');
+    types.Facility = root.lookupType('gamepb.homesteadpb.Facility');
     types.SpeedUpRegionUnlockReply = root.lookupType('gamepb.homesteadpb.SpeedUpRegionUnlockReply');
     types.AllCellsRequest = root.lookupType('gamepb.homesteadpb.AllCellsRequest');
     types.AllCellsReply = root.lookupType('gamepb.homesteadpb.AllCellsReply');

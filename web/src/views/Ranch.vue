@@ -123,7 +123,7 @@ async function buyGrassManually() {
 }
 
 // 幼崽商城筛选/排序(对照种子商城的 FILTERS)
-const cubFilter = ref<'all' | 'available' | 'locked' | 'soldout'>('all')
+const cubFilter = ref<'all' | 'available' | 'locked' | 'soldout' | 'coop' | 'pen'>('all')
 const cubSort = ref<'ratio' | 'price' | 'profit'>('ratio')
 
 /** 筛选后的幼崽列表 */
@@ -139,6 +139,9 @@ const cubShopFiltered = computed(() => {
       case 'available': return !!g.unlocked && (noLimit || Number(remain) > 0)
       case 'locked': return !g.unlocked
       case 'soldout': return !!g.unlocked && !noLimit && Number(remain) <= 0
+      // 窝/棚归属(2026-11-22): 60xxx=窝(小动物) 70xxx=棚(大动物), 后端 housing 字段
+      case 'coop': return (g.housing || (Number(g.animalId) >= 70000 ? '棚' : '窝')) === '窝'
+      case 'pen': return (g.housing || (Number(g.animalId) >= 70000 ? '棚' : '窝')) === '棚'
       default: return true
     }
   })
@@ -159,6 +162,7 @@ const cubCounts = computed(() => {
     const noLimit = remain === null || remain === undefined
     return !!g?.unlocked && (noLimit || Number(remain) > 0)
   }
+  const housingOf = (g: any) => g?.housing || (Number(g?.animalId) >= 70000 ? '棚' : '窝')
   return {
     all: all.length,
     available: all.filter(isAvail).length,
@@ -167,15 +171,19 @@ const cubCounts = computed(() => {
       const remain = g?.remaining
       return !!g?.unlocked && remain !== null && remain !== undefined && Number(remain) <= 0
     }).length,
+    coop: all.filter((g: any) => g && housingOf(g) === '窝').length,
+    pen: all.filter((g: any) => g && housingOf(g) === '棚').length,
   }
 })
 
 /** 筛选按钮配置(模板里只引用, 不在表达式里构造对象) */
-const CUB_FILTERS: Array<{ key: 'all' | 'available' | 'locked' | 'soldout', label: string }> = [
+const CUB_FILTERS: Array<{ key: 'all' | 'available' | 'locked' | 'soldout' | 'coop' | 'pen', label: string }> = [
   { key: 'all', label: '全部' },
   { key: 'available', label: '可购买' },
   { key: 'locked', label: '未解锁' },
   { key: 'soldout', label: '已售罄' },
+  { key: 'coop', label: '窝(小动物)' },
+  { key: 'pen', label: '棚(大动物)' },
 ]
 const cubBuyBusy = ref(0)
 // 幼崽商城加购(对齐农场商城「道具商城」的交互架构):
@@ -1166,7 +1174,15 @@ onUnmounted(() => {
                 >
                   高收益
                 </span>
-                <span v-else />
+                <!-- 窝/棚归属徽章(2026-11-22): 让人一眼看清这只幼崽要放窝还是放棚 -->
+                <span
+                  class="rounded px-1 py-0.5 text-[10px]"
+                  :class="(g.housing || (Number(g.animalId) >= 70000 ? '棚' : '窝')) === '棚'
+                    ? 'bg-orange-100 text-orange-700 dark:bg-orange-900/40 dark:text-orange-300'
+                    : 'bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-300'"
+                >
+                  {{ g.housing || (Number(g.animalId) >= 70000 ? '棚' : '窝') }}
+                </span>
                 <span
                   v-if="g.limit > 0"
                   class="rounded px-1 py-0.5 text-[10px]"

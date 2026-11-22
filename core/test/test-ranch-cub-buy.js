@@ -898,6 +898,59 @@ proto.loadProto().then(async () => {
         }
     }
 
+    section('23. 棚解锁 ActivateFacility(抓包 20261122-222723_解锁棚 全帧回归)');
+    {
+        // 抓包: C->S = 08934e = {1: 10003}(slot); S->C = 0aa601{08934e 10d1aaee02 1807 200b 280f 4805 5003 5a7d... 6001 a2010c08934e}
+        const facility = require(`${SB}/src/services/ranch-facility`);
+        check('activateFacility/autoActivateShed 已导出',
+            typeof facility.activateFacility === 'function' && typeof facility.autoActivateShed === 'function', null);
+
+        // 请求编码必须等于抓包帧
+        const enc = types.ActivateFacilityRequest.encode(types.ActivateFacilityRequest.create({ slot: 10003 })).finish();
+        check('请求编码 = 抓包 08934e', enc.toString('hex') === '08934e', enc.toString('hex'));
+
+        // 真帧字段(20261122-222723 S->C 169B, python 逐字段 walk 实锤):
+        //   {1:Facility{ slot=10003, gid=6002001, level=7, type=11, f5=15,
+        //                f7=1, f8=5, f9=5, f10=3, #11=repeated125B, f12=1, #20 }}
+        // 抓包原文 hex 不进测试(长 hex 会被会话层红action 弄坏, 线上踩过), 用编码往返锁建模。
+        const wire = types.ActivateFacilityReply.encode(types.ActivateFacilityReply.create({
+            facility: { slot: 10003, gid: 6002001, level: 7, type: 11,
+                field5: 15, field7: 1, field8: 5, field9: 5, field10: 3, field12: 1 },
+        })).finish();
+        const dec = types.ActivateFacilityReply.decode(wire);
+        check('真帧: facility.slot = 10003', Number(dec.facility.slot) === 10003, Number(dec.facility.slot));
+        check('真帧: facility.gid = 6002001(牧场棚)', Number(dec.facility.gid) === 6002001, Number(dec.facility.gid));
+        check('真帧: facility.level = 7', Number(dec.facility.level) === 7, Number(dec.facility.level));
+        check('真帧: facility.type = 11', Number(dec.facility.type) === 11, Number(dec.facility.type));
+
+        // 行为: buildings 里没有棚(gid 6002001) → 发 ActivateFacility(10003)
+        const allCellsNoShed = () => types.AllCellsReply.encode(types.AllCellsReply.create({
+            buildings: [{ inst_id: 11, building_id: 6001001, level: 3, status: 9 }],
+        })).finish();
+        let calls = installStub({
+            AllCells: allCellsNoShed,
+            ActivateFacility: () => wire,
+        });
+        let r = await facility.autoActivateShed();
+        check('无棚 → 调 ActivateFacility', calls.some(c => c.method === 'ActivateFacility'), calls.map(c => c.method));
+        check('结果 activated = true', r.activated === true, r);
+        const req = types.ActivateFacilityRequest.decode(calls.find(c => c.method === 'ActivateFacility').body);
+        check('激活请求 slot = 10003', Number(req.slot) === 10003, Number(req.slot));
+
+        // 行为: buildings 里已有棚 → 不发请求
+        calls = installStub({
+            AllCells: () => types.AllCellsReply.encode(types.AllCellsReply.create({
+                buildings: [
+                    { inst_id: 11, building_id: 6001001, level: 3, status: 9 },
+                    { inst_id: 13, building_id: 6002001, level: 7, status: 9 },
+                ],
+            })).finish(),
+        });
+        r = await facility.autoActivateShed();
+        check('已有棚 → 不调 ActivateFacility', !calls.some(c => c.method === 'ActivateFacility'), calls.map(c => c.method));
+        check('结果 alreadyUnlocked = true', r.alreadyUnlocked === true, r);
+    }
+
     finish();
 }).catch((e) => {
     console.error('测试异常:', e);

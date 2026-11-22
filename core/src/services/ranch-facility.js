@@ -218,6 +218,62 @@ async function removeFacility(instanceId) {
     return { instId: toNum(reply.item && reply.item.inst_id) };
 }
 
+// ============ 设施激活(解锁棚) 2026-11-22 抓包 20261122-222723_解锁棚 定案 ============
+
+// 槽位/配置 id: 10001=窝(gid 6001001) 10002=喂食机(gid 7001001) 10003=棚(gid 6002001)
+const FACILITY_SHED_SLOT = 10003;
+const FACILITY_SHED_GID = 6002001;
+
+/** 激活(解锁)设施: slot=10003 解锁棚(响应 Facility{slot,gid,level}) */
+async function activateFacility(slot) {
+    const replyBody = await call('ActivateFacility', types.ActivateFacilityRequest, {
+        slot: toLong(toNum(slot)),
+    });
+    const reply = types.ActivateFacilityReply.decode(replyBody);
+    return {
+        slot: toNum(reply.facility && reply.facility.slot),
+        gid: toNum(reply.facility && reply.facility.gid),
+        level: toNum(reply.facility && reply.facility.level),
+    };
+}
+
+/**
+ * 自动解锁棚(跟窝一样纳入 autoUpgradeBuildings 的自动升级/竣工):
+ * AllCells.buildings 里出现棚(gid 6002001) = 已解锁, 不发请求;
+ * 没有才发 ActivateFacility(10003)。解锁后下一轮 autoUpgradeBuildings 自然轮到它。
+ * @returns {Promise<{activated:boolean, alreadyUnlocked:boolean}>}
+ */
+async function autoActivateShed() {
+    const result = { activated: false, alreadyUnlocked: false };
+    let buildings;
+    try {
+        buildings = (await getAllCells()).buildings;
+    } catch (e) {
+        if (!isExpectedHomeError(e)) {
+            logWarn('牧场', `读取建筑状态失败(棚解锁判定): ${e.message}`, { module: 'ranch', event: '棚解锁', result: 'error' });
+        }
+        return result;
+    }
+    if (buildings.some(b => b.buildingId === FACILITY_SHED_GID)) {
+        result.alreadyUnlocked = true;
+        return result;
+    }
+    try {
+        const r = await activateFacility(FACILITY_SHED_SLOT);
+        result.activated = true;
+        log('牧场', `棚已解锁(slot=${r.slot || FACILITY_SHED_SLOT}, gid=${r.gid || FACILITY_SHED_GID}, Lv${r.level || '?'})`, {
+            module: 'ranch', event: '棚解锁', result: 'ok',
+        });
+        await sleep(400);
+    } catch (e) {
+        // 等级不足(1045134)/材料不足/已激活等都是正常态, 本轮跳过
+        if (!isExpectedHomeError(e)) {
+            logWarn('牧场', `棚解锁失败: ${e.message}`, { module: 'ranch', event: '棚解锁', result: 'error' });
+        }
+    }
+    return result;
+}
+
 // ============ 自动化 ============
 
 /**
@@ -397,6 +453,8 @@ module.exports = {
     placeFacility,
     moveFacility,
     removeFacility,
+    activateFacility,
+    autoActivateShed,
     autoUpgradeBuildings,
     autoUnlockRegions,
 };

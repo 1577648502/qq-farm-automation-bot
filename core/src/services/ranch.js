@@ -2165,6 +2165,7 @@ const RANCH_CARE_BREAKERS = {
     hazardFriends: createFailureBreaker(),
     upgradeBuildings: createFailureBreaker(),
     unlockRegions: createFailureBreaker(),
+    unlockShed: createFailureBreaker(),
     rotationShop: createFailureBreaker(),
     ranchTasks: createFailureBreaker(),
     canBuy: createFailureBreaker(),
@@ -2570,6 +2571,25 @@ async function runRanchCare(opts = {}) {
     try {
         facility = require('./ranch-facility');
     } catch { facility = null; }
+
+    // 5.6a 自动解锁棚(2026-11-22: ActivateFacility(10003) 抓包定案) —
+    //   没解锁先解锁, 解锁后 AllCells.buildings 里就有棚, 下面 autoUpgradeBuildings 跟窝一样自动升级/竣工。
+    let ranShed = false;
+    if (want('daily') && facility && opts.unlockRegions !== false && isAutomationOn('ranch_unlock') && !RANCH_CARE_BREAKERS.unlockShed.isOpen()) {
+        ranShed = true;
+        try {
+            const r = await facility.autoActivateShed();
+            if (r.activated) result.details.push('棚已解锁');
+        } catch (e) {
+            const st = RANCH_CARE_BREAKERS.unlockShed.failure();
+            if (st === 'open') {
+                logWarn('牧场', `棚解锁连续失败, 暂停30分钟后重试: ${e.message}`, { module: 'ranch', event: '棚解锁', result: 'error' });
+            } else if (!st) {
+                logWarn('牧场', `棚解锁失败: ${e.message}`, { module: 'ranch', event: '棚解锁', result: 'error' });
+            }
+        }
+    }
+    if (ranShed) await gapIf(true);
 
     let ranUpgrade = false;
     if (want('daily') && facility && opts.upgradeBuildings !== false && isAutomationOn('ranch_upgrade') && !RANCH_CARE_BREAKERS.upgradeBuildings.isOpen()) {
@@ -4379,6 +4399,8 @@ async function getCubShop() {
         return {
             goodsId: toNum(g.id),
             animalId,
+            // 窝/棚归属(2026-11-22): 60xxx=窝(小动物) 70xxx=棚(大动物), 商店卡片徽章+筛选用
+            housing: animalId >= 70000 ? '棚' : '窝',
             name: getAnimalName(animalId),
             // 幼崽图标(2026-11-22: 所有牧场展示动物的页面都带图)
             image: getItemImageById(animalId) || '',

@@ -22,6 +22,31 @@ message BuildingItemInfo {
     // 其余字段未解析
 }
 
+// --- 设施激活(解锁窝/棚/喂食机) 2026-11-22 抓包 20261122-222723_解锁棚 定案 ---
+// 实测(用户手动解锁棚): 请求 {1: 10003} (slot);
+// 响应 0a a601 = {1: Facility{ slot=10003, gid=6002001(牧场棚), level=7, type=11, ... }}。
+// 槽位定案: 10001=窝(gid 6001001) 10002=喂食机(gid 7001001) 10003=棚(gid 6002001)。
+// 建筑类型 type=11(窝/棚同值), AllCells.buildings 的 building_id 就是这里的 gid。
+message ActivateFacilityRequest {
+    int64 slot = 1;                  // 10003 = 棚
+}
+message ActivateFacilityReply {
+    Facility facility = 1;
+}
+message Facility {
+    int64 slot = 1;                  // 10003
+    int64 gid = 2;                   // 6002001 = 牧场棚
+    int64 level = 3;                 // 7
+    int64 type = 4;                  // 11
+    int64 field5 = 5;                // 15
+    int64 field7 = 7;                // 1
+    int64 field8 = 8;                // 5
+    int64 field9 = 9;                // 5
+    int64 field10 = 10;              // 3
+    int64 field12 = 12;              // 1
+    // #11(repeated 125B 记录列表)与 #20({1:slot,...})未解析, proto3 解码自动跳过
+}
+
 // --- 建筑升级 ---
 message UpgradeBuildingRequest {
     int64 inst_id = 1;
