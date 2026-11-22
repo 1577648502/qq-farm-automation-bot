@@ -3380,7 +3380,9 @@ app.use('/api', (req, res, next) => {
     // 「牧歌初启」完成情况(只读)
     app.get('/api/activity/muge', withAccount(accountId => provider.getMugeOverview(accountId), { softErrors: true }));
     // 「牧歌初启」手动领取
-    app.post('/api/activity/muge/claim', withAccount((accountId, req) => provider.claimMugeActivity(req.body || {}), { softErrors: true }));
+    // ⚠ accountId 必须传给 provider —— 之前只传 req.body, resolveAccountRefId({}) 为空,
+    //   永远报"账号未运行"(2026-11-21 用户实测)
+    app.post('/api/activity/muge/claim', withAccount((accountId, req) => provider.claimMugeActivity(accountId, req.body || {}), { softErrors: true }));
     // 红包: 每日福利, 自动任务里已默认领; 这里给面板一个手动补领/查看入口
     app.get('/api/red-packet/state', withAccount(accountId => provider.getRedPacketState(accountId), { softErrors: true }));
     app.post('/api/red-packet/claim', withAccount(accountId => provider.claimDailyRedPacket(accountId), { softErrors: true }));

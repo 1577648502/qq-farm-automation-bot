@@ -106,8 +106,13 @@ const claimableTotal = computed(() => {
   if (!s)
     return 0
   return (s.tiers?.claimable || 0) + (s.invites?.claimable || 0)
-    + (s.tasks?.claimable || 0) + (data.value?.shares?.filter((x: any) => Number(x.count) > 0).length || 0)
+    + (s.tasks?.claimable || 0) + (s.growth?.claimable || 0)
+    + (data.value?.shares?.filter((x: any) => Number(x.count) > 0).length || 0)
 })
+
+/** 成长值档位可领数(手册顶部领奖条) */
+const growthClaimable = computed(() =>
+  data.value?.growthTiers?.filter((t: any) => Number(t.status) === 2).length || 0)
 
 async function refresh() {
   const id = currentAccountId.value
@@ -225,6 +230,31 @@ watch(currentAccountId, () => refresh())
 
       <!-- ===== 成长手册(重点页面: 完整列出全部任务) ===== -->
       <section v-if="activePage === 'handbook'" class="border border-gray-200 rounded-lg bg-white p-3 dark:border-gray-700 dark:bg-gray-800">
+        <!-- 成长值档位奖励(游戏内手册顶部的领奖条): 完成任务攒成长值, 达标领档位奖励 -->
+        <div v-if="data.growthTiers?.length" class="mb-3 border border-amber-200 rounded-lg bg-amber-50/60 p-3 dark:border-amber-800/50 dark:bg-amber-900/10">
+          <div class="mb-2 flex flex-wrap items-center gap-2">
+            <h4 class="flex items-center gap-1.5 text-sm text-amber-900 font-semibold dark:text-amber-200">
+              <div class="i-carbon-progress-bar text-amber-600" />
+              成长值奖励
+            </h4>
+            <span class="text-xs text-amber-700/90 dark:text-amber-300/90">
+              当前 {{ data.growthValue }} 点 · 完成任务攒成长值，达标领奖励
+            </span>
+            <span v-if="growthClaimable" class="ml-auto rounded bg-amber-500 px-2 py-0.5 text-xs text-white">
+              可领 {{ growthClaimable }} 档
+            </span>
+          </div>
+          <div class="grid gap-1.5 2xl:grid-cols-4 md:grid-cols-2 sm:grid-cols-2">
+            <div
+              v-for="t in data.growthTiers"
+              :key="t.seq"
+              class="flex items-center justify-between border border-amber-100 rounded px-2 py-1.5 text-xs dark:border-amber-800/50"
+            >
+              <span class="text-gray-600 dark:text-gray-300">{{ t.requiredGrowth }} 点 · {{ rewardText(t.reward) }}</span>
+              <span :class="statusOf(t.status).cls">{{ statusOf(t.status).text }}</span>
+            </div>
+          </div>
+        </div>
         <div class="mb-2 flex flex-wrap items-center gap-2">
           <h3 class="flex items-center gap-1.5 text-sm font-semibold">
             <div class="i-carbon-notebook text-emerald-600" />

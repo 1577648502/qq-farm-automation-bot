@@ -75,7 +75,17 @@ message ActivityData {
 //   7 = 批次号(1..8), 每批 3 条任务
 message ActivityBodyMugeTasks {
     repeated MugeTask tasks = 1;
-    // 2,3 未确认
+    // 2 = 当前成长值(任务奖励数累加; 20261120 领奖励抓包实测 90 对应前 9 个任务全完成)
+    // ⚠ 本文件 keepCase:true, 字段名与文件内其他字段一样保持 camelCase
+    int64 growthValue = 2;
+    // 3 = 成长值档位奖励(手册顶部领奖条): 成长值达到 requiredGrowth 领 reward
+    repeated MugeGrowthTier growthTiers = 3;
+}
+message MugeGrowthTier {
+    int64 seq = 1;
+    int64 requiredGrowth = 2;    // 30/60/90/120/150/180/210/240
+    corepb.Item reward = 3;
+    int64 status = 4;            // 同任务状态: 1=进行中 2=可领 3=已领 4=未开放
 }
 message MugeTask {
     int64 seq = 1;

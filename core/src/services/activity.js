@@ -1404,7 +1404,7 @@ function classifyMugeTaskModule(desc) {
 }
 
 async function getMugeOverview() {
-    const out = { tiers: [], invites: [], tasks: [], shares: [], error: null };
+    const out = { tiers: [], invites: [], tasks: [], shares: [], growthTiers: [], growthValue: 0, error: null };
     try {
         const body = types.GetGroupRequest.encode(types.GetGroupRequest.create({
             group_id: toLong(MUGE_ACTIVITY_GROUP),
@@ -1435,12 +1435,21 @@ async function getMugeOverview() {
                     status: toNum(x.status), reward: x.reward ? { id: toNum(x.reward.id), count: toNum(x.reward.count) } : null,
                 }));
             } else if (id === MUGE_SUB_IDS.TASKS && data.muge_tasks) {
-                out.tasks = (data.muge_tasks.tasks || []).map(x => ({
+                const t = data.muge_tasks;
+                out.tasks = (t.tasks || []).map(x => ({
                     seq: toNum(x.seq), progress: toNum(x.progress), target: toNum(x.target),
                     status: toNum(x.status), desc: String(x.desc || ''),
                     reward: x.reward ? { id: toNum(x.reward.id), count: toNum(x.reward.count) } : null,
                     // 归属到游戏内的哪个子页面(用户要求按 4 个页面展示)
                     module: classifyMugeTaskModule(String(x.desc || '')),
+                }));
+                // 成长手册顶部领奖条(20261120 抓包定案): field 2 成长值 + field 3 档位奖励
+                out.growthValue = toNum(t.growthValue);
+                out.growthTiers = (t.growthTiers || []).map(x => ({
+                    seq: toNum(x.seq),
+                    requiredGrowth: toNum(x.requiredGrowth),
+                    status: toNum(x.status),
+                    reward: x.reward ? { id: toNum(x.reward.id), count: toNum(x.reward.count) } : null,
                 }));
             } else if (id === MUGE_SUB_IDS.SHARE && data.muge_share) {
                 out.shares = (data.muge_share.tasks || []).map(x => ({
@@ -1461,7 +1470,10 @@ async function getMugeOverview() {
             claimable: list.filter(x => x.status === 2).length,
             locked: list.filter(x => x.status === 4).length,
         });
-        out.summary = { tiers: stat(out.tiers), invites: stat(out.invites), tasks: stat(out.tasks) };
+        out.summary = {
+            tiers: stat(out.tiers), invites: stat(out.invites), tasks: stat(out.tasks),
+            growth: stat(out.growthTiers || []),
+        };
     } catch (e) {
         out.error = e && e.message ? e.message : String(e);
     }
@@ -1469,7 +1481,7 @@ async function getMugeOverview() {
 }
 
 async function claimMugeActivity(options = {}) {
-    const result = { tiers: 0, invites: 0, tasks: 0, shares: 0, details: [], skipped: [] };
+    const result = { tiers: 0, invites: 0, tasks: 0, shares: 0, growth: 0, growthValue: 0, details: [], skipped: [] };
     if (options.enabled === false) return result;
 
     const sleep = (ms) => new Promise(r => setTimeout(r, ms));
@@ -1531,6 +1543,14 @@ async function claimMugeActivity(options = {}) {
         const tasks = (body && body.tasks) || [];
         const done = tasks.filter(t => toNum(t.status) === 3);
         result.tasks = done.length;
+        // 成长值档位(手册顶部领奖条): 83 的 claim_all 会连档位一起领, 这里读最新状态
+        const growthTiers = (body && body.growthTiers) || [];
+        const growthClaimed = growthTiers.filter(t => toNum(t.status) === 3);
+        result.growth = growthClaimed.length;
+        result.growthValue = toNum(body && body.growthValue);
+        if (growthTiers.length > 0) {
+            result.details.push(`成长值${result.growthValue}, 档位${growthClaimed.length}/${growthTiers.length}档`);
+        }
         if (tasks.length > 0) result.details.push(`任务${done.length}/${tasks.length}个`);
     } catch (e) {
         result.skipped.push(`活动任务: ${e.message}`);
