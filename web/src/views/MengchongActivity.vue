@@ -140,8 +140,8 @@ const luckyStarImage = computed(() => {
   const hit = (overview.value?.pet?.items || []).find(i => i.id === 1029)
   return (hit && hit.image) || '/game-config/seed_images_named/1029_幸运星_icon_s3luckyStar.png'
 })
-/** 比熊头像图(extract 自客户端 avatarDetail/img_avatar_bichon, game-config-sync 同步) */
-const BICHON_IMAGE = '/game-config/mengchong_images/img_avatar_bichon.png'
+/** 比熊本体图(S3PetSkin img_s3pkSkin0_idle_00, 102×129; avatarDetail/img_avatar_bichon 实为花环相框不是狗) */
+const BICHON_IMAGE = '/game-config/mengchong_images/img_s3pkSkin0_idle_00.png'
 const petImageOk = ref(true)
 const rulesLoading = ref(false)
 // 说明里的关键数值 (摘自活动说明) — 便于对照操作
@@ -621,7 +621,7 @@ onMounted(fetchRules)
               v-if="petImageOk"
               :src="BICHON_IMAGE"
               alt="比熊犬"
-              class="h-10 w-10 border border-gray-200 rounded-full object-cover dark:border-gray-600"
+              class="h-11 w-auto"
               @error="petImageOk = false"
             >
             比熊萌宠
