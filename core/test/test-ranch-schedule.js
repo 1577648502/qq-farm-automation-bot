@@ -443,9 +443,14 @@ proto.loadProto().then(async () => {
         // 82/83 两个领取命令都发
         check('MUGE_TASK_CLAIM2 = 83 已定义', /MUGE_TASK_CLAIM2:\s*83/.test(src),
             (src.match(/MUGE_TASK_CLAIM2:[^,\n]*/) || [])[0]);
+        // 2026-11-22 根因修复: 82/83 不再共用一个 try 循环(82 抛"已领取"会阻断 83),
+        //   改为各自独立的 operateActivity 调用。两条命令都必须出现, 且 83 带独立 try。
         check('两个命令都发送',
-            src.includes('ACTIVITY_OPERATE.MUGE_TASK_CLAIM2])'),
-            '未找到双命令循环');
+            src.includes('ACTIVITY_OPERATE.MUGE_TASK_CLAIM') && src.includes('ACTIVITY_OPERATE.MUGE_TASK_CLAIM2'),
+            '未找到 82/83 两个命令的调用');
+        check('82/83 各自独立 try 不互相阻断',
+            src.includes('muge_task_claim: { claim_all: 0 }') && src.includes('muge_task_claim2: { claim_all: 0 }'),
+            '未找到 82/83 的独立字段调用');
         // proto 里补了 183
         const psrc = require('node:fs').readFileSync(
             require('node:path').join(SB, 'src/proto/activitypb.proto'), 'utf8');

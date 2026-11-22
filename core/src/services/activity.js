@@ -1522,44 +1522,50 @@ async function claimMugeActivity(options = {}) {
     }
     await sleep(500);
 
-    // ---- 1704 活动任务 + 成长值档位 (cmd=82 + cmd=83) ----
-    // cmd=82 与 cmd=83 是两个不同的领取入口(20261120 抓包对照):
-    //   82 = 任务列表领取(参数在 field 182 muge_task_claim)
-    //   83 = 成长值档位领取(参数在 field 183 muge_task_claim2) —— 手册顶部领奖条
-    // ⚠ 2026-11-22 修正: 之前发 83 时参数也塞在 muge_task_claim(182) → 服务器解析
-    //   183 字段为空 → 档位领取从不执行, 档位永远卡在"可领"(账号1 实测卡 120 点档)。
-    //   现在按 cmd 选对应字段。
+    // ---- 1704 活动任务 (cmd=82) + 成长值档位 (cmd=83) ----
+    // cmd=82 与 cmd=83 是两个独立领取入口(20261120 抓包对照):
+    //   82 = 任务列表领取(参数 field 182 muge_task_claim)
+    //   83 = 成长值档位领取(参数 field 183 muge_task_claim2) 手册顶部领奖条
+    // ⚠ 2026-11-22 修正(根因): 之前 82/83 共用一个 try 块, 且 82 一抛就 throw 跳出循环。
+    //   而任务全部已领时, 82 必回 1034164「该任务奖励已领取」并抛出 → 83 从不执行,
+    //   成长值档位因此永远卡在"可领"(4 账号实测)。现在两条命令各自独立 try/catch,
+    //   82 的业务性失败不阻断 83。
+    let tasksBody = null;
     try {
-        // 两个命令各发一次, 用最后一次的响应统计(它带最新的任务状态)。
-        let reply = null;
-        for (const cmd of [ACTIVITY_OPERATE.MUGE_TASK_CLAIM, ACTIVITY_OPERATE.MUGE_TASK_CLAIM2]) {
-            try {
-                const reqField = cmd === ACTIVITY_OPERATE.MUGE_TASK_CLAIM ? 'muge_task_claim' : 'muge_task_claim2';
-                reply = await operateActivity(MUGE_SUB_IDS.TASKS, cmd, {
-                    [reqField]: { claim_all: 0 },
-                });
-                await sleep(400);
-            } catch (e) {
-                // 主命令(82)失败才算真失败; 档位命令(83)不被支持时忽略
-                if (cmd === ACTIVITY_OPERATE.MUGE_TASK_CLAIM) throw e;
-            }
-        }
-        const body = reply && reply.activity && reply.activity.muge_tasks;
-        const tasks = (body && body.tasks) || [];
-        const done = tasks.filter(t => toNum(t.status) === 3);
-        result.tasks = done.length;
-        // 成长值档位(手册顶部领奖条): 83 的 claim_all 会连档位一起领, 这里读最新状态
-        const growthTiers = (body && body.growthTiers) || [];
-        const growthClaimed = growthTiers.filter(t => toNum(t.status) === 3);
-        result.growth = growthClaimed.length;
-        result.growthValue = toNum(body && body.growthValue);
-        if (growthTiers.length > 0) {
-            result.details.push(`成长值${result.growthValue}, 档位${growthClaimed.length}/${growthTiers.length}档`);
-        }
-        if (tasks.length > 0) result.details.push(`任务${done.length}/${tasks.length}个`);
+        const r = await operateActivity(MUGE_SUB_IDS.TASKS, ACTIVITY_OPERATE.MUGE_TASK_CLAIM, {
+            muge_task_claim: { claim_all: 0 },
+        });
+        tasksBody = r && r.activity && r.activity.muge_tasks;
+        await sleep(400);
     } catch (e) {
         result.skipped.push(`活动任务: ${e.message}`);
     }
+
+    let growthBody = null;
+    try {
+        const r = await operateActivity(MUGE_SUB_IDS.TASKS, ACTIVITY_OPERATE.MUGE_TASK_CLAIM2, {
+            muge_task_claim2: { claim_all: 0 },
+        });
+        growthBody = r && r.activity && r.activity.muge_tasks;
+        await sleep(400);
+    } catch (e) {
+        result.skipped.push(`成长值档位: ${e.message}`);
+    }
+
+    // 两个回复都带完整 muge_tasks(任务+成长值), 取最后一个成功的做统计
+    const body = growthBody || tasksBody;
+    const tasks = (body && body.tasks) || [];
+    const done = tasks.filter(t => toNum(t.status) === 3);
+    result.tasks = done.length;
+    // 成长值档位(手册顶部领奖条): 83 的 claim_all 会连档位一起领, 这里读最新状态
+    const growthTiers = (body && body.growthTiers) || [];
+    const growthClaimed = growthTiers.filter(t => toNum(t.status) === 3);
+    result.growth = growthClaimed.length;
+    result.growthValue = toNum(body && body.growthValue);
+    if (growthTiers.length > 0) {
+        result.details.push(`成长值${result.growthValue}, 档位${growthClaimed.length}/${growthTiers.length}档`);
+    }
+    if (tasks.length > 0) result.details.push(`任务${done.length}/${tasks.length}个`);
     await sleep(500);
 
     // ---- 1705 分享任务 (cmd=86 逐个领; 分享本体不做) ----
