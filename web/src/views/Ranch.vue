@@ -503,19 +503,76 @@ const careSummary = computed(() => {
   }
 })
 
-/** 罐头桶余量文案(总览头部): 读不到(null)时显示'?'，0=空桶。喂食失败最常见原因就是桶空 */
-const canBucketText = computed(() => {
-  const b = (overview.value as any)?.canBuckets
-  if (!b || (b.normalSec === null && b.organicSec === null))
-    return ''
-  const fmt = (sec: number | null) => (sec === null ? '?' : (sec > 0 ? `${(sec / 3600).toFixed(1)}h` : '空'))
-  return `普通桶 ${fmt(b.normalSec)} · 有机桶 ${fmt(b.organicSec)}`
+/** 牧草机(slot 10002): 顶部卡 2 显示存量/容量, 卡 3 显示等级 */
+const feedMachine = computed(() => ((overview.value as any)?.facilities || []).find((f: any) => f.slot === 10002))
+/** 下个收获倒计时(对齐首页牧场账号卡的"下个收获"): 可收=0, 没有数据=null */
+const ranchNextReady = computed<number | null>(() => {
+  const list = overview.value?.animals || []
+  if (!list.length)
+    return null
+  if (list.some(a => isHarvestable(a)))
+    return 0
+  const secs: number[] = []
+  for (const a of list) {
+    for (const sec of [a.infantInSec, a.growInSec, a.produceInSec, a.matureInSec, a.deliveringInSec]) {
+      const v = typeof sec === 'number' ? sec : Number(sec)
+      if (Number.isFinite(v) && v > 0)
+        secs.push(v)
+    }
+  }
+  return secs.length ? Math.min(...secs) : null
 })
-const canBucketEmpty = computed(() => {
-  const b = (overview.value as any)?.canBuckets
-  if (!b)
-    return false
-  return b.normalSec === 0 || b.organicSec === 0
+const grassRatio = computed(() => {
+  const fm = feedMachine.value as any
+  const cap = Number(fm?.capacity) || 0
+  if (cap <= 0)
+    return 0
+  return Math.max(0, Math.min(1, (Number(fm?.stored) || 0) / cap))
+})
+
+/** 罐头桶余量(总览顶卡): 读不到(null)显示'?'，0=空桶。喂食失败最常见原因就是桶空 */
+const canBucket = computed(() => (overview.value as any)?.canBuckets || null)
+const fmtBucketSec = (sec: number | null) => (sec === null ? '?' : (sec > 0 ? `${(sec / 3600).toFixed(1)}h` : '空'))
+const canNormalText = computed(() => (canBucket.value ? fmtBucketSec(canBucket.value.normalSec) : '?'))
+const canOrganicText = computed(() => (canBucket.value ? fmtBucketSec(canBucket.value.organicSec) : '?'))
+const canNormalEmpty = computed(() => canBucket.value?.normalSec === 0)
+const canOrganicEmpty = computed(() => canBucket.value?.organicSec === 0)
+
+/** 卡 3 建筑行: 窝/棚/牧草机 的等级与状态(pensView 有棚未解锁判定, AllCells 有真实建筑) */
+const buildingRows = computed(() => {
+  const ov = overview.value as any
+  if (!ov)
+    return []
+  const coopB = (ov.coopBuildings || [])[0]
+  const penB = (ov.penBuildings || [])[0]
+  const fm = feedMachine.value as any
+  const penPen = pensView.value.find(p => p.key === 'pen')
+  return [
+    {
+      key: 'coop',
+      label: '窝',
+      locked: !coopB,
+      value: coopB ? `Lv${coopB.level}` : '',
+      upgrading: false,
+      hint: '',
+    },
+    {
+      key: 'pen',
+      label: '棚',
+      locked: !!(penPen && penPen.locked) || !penB,
+      value: penB ? `Lv${penB.level}` : '',
+      upgrading: false,
+      hint: penPen?.lockedHint || '',
+    },
+    {
+      key: 'feed',
+      label: '牧草机',
+      locked: !fm,
+      value: fm ? `Lv${fm.level || (fm.buildingId ? fm.buildingId % 10 : '?')}` : '',
+      upgrading: !!fm?.upgrading,
+      hint: '',
+    },
+  ]
 })
 
 /** 窝/棚分组视图(对应农场的田地) */
@@ -577,17 +634,6 @@ const pensView = computed<PenView[]>(() => {
   }
   return pens
 })
-
-const facilityText = computed(() => {
-  // 留言板/装饰位没有等级概念, 不显示
-  const fs = (overview.value?.facilities || []).filter(f => f.kind !== 'decor')
-  if (!fs.length)
-    return ''
-  return fs.map(f => `${f.name || '建筑'}${f.level ? ` Lv${f.level}` : ''}`).join(' · ')
-})
-
-// 今日次数: op id(11003/11008/11009) 的官方语义未确认, 先不展示, 避免误导
-const opLimitText = computed(() => '')
 
 // 刷新防抖: 挂载/切账号/每次操作都会触发 refresh, 连点按钮会叠加请求;
 // 后端虽有 10s 节流, 前端也压一下(1.5s 内的多次触发只发一次)
@@ -1509,55 +1555,167 @@ onUnmounted(() => {
     <div v-if="currentTab === 'overview'" class="space-y-4">
       <div class="rounded-lg bg-white shadow dark:bg-gray-800">
         <!-- 头部 -->
-        <div class="border-b border-gray-100 p-3 dark:border-gray-700 sm:p-4">
-          <div class="mb-2.5 flex flex-wrap items-center justify-between gap-2 sm:mb-3">
-            <h3 class="flex items-center gap-2 text-lg font-bold">
-              <div class="i-carbon-home text-xl" />
-              牧场总览
-            </h3>
-            <div v-if="overview" class="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-gray-500 dark:text-gray-400">
-              <span>窝 {{ overview.coopAnimals ?? 0 }}/{{ overview.coopCount }} · 棚 {{ overview.penAnimals ?? 0 }}/{{ overview.penCount }}</span>
-              <span>牧草 {{ overview.grassCount }}</span>
-              <span
-                v-if="canBucketText"
-                :class="canBucketEmpty ? 'text-rose-500 dark:text-rose-400' : ''"
-                title="罐头桶里的剩余加速时长；喂食从桶里扣，桶空会报「罐头桶已耗尽」"
+        <!-- 顶部 3 卡网格(对齐首页牧场区 cb071fd 的分区模式):
+             账号卡 / 牧草罐头卡 / 建筑设施卡 —— 原来头部一行小字+摘要条信息密度太低 -->
+        <div v-if="overview" class="grid grid-cols-1 gap-4 p-3 sm:p-4 lg:grid-cols-3 sm:grid-cols-2">
+          <!-- 卡 1: 牧场账号(等级/在养/EXP/窝棚) -->
+          <div class="min-w-0 flex flex-col rounded-lg border border-gray-100 bg-gray-50/60 p-3 dark:border-gray-700 dark:bg-gray-900/40">
+            <div class="mb-2 flex items-start justify-between">
+              <div class="flex items-center gap-1.5 text-sm text-gray-500">
+                <div class="i-fas-paw" />
+                牧场账号
+              </div>
+              <div
+                v-if="overview.ranchLevel"
+                class="rounded bg-amber-100 px-2 py-0.5 text-xs text-amber-700 dark:bg-amber-900/30 dark:text-amber-300"
               >
-                <span class="i-carbon-restaurant inline-block align-[-1px]" />
-                {{ canBucketText }}
-              </span>
-              <span v-if="overview.ranchLevel">牧场 Lv{{ overview.ranchLevel }} <span class="text-gray-400">{{ overview.ranchLevelExp }}/{{ overview.ranchLevelNeeded }}</span></span>
-              <span v-else>经验 {{ overview.ranchExp }}</span>
+                Lv.{{ overview.ranchLevel }}
+              </div>
+            </div>
+            <div class="mb-1 truncate text-xl font-bold">
+              {{ overview.animals.length }} 只在养
+            </div>
+            <div class="mt-auto">
+              <div class="mb-1 min-w-0 flex items-start justify-between gap-2 text-xs text-gray-500">
+                <div class="flex shrink-0 items-center gap-1">
+                  <div class="i-fas-bolt text-amber-400" />
+                  <span>EXP</span>
+                </div>
+                <span class="min-w-0 break-words text-right tabular-nums">
+                  {{ overview.ranchLevel ? `${overview.ranchLevelExp} / ${overview.ranchLevelNeeded}` : `经验 ${overview.ranchExp}` }}
+                </span>
+              </div>
+              <div
+                v-if="overview.ranchLevel"
+                class="h-1.5 w-full overflow-hidden rounded-full bg-gray-100 dark:bg-gray-700"
+              >
+                <div
+                  class="h-full rounded-full bg-amber-500 transition-all duration-500"
+                  :style="{ width: `${Math.min(100, Math.round((Number(overview.ranchLevelExp) / Math.max(1, Number(overview.ranchLevelNeeded) || 1)) * 100))}%` }"
+                />
+              </div>
+              <div class="mt-2 min-w-0 flex flex-wrap justify-between gap-x-2 gap-y-1 text-xs text-gray-400">
+                <span class="shrink-0">窝 {{ overview.coopAnimals ?? 0 }}/{{ overview.coopCount }} · 棚 {{ overview.penAnimals ?? 0 }}/{{ overview.penCount }}</span>
+                <span class="min-w-0 break-words text-right">
+                  下个收获
+                  <span :class="ranchNextReady === 0 ? 'text-amber-600 font-medium' : 'text-orange-500'">
+                    {{ ranchNextReady === null ? '—' : (ranchNextReady === 0 ? '现在' : formatTime(ranchNextReady)) }}
+                  </span>
+                </span>
+              </div>
+              <div class="mt-1 flex flex-wrap gap-1 text-[10px]">
+                <span class="rounded-full bg-amber-100 px-1.5 py-0.5 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400">可收 {{ careSummary.harvestable }}</span>
+                <span
+                  class="rounded-full px-1.5 py-0.5"
+                  :class="careSummary.hungry > 0 ? 'bg-rose-100 text-rose-700 dark:bg-rose-900/30 dark:text-rose-400' : 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400'"
+                >缺草 {{ careSummary.hungry }}</span>
+                <span class="rounded-full bg-fuchsia-100 px-1.5 py-0.5 text-fuchsia-700 dark:bg-fuchsia-900/30 dark:text-fuchsia-400">变异 {{ careSummary.mutant }}</span>
+              </div>
             </div>
           </div>
-        </div>
 
-        <!-- 摘要 -->
-        <div
-          v-if="overview"
-          class="flex flex-wrap items-center gap-2 border-b border-gray-100 bg-gray-50 px-3 py-2.5 text-xs dark:border-gray-700 dark:bg-gray-900/50 sm:px-4 sm:text-sm"
-        >
-          <div class="flex items-center gap-1 rounded-full bg-amber-100 px-2.5 py-1 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400">
-            <i class="i-fas-egg" />
-            <span class="font-medium">可收 {{ careSummary.harvestable }}</span>
+          <!-- 卡 2: 牧草与罐头(牧草机存量/罐头桶余量) -->
+          <div class="min-w-0 flex flex-col rounded-lg border border-gray-100 bg-gray-50/60 p-3 dark:border-gray-700 dark:bg-gray-900/40">
+            <div class="mb-2 flex items-start justify-between">
+              <div class="flex items-center gap-1.5 text-sm text-gray-500">
+                <div class="i-carbon-zap text-amber-500" />
+                牧草与罐头
+              </div>
+              <button
+                type="button"
+                class="min-h-[30px] border border-emerald-300 rounded-md bg-emerald-50 px-2 py-1 text-[11px] text-emerald-700 font-medium transition dark:border-emerald-700 dark:bg-emerald-900/30 hover:bg-emerald-100 dark:text-emerald-300 disabled:opacity-40"
+                :disabled="opBusy !== ''"
+                title="把背包里的牧草投进牧草机(检测到耗尽时自动化也会一次性补满)"
+                @click="runOp('feedmachine', 0, { count: 100 })"
+              >
+                补草
+              </button>
+            </div>
+            <div class="min-w-0">
+              <div class="flex items-center gap-1 text-xs text-gray-500">
+                <div class="i-fas-leaf text-green-500" />
+                牧草(机内)
+              </div>
+              <div class="text-xl text-green-600 font-bold leading-tight tabular-nums sm:text-2xl dark:text-green-400">
+                {{ overview.grassCount ?? 0 }}
+                <span v-if="feedMachine && feedMachine.capacity" class="text-xs text-gray-400 font-normal">/ {{ feedMachine.capacity }}</span>
+              </div>
+              <div
+                v-if="feedMachine && feedMachine.capacity"
+                class="mt-1 h-1.5 w-full overflow-hidden rounded-full bg-gray-100 dark:bg-gray-700"
+              >
+                <div
+                  class="h-full rounded-full transition-all duration-500"
+                  :class="grassRatio <= 0.15 ? 'bg-rose-500' : 'bg-green-500'"
+                  :style="{ width: `${Math.min(100, Math.round(grassRatio * 100))}%` }"
+                />
+              </div>
+            </div>
+            <div class="mt-3 mb-1 flex items-center gap-1.5 text-sm text-gray-500">
+              <div class="i-carbon-restaurant text-orange-400" />
+              罐头容器
+            </div>
+            <div class="grid grid-cols-2 min-w-0 gap-2">
+              <div class="min-w-0">
+                <div class="flex items-center gap-1 text-xs text-gray-400">
+                  <div class="i-fas-box text-orange-400" />
+                  普通
+                </div>
+                <div class="break-all font-bold tabular-nums" :class="canNormalEmpty ? 'text-rose-500 dark:text-rose-400' : ''">
+                  {{ canNormalText }}
+                </div>
+              </div>
+              <div class="min-w-0">
+                <div class="flex items-center gap-1 text-xs text-gray-400">
+                  <div class="i-fas-box-open text-orange-400" />
+                  有机
+                </div>
+                <div class="break-all font-bold tabular-nums" :class="canOrganicEmpty ? 'text-rose-500 dark:text-rose-400' : ''">
+                  {{ canOrganicText }}
+                </div>
+              </div>
+            </div>
           </div>
-          <div class="flex items-center gap-1 rounded-full px-2.5 py-1" :class="careSummary.hungry > 0 ? 'bg-rose-100 text-rose-700 dark:bg-rose-900/30 dark:text-rose-400' : 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400'">
-            <i class="i-carbon-sprout" />
-            <span class="font-medium">缺草 {{ careSummary.hungry }}</span>
-          </div>
-          <div class="flex items-center gap-1 rounded-full bg-fuchsia-100 px-2.5 py-1 text-fuchsia-700 dark:bg-fuchsia-900/30 dark:text-fuchsia-400">
-            <i class="i-carbon-star" />
-            <span class="font-medium">变异 {{ careSummary.mutant }}</span>
-          </div>
-          <div
-            v-if="overview?.facilities?.length"
-            class="flex items-center gap-1 rounded-full bg-sky-100 px-2.5 py-1 text-sky-700 dark:bg-sky-900/30 dark:text-sky-400"
-          >
-            <i class="i-carbon-home" />
-            <span class="font-medium">{{ facilityText }}</span>
-          </div>
-          <div v-if="opLimitText" class="ml-auto text-[11px] text-gray-400">
-            今日次数 {{ opLimitText }}
+
+          <!-- 卡 3: 建筑与设施(窝/棚/牧草机等级) -->
+          <div class="min-w-0 flex flex-col rounded-lg border border-gray-100 bg-gray-50/60 p-3 dark:border-gray-700 dark:bg-gray-900/40">
+            <div class="mb-2 flex items-start justify-between">
+              <div class="flex items-center gap-1.5 text-sm text-gray-500">
+                <div class="i-carbon-building text-indigo-500" />
+                建筑与设施
+              </div>
+              <button
+                type="button"
+                class="text-[11px] text-indigo-600 hover:underline dark:text-indigo-300"
+                @click="openBuildings"
+              >
+                详情 <span class="i-carbon-arrow-right inline-block align-[-1px]" />
+              </button>
+            </div>
+            <div class="space-y-1.5 text-xs">
+              <div
+                v-for="b in buildingRows"
+                :key="b.key"
+                class="min-w-0 flex items-center justify-between gap-2"
+                :title="b.hint || undefined"
+              >
+                <div class="flex shrink-0 items-center gap-1 text-gray-500">
+                  <span class="rounded bg-indigo-50 px-1.5 py-0.5 text-[10px] text-indigo-600 dark:bg-indigo-900/30 dark:text-indigo-300">{{ b.label }}</span>
+                </div>
+                <div class="min-w-0 flex items-center gap-1.5 text-right">
+                  <span v-if="b.locked" class="text-[10px] text-gray-400">未解锁</span>
+                  <template v-else>
+                    <span class="text-gray-700 font-medium dark:text-gray-200">{{ b.value }}</span>
+                    <span
+                      v-if="b.upgrading"
+                      class="rounded bg-sky-100 px-1 py-0.5 text-[10px] text-sky-700 dark:bg-sky-900/40 dark:text-sky-300"
+                    >
+                      升级中
+                    </span>
+                  </template>
+                </div>
+              </div>
+            </div>
           </div>
         </div>
 
@@ -1889,40 +2047,6 @@ onUnmounted(() => {
                     空位
                   </div>
                 </div>
-              </div>
-            </div>
-
-            <!-- 牧草机等建筑状态 -->
-            <div
-              v-for="f in (overview.facilities || []).filter((x: any) => x.slot === 10002)"
-              :key="`fac-${f.slot}`"
-              class="flex flex-wrap items-center justify-between gap-2 border border-gray-200 rounded-lg px-3 py-2.5 text-xs dark:border-gray-700"
-            >
-              <div class="flex items-center gap-2">
-                <i class="i-carbon-zap text-base text-amber-500" aria-hidden="true" />
-                <span class="text-gray-700 font-medium dark:text-gray-200">{{ f.name || '牧草机' }}</span>
-                <span v-if="f.level" class="text-gray-400">Lv{{ f.level }}</span>
-                <span
-                  v-if="f.upgrading"
-                  class="rounded bg-sky-100 px-1 py-0.5 text-[10px] text-sky-700 dark:bg-sky-900/40 dark:text-sky-300"
-                >
-                  升级中
-                </span>
-              </div>
-              <div class="flex items-center gap-2">
-                <span class="text-gray-500 dark:text-gray-400">
-                  {{ f.slot === 10002 ? '牧草' : '占位' }} {{ f.stored }} / {{ f.capacity || '?' }}
-                </span>
-                <!-- 补草(feedmachine): 把背包里的牧草投进机器, 是栏舍「缺草」的唯一解 -->
-                <button
-                  v-if="f.slot === 10002"
-                  type="button"
-                  class="min-h-[30px] border border-emerald-300 rounded-md bg-emerald-50 px-2 py-1 text-[11px] text-emerald-700 font-medium transition dark:border-emerald-700 dark:bg-emerald-900/30 hover:bg-emerald-100 dark:text-emerald-300 disabled:opacity-40"
-                  :disabled="opBusy !== ''"
-                  @click="runOp('feedmachine', 0, { count: 100 })"
-                >
-                  补草
-                </button>
               </div>
             </div>
           </div>
