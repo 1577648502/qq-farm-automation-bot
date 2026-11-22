@@ -187,6 +187,48 @@ proto.loadProto().then(async () => {
         check('新字段能被识别', !!grew && grew.newFields.includes('3:0'), grew);
     }
 
+    section('4.5 指纹抽样: 结构稳定后降频解析, 新字段 ≤40 帧内仍被发现');
+    {
+        // 性能优化(2026-11-22): footprint 全量 wire 解析是 WS 热路径大头。
+        // 锁定: ① 稳定后不再每帧解析(用调用计数验证); ② 抽样窗口内新字段必被发现;
+        //       ③ 无结构变化的 flush 直接跳过(不再每 5s 全量重写 catalog)。
+        observer.reset();
+        observer.setEnabled(true);
+        observer.start();
+        const wireMod = require(`${SB}/src/utils/wire`);
+        const origFootprint = wireMod.footprint;
+        let fpCalls = 0;
+        wireMod.footprint = (buf, opts) => { fpCalls += 1; return origFootprint(buf, opts); };
+        try {
+            const body = Buffer.from([0x08, 0x01]);
+            const K = 'gamepb.samplingpb.SampleService.Steady';
+            for (let i = 0; i < 100; i++) observer.observe('S->C', K, body);
+            // 100 帧: warmup 30 逐帧 + 40/80 两次探测 ≈ 32 次, 远小于 100
+            check('稳定接口不再逐帧解析', fpCalls <= 40, `footprint 调用 ${fpCalls}/100`);
+
+            // 新字段出现在抽样窗口内: 40 帧内必被发现
+            const grown = Buffer.from([0x08, 0x01, 0x10, 0x02]);
+            let detected = false;
+            for (let i = 0; i < 40; i++) {
+                observer.observe('S->C', K, grown);
+                const snap = observer.snapshot();
+                const it = snap.interfaces.find(x => x.key === K);
+                if (it && it.fieldPaths.includes('2:0')) { detected = true; break; }
+            }
+            check('新字段 ≤40 帧内被发现', detected);
+
+            // 无结构变化: flush 跳过落盘(返回 false), force 才写
+            observer.flush(true);
+            const skipped = observer.flush();
+            check('无结构变化 flush 跳过', skipped === false);
+            check('force flush 落盘', observer.flush(true) === true);
+        } finally {
+            wireMod.footprint = origFootprint;
+        }
+        // 还原活动快照(4.5 的 reset 清掉了), 让 section 5 的落盘断言仍成立
+        for (const f of frames) observer.observe(f.dir, f.key, f.body, { errorCode: f.errorCode });
+    }
+
     section('5. 落盘: 文件存在且 JSON 可读');
     {
         observer.flush();

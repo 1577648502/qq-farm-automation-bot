@@ -2045,7 +2045,20 @@ async function runRanchCare(opts = {}) {
     // 各步骤之间的最小间隔: 一轮原来 20ms 内打完 10 个 RPC,
     // 服务端会把这种"突发"当异常, 是掉线的直接原因之一。
     const STEP_GAP_MS = Math.max(200, toNum(opts.stepGapMs) || 800);
-    const gap = () => sleep(STEP_GAP_MS);
+    // ⭐ 2026-11-22 性能: gap 只在"这一步真的发了请求"后才需要(节奏防突发)。
+    //   步骤被开关/熔断/计划跳过时没发任何 RPC, 不会再有"下一步撞上来"的风险, 直接不睡。
+    //   16 处无条件 gap 在全跳过轮 = 12.8s 纯睡眠/轮(20~25s 的周期里占一半以上)。
+    const gapIf = (didWork) => (didWork ? sleep(STEP_GAP_MS) : Promise.resolve());
+
+    // ⭐ 2026-11-22 性能: 到点路径(runRanchDueTick)已经拉过牧场总览并算出动作计划,
+    //   巡检路径直接复用它的判定 —— 计划为空就不再盲打 collect×6/催产/收获
+    //   (约 9 RPC/轮 × 每小时上百轮, 是全系统最大 RPC 消耗方)。
+    //   view 由调用方传入(runRanchDueTick → checkRanchGroup); 手动/旧调用不传时
+    //   duePlan=null, 保持旧行为(盲打), 兼容手动「一键巡牧场」。
+    const duePlan = Array.isArray(opts.view && opts.view.animals)
+        ? planRanchDueActions(opts.view)
+        : null;   // null = 未传 view, 退化旧行为
+    const planHas = (action) => Array.isArray(duePlan) && duePlan.includes(action);
 
     // 分组执行: 自动巡查按组各自调度(对照农场的 农场/帮助/偷菜 三套独立间隔),
     // 不再"一轮把 15 个步骤全跑一遍"。手动「一键巡牧场」不传 groups = 全组。
@@ -2056,7 +2069,9 @@ async function runRanchCare(opts = {}) {
 
     // 0. 自动使用牧场背包道具(与农场 automation.auto_use_items 同一个开关)
     //    罐头(80021~80034)灌进桶也在这里发生 —— 桶有时长才能喂。
+    let ranAutoUse = false;
     if (want('feed') && opts.autoUseItems !== false && isAutomationOn('auto_use_items')) {
+        ranAutoUse = true;
         try {
             const r = await autoUseRanchBagItems();
             if (r.used > 0) result.details.push(`用道具${r.used}`);
@@ -2067,10 +2082,13 @@ async function runRanchCare(opts = {}) {
         }
     }
 
-    await gap();
+    await gapIf(ranAutoUse);
 
     // 0. 牧草机补草(任务"给牧草机添加牧草"也靠它驱动)
+    //    不挂 duePlan 闸门: 牧草机余量只有查了才知道, 动物 grassBlocked 是滞后的信号
+    let ranFeedMachine = false;
     if (want('feed') && opts.feedMachine !== false && isAutomationOn('ranch_feedmachine') && !RANCH_CARE_BREAKERS.feedMachine.isOpen()) {
+        ranFeedMachine = true;
         try {
             const fm = await autoFeedMachine(opts);
             result.feedMachineAdded = fm.fed;
@@ -2087,20 +2105,24 @@ async function runRanchCare(opts = {}) {
             }
         }
     }
-    await gap();
+    await gapIf(ranFeedMachine);
 
     // 1. 收获(蛋/崽/整只; 任务"完成1次收获""收获鸡蛋N个""收获整鸡N次"靠它驱动)
     //    ⭐ 官方操作顺序: 收副产物(CollectProduce, 架上的蛋) → 催产 → 收获(HarvestRanch)
     //    只发 HarvestRanch 收不到架上的蛋(鹅 feed=3/#6≥1 就是蛋在架上)
-    if (want('core') && isAutomationOn('ranch_harvest') && !RANCH_CARE_BREAKERS.harvest.isOpen()) try {
+    const wantHarvest = want('core') && isAutomationOn('ranch_harvest') && !RANCH_CARE_BREAKERS.harvest.isOpen()
+        && (!Array.isArray(duePlan) || planHas('collect') || planHas('harvest'));
+    if (wantHarvest) try {
+        let collectRan = false;
         for (const s of [1, 2, 3, 4, 5, 6]) {
             try {
                 await collectProduce(s);
+                collectRan = true;
                 await sleep(200);
             } catch { /* 槽空/未就绪, 静默 */ }
         }
         await triggerProduce(0).catch(() => null);
-        await gap();
+        await gapIf(collectRan);
         const harvestReply = await harvestRanch(1);
         for (const gain of (harvestReply.gains || [])) {
             for (const item of (gain.items || [])) {
@@ -2135,10 +2157,14 @@ async function runRanchCare(opts = {}) {
         // expected 错误(没有可收的等正常状态)不计入熔断
         else RANCH_CARE_BREAKERS.harvest.success();
     }
-    await gap();
+    await gapIf(wantHarvest);
 
     // 2. 催产(空请求 = 全部槽位; 任务"生产N次"靠它驱动)
-    if (want('core') && isAutomationOn('ranch_produce') && !RANCH_CARE_BREAKERS.produce.isOpen()) try {
+    let ranProduce = false;
+    if (want('core') && isAutomationOn('ranch_produce') && !RANCH_CARE_BREAKERS.produce.isOpen()
+        && (!Array.isArray(duePlan) || planHas('trigger'))) {
+        ranProduce = true;
+        try {
         const produceReply = await triggerProduce(0);
         for (const r of (produceReply.receipts || [])) {
             result.produced += toNum(r.count);
@@ -2167,14 +2193,17 @@ async function runRanchCare(opts = {}) {
         }
         else RANCH_CARE_BREAKERS.produce.success();
     }
-    await gap();
+    }
+    await gapIf(ranProduce);
 
     // 3. 喂罐头 —— 两条路径:
     //   a) 手动"全场投喂"(显式传 feedCount): 一次全场 FeedAnimal, 保留旧行为
     //   b) 罐头策略(automation.ranch_can, 与农场施肥策略同构): core 组每轮巡查执行
     // ⚠ 20261117 抓包: 真实客户端全程没调 FeedAnimal —— 动物吃牧草机里的草是自动的,
     //   这个接口是"投喂罐头加速"用的(消耗罐头 80021+)。
+    let ranFeedBlock = false;
     if (want('feed') && opts.feedCount && toNum(opts.feedCount) > 0 && !RANCH_CARE_BREAKERS.feedManual.isOpen()) {
+        ranFeedBlock = true;
         try {
             // 自动巡牧场不做单只投喂(没必要), 只支持"全场投喂"
             // ⭐ #2 是喂食方式: 4=普通罐头→2 / 5,6=有机→1
@@ -2201,6 +2230,7 @@ async function runRanchCare(opts = {}) {
         }
     }
     else if (want('core') && isAutomationOn('ranch_auto') && !RANCH_CARE_BREAKERS.feedStrategy.isOpen()) {
+        ranFeedBlock = true;
         // 罐头策略: none 不喂 / normal 仅普通(每只一次) / organic 仅有机(每轮每只一次)
         // / both 普通+有机 / smart 普通+快成熟有机(≤ ranch_can_smart_seconds, 默认 300s)
         try {
@@ -2234,15 +2264,15 @@ async function runRanchCare(opts = {}) {
         }
     }
 
-    await gap();
+    await gapIf(ranFeedBlock);
 
     // 3b. 罐头自动购买已改为独立检测定时器(startCanBuyCheckTimer, 与农场化肥定时器同构),
     //     不再挂在巡查轮 —— 以前 core 组每 20~25 秒读一次背包算桶余量, 太频繁。
 
-    await gap();
-
     // 4. 出售产物(任务"出售鸡蛋"靠它驱动; type=107 的蛋/崽)
+    let ranSell = false;
     if (want('daily') && opts.sell !== false && isAutomationOn('ranch_sell') && !RANCH_CARE_BREAKERS.sell.isOpen()) {
+        ranSell = true;
         try {
             const r = await autoSellRanchProducts(opts);
             result.sold = r.sold;
@@ -2258,14 +2288,16 @@ async function runRanchCare(opts = {}) {
         }
     }
 
-    await gap();
+    await gapIf(ranSell);
 
     // 5. 幼崽入栏(必须在买幼崽之前!)
     // ⚠ 线上事故(2026-11-18): BuyGoods 的 auto_add **不会**把幼崽放进栏舍,
     //   幼崽只是进了背包(itemType=105)。不补这一步, 槽位永远算作"空",
     //   于是每轮巡检都再买 4 只 → 实测背包里堆了 1242 只鸡。
     //   抓包证实: 客户端买完后会调 AnimalService.PlaceAnimal 入栏。
+    let ranPlaceCubs = false;
     if (want('core') && opts.placeCubs !== false && !RANCH_CARE_BREAKERS.placeCubs.isOpen()) {
+        ranPlaceCubs = true;
         try {
             const placed = await autoPlaceCubs(opts);
             result.cubsPlaced = placed.placed;
@@ -2282,10 +2314,12 @@ async function runRanchCare(opts = {}) {
         }
     }
 
-    await gap();
+    await gapIf(ranPlaceCubs);
 
     // 6. 买幼崽(任务"领养鸡幼崽N个"靠它驱动; 按收益比优先)
+    let ranBuyCubs = false;
     if (want('core') && opts.buyCubs !== false && isAutomationOn('ranch_buy_cubs') && !RANCH_CARE_BREAKERS.buyCubs.isOpen()) {
+        ranBuyCubs = true;
         try {
             let careView = null;
             try { careView = await getRanchOverview(); } catch { careView = null; }
@@ -2302,10 +2336,12 @@ async function runRanchCare(opts = {}) {
         }
     }
 
-    await gap();
+    await gapIf(ranBuyCubs);
 
     // 5.5a 清理自己的牧场(20261117 抓包: CleanAllRanch 清自己, 产便便 → 游商货币)
+    let ranCleanOwn = false;
     if (want('daily') && opts.cleanOwn !== false && isAutomationOn('ranch_clean') && !RANCH_CARE_BREAKERS.cleanOwn.isOpen()) {
+        ranCleanOwn = true;
         try {
             const r = await autoCleanOwnRanch();
             result.cleanedFriends += r.cleaned;   // 沿用统计字段
@@ -2320,10 +2356,12 @@ async function runRanchCare(opts = {}) {
         }
     }
 
-    await gap();
+    await gapIf(ranCleanOwn);
 
     // 5.5b 偷好友牧场产物(20261117 抓包: StealProduce{gid}, feed_state==4 才偷)
+    let ranSteal = false;
     if (want('steal') && opts.stealFriends !== false && isAutomationOn('ranch_steal') && !RANCH_CARE_BREAKERS.stealFriends.isOpen()) {
+        ranSteal = true;
         try {
             const r = await autoStealFriendProduce(opts);
             result.stolenFriends = r.cleaned;
@@ -2338,11 +2376,13 @@ async function runRanchCare(opts = {}) {
         }
     }
 
-    await gap();
+    await gapIf(ranSteal);
 
     // 5.5c 照顾好友动物(StrokeAnimal) —— 牧歌初启"累计照料好友动物 N 次"靠它
     //   抓包(20261120-001457)定案: {1:好友gid, 2:{1:栏舍实例,2:槽位}}; 每日上限 op 11009 = 10 次
+    let ranStroke = false;
     if (want('steal') && opts.strokeFriends !== false && isAutomationOn('ranch_stroke') && !RANCH_CARE_BREAKERS.strokeFriends.isOpen()) {
+        ranStroke = true;
         try {
             const r = await autoStrokeFriendAnimals(opts);
             result.strokedFriends = r.count;
@@ -2357,11 +2397,13 @@ async function runRanchCare(opts = {}) {
         }
     }
 
-    await gap();
+    await gapIf(ranStroke);
 
     // 5.5d 对好友使坏(PutHazard) —— 牧歌初启"累计使坏好友 N 次"靠它
     //   抓包定案: {1:栏舍实例, 2:好友gid, 3:11003, 4:1}; 每日上限 op 11003 = 100
+    let ranHazard = false;
     if (want('steal') && opts.hazardFriends !== false && isAutomationOn('ranch_hazard') && !RANCH_CARE_BREAKERS.hazardFriends.isOpen()) {
+        ranHazard = true;
         try {
             const r = await autoPutHazardOnFriends(opts);
             result.hazardedFriends = r.count;
@@ -2376,7 +2418,7 @@ async function runRanchCare(opts = {}) {
         }
     }
 
-    await gap();
+    await gapIf(ranHazard);
 
     // 5.6 建筑升级 / 地块解锁(2026-11-17 官方文档)
     //   归属 daily 组: 与农场的"每日任务"同层 —— 建筑/地块是长周期操作,
@@ -2386,7 +2428,9 @@ async function runRanchCare(opts = {}) {
         facility = require('./ranch-facility');
     } catch { facility = null; }
 
+    let ranUpgrade = false;
     if (want('daily') && facility && opts.upgradeBuildings !== false && isAutomationOn('ranch_upgrade') && !RANCH_CARE_BREAKERS.upgradeBuildings.isOpen()) {
+        ranUpgrade = true;
         try {
             const r = await facility.autoUpgradeBuildings(opts);
             result.buildingsCompleted = r.completed;
@@ -2404,9 +2448,11 @@ async function runRanchCare(opts = {}) {
         }
     }
 
-    await gap();
+    await gapIf(ranUpgrade);
 
+    let ranUnlock = false;
     if (want('daily') && facility && opts.unlockRegions !== false && isAutomationOn('ranch_unlock') && !RANCH_CARE_BREAKERS.unlockRegions.isOpen()) {
+        ranUnlock = true;
         try {
             const r = await facility.autoUnlockRegions(opts);
             result.regionsCompleted = r.completed;
@@ -2424,10 +2470,12 @@ async function runRanchCare(opts = {}) {
         }
     }
 
-    await gap();
+    await gapIf(ranUnlock);
 
     // 6. 游商兑换(便便换有机化肥, 纯赚)
+    let ranTail = false;
     if (want('daily') && opts.rotationShop !== false && isAutomationOn('ranch_rotation') && !RANCH_CARE_BREAKERS.rotationShop.isOpen()) {
+        ranTail = true;
         try {
             const r = await autoBuyRotationShop(opts);
             result.rotationBought = r.bought;
@@ -2447,6 +2495,7 @@ async function runRanchCare(opts = {}) {
     //   (见 docs/mc-ranch/牧场任务系统功能文档.md); 之前调 checkAndClaimTasks()
     //   拉的是农场任务列表, 牧场任务从来没领过。
     if (want('daily') && isAutomationOn('ranch_task') && !RANCH_CARE_BREAKERS.ranchTasks.isOpen()) {   // 统一由开关决定(原来 checkRanch 传 claimTasks:false 导致永不执行)
+        ranTail = true;
         try {
             const { checkAndClaimRanchTasks } = require('./task');
             const r = await checkAndClaimRanchTasks();
@@ -2462,7 +2511,7 @@ async function runRanchCare(opts = {}) {
         }
     }
 
-    await gap();
+    await gapIf(ranTail);
 
     // 手册(图鉴)领奖: 之前只在手动 API 里有, 巡检从不调用 → "手册的领奖没加"
     // ⚠ 图鉴分两类(2026-11-20 抓包定案):
@@ -2657,7 +2706,8 @@ function scheduleRanchGroup(groupKey, delayMs) {
         //   "没干成"包括: 没有到点动作 / 有动作但服务端没给东西(可收位失效等)。
         if (groupKey === 'core') {
             const r = await runRanchDueTick();
-            if (!r.ran) await checkRanchGroup('core');
+            // ⭐ 没干成时退回整组巡检, 并把到点路径刚拉的总览传下去做闸门(性能优化)
+            if (!r.ran) await checkRanchGroup('core', { view: r.view });
         } else {
             await checkRanchGroup(groupKey);
         }
@@ -2704,7 +2754,7 @@ function recordRanchCareStats(result) {
  * @param {'core'|'daily'|'steal'} groupKey
  * @returns {Promise<boolean>} 本轮有没有实际干活
  */
-async function checkRanchGroup(groupKey) {
+async function checkRanchGroup(groupKey, opts = {}) {
     const g = RANCH_GROUPS[groupKey] || RANCH_GROUPS.core;
     const key = g.key;
     if (isCheckingRanchGroup[key]) return false;
@@ -2712,7 +2762,7 @@ async function checkRanchGroup(groupKey) {
     isCheckingRanchGroup[key] = true;
     isCheckingRanch = true;
     try {
-        const result = await runRanchCare({ claimTasks: false, groups: [key] });
+        const result = await runRanchCare({ claimTasks: false, groups: [key], view: opts.view });
         if (result && result.skipped === 'scene_locked') return false;
 
         // 统计(对照农场 recordOperation)
@@ -3103,7 +3153,11 @@ async function runRanchDueTick() {
         let plan = planRanchDueActions(view);
         // 2. 数据不可用时退回缓存里的动作(仍只跑那几步)
         if (!plan.length && dueActionPlan.actions.length) plan = dueActionPlan.actions;
-        if (!plan.length) return { ran: false, actions: [], harvested: 0, produced: 0, details: [] };
+        if (!plan.length) {
+            // ⭐ 把 view 带回给调用方: 整组巡检(checkRanchGroup→runRanchCare)复用它做闸门,
+            //   计划为空时不再盲打 collect/催产/收获
+            return { ran: false, actions: [], harvested: 0, produced: 0, details: [], view };
+        }
 
         // 3. 只执行这几步
         const out = await runRanchDueActions(view, { plan });
@@ -3406,12 +3460,16 @@ const _strokeToday = new Map();  // dateKey -> 次数(本地累计, 防重启后
 const _strokeSkip = new Map();   // `${dateKey}:${gid}:${animalInstId}` -> true
 // 未知错误码的连续失败计数(单只动物粒度): 连挂 2 次 → 今日跳过
 const _strokeFailCount = new Map();   // skipKey -> 连续失败次数
+// ⭐ 好友级跳过(2026-11-22 性能): 这家"今天已无可照料"(全部动物已照料/巨大化)→ 跳到当天结束;
+//   空牧场 → 跳 60 分钟(可能中途买崽)。没有它, 每轮对每个好友都 Enter+GetRanchDetail 白跑。
+const _strokeFriendSkipUntil = new Map();   // gid -> 跳过截止时刻(ms)
 async function autoStrokeFriendAnimals(opts = {}) {
     const result = { count: 0, details: [], remaining: -1 };
     const maxTotal = Math.max(1, toNum(opts.maxStrokePerRound) || 10);
     const todayKey = new Date().toDateString();
     const already = toNum(_strokeToday.get(todayKey)) || 0;
     const skipKey = (gid, inst) => `${todayKey}:${toNum(gid)}:${toNum(inst)}`;
+    const dayEndMs = new Date().setHours(24, 0, 0, 0);
 
     const limits = await getFriendOpRemaining();
     result.remaining = limits.stroke;
@@ -3425,18 +3483,31 @@ async function autoStrokeFriendAnimals(opts = {}) {
     const friends = await getFriendsList().catch(() => []);
     if (!Array.isArray(friends) || friends.length === 0) return result;
 
-    for (const f of friends.slice(0, 20)) {
+    const targets0 = friends.slice(0, 20);
+    let visited = 0;
+    for (let idx = 0; idx < targets0.length; idx++) {
+        const f = targets0[idx];
         if (budget <= 0) break;
         const gid = toNum(f && f.gid);
         if (!gid) continue;
+        if (Date.now() < (toNum(_strokeFriendSkipUntil.get(gid)) || 0)) continue;
+        // ⭐ 好友之间的节奏间隔只在"真要进这家"时生效; 跳过零延迟, 最后一家后不再空睡
+        if (visited > 0) await sleep(400);
+        visited += 1;
+        let visitTargets = null;
         try {
             await withFriendHomestead(gid, async () => {
                 const detail = await getRanchDetail(gid);
-                const targets = listFriendAnimals(detail.ranches);
+                visitTargets = listFriendAnimals(detail.ranches);
+                const targets = visitTargets;
+                let attempted = 0;
                 for (const t of targets) {
                     if (budget <= 0) break;
                     // 今天已经照料过 / 巨大化不可照料 → 本次进程内直接跳过, 不再发请求
                     if (_strokeSkip.has(skipKey(gid, t.animalInstId))) continue;
+                    // ⭐ 节奏间隔只在真实尝试之间生效; 跳过零延迟
+                    if (attempted > 0) await sleep(600);
+                    attempted += 1;
                     try {
                         await strokeAnimal(gid, { hostGid: t.instId, animalInstId: t.animalInstId });
                         budget -= 1;
@@ -3471,10 +3542,15 @@ async function autoStrokeFriendAnimals(opts = {}) {
                             _strokeSkip.set(sk, true);
                         }
                     }
-                    await sleep(600);
                 }
             });
-            await sleep(400);
+            // 这家今天已无可照料(空牧场/全部动物都跳过) → 好友级跳过, 不再每轮 Enter 白跑
+            if (visitTargets && visitTargets.length === 0) {
+                _strokeFriendSkipUntil.set(gid, Date.now() + 60 * 60 * 1000);
+            } else if (visitTargets && visitTargets.length
+                && visitTargets.every(t => _strokeSkip.has(skipKey(gid, t.animalInstId)))) {
+                _strokeFriendSkipUntil.set(gid, dayEndMs);
+            }
         } catch { /* 这家进不去就换下家 */ }
     }
     if (result.count > 0) {
@@ -3493,6 +3569,9 @@ async function autoStrokeFriendAnimals(opts = {}) {
  *
  * @returns {Promise<{count:number, details:string[], remaining:number}>}
  */
+// ⭐ 好友级冷却(2026-11-22 性能): 全部栏舍都放满/空牧场 → 跳 60 分钟,
+//   不再每轮 Enter+GetRanchDetail 白跑(蚊子会被好友清理, 所以是小时级不是当天)。
+const _hazardFriendSkipUntil = new Map();   // gid -> 跳过截止时刻(ms)
 async function autoPutHazardOnFriends(opts = {}) {
     const result = { count: 0, details: [], remaining: -1 };
     const maxTotal = Math.max(1, toNum(opts.maxHazardPerRound) || 3);
@@ -3511,10 +3590,19 @@ async function autoPutHazardOnFriends(opts = {}) {
     //   同一栏舍连放会被拒。所以每换一个栏舍(窝 10001 / 棚 10003)就换一处试,
     //   一处放不进去只放弃这一处, 不影响其它好友。
     let lastCode = 0;
-    for (const f of friends.slice(0, 20)) {
+    const targets1 = friends.slice(0, 20);
+    let visited = 0;
+    for (let idx = 0; idx < targets1.length; idx++) {
+        const f = targets1[idx];
         if (left <= 0) break;
         const gid = toNum(f && f.gid);
         if (!gid) continue;
+        if (Date.now() < (toNum(_hazardFriendSkipUntil.get(gid)) || 0)) continue;
+        if (visited > 0) await sleep(400);   // 节奏间隔只在真进这家时生效; 最后一家后不再空睡
+        visited += 1;
+        let placedInVisit = 0;
+        let triedRanches = 0;
+        let fullRanches = 0;
         try {
             await withFriendHomestead(gid, async () => {
                 const detail = await getRanchDetail(gid);
@@ -3522,15 +3610,21 @@ async function autoPutHazardOnFriends(opts = {}) {
                 if (animals.length === 0) return;
                 // 按栏舍分组: 先窝后棚(与客户端抓包一致), 每处最多放 1~2 次就换处
                 const instIds = [...new Set(animals.map(a => a.instId))];
+                let placementGap = false;   // 本次进店是否已放过(决定下一次放之前要不要等节奏)
                 for (const instId of instIds) {
                     if (left <= 0) break;
+                    triedRanches += 1;
                     let placedHere = 0;
+                    let thisRanchFull = false;
                     const perRanch = 2;   // 同一栏舍放 2 次就换, 避免 1045230
                     while (left > 0 && placedHere < perRanch) {
+                        if (placementGap) await sleep(500);   // 只在连续放置之间等待
+                        placementGap = true;
                         try {
                             const r = await putHazard(gid, { hostGid: instId, count: 1 });
                             left -= 1;
                             placedHere += 1;
+                            placedInVisit += 1;
                             result.count += 1;
                             if (result.details.length < 6) result.details.push(f.name || String(gid));
                             if (r.remaining === 0) { left = 0; break; }
@@ -3538,18 +3632,23 @@ async function autoPutHazardOnFriends(opts = {}) {
                             const code = parseRanchErrorCode(e);
                             lastCode = code;
                             // 1045230 = 这处放满了, 换下一处/下一位好友(不是故障)
-                            if (code !== RANCH_ERR.HAZARD_ENOUGH && !isExpectedRanchError(e)) {
+                            if (code === RANCH_ERR.HAZARD_ENOUGH) thisRanchFull = true;
+                            else if (!isExpectedRanchError(e)) {
                                 logWarn('牧场', `使坏失败 ${f.name || gid}: ${shortErr(e)}`, {
                                     module: 'ranch', event: '使坏好友', result: 'error', code,
                                 });
                             }
                             break;
                         }
-                        await sleep(500);
                     }
+                    if (placedHere === 0 && thisRanchFull) fullRanches += 1;
                 }
             });
-            await sleep(400);
+            // 空牧场 / 所有栏舍都满 → 60 分钟后再看
+            const detailEmpty = placedInVisit === 0 && triedRanches === 0;
+            if (detailEmpty || (placedInVisit === 0 && triedRanches > 0 && fullRanches === triedRanches)) {
+                _hazardFriendSkipUntil.set(gid, Date.now() + 60 * 60 * 1000);
+            }
         } catch { /* 进不去就换下家 */ }
     }
     if (result.count === 0 && lastCode === RANCH_ERR.HAZARD_ENOUGH) {
@@ -3593,12 +3692,16 @@ async function autoStealFriendProduce(opts = {}) {
     const friends = await getFriendsList().catch(() => []);
     if (!Array.isArray(friends) || friends.length === 0) return result;
 
-    for (const f of friends.slice(0, 40)) {
+    const targets = friends.slice(0, 40);
+    for (let idx = 0; idx < targets.length; idx++) {
+        const f = targets[idx];
         if (result.cleaned >= maxPerRound) break;
         const gid = toNum(f && f.gid);
         if (!gid) continue;
         const nextAt = _stealToday.get(gid) || 0;
         if (now < nextAt) { result.skipped += 1; continue; }
+        // ⭐ 节奏间隔只在"真要进这家"时生效; 冷却跳过零延迟, 最后一家之后不再空睡
+        if (idx > 0) await sleep(800);
         result.checked += 1;
         try {
             const r = await stealFriendProduce(gid);
@@ -3613,7 +3716,6 @@ async function autoStealFriendProduce(opts = {}) {
                 result.empty += 1;
                 _stealToday.set(gid, Date.now() + cooldownEmpty);
             }
-            await sleep(800);
         } catch (e) {
             // 业务态(别拿啦 1045221/场景态等) = 没得偷, 短冷却后再看;
             // 真失败只内部计数 + 退避, 不打日志(巡检只显示成功)
@@ -3623,7 +3725,6 @@ async function autoStealFriendProduce(opts = {}) {
                 result.errors += 1;
             }
             _stealToday.set(gid, Date.now() + cooldownEmpty);
-            await sleep(500);
         }
     }
     if (result.cleaned > 0) {
@@ -4241,22 +4342,8 @@ async function buyCubByGoods(goodsId, count, opts = {}) {
  */
 async function autoBuyCubs(opts = {}) {
     const result = { bought: 0, spent: 0, details: [] };
-    const shop = await getCubShop();
-    let usable = shop.filter(g => g.unlocked && g.price > 0 && g.valueRatio > 0);
-    if (usable.length === 0) {
-        log('牧场', '幼崽商店没有可买的(未解锁或价格为 0)', { module: 'ranch', event: '买幼崽', result: 'skip' });
-        return result;
-    }
-
-    // 按用户配置的策略挑幼崽(对照农场 plantingStrategy, 但牧场完全独立)
-    // ⭐ 排外(ranchCubExclude) 与农场 plantSeedExclude 同语义: 不买、也不排序
-    usable = applyCubStrategy(usable, { exclude: [...getRanchCubExcludeSet()] });
-    if (usable.length === 0) {
-        log('牧场', '按当前幼崽策略没有可选目标', { module: 'ranch', event: '买幼崽', result: 'skip' });
-        return result;
-    }
-
-    // 空槽 = 窝+棚 总位 - 已养数
+    // ⭐ 先算空槽(一次总览, 10s 缓存内基本是命中), 栏满就不必再查幼崽商店 ——
+    //   栏满时商店查询每轮白打(2026-11-22 性能: ~160 次/小时的白跑 RPC)
     let slots = toNum(opts.slots) || 0;
     if (slots <= 0) {
         try {
@@ -4271,6 +4358,21 @@ async function autoBuyCubs(opts = {}) {
         if (shouldLogOnce('ranch_buy_no_slot', `slots#${slots}`)) {
             log('牧场', '没有空槽位, 跳过买幼崽', { module: 'ranch', event: '买幼崽', result: 'skip' });
         }
+        return result;
+    }
+
+    const shop = await getCubShop();
+    let usable = shop.filter(g => g.unlocked && g.price > 0 && g.valueRatio > 0);
+    if (usable.length === 0) {
+        log('牧场', '幼崽商店没有可买的(未解锁或价格为 0)', { module: 'ranch', event: '买幼崽', result: 'skip' });
+        return result;
+    }
+
+    // 按用户配置的策略挑幼崽(对照农场 plantingStrategy, 但牧场完全独立)
+    // ⭐ 排外(ranchCubExclude) 与农场 plantSeedExclude 同语义: 不买、也不排序
+    usable = applyCubStrategy(usable, { exclude: [...getRanchCubExcludeSet()] });
+    if (usable.length === 0) {
+        log('牧场', '按当前幼崽策略没有可选目标', { module: 'ranch', event: '买幼崽', result: 'skip' });
         return result;
     }
 

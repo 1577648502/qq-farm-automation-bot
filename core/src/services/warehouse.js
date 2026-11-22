@@ -239,7 +239,15 @@ function isFertilizerContainerFullError(err) {
         || msg.includes('有机化肥容器已满');
 }
 
+// ⭐ 2026-11-22 性能: 化肥礼包探测(1×getBag)原先每 farm tick(20~25s)打一遍且几乎永远空手,
+//   礼包只在购买/领取后出现, 60s 节流足够(与 autoUseBagItems 的扫描节流同构)。
+const FERT_PACK_SCAN_INTERVAL_MS = 60 * 1000;
+let fertPackLastCheckAt = 0;
+
 async function autoOpenFertilizerGiftPacks() {
+    const now = Date.now();
+    if (now - fertPackLastCheckAt < FERT_PACK_SCAN_INTERVAL_MS) return 0;
+    fertPackLastCheckAt = now;
     try {
         const bagReply = await getBag();
         const bagItems = getBagItems(bagReply);

@@ -33,6 +33,15 @@ const MAX_SAMPLES_PER_KEY = 4;
 const MAX_SAMPLE_BYTES = 8192;
 const MAX_KEYS = 3000;
 const MAX_FIELD_PATHS_PER_KEY = 600;
+// 指纹抽样(2026-11-22 性能优化): footprint 全量 wire 解析是 WS 热路径开销大头。
+// 前 30 帧逐帧解析摸清结构; 连续 10 帧无新字段视为结构稳定 → 降频到每 40 帧探一次;
+// 探到新字段立即恢复逐帧窗口 —— 新玩法上线仍能在 ≤40 帧内被发现(回归测试锁定)。
+const FOOTPRINT_WARMUP_FRAMES = 30;
+const FOOTPRINT_STABLE_ROUNDS = 10;
+const FOOTPRINT_SAMPLE_EVERY = 40;
+// 落盘策略: 只有结构变化(新接口/新字段/新样本/活动快照)才 5s 内落盘;
+// 纯计数/lastSeenAt 变化走 10 分钟心跳, 不再每 5 秒全量重写 catalog JSON(×4 账号)。
+const HEARTBEAT_FLUSH_MS = 10 * 60 * 1000;
 
 const ACTIVITY_SERVICE = 'gamepb.activitypb.ActivityService';
 
@@ -40,6 +49,7 @@ let enabled = process.env.FARM_PROTOCOL_OBSERVER !== '0';
 let startedAt = 0;
 let flushTimer = null;
 let dirty = false;
+let lastFlushAt = 0;
 let protoReflection = null;
 
 /** key = "service.method" 或 "[Notify] xxx" */
@@ -112,6 +122,8 @@ function emptyEntry(key) {
         lastSeenAt: 0,
         dirs: {},
         fieldPaths: [],
+        stableRounds: 0,        // 连续多少帧没发现新字段(结构稳定性计数)
+        _hadSet: null,          // fieldPaths 的 Set 缓存(避免每帧重建), 不落盘
         errors: 0,
         samples: [],
         bytes: { min: 0, max: 0 },
@@ -201,11 +213,15 @@ function observeUnsafe(dir, key, body, meta = {}) {
     }
     if (meta.errorCode) entry.errors += 1;
 
-    // 指纹: 只对非空 body 算
-    if (buf.length) {
+    // 指纹: 只对非空 body 且"值得解析"的帧算(抽样规则见文件头常量)
+    let grew = false;
+    if (buf.length
+        && (entry.count <= FOOTPRINT_WARMUP_FRAMES
+            || entry.stableRounds < FOOTPRINT_STABLE_ROUNDS
+            || entry.count % FOOTPRINT_SAMPLE_EVERY === 0)) {
         const fp = wire.footprint(buf);
-        const had = new Set(entry.fieldPaths);
-        let grew = false;
+        // 缓存 Set 代替每帧 `new Set(fieldPaths)`(热路径分配大头之一)
+        const had = entry._hadSet || (entry._hadSet = new Set(entry.fieldPaths));
         for (const p of fp.paths) {
             if (!had.has(p) && entry.fieldPaths.length < MAX_FIELD_PATHS_PER_KEY) {
                 entry.fieldPaths.push(p);
@@ -213,27 +229,31 @@ function observeUnsafe(dir, key, body, meta = {}) {
                 grew = true;
             }
         }
-        // 采样本: 结构有增长时必存; 否则按数量采样。
-        // ⚠ 只存**结构安全**的接口: 登录/鉴权类请求体里有 openID、device_id 等设备标识,
-        //   落盘就是明文写在 data/protocol/ 里。这类一律不存样本(指纹照样采, 不影响发现结构变化)。
-        if (shouldKeepSample(key)
-            && entry.samples.length < MAX_SAMPLES_PER_KEY
-            && (grew || entry.count % 40 === 0)) {
-            entry.samples.push({
-                at: Date.now(),
-                dir,
-                bytes: buf.length,
-                hex: buf.subarray(0, MAX_SAMPLE_BYTES).toString('hex'),
-                truncated: buf.length > MAX_SAMPLE_BYTES,
-            });
-        }
+    }
+    entry.stableRounds = grew ? 0 : (entry.stableRounds || 0) + 1;
+    if (grew) dirty = true;
+
+    // 采样本: 结构有增长时必存; 否则按数量采样。
+    // ⚠ 只存**结构安全**的接口: 登录/鉴权类请求体里有 openID、device_id 等设备标识,
+    //   落盘就是明文写在 data/protocol/ 里。这类一律不存样本(指纹照样采, 不影响发现结构变化)。
+    if (buf.length && shouldKeepSample(key)
+        && entry.samples.length < MAX_SAMPLES_PER_KEY
+        && (grew || entry.count % FOOTPRINT_SAMPLE_EVERY === 0)) {
+        entry.samples.push({
+            at: Date.now(),
+            dir,
+            bytes: buf.length,
+            hex: buf.subarray(0, MAX_SAMPLE_BYTES).toString('hex'),
+            truncated: buf.length > MAX_SAMPLE_BYTES,
+        });
+        dirty = true;
     }
 
     if (key === `${ACTIVITY_SERVICE}.List` && dir === 'S->C') {
         try { harvestActivityList(buf); } catch { /* 结构提取失败不影响采集 */ }
     }
 
-    dirty = true;
+    if (wasNew) dirty = true;
     scheduleFlush();
 }
 
@@ -454,9 +474,12 @@ function scheduleFlush() {
     if (flushTimer.unref) flushTimer.unref();
 }
 
-function flush() {
-    if (!dirty) return false;
+function flush(force = false) {
+    // 结构没变且距上次落盘不足心跳间隔 → 跳过(计数/lastSeenAt 的变化不值得
+    // 每 5 秒全量重写一份几 MB 的 catalog JSON × 4 个账号)
+    if (!dirty && !force && Date.now() - lastFlushAt < HEARTBEAT_FLUSH_MS) return false;
     dirty = false;
+    lastFlushAt = Date.now();
     try {
         const snap = snapshot();
         // catalog-<账号>.json 只存结构化数据 + 少量样本
@@ -474,7 +497,8 @@ function reset() {
     activitySummaries = new Map();
     activityAt = 0;
     dirty = true;
-    flush();
+    lastFlushAt = 0;
+    flush(true);
 }
 
 function start() {
@@ -482,8 +506,8 @@ function start() {
     startedAt = Date.now();
     loadBaseline();
     ensureDir();
-    // 进程退出前落盘, 避免丢最后一次采集
-    const onExit = () => { try { flush(); } catch {} };
+    // 进程退出前落盘, 避免丢最后一次采集(force: 退出时无条件写, 不受心跳门控)
+    const onExit = () => { try { flush(true); } catch {} };
     process.once('exit', onExit);
     return true;
 }

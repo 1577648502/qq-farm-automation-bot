@@ -1450,7 +1450,7 @@ async function visitFriendForSteal(friend, totalActions, myGid, accountId) {
             // log('好友', `${name}: 跳过，所有可偷蔬菜都被黑名单过滤`, {
             //     module: 'friend', event: '偷菜全部过滤', friendName: name, friendGid: gid
             // });
-            await leaveFriendFarm(gid);
+            // 离开由 withFriendFarm 的 finally 统一负责(原来这里显式 leave 了一次 = 双重离开)
             return;
         }
 
@@ -1607,8 +1607,10 @@ async function checkFriends(options = {}) {
     checkDailyReset();
 
     try {
-        const friendsReply = await getAllFriends();
-        const friends = extractReplyFriends(friendsReply);
+        // ⭐ 2026-11-22 性能: 走 60s 缓存的 getFriendsList(与牧场偷取/夺宝同一份),
+        //   不再每个 tick 直拉一次 GetAllFriends(帮助+偷菜两个 tick ≈ 320 次重 RPC/h)。
+        //   状态数字最多陈旧 60s: 真正的可偷/可帮判定在进农场后用实时 lands/status, 不受影响。
+        const friends = await getFriendsList();
         if (friends.length === 0) {
             log('好友', '没有好友', { module: 'friend', event: '好友扫描', result: 'empty' });
             return false;
@@ -1626,12 +1628,12 @@ async function checkFriends(options = {}) {
             if (visitedGids.has(gid)) continue;
             if (blacklist.has(gid)) continue;
 
-            const name = f.remark || f.name || `GID:${gid}`;
+            const name = f.name || `GID:${gid}`;
             const p = f.plant;
-            const stealNum = p ? toNum(p.steal_plant_num) : 0;
-            const dryNum = p ? toNum(p.dry_num) : 0;
-            const weedNum = p ? toNum(p.weed_num) : 0;
-            const insectNum = p ? toNum(p.insect_num) : 0;
+            const stealNum = p ? toNum(p.stealNum) : 0;
+            const dryNum = p ? toNum(p.dryNum) : 0;
+            const weedNum = p ? toNum(p.weedNum) : 0;
+            const insectNum = p ? toNum(p.insectNum) : 0;
 
             if (stealNum > 0 && effectiveStealEnabled) {
                 stealFriends.push({ gid, name, stealNum });
@@ -1725,12 +1727,12 @@ async function checkFriends(options = {}) {
                 if (badVisitedGids.has(gid)) continue;
                 if (blacklist.has(gid)) continue;
 
-                const name = f.remark || f.name || `GID:${gid}`;
+                const name = f.name || `GID:${gid}`;
                 const p = f.plant;
-                const stealNum = p ? toNum(p.steal_plant_num) : 0;
-                const dryNum = p ? toNum(p.dry_num) : 0;
-                const weedNum = p ? toNum(p.weed_num) : 0;
-                const insectNum = p ? toNum(p.insect_num) : 0;
+                const stealNum = p ? toNum(p.stealNum) : 0;
+                const dryNum = p ? toNum(p.dryNum) : 0;
+                const weedNum = p ? toNum(p.weedNum) : 0;
+                const insectNum = p ? toNum(p.insectNum) : 0;
 
                 // 只有没有可偷、可帮助的好友才考虑捣乱
                 if (stealNum === 0 && dryNum === 0 && weedNum === 0 && insectNum === 0) {

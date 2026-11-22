@@ -963,18 +963,19 @@ async function runAutoRobTreasure(options = {}) {
         books: [], details: [],
     };
 
+    // 每日上限(官方规则: 每日最多夺宝 20 次; 0 = 不限)
+    // ⭐ 放在背包查询之前: 上限已满时(一天里大部分时间)不再白打一次 Bag RPC
+    result.todayAttempts = countTodayRobAttempts();
+    if (dailyLimit > 0 && result.todayAttempts >= dailyLimit) {
+        log('夺宝', `今日已夺宝 ${result.todayAttempts} 次(上限 ${dailyLimit}), 跳过自动夺宝`, { module: 'activity', event: '夺宝', result: 'daily_limit' });
+        return { ...result, reason: 'daily_limit' };
+    }
+
     const inventory = await getBookInventory();
     result.books = inventory.map(b => ({ id: b.id, name: b.name, count: b.count }));
     if (!pickBestBook(inventory)) {
         log('夺宝', '没有可用的挑战书(初级/中级/高级都没有), 跳过自动夺宝', { module: 'activity', event: '夺宝', result: 'no_book' });
         return { ...result, reason: 'no_book' };
-    }
-
-    // 每日上限(官方规则: 每日最多夺宝 20 次; 0 = 不限)
-    result.todayAttempts = countTodayRobAttempts();
-    if (dailyLimit > 0 && result.todayAttempts >= dailyLimit) {
-        log('夺宝', `今日已夺宝 ${result.todayAttempts} 次(上限 ${dailyLimit}), 跳过自动夺宝`, { module: 'activity', event: '夺宝', result: 'daily_limit' });
-        return { ...result, reason: 'daily_limit' };
     }
 
     const { targets, friendCount, skippedEnded } = await collectTargets();

@@ -199,7 +199,16 @@ async function checkAndClaimActives(actives) {
     return { scanned, claimed, errors };
 }
 
-async function checkAndClaimIllustratedRewards() {
+// ⭐ 2026-11-22 性能: 图鉴探测(2×getBag + 2×ClaimAllRewardsV2)原先跟着 farm tick
+//   每 20~25 秒打一遍且几乎永远空手(≈800 探测 RPC/h)。领奖是进度事件驱动的,
+//   60s 节流足够及时 —— 漏领一次下一分钟也能捡回来。
+const ILLUSTRATED_PROBE_INTERVAL_MS = 60 * 1000;
+let lastIllustratedProbeAt = 0;
+
+async function checkAndClaimIllustratedRewards(force = false) {
+    const nowMs = Date.now();
+    if (!force && nowMs - lastIllustratedProbeAt < ILLUSTRATED_PROBE_INTERVAL_MS) return false;
+    lastIllustratedProbeAt = nowMs;
     try {
         const beforeTicket = await getTicketBalanceFromBag();
         // ⭐ 两类图鉴都要领(抓包: 领奖请求 #1 = 类别, 1=植物 / 101=牧场动物「巨大」页签)
