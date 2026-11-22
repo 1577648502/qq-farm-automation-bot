@@ -532,18 +532,18 @@ function getPlantItemAssetCandidates(item) {
 
 function getIconAssetCandidates(item) {
     const iconRes = String(item && item.icon_res || '').trim().replace(/^\/+|\/+$/g, '');
-    if (!iconRes) {
-        // 牧场动物产物(ItemInfo type=106, asset_name 形如 60001_4)没有 icon_res,
-        // 图标在 **animal bundle** 的 texture/ 目录下 —— 没有这条候选, 牧场动物图鉴永远抽不到图。
-        const assetName = String(item && item.asset_name || '').trim();
-        if (assetName && /^\d{5}_\d+$/.test(assetName)) return [`texture/${assetName}`];
-        return [];
-    }
-    const base = iconRes.replace(/\/(?:spriteFrame|texture)$/, '');
-    const candidates = base ? [base] : [];
-    // 动物产物同时带上 texture 路径兜底(有的条目 icon_res 和 asset_name 都能命中)
     const assetName = String(item && item.asset_name || '').trim();
-    if (assetName && /^\d{5}_\d+$/.test(assetName)) candidates.push(`texture/${assetName}`);
+    const candidates = [];
+    if (iconRes) {
+        const base = iconRes.replace(/\/(?:spriteFrame|texture)$/, '');
+        if (base) candidates.push(base);
+    }
+    // animal bundle 的 texture 图标(2026-11-22 起接入):
+    //   动物形态(60001_4) / 罐头便便(1028_1/1030_1) / 蛋类产物(asset=自身 id 1060001)
+    // 正则放宽到 4~7 位数字(_数字后缀可选), 否则蛋类和便便永远抽不到图。
+    if (/^\d{4,7}(_\d+)?$/.test(assetName)) {
+        candidates.unshift(`texture/${assetName}`);
+    }
     return candidates;
 }
 

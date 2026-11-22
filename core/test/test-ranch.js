@@ -218,7 +218,14 @@ proto.loadProto().then(async () => {
         // 整只价(ItemInfo.price): 鸡6 兔2160 鹅5424 猫8136 乌龟13536 龙猫20304 羊1440 牛2160
         // 收益比: 鸡 3.0, 兔 2.0, 鹅 2.0, 猫 2.0, 乌龟 2.4, 龙猫 3.0, 羊 0.26, 牛 0.21
         const { ANIMAL_NAMES } = ranch;
-        check('动物名映射包含产物/整只', !!ANIMAL_NAMES[1060001] && !!ANIMAL_NAMES[2060001], Object.keys(ANIMAL_NAMES).length);
+        // 2026-11-22 定案: ANIMAL_NAMES 由 MCAnimalConfig 生成(动物本体 60xxx/70xxx) + 整只偏移(206xxxx/207xxxx);
+        // 旧手写表整体错位(60005"乌龟"实际火鸡/60002"兔子"实际鸭) → 线上名字+图片对不上。
+        // 蛋/崽(106xxxx)不在映射里, getAnimalName 走 ItemInfo 兜底(官方名: 鸡蛋/羊毛/牛奶)。
+        check('动物名映射包含整只', !!ANIMAL_NAMES[2060001], Object.keys(ANIMAL_NAMES).length);
+        check('60005 = 火鸡(修正错位)', ANIMAL_NAMES[60005] === '火鸡', ANIMAL_NAMES[60005]);
+        check('60002 = 鸭(修正错位)', ANIMAL_NAMES[60002] === '鸭', ANIMAL_NAMES[60002]);
+        check('70012 = 羊驼(修正错位)', ANIMAL_NAMES[70012] === '羊驼', ANIMAL_NAMES[70012]);
+        check('蛋名走 ItemInfo 兜底 = 鸡蛋', ranch.getAnimalName(1060001) === '鸡蛋', ranch.getAnimalName(1060001));
         // getCubShop 依赖网络, 这里只验证排序纯函数层面: 用 autoBuyCubs 的空槽跳过逻辑
         network.sendMsgAsync = async (_s, method) => {
             if (method.includes('GetRanchDetail')) {

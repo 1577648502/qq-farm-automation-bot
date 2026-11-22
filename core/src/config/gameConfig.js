@@ -482,18 +482,23 @@ function loadConfigs() {
     // 加载图片映射(seed_images_named)
     // 两处都要扫: 内置目录随版本发布(基础图), data/gameConfig 是"同步游戏配置"下载的新图
     // (新活动道具如典藏室藏品 7xxxxx 只在 data 目录里; 只扫内置目录会显示成空白)
+    // ⚠ 2026-11-22 规则修正:
+    //   1) .astc 直接跳过 —— 浏览器渲染不了 astc, 命中它必显示空白(目录里存在大量 png/astc 双胞胎);
+    //   2) **内置目录优先**: 同一 id 两目录都有时用 git 管理的内置版本(名字规范、可控),
+    //      data 目录只补内置没有的新物品。旧逻辑 data 优先, 曾让 80011 命中旧的 organic_1.png。
     try {
         seedImageMap.clear();
         seedAssetImageMap.clear();
         const scanDirs = [
-            path.join(getDataDir(), 'gameConfig', 'seed_images_named'),
             path.join(configDir, 'seed_images_named'),
+            path.join(getDataDir(), 'gameConfig', 'seed_images_named'),
         ];
         for (const seedImageDir of scanDirs) {
             if (!fs.existsSync(seedImageDir)) continue;
             const files = fs.readdirSync(seedImageDir);
             for (const file of files) {
                 const filename = String(file || '');
+                if (/\.astc$/i.test(filename)) continue;   // 浏览器渲染不了, 跳过防误命中
                 const fileUrl = `/game-config/seed_images_named/${encodeURIComponent(file)}`;
 
                 // 1) id_..._Seed.png 命名，按 id 建立映射

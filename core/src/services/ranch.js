@@ -1397,23 +1397,34 @@ function calcRanchLevel(totalExp) {
 
 // ============ 展示层: 面板用的视图 ============
 
-const ANIMAL_NAMES = {
-    60001: '鸡', 60002: '兔子', 60003: '鹅', 60004: '猫', 60005: '乌龟',
-    60006: '龙猫', 60007: '松鼠', 60008: '波斯猫', 60009: '鼹鼠', 60010: '刺猬',
-    60011: '貂', 60012: '狐狸',
-    70001: '羊', 70002: '牛', 70003: '猴子', 70004: '迷你猪', 70005: '袋鼠',
-    70006: '驴', 70007: '梅花鹿', 70008: '羚羊', 70009: '长颈鹿', 70010: '鸵鸟',
-    70011: '牦牛', 70012: '浣熊',
-};
-// 产物/整只 ID → 名字。命名规则: 幼崽 60xxx → 产物 106xxxx(窝) / 107xxxx(棚),
-// 整只 206xxxx(窝) / 207xxxx(棚), 偏移 1000000; 逐个抄一遍太长, 用前缀生成。
+// 动物 id → 名字: 以官方 MCAnimalConfig 为权威。
+// ⚠ 2026-11-22 修正: 旧手写表整体错位(60005"乌龟"实际是火鸡, 60004"猫"实际是兔子,
+//   60002"兔子"实际是鸭...), 导致面板动物名字+图片对不上(线上 1 号账号 5 只火鸡全显示"乌龟")。
+const ANIMAL_NAMES = {};
+try {
+    for (const a of require('../gameConfig/MCAnimalConfig.json')) {
+        if (a && a.id) ANIMAL_NAMES[Number(a.id)] = String(a.name || `动物${a.id}`);
+    }
+} catch { /* 配置缺失时退回旧静态表(不应该发生, MCAnimalConfig 随仓库发布) */ }
+if (!Object.keys(ANIMAL_NAMES).length) {
+    Object.assign(ANIMAL_NAMES, {
+        60001: '鸡', 60002: '鸭', 60003: '鹅', 60004: '兔子', 60005: '火鸡',
+        60006: '天竺鼠', 60007: '乌龟', 60008: '松鼠', 60009: '刺猬', 60010: '鼹鼠',
+        60011: '考拉', 60012: '狐狸', 60013: '豪猪', 60014: '龙猫', 60015: '孔雀', 60016: '貂',
+        70001: '羊', 70002: '牛', 70003: '驴', 70004: '迷你猪', 70005: '马',
+        70006: '水牛', 70007: '骆驼', 70008: '牦牛', 70009: '鸵鸟', 70010: '梅花鹿',
+        70011: '浣熊', 70012: '羊驼',
+    });
+}
+// 整只 ID → 名字。命名规则: 幼崽 60xxx → 整只 206xxxx(窝) / 207xxxx(棚), 偏移 1000000。
+// (蛋/崽 106xxxx/107xxxx 不在这里 —— 官方 ItemInfo 已有准确名字(鸡蛋/羊毛/牛奶...),
+//  getAnimalName 查不到时会走 ItemInfo 兜底)
 for (const [id, name] of Object.entries(ANIMAL_NAMES)) {
     const n = Number(id);
+    if (n < 60000 || n > 79999) continue;
     const isPen = n >= 70001;                       // 棚动物
     const base = n - (isPen ? 70000 : 60000);
-    const produceId = (isPen ? 1070000 : 1060000) + base;   // 蛋/崽
     const grownId = (isPen ? 2070000 : 2060000) + base;     // 整只
-    ANIMAL_NAMES[produceId] = name + (isPen ? '产物' : '蛋/崽');
     ANIMAL_NAMES[grownId] = `整${  name}`;
 }
 ANIMAL_NAMES[1102] = '牧场经验';
@@ -1431,7 +1442,14 @@ function getAnimalImage(animalId) {
 const getItemImageByIdOf = getAnimalImage;   // 道具图标同一条查找链(名字不同语义而已)
 
 function getAnimalName(animalId) {
-    return ANIMAL_NAMES[toNum(animalId)] || `动物#${toNum(animalId)}`;
+    const id = toNum(animalId);
+    if (ANIMAL_NAMES[id]) return ANIMAL_NAMES[id];
+    // 蛋/崽/产物(106xxxx/107xxxx)等: 官方 ItemInfo 名字兜底(鸡蛋/羊毛/牛奶...)
+    try {
+        const info = require('../config/gameConfig').getItemById(id);
+        if (info && info.name) return String(info.name);
+    } catch { /* 无配置就用编号 */ }
+    return `动物#${id}`;
 }
 
 /**
