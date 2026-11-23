@@ -19,6 +19,25 @@ const { toLong, toNum, log, logWarn, sleep } = require('../utils/utils');
 
 const SERVICE = 'gamepb.homesteadpb.HomesteadService';
 
+/**
+ * 建筑实例 → 显示名(2026-11-23 用户要求: 升级日志里的 #10003 编号改成真实名字)。
+ * 线上实测(instId ↔ buildingId ↔ kind, 4 账号一致):
+ *   10001=窝  10002=牧草机(槽位固定, GetFacilityDetail 名称="牧草机")
+ *   10003=棚(解锁后固定在 10003; acc3/4/6 早期实例=3 的那批 6002001 也是棚)
+ *   10000=留言板(装饰)  其余未知 → 退回 #编号。
+ * ⚠ 旧观测"棚实例不固定(=3)"是升级前老号的状态; 解锁接口把棚放到 slot 10003,
+ *   AllCells 里 inst_id=10003 → 两者都是棚, 统一按段判。
+ */
+function buildingInstName(instId) {
+    const id = Number(instId) || 0;
+    if (id === 10001) return '窝';
+    if (id === 10002) return '牧草机';
+    if (id === 10003) return '棚';
+    if (id === 10000) return '留言板';
+    if (id >= 1 && id <= 999) return '棚';   // 早期解锁的棚实例段(实测 inst=3)
+    return `#${id}`;
+}
+
 // 已发起升级、等待竣工的建筑实例(进程内记忆)。
 // 服务端没有可靠的"可领取"标志(AllCells 没这个字段),
 // 与其每轮对所有建筑盲试, 不如只记我们真正发起过的那些。
@@ -350,8 +369,8 @@ async function autoUpgradeBuildings(opts = {}) {
                 const r = await completeBuildingUpgrade(it.instId);
                 if (r.facility) {
                     result.completed += 1;
-                    result.details.push(`竣工#${it.instId}→Lv${r.facility.level}`);
-                    log('牧场', `建筑#${it.instId} 升级完成 → Lv${r.facility.level}`, {
+                    result.details.push(`${buildingInstName(it.instId)}竣工→Lv${r.facility.level}`);
+                    log('牧场', `${buildingInstName(it.instId)}(inst=${it.instId}) 升级完成 → Lv${r.facility.level}`, {
                         module: 'ranch', event: '建筑升级', result: 'ok', instId: it.instId, level: r.facility.level,
                     });
                 }
@@ -371,8 +390,8 @@ async function autoUpgradeBuildings(opts = {}) {
             const r = await completeBuildingUpgrade(instId);
             if (r.facility) {
                 result.completed += 1;
-                result.details.push(`竣工#${instId}→Lv${r.facility.level}`);
-                log('牧场', `建筑#${instId} 升级完成 → Lv${r.facility.level}`, {
+                result.details.push(`${buildingInstName(instId)}竣工→Lv${r.facility.level}`);
+                log('牧场', `${buildingInstName(instId)}(inst=${instId}) 升级完成 → Lv${r.facility.level}`, {
                     module: 'ranch', event: '建筑升级', result: 'ok', instId, level: r.facility.level,
                 });
                 pendingUpgrades.delete(instId);   // 领到了, 移除
@@ -386,7 +405,7 @@ async function autoUpgradeBuildings(opts = {}) {
             } else {
                 pendingUpgrades.delete(instId);   // 其他错误(没这个建筑等), 不再重试
                 if (!isExpectedHomeError(e)) {
-                    logWarn('牧场', `领取竣工失败 #${instId}: ${e.message}`, { module: 'ranch', event: '建筑升级', result: 'error' });
+                    logWarn('牧场', `领取${buildingInstName(instId)}竣工失败(inst=${instId}): ${e.message}`, { module: 'ranch', event: '建筑升级', result: 'error' });
                 }
             }
         }
@@ -400,15 +419,15 @@ async function autoUpgradeBuildings(opts = {}) {
             const r = await upgradeBuilding(it.instId);
             result.upgraded += 1;
             pendingUpgrades.add(it.instId);   // 记下, 后续轮次只对它在尝试领竣工
-            result.details.push(`升级#${it.instId}→Lv${r.level}`);
-            log('牧场', `建筑#${it.instId} 开始升级 → Lv${r.level}`, {
+            result.details.push(`${buildingInstName(it.instId)}开始升级→Lv${r.level}`);
+            log('牧场', `${buildingInstName(it.instId)}(inst=${it.instId}) 开始升级 → Lv${r.level}`, {
                 module: 'ranch', event: '建筑升级', result: 'ok', instId: it.instId, level: r.level,
             });
             await sleep(500);
         } catch (e) {
             // 满级(10441117)/升级中(10441121)/材料不足 都属正常
             if (!isExpectedHomeError(e)) {
-                logWarn('牧场', `升级失败 #${it.instId}: ${e.message}`, { module: 'ranch', event: '建筑升级', result: 'error' });
+                logWarn('牧场', `${buildingInstName(it.instId)}升级失败(inst=${it.instId}): ${e.message}`, { module: 'ranch', event: '建筑升级', result: 'error' });
             }
         }
     }

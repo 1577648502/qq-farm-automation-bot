@@ -2019,7 +2019,8 @@ async function getFacilities() {
         } catch (e) {
             // 1045115 建筑不存在 = 该槽位没建筑, 正常跳过
             if (parseRanchErrorCode(e) !== RANCH_ERR.BUILDING_MISSING) {
-                logWarn('牧场', `建筑#${slot} 查询失败: ${e.message}`, {
+                const slotName = slot === 10001 ? '窝' : (slot === 10002 ? '牧草机' : (slot === 10000 ? '留言板' : `#${slot}`));
+                logWarn('牧场', `建筑${slotName} 查询失败: ${e.message}`, {
                     module: 'ranch', event: '建筑查询', result: 'error', slot,
                 });
             }
