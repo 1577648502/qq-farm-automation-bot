@@ -2,6 +2,7 @@
 import { useIntervalFn } from '@vueuse/core'
 import { storeToRefs } from 'pinia'
 import { computed, onMounted, ref, watch } from 'vue'
+import LoadingState from '@/components/ui/LoadingState.vue'
 import { useAccountStore } from '@/stores/account'
 import { useIllustratedStore } from '@/stores/illustrated'
 import { useStatusStore } from '@/stores/status'

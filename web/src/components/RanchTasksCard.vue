@@ -1,7 +1,9 @@
 <script setup lang="ts">
 import { storeToRefs } from 'pinia'
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import api from '@/api'
+import BaseButton from '@/components/ui/BaseButton.vue'
+import LoadingState from '@/components/ui/LoadingState.vue'
 import { useAccountStore } from '@/stores/account'
 import { useToastStore } from '@/stores/toast'
 
@@ -67,6 +69,8 @@ async function claimAll() {
 
 const claimableCount = computed(() => tasks.value.filter(t => t.canClaim).length)
 
+// 切账号自动重拉(卡片常驻任务页签, 不跟随页签切换重建; 2026-11-23 修"切账号后任务还是上一个号的")
+watch(currentAccountId, () => reload())
 onMounted(reload)
 </script>
 
