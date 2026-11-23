@@ -266,11 +266,6 @@ watch(currentAccountId, () => refresh())
         :key="`${it.id}-${it.uid || 0}`"
         class="relative flex flex-col items-center border border-gray-200 rounded-lg bg-white p-2 transition dark:border-gray-700 hover:border-amber-300 dark:bg-gray-800 dark:hover:border-amber-700"
       >
-        <div class="absolute left-2 top-2 text-xs text-gray-400 font-mono">
-          #{{ it.id }}
-        </div>
-
-        <!-- 使用 / 出售(与农场背包同一套按钮) -->
         <div class="absolute right-1 top-1 flex gap-1">
           <button
             v-if="canSell(it)"
@@ -304,6 +299,9 @@ watch(currentAccountId, () => refresh())
 
         <div class="w-full truncate px-1 text-center text-xs font-bold" :title="it.name">
           {{ it.name || `物品#${it.id}` }}
+          <!-- 2026-11-22: id 角标从左上角移到名字旁 —— 原来它孤零零贴在卡片左上角,
+               复制/截图时容易和相邻卡片的文字串行, 被误读成"名字和 id 错位"(线上实锤是数据全对) -->
+          <span class="ml-1 text-[10px] text-gray-400 font-mono font-normal">#{{ it.id }}</span>
         </div>
 
         <div class="mb-1 mt-0.5 flex flex-col items-center gap-0.5 text-[10px] text-gray-400">

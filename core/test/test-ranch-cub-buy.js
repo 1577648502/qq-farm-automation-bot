@@ -1015,6 +1015,20 @@ proto.loadProto().then(async () => {
         check('无 ht → 兼容旧行为回窝', pf.resolveRanchHostGid(0) === 10001, pf.resolveRanchHostGid(0));
     }
 
+    section('26. 牧场背包自动使用的触发链必须与农场对齐(修"背包罐头不会自动用")');
+    {
+        // 根因(2026-11-22): RANCH_GROUPS 只有 core/daily/steal, runRanchCare 里
+        // want('feed') 永远 false → autoUseRanchBagItems(罐头自动灌桶)定时巡检从未执行。
+        // 农场 autoUseBagItems 是 farm tick 每轮调; 牧场必须在 ranch tick 每轮对齐。
+        const fs = require('node:fs');
+        const workerSrc = fs.readFileSync(`${SB}/src/core/worker.js`, 'utf8');
+        check('worker 牧场 tick 每轮调 autoUseRanchBagItems(与农场 autoUseBagItems 同构)',
+            /if \(auto\.auto_use_items\) await ranch\.autoUseRanchBagItems\(\)/.test(workerSrc), null);
+        const ranchSrc = fs.readFileSync(`${SB}/src/services/ranch.js`, 'utf8');
+        check('RANCH_GROUPS 仍只有 core/daily/steal(触发靠 worker 每轮, 不靠幽灵 feed 组)',
+            !/feed:\s*\{\s*key:\s*'feed'/.test(ranchSrc), null);
+    }
+
     finish();
 }).catch((e) => {
     console.error('测试异常:', e);

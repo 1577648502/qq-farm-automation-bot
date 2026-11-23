@@ -682,6 +682,13 @@ async function runRanchTick(auto) {
     }
     const due = ranchDueGroups();
     try {
+        // ⭐ 背包自动使用跟农场一样每轮看一眼(2026-11-22 修"背包罐头不会自动用"):
+        //   旧版 autoUseRanchBagItems 只挂在 runRanchCare 的 want('feed') 组里,
+        //   而 RANCH_GROUPS 只有 core/daily/steal —— want('feed') 永远 false,
+        //   罐头自动灌桶在定时巡检里从未执行过(只有手动"一键巡牧场"触发)。
+        //   农场 autoUseBagItems 是 farm tick 每轮调(内部节流), 牧场对齐同样节奏:
+        //   这里每轮调, ranch.autoUseRanchBagItems 内部自带 60s 节流。
+        if (auto.auto_use_items) await ranch.autoUseRanchBagItems().catch(() => 0);
         for (const groupKey of due) {
             await ranch.runRanchTick(groupKey);
         }
