@@ -242,6 +242,7 @@ async function activateFacility(slot) {
 // 玩家等级一变(升级了)立即放行重试 —— 等级一到就自动解锁, 不空打请求。
 const SHED_LEVEL_RETRY_MS = 30 * 60 * 1000;
 let _shedLevelBlock = { until: 0, levelSeen: 0 };
+let _shedUnlockedLogged = false;   // 解锁成功日志只打一次(2026-11-23 重复刷屏修复)
 
 function getPlayerLevelForShed() {
     try {
@@ -256,8 +257,16 @@ function getPlayerLevelForShed() {
  * 自动解锁棚(跟窝一样纳入 autoUpgradeBuildings 的自动升级/竣工):
  * AllCells.buildings 里出现棚(gid 6002001) = 已解锁, 不发请求;
  * 没有才发 ActivateFacility(10003)。解锁后下一轮 autoUpgradeBuildings 自然轮到它。
+ * ⚠ 2026-11-23 实锤: buildingId 会随升级变档(窝 6001001→6001002→…→6001004, 棚
+ *   6002001→6002002), 判"已解锁"必须按 6002xxx 段而不是 ===6002001 ——
+ *   旧判定把升级后的棚(6002002)当成未解锁, 每轮重复发 ActivateFacility 刷日志。
  * @returns {Promise<{activated:boolean, alreadyUnlocked:boolean, skipped?:string}>}
  */
+function isShedBuildingId(buildingId) {
+    const id = Number(buildingId) || 0;
+    return id >= 6002001 && id <= 6002999;
+}
+
 async function autoActivateShed() {
     const result = { activated: false, alreadyUnlocked: false };
     let buildings;
@@ -269,7 +278,7 @@ async function autoActivateShed() {
         }
         return result;
     }
-    if (buildings.some(b => b.buildingId === FACILITY_SHED_GID)) {
+    if (buildings.some(b => isShedBuildingId(b.buildingId))) {
         result.alreadyUnlocked = true;
         return result;
     }
@@ -282,9 +291,15 @@ async function autoActivateShed() {
         const r = await activateFacility(FACILITY_SHED_SLOT);
         result.activated = true;
         _shedLevelBlock = { until: 0, levelSeen: 0 };
-        log('牧场', `棚已解锁(slot=${r.slot || FACILITY_SHED_SLOT}, gid=${r.gid || FACILITY_SHED_GID}, Lv${r.level || '?'})`, {
-            module: 'ranch', event: '棚解锁', result: 'ok',
-        });
+        // 2026-11-23: 解锁成功日志只打一次(模块内记忆) —— 旧逻辑因 buildingId 变档误判,
+        // 同一号 24h 刷了 50 条"棚已解锁"; 且响应里的 level(#3=7)是服务端内部值,
+        // 不是小程序显示的棚档位(6002002 实显 Lv3), 打出来只会误导, 不再带等级。
+        if (!_shedUnlockedLogged) {
+            _shedUnlockedLogged = true;
+            log('牧场', `棚已解锁(slot=${r.slot || FACILITY_SHED_SLOT}, gid=${r.gid || FACILITY_SHED_GID})`, {
+                module: 'ranch', event: '棚解锁', result: 'ok',
+            });
+        }
         await sleep(400);
     } catch (e) {
         const code = parseHomeErrorCode(e);

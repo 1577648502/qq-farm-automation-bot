@@ -252,6 +252,24 @@ const INJECT_PAYLOAD = `
   // ---- 3. 周期心跳 ----
   setInterval(function(){ flushAll(); },1500);
   setInterval(function(){ wf('probe.json',JSON.stringify({alive:Date.now(),started:t0,hasQQ:typeof qq,hasWX:typeof wx,same:typeof wx!=='undefined'&&wx===qq,frames:FRAME_COUNT})); },5000);
+
+  // ---- 4. JSON.parse hook: 抓加密配置表(MCFacilityConfig 等 'FSpk' TextAsset)解密后的明文 ----
+  // 加密配置由业务代码解密成 JSON 字符串后必然过 JSON.parse → 在这里按特征 dump 明文。
+  try{
+    var origParse=JSON.parse;
+    JSON.parse=function(){
+      try{
+        var s=arguments[0];
+        if(typeof s==='string'&&s.length>200&&s.indexOf('facility_id')!==-1){
+          wf('facility_config.json',s);
+        }else if(typeof s==='string'&&s.length>200&&(s.indexOf('module_type')!==-1&&s.indexOf('next_facility')!==-1)){
+          wf('facility_config.json',s);
+        }
+      }catch(e){}
+      return origParse.apply(JSON,arguments);
+    };
+    af('hook_error.txt','JSON.parse hooked\\n');
+  }catch(e){ try{ af('hook_error.txt','JPH:'+String(e&&e.message||e)+'\\n'); }catch(e2){} }
 }catch(e){}})();
 `;
 
@@ -312,7 +330,7 @@ const DUMP_HOST_DIR = path.join(MINIAPP_USR, DUMP_DIR_IN_MINIAPP);
 function readDumpFiles() {
     if (!fs.existsSync(DUMP_HOST_DIR)) return {};
     const out = {};
-    for (const name of ['gateway.jsonl', 'modules.txt', 'probe.json', 'sockets.jsonl', 'hook_error.txt', 'modules_error.txt']) {
+    for (const name of ['gateway.jsonl', 'modules.txt', 'probe.json', 'sockets.jsonl', 'hook_error.txt', 'modules_error.txt', 'facility_config.json']) {
         const f = path.join(DUMP_HOST_DIR, name);
         if (fs.existsSync(f)) out[name] = fs.readFileSync(f, 'utf8');
     }

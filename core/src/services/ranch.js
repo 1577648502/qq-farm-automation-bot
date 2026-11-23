@@ -1957,12 +1957,36 @@ async function getFacilityDetailByInstance(instId) {
 // 11001001 是槽位 10000 上的装饰建筑(留言板), 线上三个账号实测都出现, 归为 decor。
 const BUILDING_KINDS = {
     6001001: 'coop', 6001002: 'coop', 6001003: 'coop',
+    6001004: 'coop', 6001005: 'coop', 6001006: 'coop',
+    6001007: 'coop', 6001008: 'coop', 6001009: 'coop',
     6002001: 'pen',  6002002: 'pen',  6002003: 'pen',
+    6002004: 'pen',  6002005: 'pen',  6002006: 'pen',
     7001001: 'feed', 7001002: 'feed', 7001003: 'feed',
     11001001: 'decor',
 };
 function buildingKind(buildingId) {
     return BUILDING_KINDS[Number(buildingId)] || '';
+}
+
+/**
+ * 建筑档位(小程序显示的"窝 Lv4/棚 Lv3")—— 与服务端 AllCells.buildings.level **无关**
+ * (实测 acc1: AllCells 窝 level=6/棚=7, 小程序显示 窝Lv4/棚Lv3)。
+ * 档位 = buildingId 查 MCFacilityConfig 升级链(该表在客户端是 'FSpk' 加密 TextAsset, 解不出明文),
+ * 但升级链的档位可由线上锚点定案:
+ *   窝: 6001001→Lv1 … 6001005→Lv5 (末位=档位; acc3 6001002=窝Lv2 ✓, acc1 6001004=窝Lv4 ✓, 抓包别家 6001005=窝Lv5 ✓)
+ *   棚: 6002001→Lv1(解锁瞬间) 6002002→Lv3(用户实看) 6002003→Lv5(推定) — 棚档位跳级(1,3,5,…), 非连续!
+ *   牧草机: 7001001→Lv1 7001002→Lv2 7001003→Lv3 (官方文档实锤, 末位=档位)
+ *   留言板: 11001001 → 无档位概念, 固定 Lv1
+ * 棚链只实锤 3 个点, 后面档位(6002004→Lv7?)等新锚点再补; 表外 buildingId 退回 null(前端显示 '-')。
+ */
+const BUILDING_TIER = {
+    coop: { 6001001: 1, 6001002: 2, 6001003: 3, 6001004: 4, 6001005: 5, 6001006: 6, 6001007: 7, 6001008: 8, 6001009: 9 },
+    pen: { 6002001: 1, 6002002: 3, 6002003: 5 },
+    feed: { 7001001: 1, 7001002: 2, 7001003: 3 },
+};
+function buildingTier(buildingId) {
+    const kind = buildingKind(buildingId);
+    return BUILDING_TIER[kind] ? (BUILDING_TIER[kind][Number(buildingId)] ?? null) : null;
 }
 
 /**
@@ -2062,16 +2086,19 @@ async function getRanchOverview(accountId = '') {
                         f.status = b.status;
                         f.buildingId = b.buildingId;
                         f.buildingKind = buildingKind(b.buildingId);
+                        f.tier = buildingTier(b.buildingId);   // 小程序显示档位(区别于 upgradeLevel 服务端内部值)
                     } else {
                         f.upgrading = false;
                     }
                 }
                 // ⭐ 真实建筑清单(棚不在固定槽位里, 只能从 AllCells 拿):
                 //   ItemInfo: 3601001=牧场窝(target 6001001) / 3602001=牧场棚(6002001) / 3702001=喂食机(7001001)
+                // tier = 小程序显示档位(buildingTier); level = 服务端内部值(与显示无关, 见 buildingTier 注释)
                 view.buildings = all.buildings.map(b => ({
                     instId: b.instId,
                     buildingId: b.buildingId,
                     level: b.level,
+                    tier: buildingTier(b.buildingId),
                     status: b.status,
                     kind: buildingKind(b.buildingId),
                 }));
@@ -5552,5 +5579,7 @@ module.exports = {
         planRanchDueActions, runRanchDueActions,
         // 好友牧场: 照顾 target#2 必须用 animal_inst_id(线上 1045207)
         listFriendAnimals, strokeAnimal, putHazard,
+        // 建筑档位: 供测试验证"窝/棚显示档位与小程序一致"(AllCells.level 不是显示档位)
+        buildingTier, BUILDING_TIER,
     },
 };

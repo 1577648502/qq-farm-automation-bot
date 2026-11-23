@@ -956,6 +956,21 @@ proto.loadProto().then(async () => {
         r = await facility.autoActivateShed();
         check('已有棚 → 不调 ActivateFacility', !calls.some(c => c.method === 'ActivateFacility'), calls.map(c => c.method));
         check('结果 alreadyUnlocked = true', r.alreadyUnlocked === true, r);
+
+        // 2026-11-23 实锤: 棚升级后 buildingId 变档(6002001→6002002), 旧判定 ===6002001
+        // 把升级后的棚当"未解锁", 每轮重复发 ActivateFacility(acc1 24h 刷 50 条日志)。
+        // 修复: 按 6002xxx 段判定。
+        calls = installStub({
+            AllCells: () => types.AllCellsReply.encode(types.AllCellsReply.create({
+                buildings: [
+                    { inst_id: 11, building_id: 6001004, level: 6, status: 9 },
+                    { inst_id: 13, building_id: 6002002, level: 7, status: 9 },
+                ],
+            })).finish(),
+        });
+        r = await facility.autoActivateShed();
+        check('棚已升级(6002002) → 不调 ActivateFacility(段判定)', !calls.some(c => c.method === 'ActivateFacility'), calls.map(c => c.method));
+        check('棚已升级 → alreadyUnlocked = true', r.alreadyUnlocked === true, r);
     }
 
     section('24. 棚解锁"到等级自动解锁"(2026-11-22 用户定案): 1045134 进窗口, 升级立即放行');
@@ -1104,6 +1119,25 @@ proto.loadProto().then(async () => {
         await ranch.placeAnimal(60005);
         const pa2 = calls3.map(c => types.PlaceAnimalRequest.decode(c.body))[0];
         check('窝幼崽(60xxx)入栏 target#1 = 窝实例', Number(pa2.target.host_gid) === 10001, Number(pa2.target.host_gid));
+    }
+
+    section('29. 建筑档位映射(2026-11-23 "棚等级不对": AllCells.level 不是小程序显示档位)');
+    {
+        const pf = freshRanch().__privateRanchFns;
+        const { buildingTier } = pf;
+        // 窝链: 末位=档位(6001002→2 acc3 实看窝Lv2 / 6001004→4 acc1 实看窝Lv4)
+        check('窝 6001002 → Lv2', buildingTier(6001002) === 2, buildingTier(6001002));
+        check('窝 6001004 → Lv4', buildingTier(6001004) === 4, buildingTier(6001004));
+        check('窝 6001005 → Lv5(抓包别家)', buildingTier(6001005) === 5, buildingTier(6001005));
+        // 棚链(跳级): 6002001→Lv1(解锁瞬间) / 6002002→Lv3(用户实看) / 6002003→Lv5(推定)
+        check('棚 6002001 → Lv1', buildingTier(6002001) === 1, buildingTier(6002001));
+        check('棚 6002002 → Lv3(用户实看)', buildingTier(6002002) === 3, buildingTier(6002002));
+        check('棚 6002003 → Lv5(推定)', buildingTier(6002003) === 5, buildingTier(6002003));
+        // 牧草机: 官方文档 7001001=Lv1 7001002=Lv2 7001003=Lv3
+        check('牧草机 7001003 → Lv3', buildingTier(7001003) === 3, buildingTier(7001003));
+        // 表外/装饰: 返回 null(前端显示 '-' 或回退)
+        check('留言板 11001001 → null', buildingTier(11001001) === null, buildingTier(11001001));
+        check('未知棚档 6002004 → null(等新锚点)', buildingTier(6002004) === null, buildingTier(6002004));
     }
 
     finish();

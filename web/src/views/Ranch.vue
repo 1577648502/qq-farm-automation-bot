@@ -544,7 +544,7 @@ interface PenView {
   /** 容量为 0 且没动物 = 该建筑还没解锁(棚需要玩家等级更高才开, 与窝不同步) */
   locked: boolean
   /** AllCells 里的真实建筑(没有 = 该建筑还没建造/没放置) */
-  building?: { instId: number, buildingId: number, level: number, status: number, kind: string }
+  building?: { instId: number, buildingId: number, level: number, tier?: number | null, status: number, kind: string }
   /** 服务端 GetRanchDetail 里有没有这一组(没有=该栏舍未解锁) */
   exists?: boolean
   /** 锁定时的原因说明(棚: 建筑已放置但牧场等级不够) */
@@ -601,12 +601,20 @@ const buildingRows = computed(() => {
   const penB = (ov.penBuildings || [])[0]
   const fm = feedMachine.value as any
   const penPen = pensView.value.find(p => p.key === 'pen')
+  // 显示档位 = buildingTier(小程序口径, 2026-11-23 定案); tier 缺档时显示服务端内部 level 并加 * 号
+  const tierText = (b: any, fbKey?: string) => {
+    if (!b)
+      return ''
+    if (b.tier !== null && b.tier !== undefined)
+      return `Lv${b.tier}`
+    return b.level ? `Lv${b.level}*` : (fbKey && b.buildingId ? `Lv${b.buildingId % 10}` : '')
+  }
   return [
     {
       key: 'coop',
       label: '窝',
       locked: !coopB,
-      value: coopB ? `Lv${coopB.level}` : '',
+      value: tierText(coopB),
       upgrading: false,
       hint: '',
     },
@@ -614,7 +622,7 @@ const buildingRows = computed(() => {
       key: 'pen',
       label: '棚',
       locked: !!(penPen && penPen.locked) || !penB,
-      value: penB ? `Lv${penB.level}` : '',
+      value: tierText(penB),
       upgrading: false,
       hint: penPen?.lockedHint || '',
     },
@@ -622,7 +630,7 @@ const buildingRows = computed(() => {
       key: 'feed',
       label: '牧草机',
       locked: !fm,
-      value: fm ? `Lv${fm.level || (fm.buildingId ? fm.buildingId % 10 : '?')}` : '',
+      value: fm ? (fm.tier != null ? `Lv${fm.tier}` : `Lv${fm.level || (fm.buildingId ? fm.buildingId % 10 : '?')}`) : '',
       upgrading: !!fm?.upgrading,
       hint: '',
     },
@@ -1607,8 +1615,9 @@ onUnmounted(() => {
                 <!-- 未解锁时不渲染等级: 建筑虽已放置(AllCells 有 6002001 Lv7), 但服务端没开放棚组,
                      显示 Lv7 会被误读成"已解锁" —— 解锁说明在下方占位里 -->
                 <div v-if="!pen.locked && (pen.facility || pen.building)" class="flex items-center gap-1 text-[11px] text-gray-400">
-                  <span v-if="pen.facility">{{ pen.facility.name || pen.title }}{{ pen.facility.level ? ` Lv${pen.facility.level}` : '' }}</span>
-                  <span v-else-if="pen.building">{{ pen.title.slice(0, 1) }} Lv{{ pen.building.level }}</span>
+                  <!-- 档位显示(2026-11-23): tier=小程序口径档位, 没有才退回服务端内部 level(加*) -->
+                  <span v-if="pen.facility">{{ pen.facility.name || pen.title }}{{ pen.facility.tier != null ? ` Lv${pen.facility.tier}` : (pen.facility.level ? ` Lv${pen.facility.level}*` : '') }}</span>
+                  <span v-else-if="pen.building">{{ pen.title.slice(0, 1) }} {{ pen.building.tier != null ? `Lv${pen.building.tier}` : (pen.building.level ? `Lv${pen.building.level}*` : '') }}</span>
                   <span
                     v-if="pen.facility?.upgrading"
                     class="rounded bg-sky-100 px-1 py-0.5 text-[10px] text-sky-700 dark:bg-sky-900/40 dark:text-sky-300"

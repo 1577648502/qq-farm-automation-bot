@@ -21,7 +21,10 @@ export interface RanchFacility {
 export interface RanchBuilding {
   instId: number
   buildingId: number
+  /** 服务端内部值(与小程序显示无关) */
   level: number
+  /** 小程序显示档位(2026-11-23 buildingTier 定案); 表外建筑为 null */
+  tier?: number | null
   status: number
   /** coop=窝 pen=棚 feed=喂食机 */
   kind: string
@@ -114,6 +117,8 @@ export interface RanchFacility {
   slot: number
   name: string
   level: number
+  /** 小程序显示档位(来自 buildingTier); 缺省=表外建筑 */
+  tier?: number | null
   stored: number
   capacity: number
 }
