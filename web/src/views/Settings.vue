@@ -813,6 +813,15 @@ const RANCH_CUB_METRIC_TEXT: Record<string, string> = {
   max_fert_profit: '普通肥净利/时',
 }
 
+/** 幼崽窝/棚归属(60xxx=窝(小动物), 70xxx=棚(大动物)); 预览文案与背包列表角标都要区分 */
+function ranchCubHousingOf(animalId: any) {
+  const id = Number(animalId) || 0
+  return id >= 70000 && id < 80000 ? 'pen' : 'coop'
+}
+function ranchCubHousingText(animalId: any) {
+  return ranchCubHousingOf(animalId) === 'pen' ? '棚·' : '窝·'
+}
+
 /**
  * 预览文案 —— 纯本地 computed, 切换策略立即变化。
  * 农场语义: bag_priority 时预览显示"第二优先策略"会选中的那只。
@@ -866,7 +875,7 @@ const ranchCubPreviewLabel = computed<string | null>(() => {
     const first = bagCubs[0]
     if (first) {
       const total = bagCubs.reduce((n, c) => n + (Number(c.count) || 0), 0)
-      return `先入栏: ${first.name}(背包还有 ${total} 只)`
+      return `先入栏: ${ranchCubHousingText(first.animalId)}${first.name}(背包还有 ${total} 只)`
     }
   }
 
@@ -875,7 +884,8 @@ const ranchCubPreviewLabel = computed<string | null>(() => {
   // ⚠ 必须把"当前按哪个策略算的"写出来:
   //   四个指标策略在这套数据下经常选出同一只(孔雀在 经验/普通肥经验/净利/普通肥净利
   //   四项上都是第一), 只显示动物名会让人以为"切换没生效"。
-  const who = `Lv${level} ${pick.name}`
+  // 2026-11-22: 预览要区别窝/棚(60xxx=窝小动物, 70xxx=棚大动物), 买错了入错栏
+  const who = `Lv${level} ${ranchCubHousingText(pick.animalId)}${pick.name}`
   if (strategy0 === 'bag_priority') {
     return `背包无可用幼崽 → 按${RANCH_CUB_STRATEGY_TEXT[strategy] || strategy}买 ${who}`
   }
@@ -2886,6 +2896,13 @@ async function onBackupFileChange(ev: Event) {
                         <span class="truncate text-sm text-gray-800 font-medium dark:text-gray-200">
                           {{ cub.name }}
                         </span>
+                        <!-- 窝/棚角标(与 Ranch.vue 商店同款: 窝绿/棚橙; 60xxx=窝小动物, 70xxx=棚大动物) -->
+                        <span
+                          class="shrink-0 rounded px-1 py-0.5 text-[10px]"
+                          :class="ranchCubHousingOf(cub.animalId) === 'pen'
+                            ? 'bg-orange-100 text-orange-700 dark:bg-orange-900/40 dark:text-orange-300'
+                            : 'bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-300'"
+                        >{{ ranchCubHousingOf(cub.animalId) === 'pen' ? '棚' : '窝' }}</span>
                         <span v-if="isRanchCubExcluded(cub.animalId)" class="shrink-0 rounded bg-rose-100 px-1.5 py-0.5 text-[10px] text-rose-700 dark:bg-rose-900/40 dark:text-rose-300">
                           已排外
                         </span>

@@ -34,6 +34,19 @@ const cubSource = ref<string>('')
 const cubLiveError = ref<string>('')
 // 排序键与农场 /api/analytics 同构(exp / fert_exp / profit / fert_profit)
 const cubSort = ref<'exp' | 'fert_exp' | 'profit' | 'fert_profit' | 'ratio' | 'cost' | 'level'>('exp')
+// 窝/棚筛选(2026-11-22 用户要求: 分析页要区别窝棚) —— 'all' | 'coop'(窝,60xxx) | 'pen'(棚,70xxx)
+const cubHousing = ref<'all' | 'coop' | 'pen'>('all')
+
+function cubHousingOf(animalId: any) {
+  const id = Number(animalId) || 0
+  return id >= 70000 && id < 80000 ? 'pen' : 'coop'
+}
+
+const cubRowsFiltered = computed(() => {
+  if (cubHousing.value === 'all')
+    return cubRows.value
+  return cubRows.value.filter(r => cubHousingOf(r.animalId) === cubHousing.value)
+})
 
 async function loadCubAnalytics() {
   const id = currentAccountId.value
@@ -720,6 +733,39 @@ function formatGrowTime(seconds: any) {
       <div v-if="activeTab === 'ranch'" class="space-y-3">
         <div class="flex flex-wrap items-center gap-3">
           <span class="text-gray-700 font-medium dark:text-gray-300">全部幼崽</span>
+          <!-- 窝/棚筛选(60xxx=窝小动物, 70xxx=棚大动物; 与 Ranch.vue 商店筛选同款配色) -->
+          <div class="flex items-center gap-1">
+            <button
+              type="button"
+              class="rounded-full px-3 py-1 text-xs transition"
+              :class="cubHousing === 'all'
+                ? 'bg-amber-600 text-white'
+                : 'bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-300'"
+              @click="cubHousing = 'all'"
+            >
+              全部 {{ cubRows.length }}
+            </button>
+            <button
+              type="button"
+              class="rounded-full px-3 py-1 text-xs transition"
+              :class="cubHousing === 'coop'
+                ? 'bg-green-600 text-white'
+                : 'bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-300'"
+              @click="cubHousing = 'coop'"
+            >
+              窝·小动物 {{ cubRows.filter(r => cubHousingOf(r.animalId) === 'coop').length }}
+            </button>
+            <button
+              type="button"
+              class="rounded-full px-3 py-1 text-xs transition"
+              :class="cubHousing === 'pen'
+                ? 'bg-orange-500 text-white'
+                : 'bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-300'"
+              @click="cubHousing = 'pen'"
+            >
+              棚·大动物 {{ cubRows.filter(r => cubHousingOf(r.animalId) === 'pen').length }}
+            </button>
+          </div>
           <BaseSelect
             v-model="cubSort"
             class="w-52"
@@ -763,7 +809,10 @@ function formatGrowTime(seconds: any) {
           暂无幼崽数据（配置缺失）
         </div>
         <div v-else class="overflow-hidden border border-gray-200 rounded-lg bg-white shadow dark:border-gray-700 dark:bg-gray-800">
-          <div class="overflow-x-auto">
+          <div v-if="!cubRowsFiltered.length" class="p-8 text-center text-sm text-gray-400">
+            该分类暂无幼崽
+          </div>
+          <div v-else class="overflow-x-auto">
             <table class="w-full whitespace-nowrap text-left text-sm">
               <thead class="border-b bg-gray-50 text-xs text-gray-500 uppercase dark:border-gray-700 dark:bg-gray-700/50 dark:text-gray-400">
                 <tr>
@@ -801,7 +850,7 @@ function formatGrowTime(seconds: any) {
               </thead>
               <tbody class="divide-y divide-gray-100 dark:divide-gray-700">
                 <tr
-                  v-for="r in cubRows"
+                  v-for="r in cubRowsFiltered"
                   :key="r.goodsId"
                   class="transition-colors hover:bg-gray-50 dark:hover:bg-gray-700/50"
                 >
@@ -815,7 +864,16 @@ function formatGrowTime(seconds: any) {
                         @error="imageErrors[r.animalId] = true"
                       >
                       <div>
-                        {{ r.name }}
+                        <span class="inline-flex items-center gap-1">
+                          {{ r.name }}
+                          <!-- 窝/棚角标(与 Ranch.vue 商店同款: 窝绿/棚橙) -->
+                          <span
+                            class="rounded px-1 py-0.5 text-[10px] font-normal"
+                            :class="cubHousingOf(r.animalId) === 'pen'
+                              ? 'bg-orange-100 text-orange-700 dark:bg-orange-900/40 dark:text-orange-300'
+                              : 'bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-300'"
+                          >{{ cubHousingOf(r.animalId) === 'pen' ? '棚' : '窝' }}</span>
+                        </span>
                         <span class="text-xs text-gray-400">Lv{{ r.level ?? '-' }}</span>
                       </div>
                     </div>

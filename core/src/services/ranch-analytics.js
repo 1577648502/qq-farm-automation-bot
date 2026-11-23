@@ -386,6 +386,9 @@ function getCubRankings(shop, sortBy = 'ratio') {
             name: String(g.name || '') || String(cubInfo.name || ''),
             // 幼崽图标(2026-11-22 用户要求: 所有牧场展示动物的页面都带图)
             image: gameConfig.getItemImageById(animalId) || '',
+            // 窝/棚归属(同 getCubShop 口径: 60xxx=窝(小动物) 70xxx=棚(大动物)),
+            // 分析页与策略选崽预览要区别窝棚
+            housing: animalId >= 70000 && animalId < 80000 ? '棚' : '窝',
             level,
             cost,
             grownValue,
