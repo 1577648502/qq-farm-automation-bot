@@ -1029,6 +1029,38 @@ proto.loadProto().then(async () => {
             !/feed:\s*\{\s*key:\s*'feed'/.test(ranchSrc), null);
     }
 
+    section('27. 灌桶分批上限(修"容器已达到上限整格被拒"): 1003002 实锤服务端上限 1,000,000 秒');
+    {
+        // 2026-11-23 线上事故: acc1 有机桶 992.3h(≈3572152s), 上限 3600000s(1000h),
+        //   整格一条 Use count=130(130x8h=1040h) 超上限 → 整单被拒 1003002, 一个不进。
+        //   正确做法: 按桶余量算 headroom, 每批 min(剩余, floor(headroom/单罐秒))。
+        const ranch = freshRanch();
+        const pf = ranch.__privateRanchFns;
+        // 牧场背包 80033 x130, uid=13831
+        const warehouse = require(`${SB}/src/services/warehouse`);
+        warehouse.getBag = async () => ({ items: [] });
+        warehouse.getBagItems = (r) => (r && r.items) || [];
+        warehouse.getRanchBagItems = async () => ([
+            { id: 80033, count: 130, uid: 13831 },
+        ]);
+        // 有机桶余量 965000s(268.1h), 上限 1000000s → headroom 35000s
+        //   → 8h 罐(28800s)只灌得下 1 个; 整格 130 个(1040h)会被整单拒
+        // readCanBucketSecs 读 wh.getBag + wh.getBagItems → stub 数据源
+        const bagNow = { items: [{ id: 7004, count: 965000, uid: 0 }] };
+        warehouse.getBag = async () => bagNow;
+        const calls = installStub({
+            Use: () => types.UseReply.encode(types.UseReply.create({})).finish(),
+        });
+        const r = await ranch.autoFillCansToWatermark();
+        const useCalls = calls.filter(c => c.method === 'Use');
+        check('分批: 只发了 1 条 Use(headroom 只够 1 个 8h 罐)', useCalls.length === 1, useCalls.length);
+        if (useCalls.length === 1) {
+            const req = types.UseRequest.decode(useCalls[0].body);
+            check('该条 count = 1(floor(35000s/28800s))', Number(req.count) === 1, Number(req.count));
+        }
+        check('used = 1(没有硬灌整格)', r.used === 1, r);
+    }
+
     finish();
 }).catch((e) => {
     console.error('测试异常:', e);
