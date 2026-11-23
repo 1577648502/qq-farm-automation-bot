@@ -1061,6 +1061,51 @@ proto.loadProto().then(async () => {
         check('used = 1(没有硬灌整格)', r.used === 1, r);
     }
 
+    section('28. 空槽按栏舍分开买(修"棚的动物不会自动购买"): 棚空槽必须买 70xxx');
+    {
+        // 2026-11-23 线上实锤(acc1): 棚 0/3 一直空着 —— 窝棚动物 ratio 并列 2.0,
+        //   混排后窝动物稳定在前, "只买第一名"永远买窝动物。
+        // 正确: 窝空槽买 60xxx 第一名, 棚空槽买 70xxx 第一名, 各一单。
+        const goods = [
+            { id: 10005, item_id: 60005, price: 5640, price_id: 1007, limit_count: 0, bought_num: 0, unlocked: true },  // 火鸡(窝) ratio 2.0
+            { id: 10008, item_id: 70001, price: 5640, price_id: 1007, limit_count: 0, bought_num: 0, unlocked: true },  // 羊(棚) ratio 2.0
+        ];
+        const calls = installStub({
+            [`${SHOP}.ShopInfo`]: () => types.ShopInfoReply.encode(types.ShopInfoReply.create({ goods_list: goods })).finish(),
+            [`${SHOP}.BuyGoods`]: () => types.BuyGoodsReply.encode(types.BuyGoodsReply.create({})).finish(),
+        });
+        const ranch = freshRanch();
+        const warehouse = require(`${SB}/src/services/warehouse`);
+        warehouse.getRanchBagItems = async () => [];
+        warehouse.getBag = async () => ({ items: [] });
+        const r = await ranch.__privateRanchFns.autoBuyCubs({
+            view: { coopCount: 2, penCount: 3, animals: [] },
+        });
+        check('窝+棚各发一单(共 2 条 BuyGoods)', calls.filter(c => c.method === 'BuyGoods').length === 2,
+            calls.filter(c => c.method === 'BuyGoods').length);
+        check('两种都买了(火鸡+羊)', r.details.join(',').includes('火鸡') && r.details.join(',').includes('羊'), r.details);
+        check('bought = 5(窝2+棚3)', r.bought === 5, r.bought);
+
+        // 棚幼崽入栏必须挑棚实例: placeAnimal(70001) → target#1 = 棚
+        const pf = ranch.__privateRanchFns;
+        pf.rememberRanchInstIds({
+            coops: [{ ranchInstId: 10001, husbandryType: 1 }],
+            pens: [{ ranchInstId: 10003, husbandryType: 2 }],
+        });
+        const calls2 = installStub({
+            PlaceAnimal: () => types.PlaceAnimalReply.encode(types.PlaceAnimalReply.create({})).finish(),
+        });
+        await ranch.placeAnimal(70001);
+        const pa = calls2.map(c => types.PlaceAnimalRequest.decode(c.body))[0];
+        check('棚幼崽(70xxx)入栏 target#1 = 棚实例', Number(pa.target.host_gid) === 10003, Number(pa.target.host_gid));
+        const calls3 = installStub({
+            PlaceAnimal: () => types.PlaceAnimalReply.encode(types.PlaceAnimalReply.create({})).finish(),
+        });
+        await ranch.placeAnimal(60005);
+        const pa2 = calls3.map(c => types.PlaceAnimalRequest.decode(c.body))[0];
+        check('窝幼崽(60xxx)入栏 target#1 = 窝实例', Number(pa2.target.host_gid) === 10001, Number(pa2.target.host_gid));
+    }
+
     finish();
 }).catch((e) => {
     console.error('测试异常:', e);

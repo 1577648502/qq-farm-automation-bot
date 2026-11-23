@@ -1053,7 +1053,16 @@ async function stealFriendProduce(hostGid) {
  * @param cubItemId 幼崽物品 id(60001 鸡 / 60002 兔 …)
  */
 async function placeAnimal(cubItemId, hostGid = 0) {
-    const gid = resolveRanchHostGid(hostGid);
+    // ⭐ 2026-11-23: 幼崽必须放进**对应栏舍** —— 60xxx=窝(小动物) 70xxx=棚(大动物),
+    //   写死/默认窝会把棚幼崽发进窝(服务端 1045xxx 拒收)。
+    //   线上实测(2026-11-23): 服务端 BuyGoods auto_add 也会自动挑对栏舍,
+    //   但背包优先策略的 PlaceAnimal 是我们自己发的, 必须自己选对。
+    let gid = toNum(hostGid);
+    if (gid <= 0) {
+        const cubId = toNum(cubItemId);
+        const wantHt = cubId >= 70000 && cubId < 80000 ? 2 : 1;
+        gid = resolveRanchHostGid(0, wantHt);
+    }
     const body = types.PlaceAnimalRequest.encode(types.PlaceAnimalRequest.create({
         target: { host_gid: toLong(gid), slot: toLong(toNum(cubItemId)) },
     })).finish();
@@ -4694,13 +4703,27 @@ async function autoBuyCubs(opts = {}) {
     // ⭐ 先算空槽(一次总览, 10s 缓存内基本是命中), 栏满就不必再查幼崽商店 ——
     //   栏满时商店查询每轮白打(2026-11-22 性能: ~160 次/小时的白跑 RPC)
     let slots = toNum(opts.slots) || 0;
-    if (slots <= 0) {
+    // ⭐ 2026-11-23 修"棚的动物不会自动购买": 空槽必须**按栏舍分开算** ——
+    //   窝(60xxx 小动物)与棚(70xxx 大动物)不通用, 只算总数会拿窝的空槽去买棚动物
+    //   (或反过来), 服务端拒收后棚一直空着。棚动物 ratio 与窝动物相同(2.0),
+    //   排序后窝动物稳定在前 → 棚永远轮不到。
+    let coopSlots = toNum(opts.coopSlots) || 0;
+    let penSlots = toNum(opts.penSlots) || 0;
+    if (slots <= 0 && coopSlots <= 0 && penSlots <= 0) {
         try {
             // ⚠ 必须用带兜底的 view(AllCells 补容量), 不能用裸 getRanchDetail:
             //   从没进过牧场的号 RanchInfo 是空的(coop/pen 全 0) → slots=0 → 永远不买幼崽。
             const view = opts.view || await getRanchOverview();
-            slots = Math.max(0, (toNum(view.coopCount) + toNum(view.penCount)) - (view.animals || []).length);
+            const animals = view.animals || [];
+            const countIn = ht => animals.filter(a => toNum(a.husbandryType) === ht).length;
+            coopSlots = Math.max(0, toNum(view.coopCount) - countIn(1));
+            penSlots = Math.max(0, toNum(view.penCount) - countIn(2));
+            slots = coopSlots + penSlots;
         } catch { slots = 0; }
+    } else if (slots > 0 && coopSlots <= 0 && penSlots <= 0) {
+        // 兼容旧调用方(显式 slots, 不分栏舍): 全部按窝算(老行为)
+        coopSlots = slots;
+        penSlots = 0;
     }
     if (slots <= 0) {
         // 与"栏位已满"同因, 不重复刷屏(农场同样只提示一次)
@@ -4734,6 +4757,7 @@ async function autoBuyCubs(opts = {}) {
     //   加硬上限: 每轮最多买 slots 只, 且不超过 MAX_CUBS_PER_ROUND。
     const MAX_CUBS_PER_ROUND = 4;
     const buyBudget = Math.min(slots, MAX_CUBS_PER_ROUND);
+    // 分栏舍后: 每种栏舍的上限 = min(该栏舍空槽, MAX_CUBS_PER_ROUND)(总买量 ≤ 两种合计)
 
     // 背包里已有的幼崽: 与农场 plantFromBagSeeds 同语义 ——
     //   **背包里还有可用(未排外)幼崽, 就先别买**, 把它们放完再说;
@@ -4790,34 +4814,47 @@ async function autoBuyCubs(opts = {}) {
     //   之前是"按策略排名依次各买几只直到填满空槽", 于是 max_profit 下会买
     //   鹅x1 + 兔子x2 + 鸡x1 —— 用户要的是"选崽策略只有一个答案"。
     //   现在: 取排序后的第一名; 只有它买不到(限购已满/钱不够)时才轮到第二名。
+    // ⭐ 2026-11-23 修棚不买: **按栏舍各挑各的** —— 窝空槽买窝动物(60xxx),
+    //   棚空槽买棚动物(70xxx)。棚动物 ratio 与窝动物并列 2.0, 混在一个列表里
+    //   排序永远窝在前, 棚就永远空着(线上实锤 acc1 棚 0/3 一直没买)。
+    //   两种都要买时(窝棚都有空槽): 各自买各自的第一名, 一次购物车两单。
     let spend = 0;
-    for (const g of usable) {
-        if (result.bought >= buyBudget || spend >= maxSpend) break;
-        // 限购余量
-        const remain = g.limit > 0 ? Math.max(0, g.limit - g.bought) : 99;
-        if (remain <= 0) continue;
-        // 只买这一种, 一次买满剩余空槽(只受限购与单轮上限约束)
-        const count = Math.min(buyBudget - result.bought, remain);
-        if (count <= 0) continue;
-        try {
-            const reply = await purchaseShopGoods(g.goodsId, count, g.price);
-            const costItems = (reply && reply.cost_items) || [];
-            const spentThis = costItems.reduce((s, it) => s + toNum(it.count), 0);
-            spend += spentThis || g.price * count;
-            result.bought += count;
-            result.details.push(`${g.name}x${count}`);
-            log('牧场', `购买幼崽: ${g.name}x${count} (收益比 ${g.valueRatio.toFixed(2)}, 花费 ${spentThis || g.price * count} 金券)`, {
-                module: 'ranch', event: '买幼崽', result: 'ok',
-                animalId: g.animalId, count, ratio: g.valueRatio,
-            });
-        } catch (e) {
-            logWarn('牧场', `买幼崽失败 ${g.name}: ${e.message}`, {
-                module: 'ranch', event: '买幼崽', result: 'error', animalId: g.animalId,
-            });
+    const boughtPerKind = { coop: 0, pen: 0 };
+    for (const kindSlot of [
+        { key: 'coop', free: Math.min(coopSlots, buyBudget), lo: 60000, hi: 70000 },
+        { key: 'pen', free: Math.min(penSlots, buyBudget), lo: 70000, hi: 80000 },
+    ]) {
+        if (kindSlot.free <= 0) continue;
+        const kindUsable = usable.filter(g => g.animalId >= kindSlot.lo && g.animalId < kindSlot.hi);
+        for (const g of kindUsable) {
+            if (boughtPerKind[kindSlot.key] >= kindSlot.free || spend >= maxSpend) break;
+            // 限购余量
+            const remain = g.limit > 0 ? Math.max(0, g.limit - g.bought) : 99;
+            if (remain <= 0) continue;
+            // 只买这一种, 一次买满该栏舍剩余空槽(只受限购与单轮上限约束)
+            const count = Math.min(kindSlot.free - boughtPerKind[kindSlot.key], remain);
+            if (count <= 0) continue;
+            try {
+                const reply = await purchaseShopGoods(g.goodsId, count, g.price);
+                const costItems = (reply && reply.cost_items) || [];
+                const spentThis = costItems.reduce((s, it) => s + toNum(it.count), 0);
+                spend += spentThis || g.price * count;
+                result.bought += count;
+                boughtPerKind[kindSlot.key] += count;
+                result.details.push(`${g.name}x${count}`);
+                log('牧场', `购买幼崽: ${g.name}x${count} (收益比 ${g.valueRatio.toFixed(2)}, 花费 ${spentThis || g.price * count} 金券)`, {
+                    module: 'ranch', event: '买幼崽', result: 'ok',
+                    animalId: g.animalId, count, ratio: g.valueRatio,
+                });
+            } catch (e) {
+                logWarn('牧场', `买幼崽失败 ${g.name}: ${e.message}`, {
+                    module: 'ranch', event: '买幼崽', result: 'error', animalId: g.animalId,
+                });
+                break;
+            }
+            // 只买第一名这一种: 买完就停, 不再换下一种(除非它买不到, 由上面的 continue/break 兜)
             break;
         }
-        // 只买第一名这一种: 买完就停, 不再换下一种(除非它买不到, 由上面的 continue/break 兜)
-        break;
     }
     result.spent = spend;
     if (result.bought > 0) {
