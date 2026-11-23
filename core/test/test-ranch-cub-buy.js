@@ -1125,19 +1125,21 @@ proto.loadProto().then(async () => {
     {
         const pf = freshRanch().__privateRanchFns;
         const { buildingTier } = pf;
-        // 窝链: 末位=档位(6001002→2 acc3 实看窝Lv2 / 6001004→4 acc1 实看窝Lv4)
+        // 规则定案(2026-11-23 二次修正): 末位 = 档位, 窝/棚/牧草机同规则
+        // 窝链: 6001002→2 acc3 实看窝Lv2 / 6001004→4 acc1 实看窝Lv4 / 6001005→5 抓包别家
         check('窝 6001002 → Lv2', buildingTier(6001002) === 2, buildingTier(6001002));
         check('窝 6001004 → Lv4', buildingTier(6001004) === 4, buildingTier(6001004));
         check('窝 6001005 → Lv5(抓包别家)', buildingTier(6001005) === 5, buildingTier(6001005));
-        // 棚链(跳级): 6002001→Lv1(解锁瞬间) / 6002002→Lv3(用户实看) / 6002003→Lv5(推定)
+        // 棚链: 6002001→1 解锁瞬间 / 6002003→3 用户实看(13:42 完成第二次升级后)
         check('棚 6002001 → Lv1', buildingTier(6002001) === 1, buildingTier(6002001));
-        check('棚 6002002 → Lv3(用户实看)', buildingTier(6002002) === 3, buildingTier(6002002));
-        check('棚 6002003 → Lv5(推定)', buildingTier(6002003) === 5, buildingTier(6002003));
-        // 牧草机: 官方文档 7001001=Lv1 7001002=Lv2 7001003=Lv3
+        check('棚 6002002 → Lv2', buildingTier(6002002) === 2, buildingTier(6002002));
+        check('棚 6002003 → Lv3(用户实看)', buildingTier(6002003) === 3, buildingTier(6002003));
+        // 牧草机: 官方文档 7001001=Lv1 7001002=Lv2 7001003=Lv3; acc1 已升到 7001004→Lv4(外推)
         check('牧草机 7001003 → Lv3', buildingTier(7001003) === 3, buildingTier(7001003));
+        check('牧草机 7001004 → Lv4(acc1 现值)', buildingTier(7001004) === 4, buildingTier(7001004));
         // 表外/装饰: 返回 null(前端显示 '-' 或回退)
         check('留言板 11001001 → null', buildingTier(11001001) === null, buildingTier(11001001));
-        check('未知棚档 6002004 → null(等新锚点)', buildingTier(6002004) === null, buildingTier(6002004));
+        check('未知段 6003001 → null', buildingTier(6003001) === null, buildingTier(6003001));
     }
 
     finish();
