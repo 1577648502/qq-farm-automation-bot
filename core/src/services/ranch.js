@@ -3242,6 +3242,10 @@ async function checkCanBuyOnce() {
     }
 }
 
+// 记录当前定时器实际生效的间隔: restart 在每次配置快照下发时都会被调,
+// 靠它判断"配置是否真的变了", 没变就静默跳过, 不刷"已启动"日志
+let canBuyCheckIntervalMinutes = 0;
+
 function startCanBuyCheckTimer() {
     if (!isAutomationOn('ranch_can_buy_organic') && !isAutomationOn('ranch_can_buy_normal')) return;
     let intervalMinutes = 10;
@@ -3251,6 +3255,7 @@ function startCanBuyCheckTimer() {
     } catch { /* 读不到用默认 */ }
     const intervalMs = intervalMinutes * 60 * 1000;
     canBuyCheckTimer = setInterval(() => { checkCanBuyOnce(); }, intervalMs);
+    canBuyCheckIntervalMinutes = intervalMinutes;
     log('牧场', `罐头自动购买检测定时器已启动，间隔 ${intervalMinutes} 分钟`, {
         module: 'ranch', event: '买罐头计时器', result: 'start', intervalMinutes,
     });
@@ -3260,16 +3265,34 @@ function stopCanBuyCheckTimer() {
     if (canBuyCheckTimer) {
         clearInterval(canBuyCheckTimer);
         canBuyCheckTimer = null;
+        canBuyCheckIntervalMinutes = 0;
     }
 }
 
 /**
  * 保存设置后重启罐头购买定时器(与化肥 restartFertilizerBuyCheckTimer 同构):
  * 开关 关→开 / 改间隔后立即按新配置重挂, 不用等重启进程。
+ *
+ * 2026-11-24 加静默跳过: restart 在每次配置快照下发时都调, 旧实现无条件
+ * stop+start, 设置没动也反复刷"已启动"日志。开关与间隔都没变时直接返回。
  */
 function restartCanBuyCheckTimer() {
+    const wantOn = isAutomationOn('ranch_can_buy_organic') || isAutomationOn('ranch_can_buy_normal');
+    if (wantOn && canBuyCheckTimer
+        && canBuyCheckIntervalMinutes === getCanBuyCheckIntervalMinutes()) {
+        return;
+    }
     stopCanBuyCheckTimer();
     startCanBuyCheckTimer();
+}
+
+function getCanBuyCheckIntervalMinutes() {
+    try {
+        const automation = require('../models/store').getAutomation(process.env.FARM_ACCOUNT_ID || '') || {};
+        return Math.max(1, Math.min(1440, toNum(automation.ranch_can_buy_check_interval_minutes) || 10));
+    } catch {
+        return 10;
+    }
 }
 
 function startRanchCheckLoop(options = {}) {

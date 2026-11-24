@@ -2281,6 +2281,10 @@ function refreshFarmCheckLoop(delayMs = 200) {
 }
 
 // ============ 化肥自动购买定时检测 ============
+// 记录当前定时器实际生效的间隔: restart 在每次配置快照下发时都会被调,
+// 靠它判断"配置是否真的变了", 没变就静默跳过, 不刷 停止/启动 两条
+let fertilizerBuyCheckIntervalMinutes = 0;
+
 function startFertilizerBuyCheckTimer() {
     if (fertilizerBuyCheckTimer) {
         clearInterval(fertilizerBuyCheckTimer);
@@ -2290,15 +2294,16 @@ function startFertilizerBuyCheckTimer() {
     if (!isAutomationOn('fertilizer_buy_organic') && !isAutomationOn('fertilizer_buy_normal')) {
         return;
     }
-    
+
     // 设置定时检测
     const intervalMinutes = getFertilizerBuyCheckIntervalMinutes();
     const intervalMs = intervalMinutes * 60 * 1000;
-    
+
     fertilizerBuyCheckTimer = setInterval(() => {
         checkFertilizerBuyOnce();
     }, intervalMs);
-    
+    fertilizerBuyCheckIntervalMinutes = intervalMinutes;
+
     log('农场', `化肥自动购买检测定时器已启动，间隔 ${intervalMinutes} 分钟`, {
         module: 'farm',
         event: '购买化肥计时器',
@@ -2311,12 +2316,15 @@ function stopFertilizerBuyCheckTimer() {
     if (fertilizerBuyCheckTimer) {
         clearInterval(fertilizerBuyCheckTimer);
         fertilizerBuyCheckTimer = null;
+        fertilizerBuyCheckIntervalMinutes = 0;
+        // 只在实际清掉了定时器时才打日志(旧实现没定时器也打"已停止",
+        // 配合 restart 成对循环刷屏)
+        log('农场', '化肥自动购买检测定时器已停止', {
+            module: 'farm',
+            event: '购买化肥计时器',
+            result: 'stop',
+        });
     }
-    log('农场', '化肥自动购买检测定时器已停止', {
-        module: 'farm',
-        event: '购买化肥计时器',
-        result: 'stop',
-    });
 }
 
 /**
@@ -2324,8 +2332,16 @@ function stopFertilizerBuyCheckTimer() {
  * 旧实现 startFarmCheckLoop 才挂定时器, applyRuntimeConfig 只刷巡田循环,
  * 开关 关→开 / 改间隔后旧定时器仍按旧配置跑, 要等下次重启进程才生效。
  * startFertilizerBuyCheckTimer 自带"先清后挂 + 关着不挂", 幂等可重复调。
+ *
+ * 2026-11-24 加静默跳过: restart 在每次配置快照下发时都调, 旧实现无条件
+ * stop+start, 设置没动也成对刷"已停止/已启动"两条。开关与间隔都没变时直接返回。
  */
 function restartFertilizerBuyCheckTimer() {
+    const wantOn = isAutomationOn('fertilizer_buy_organic') || isAutomationOn('fertilizer_buy_normal');
+    if (wantOn && fertilizerBuyCheckTimer
+        && fertilizerBuyCheckIntervalMinutes === getFertilizerBuyCheckIntervalMinutes()) {
+        return;
+    }
     stopFertilizerBuyCheckTimer();
     startFertilizerBuyCheckTimer();
 }
