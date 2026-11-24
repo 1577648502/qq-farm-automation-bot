@@ -2845,33 +2845,10 @@ async function runRanchCare(opts = {}) {
     return result;
 }
 
-/**
- * 重复状态提示节流 —— 对照农场日志的做法。
- *
- * 农场遇到"没有空地/没得种"时, 要么在**状态变化时**才打一条, 要么按分钟级间隔打;
- * 绝不会每 20 秒巡查都刷一行。牧场之前每轮都无条件 log, 于是
- * 「栏位已满(4/4) ... 73 只幼崽暂无法入栏」+「没有空槽位, 跳过买幼崽」
- * 每 20 秒来一对, 日志被刷满。
- *
- * @param {string} key       提示类别
- * @param {string} signature 当前状态签名(相同签名 = 同一状态, 不重复提示)
- * @param {number} [minIntervalMs] 同一状态最短重复间隔(默认 30 分钟)
- * @returns {boolean} 本次是否应该打日志
- */
-const _logOnceState = new Map();
-function shouldLogOnce(key, signature = '', minIntervalMs = 30 * 60 * 1000) {
-    const now = Date.now();
-    const prev = _logOnceState.get(key);
-    // 状态变了 → 立刻提示一次(例如从 4/4 变成 3/4, 或幼崽数量变化)
-    if (!prev || prev.sig !== signature || now - prev.at >= minIntervalMs) {
-        _logOnceState.set(key, { sig: signature, at: now });
-        return true;
-    }
-    return false;
-}
-
-/** 测试/重启用: 清空节流状态 */
-function resetLogOnceState() { _logOnceState.clear(); }
+// 重复状态提示节流(见 utils/log-throttle.js): 同一静态条件的 skip 日志
+// 只在状态变化或间隔到点时放行, 不再每轮巡查刷屏。
+// 日志节流: 供测试验证"同一状态不重复刷屏"
+const { shouldLogOnce, resetLogOnceState } = require('../utils/log-throttle');
 
 // ============ 牧场巡查(三套独立节奏, 对照农场的 农场/帮助/偷菜) ============
 //
@@ -3229,9 +3206,7 @@ function onRanchFacilitiesChanged() {
     const now = Date.now();
     if (now - lastRanchPushAt < RANCH_PUSH_THROTTLE_MS) return;
     lastRanchPushAt = now;
-    log('牧场', '收到建筑推送, 1 分钟后巡牧场', {
-        module: 'ranch', event: '建筑推送通知', result: 'trigger_check',
-    });
+    // 内部调度细节不进日志: 每次建筑推送都打一行"收到推送, N 分钟后巡牧场"纯刷屏
     ranchScheduler.setTimeoutTask('ranch_push_check', RANCH_PUSH_THROTTLE_MS, async () => {
         if (!isCheckingRanch) await checkRanch();
     });
@@ -4178,10 +4153,13 @@ async function autoBuyRotationShop(_opts = {}) {
         } catch (e) {
             // 1004012 等"当前买不了"(等级/限购/已过期)属正常业务状态, 不是故障:
             // 记 info 而不是 warn, 否则每轮刷一条 error 日志。
+            // 同一商品同一状态 6 小时只提示一次(等级不足/限购是静态条件, 每轮都刷)。
             if (isRotationNotPurchasable(e)) {
-                log('游商', `${rotationGoodsLabel(g)} 当前不可购买(${rotationErrorHint(e)})，跳过`, {
-                    module: 'ranch', event: '游商购买', result: 'skip', itemId: g.itemId,
-                });
+                if (shouldLogOnce('ranch_vendor_skip', String(g.itemId), 6 * 60 * 60 * 1000)) {
+                    log('游商', `${rotationGoodsLabel(g)} 当前不可购买(${rotationErrorHint(e)})，跳过`, {
+                        module: 'ranch', event: '游商购买', result: 'skip', itemId: g.itemId,
+                    });
+                }
             } else {
                 logWarn('游商', `购买失败 ${rotationGoodsLabel(g)}: ${e.message}`, {
                     module: 'ranch', event: '游商购买', result: 'error', itemId: g.itemId,
@@ -4758,7 +4736,7 @@ async function autoBuyCubs(opts = {}) {
     }
     if (slots <= 0) {
         // 与"栏位已满"同因, 不重复刷屏(农场同样只提示一次)
-        if (shouldLogOnce('ranch_buy_no_slot', `slots#${slots}`)) {
+        if (shouldLogOnce('ranch_buy_no_slot', `slots#${slots}`, 6 * 60 * 60 * 1000)) {
             log('牧场', '没有空槽位, 跳过买幼崽', { module: 'ranch', event: '买幼崽', result: 'skip' });
         }
         return result;

@@ -955,18 +955,9 @@ function analyzeFriendLands(lands, myGid, friendName = '', options = {}) {
 
 /**
  * 获取好友列表 (供面板)
+ * 2026-11-24: 原有的"好友列表已更新"日志节流(5 分钟心跳)整体删除 ——
+ * 心跳本身就是刷屏(2.6h 137 条), 好友数没有排查价值, 一行都不打了。
  */
-/**
- * 好友列表日志节流(2026-11-20 线上刷屏):
- *   各服务(牧场三连/天气/奶茶/夺宝…)都会调 getFriendsList, 而缓存 TTL 60s
- *   恰好比它们的调用节奏(70~80s)短一点 → 每次都是真的重拉。
- *   4 个账号 × 每次 2 行 info = 观感上"一直在刷"。
- *   缓存逻辑本身是对的, 所以这里只处理**日志**: 同一账号 5 分钟内最多打一条,
- *   好友数变化时立刻打一条(这样真有异常仍然看得见)。
- */
-let friendsListLogAt = 0;
-let friendsListLogCount = -1;
-const FRIENDS_LIST_LOG_INTERVAL_MS = 5 * 60 * 1000;
 
 async function getFriendsList(forceSync = false) {
     try {
@@ -1007,20 +998,9 @@ async function getFriendsList(forceSync = false) {
         // 更新缓存
         friendsListCache = result;
         friendsListCacheTime = now;
-        
-        // 只在"数量变了"或"距上次日志超过 5 分钟"时打一条(见上方注释)
-        const countChanged = result.length !== friendsListLogCount;
-        if (countChanged || now - friendsListLogAt >= FRIENDS_LIST_LOG_INTERVAL_MS) {
-            log('好友', `好友列表已更新，共 ${result.length} 位好友`, {
-                module: 'friend',
-                event: '获取好友列表',
-                result: 'ok',
-                count: result.length,
-                forceSync: !!forceSync,
-            });
-            friendsListLogAt = now;
-            friendsListLogCount = result.length;
-        }
+
+        // 2026-11-24: "好友列表已更新，共 N 位好友"整行删除 —— 5 分钟心跳照样
+        // 2.6h 刷 137 条, 且好友数本身没有排查价值; 真异常时各巡查日志都会暴露。
         return result;
     } catch (e) {
         log('好友', `获取好友列表失败: ${e.message}`, {

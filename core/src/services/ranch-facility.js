@@ -16,6 +16,7 @@
 const network = require('../utils/network');
 const { types } = require('../utils/proto');
 const { toLong, toNum, log, logWarn, sleep } = require('../utils/utils');
+const { shouldLogOnce } = require('../utils/log-throttle');
 
 const SERVICE = 'gamepb.homesteadpb.HomesteadService';
 
@@ -452,10 +453,13 @@ async function autoUnlockRegions(opts = {}) {
     }
     // ⚠ 实测(20261117): 地块 status 1=锁定(61 个) 2=已解锁(30 个)。
     //   配额 25/25 满时不能再解锁, 直接跳过 —— 否则会对 61 个锁定地块乱发请求被限流(1045101)。
+    //   配额满是静态条件, 6 小时提示一次就够(2.6h 内曾刷 91 条)。
     if (all.quota > 0 && all.occupied >= all.quota) {
-        log('牧场', `地块配额已满(${all.occupied}/${all.quota}), 跳过解锁`, {
-            module: 'ranch', event: '地块解锁', result: 'skip',
-        });
+        if (shouldLogOnce('ranch_land_quota_full', `${all.occupied}/${all.quota}`, 6 * 60 * 60 * 1000)) {
+            log('牧场', `地块配额已满(${all.occupied}/${all.quota}), 跳过解锁`, {
+                module: 'ranch', event: '地块解锁', result: 'skip',
+            });
+        }
         return result;
     }
     // 真正"解锁中待领取"的地块无法从 status 区分, 只对首个锁定项试一次, 失败即停

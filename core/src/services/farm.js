@@ -2251,7 +2251,7 @@ function startFarmCheckLoop(options = {}) {
 }
 
 let lastPushTime = 0;
-function onLandsChangedPush(lands) {
+function onLandsChangedPush(_lands) {
     if (!isAutomationOn('farm_push')) {
         return;
     }
@@ -2259,9 +2259,8 @@ function onLandsChangedPush(lands) {
     const now = Date.now();
     if (now - lastPushTime < 500) return;
     lastPushTime = now;
-    log('农场', `收到推送: ${lands.length}块土地变化，检查中...`, {
-        module: 'farm', event: '土地推送通知', result: 'trigger_check', count: lands.length
-    });
+    // 内部调度细节不进日志: "收到推送 N 块土地变化"每轮推送都打一行纯刷屏,
+    // 后续 浇水/收获/种植 的实际动作日志已经足够定位
     farmScheduler.setTimeoutTask('farm_push_check', 100, async () => {
         if (!isCheckingFarm) await checkFarm();
     });

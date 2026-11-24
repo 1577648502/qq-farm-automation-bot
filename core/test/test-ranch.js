@@ -504,18 +504,15 @@ proto.loadProto().then(async () => {
             null);
     }
 
-    section('16. 好友列表日志节流(线上刷屏)');
+    section('16. 好友列表日志(2026-11-24 起整行删除)');
     {
-        // 线上 2026-11-20: 好友列表日志 5 分钟刷了几十条。
-        // 实测原因不是缓存坏了 —— 日志间隔 70~80s, 而缓存 TTL 是 60s,
-        // 各服务(牧场三连/天气/奶茶)刚好每轮都跨过 TTL, 于是真的重拉;
-        // 4 个账号 × 每次 2 行 info = 刷屏观感。
-        // 修法: 合并成 1 行 + 5 分钟节流(好友数变化时立刻打)。
+        // 线上 2026-11-20: 好友列表日志 5 分钟刷了几十条, 当时改成 5 分钟节流。
+        // 2026-11-24: 节流后仍 2.6h 刷 137 条(心跳本身就是刷屏), 好友数没有排查
+        // 价值 → 整行删除, 不再打任何"好友列表已更新"日志。
         const src = fs.readFileSync(require('node:path').join(SB, 'src/services/friend.js'), 'utf8');
-        check('有日志节流常量', /FRIENDS_LIST_LOG_INTERVAL_MS/.test(src), null);
+        check('不再打"好友列表已更新"日志', !/log\('好友', `好友列表已更新/.test(src), null);
         check('不再每次打"开始获取好友列表"', !/log\('好友', '开始获取好友列表'/.test(src), null);
-        check('好友数变化时仍会打日志', /countChanged \|\|/.test(src), null);
-        check('节流间隔 5 分钟', /FRIENDS_LIST_LOG_INTERVAL_MS = 5 \* 60 \* 1000/.test(src), null);
+        check('旧节流常量已清理', !/FRIENDS_LIST_LOG_INTERVAL_MS/.test(src), null);
     }
 
     section('17. 自动偷取: 按冷却重复执行 + 只认 shelf.remain_num');

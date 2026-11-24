@@ -1364,15 +1364,15 @@ async function checkAndBuyFertilizerByThreshold(type, count, thresholdHours) {
         const currentHours = type === 'normal' ? containerHours.normal : containerHours.organic;
         const typeName = type === 'normal' ? '无机化肥' : '有机化肥';
 
-        log('商城', `检测${typeName}容器: 剩余 ${currentHours.toFixed(1)} 小时，阈值 ${thresholdHours} 小时`, {
-            module: 'mall',
-            event: 'check_fertilizer',
-            type,
-            currentHours,
-            thresholdHours,
-        });
-
         if (currentHours < thresholdHours) {
+            // "检测容器: 剩余 X 小时"只在真要买时才打 —— 阈值未到时每轮检测都打一行纯刷屏
+            log('商城', `检测${typeName}容器: 剩余 ${currentHours.toFixed(1)} 小时，阈值 ${thresholdHours} 小时`, {
+                module: 'mall',
+                event: 'check_fertilizer',
+                type,
+                currentHours,
+                thresholdHours,
+            });
             const bought = await autoBuyFertilizer(true, type, count);
             return { bought, currentHours, thresholdHours, needed: true };
         }
@@ -1413,6 +1413,13 @@ async function checkAndBuyFertilizerBoth(options) {
         return result;
     }
 
+    // 2026-11-24: 点券不足当天停购(buyPausedNoGoldDateKey 只写没读, 等于没生效),
+    // 定时器一直重试 + 每轮"点券不足"失败日志刷屏。当天直接跳过, 明天自动恢复。
+    if (isDoneTodayByKey(buyPausedNoGoldDateKey)) {
+        result.pausedNoTicketToday = true;
+        return result;
+    }
+
     try {
         const bagReply = await getBag();
         const bagItems = getBagItems(bagReply);
@@ -1423,14 +1430,14 @@ async function checkAndBuyFertilizerBoth(options) {
 
         // 优先购买有机化肥
         if (buyOrganic && organicCount > 0 && organicThresholdHours > 0) {
-            log('商城', `检测有机化肥容器: 剩余 ${containerHours.organic.toFixed(1)} 小时，阈值 ${organicThresholdHours} 小时`, {
-                module: 'mall',
-                event: 'check_fertilizer_organic',
-                currentHours: containerHours.organic,
-                thresholdHours: organicThresholdHours,
-            });
-
             if (containerHours.organic < organicThresholdHours) {
+                // "检测容器"只在阈值命中(真要买)时打, 阈值未到每轮检测都打一行纯刷屏
+                log('商城', `检测有机化肥容器: 剩余 ${containerHours.organic.toFixed(1)} 小时，阈值 ${organicThresholdHours} 小时`, {
+                    module: 'mall',
+                    event: 'check_fertilizer_organic',
+                    currentHours: containerHours.organic,
+                    thresholdHours: organicThresholdHours,
+                });
                 result.organicBought = await autoBuyFertilizer(true, 'organic', organicCount);
             }
         }
@@ -1443,14 +1450,13 @@ async function checkAndBuyFertilizerBoth(options) {
 
         // 购买无机化肥
         if (buyNormal && normalCount > 0 && normalThresholdHours > 0) {
-            log('商城', `检测无机化肥容器: 剩余 ${containerHours.normal.toFixed(1)} 小时，阈值 ${normalThresholdHours} 小时`, {
-                module: 'mall',
-                event: 'check_fertilizer_normal',
-                currentHours: containerHours.normal,
-                thresholdHours: normalThresholdHours,
-            });
-
             if (containerHours.normal < normalThresholdHours) {
+                log('商城', `检测无机化肥容器: 剩余 ${containerHours.normal.toFixed(1)} 小时，阈值 ${normalThresholdHours} 小时`, {
+                    module: 'mall',
+                    event: 'check_fertilizer_normal',
+                    currentHours: containerHours.normal,
+                    thresholdHours: normalThresholdHours,
+                });
                 result.normalBought = await autoBuyFertilizer(true, 'normal', normalCount);
             }
         }
