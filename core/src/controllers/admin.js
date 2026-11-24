@@ -1416,6 +1416,24 @@ app.use('/api', (req, res, next) => {
         }
     });
 
+    // API: 购买牧草种子(shop18 道具组, goods 2129, 20金币/个 — 2026-11-24 抓包定案)
+    app.post('/api/seeds/grass-seed/buy', async (req, res) => {
+        const id = getAccId(req);
+        if (!id) return res.status(400).json({ ok: false });
+
+        if (!checkAccountAccess(req, id)) {
+            return res.status(403).json({ ok: false, error: '无权访问此账号' });
+        }
+
+        const count = Number((req.body || {}).count) || 1;
+        try {
+            const data = await provider.buyGrassSeed(id, count);
+            res.json({ ok: true, data });
+        } catch (e) {
+            handleApiError(res, e);
+        }
+    });
+
     // API: 神秘商店当前激活 NPC 及在售商品
     app.get('/api/mystery-shop', async (req, res) => {
         const id = getAccId(req);

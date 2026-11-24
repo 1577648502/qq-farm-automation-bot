@@ -556,6 +556,67 @@ async function buySeed(goodsId, num, price) {
     return { ok: true, getItems, costItems };
 }
 
+// ============ 牧草种子(2026-11-24 抓包 20261124-202549_牧草种子购买) ============
+// 商店分工: shop2=种子商城(152种, 无牧草种子), shop18=农场商店"道具组"页签
+// (牧草种子 goods_id=2129, 20金币/个 + 头像框/农家装扮)。
+// 牧草种子种下 10 分钟收 牧草(7001)x20, 是饲料商店买成品(60金券)之外的官方第二途径。
+const GRASS_SEED_ITEM_ID = 20040;
+const GRASS_SEED_SHOP_ID = 18;
+// goods_id=2129 是抓包实测值; 若服务端调整货架, buyGrassSeed 会先查 ShopInfo 校准
+const GRASS_SEED_GOODS_ID_FALLBACK = 2129;
+const GRASS_SEED_PRICE = 20;
+
+async function getGrassSeedGoods() {
+    const reply = await getShopInfo(GRASS_SEED_SHOP_ID);
+    const goods = (reply.goods_list || []).find(g => toNum(g.item_id) === GRASS_SEED_ITEM_ID);
+    if (!goods) return null;
+    return {
+        goodsId: toNum(goods.id),
+        price: toNum(goods.price),
+        limitCount: toNum(goods.limit_count),
+        boughtNum: toNum(goods.bought_num),
+        unlocked: goods.unlocked !== false,
+        requiredLevel: (() => {
+            for (const cond of goods.conds || []) {
+                if (toNum(cond.type) === 1) return toNum(cond.param);
+            }
+            return 0;
+        })(),
+    };
+}
+
+async function buyGrassSeed(count = 1) {
+    const n = Math.max(1, Math.min(99, Math.floor(toNum(count) || 1)));
+    let goods = null;
+    try {
+        goods = await getGrassSeedGoods();
+    } catch { /* 商店拉不到就按抓包锚点直买 */ }
+    const goodsId = goods ? goods.goodsId : GRASS_SEED_GOODS_ID_FALLBACK;
+    const price = goods ? goods.price : GRASS_SEED_PRICE;
+
+    if (goods && !goods.unlocked) {
+        return { ok: false, error: '牧草种子未解锁' };
+    }
+    if (goods && goods.limitCount > 0 && goods.boughtNum >= goods.limitCount) {
+        return { ok: false, error: `牧草种子今日限购已满(${goods.boughtNum}/${goods.limitCount})` };
+    }
+
+    const state = getUserState();
+    if (goods && goods.requiredLevel > 0 && state.level < goods.requiredLevel) {
+        return { ok: false, error: `等级不足(需 Lv${goods.requiredLevel})` };
+    }
+
+    const reply = await buyGoods(goodsId, n, price);
+    const getItems = (reply.get_items || []).map(it => ({ id: toNum(it.id), count: toNum(it.count) }));
+    const costItems = (reply.cost_items || []).map(it => ({ id: toNum(it.id), count: toNum(it.count) }));
+    const got = getItems.find(it => it.id === GRASS_SEED_ITEM_ID);
+    log('商店', `购买牧草种子 x${n}(单价 ${price} 金币)`, {
+        module: 'farm', event: '牧草种子购买', result: 'ok', count: n, price,
+        got: got ? got.count : 0,
+    });
+    return { ok: true, goodsId, price, count: n, getItems, costItems };
+}
+
 // ============ 种植 ============
 
 function encodePlantRequest(seedId, landIds, autoSlave = false) {
@@ -2389,6 +2450,8 @@ module.exports = {
     getLandsDetail,
     getAvailableSeeds,
     buySeed,
+    getGrassSeedGoods,
+    buyGrassSeed,
     runFarmOperation,
     operateSingleLand,
     runFertilizerByConfig,

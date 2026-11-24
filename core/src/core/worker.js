@@ -12,7 +12,7 @@ const { getLevelExpProgress } = require('../config/gameConfig');
 const { getAutomation, getPreferredSeed, getConfigSnapshot, applyConfigSnapshot, getBuyBookConfig, getAutumnWishConfig, getHappyShareEnabled, getMilkTeaConfig, getActivityStatus, getAdGiftEnabled, getLimitedPackConfig, getCollectionEnabled } = require('../models/store');
 const { checkAndClaimEmails } = require('../services/email');
 const { getEmailDailyState } = require('../services/email');
-const { checkFarm, startFarmCheckLoop, stopFarmCheckLoop, refreshFarmCheckLoop, restartFertilizerBuyCheckTimer, getLandsDetail, getAvailableSeeds, buySeed, runFarmOperation, runFertilizerByConfig, operateSingleLand } = require('../services/farm');
+const { checkFarm, startFarmCheckLoop, stopFarmCheckLoop, refreshFarmCheckLoop, restartFertilizerBuyCheckTimer, getLandsDetail, getAvailableSeeds, buySeed, buyGrassSeed, runFarmOperation, runFertilizerByConfig, operateSingleLand } = require('../services/farm');
 const { checkFriends, startFriendCheckLoop, stopFriendCheckLoop, refreshFriendCheckLoop, runBadOnceOnStartup, isHelpExpLimitReached, getFriendsList, getFriendLandsDetail, doFriendOperation } = require('../services/friend');
 const { getInteractRecords } = require('../services/interact');
 const { processInviteCodes } = require('../services/invite');
@@ -1353,6 +1353,10 @@ async function handleApiCall(msg) {
             case 'buySeed': {
                 const [goodsId, num, price] = args;
                 result = await buySeed(goodsId, num, price);
+                break;
+            }
+            case 'buyGrassSeed': {
+                result = await buyGrassSeed(args[0]);
                 break;
             }
             case 'getMysteryShop':

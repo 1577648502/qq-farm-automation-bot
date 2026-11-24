@@ -64,6 +64,14 @@ export const useSeedShopStore = defineStore('seedShop', () => {
     return res.data
   }
 
+  // 牧草种子(shop18 道具组, goods 2129, 20金币/个): 独立入口, 不混进种子商城列表
+  async function buyGrassSeed(accountId: string, count: number) {
+    const res = await api.post('/api/seeds/grass-seed/buy', { count }, {
+      headers: { 'x-account-id': accountId },
+    })
+    return res.data
+  }
+
   return {
     items,
     loading,
@@ -72,6 +80,7 @@ export const useSeedShopStore = defineStore('seedShop', () => {
     soldOutItems,
     fetchSeeds,
     buySeed,
+    buyGrassSeed,
     clear,
   }
 })

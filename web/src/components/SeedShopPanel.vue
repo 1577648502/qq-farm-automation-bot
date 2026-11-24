@@ -21,6 +21,33 @@ const imageErrors = ref<Record<number, boolean>>({})
 const buyCounts = ref<Record<number, number>>({})
 const buyingId = ref<number | null>(null)
 
+// 牧草种子(shop18 道具组, 20金币/个, 种下10分钟收牧草x20): 独立卡片入口
+const grassSeedCount = ref(10)
+const grassSeedBuying = ref(false)
+
+async function handleBuyGrassSeed() {
+  if (!currentAccountId.value || grassSeedBuying.value)
+    return
+  const n = Math.max(1, Math.floor(Number(grassSeedCount.value) || 1))
+  grassSeedBuying.value = true
+  try {
+    const res = await seedShopStore.buyGrassSeed(currentAccountId.value, n)
+    if (res.ok) {
+      const got = res.data?.getItems?.find((it: any) => it.id === 20040)
+      toastStore.success(`购买牧草种子 x${res.data?.count || n}${got ? `，现有 ${got.count}` : ''}`)
+    }
+    else {
+      toastStore.error(res.error || '购买失败')
+    }
+  }
+  catch (e: any) {
+    toastStore.error(e?.response?.data?.error || e?.message || '购买失败')
+  }
+  finally {
+    grassSeedBuying.value = false
+  }
+}
+
 function buyCount(seedId: number) {
   const n = Number(buyCounts.value[seedId])
   return Number.isFinite(n) && n > 0 ? Math.floor(n) : 1
@@ -120,6 +147,39 @@ useIntervalFn(load, 60000)
         <div class="flex items-center gap-1 rounded-full bg-red-100 px-3 py-1 text-red-700 dark:bg-red-900/30 dark:text-red-400">
           <div class="i-carbon-close-outline" />
           <span class="font-medium">已售罄: {{ soldOutItems.length }}</span>
+        </div>
+      </div>
+
+      <!-- 牧草种子卡片: shop18 道具组(goods 2129, 20金币/个), 种下10分钟收牧草x20 -->
+      <div class="border-b border-emerald-100 bg-emerald-50/60 p-3 dark:border-emerald-800 dark:bg-emerald-900/20 sm:p-4">
+        <div class="flex flex-wrap items-center gap-3">
+          <div class="min-w-0 flex-1">
+            <div class="text-sm text-emerald-900 font-semibold dark:text-emerald-200">
+              牧草种子 · 单价 20 金币
+            </div>
+            <p class="mt-0.5 text-xs text-emerald-700/90 dark:text-emerald-300/90">
+              农场种植，约 10 分钟成熟收牧草×20（饲料商店买成品之外的第二途径）
+            </p>
+          </div>
+          <label class="flex items-center gap-1.5 text-xs text-gray-600 dark:text-gray-300">
+            数量
+            <input
+              v-model.number="grassSeedCount"
+              type="number"
+              min="1"
+              class="h-9 w-20 border border-gray-300 rounded-lg bg-white px-2 text-center text-sm dark:border-gray-600 dark:bg-gray-800"
+            >
+          </label>
+          <button
+            class="min-h-[32px] flex items-center justify-center gap-1 rounded-lg px-3 py-1.5 text-sm text-white font-medium transition disabled:cursor-not-allowed disabled:opacity-50"
+            style="background-color: var(--theme-primary)"
+            :disabled="grassSeedBuying"
+            @click="handleBuyGrassSeed"
+          >
+            <div v-if="grassSeedBuying" class="i-svg-spinners-90-ring-with-bg" />
+            <div v-else class="i-carbon-shopping-cart-plus" />
+            {{ grassSeedBuying ? '购买中…' : '购买种子' }}
+          </button>
         </div>
       </div>
 

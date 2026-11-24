@@ -175,6 +175,7 @@ function createDataProvider(options) {
         getDailyGifts: (accountRef) => callWorkerApi(resolveAccountRefId(accountRef), 'getDailyGiftOverview'),
         getSeeds: (accountRef) => callWorkerApi(resolveAccountRefId(accountRef), 'getSeeds'),
         buySeed: (accountRef, goodsId, num, price) => callWorkerApi(resolveAccountRefId(accountRef), 'buySeed', goodsId, num, price),
+        buyGrassSeed: (accountRef, count) => callWorkerApi(resolveAccountRefId(accountRef), 'buyGrassSeed', count),
         getMysteryShop: (accountRef) => callWorkerApi(resolveAccountRefId(accountRef), 'getMysteryShop'),
         buyMystery: (accountRef, goodsId) => callWorkerApi(resolveAccountRefId(accountRef), 'buyMystery', goodsId),
 
