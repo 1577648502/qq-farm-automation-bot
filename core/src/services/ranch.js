@@ -4295,7 +4295,13 @@ let _feedSkipUntil = 0;
  * 牧草机补草(2026-11-22 用户定案: 检测到没草 → 一次性补满, 不再留 20 阈值)。
  *
  * 流程: 余量为 0(或 ≤threshold) → 算缺口 → 背包有多少补多少 → 还缺就买满 → AddFeed 补满。
- * 背包的散草先用掉, 不够的部分自动从牧场商店买(受 automation.ranch_buy_grass 控制, 默认开)。
+ *
+ * 2026-11-24 用户定案补草优先级: **农场种植的牧草优先** —
+ *   1. 农场背包(getBag/ItemService.Bag)的 7001: 农场种牧草种子收的草在这里
+ *      (线上实测: 牧场 GetBag scene=2 没有 7001, 农场 bag 才有)
+ *   2. 牧场背包(getRanchBagDetail/scene=2)的 7001(若有)
+ *   3. 买成品(shop6 goods10001, 60金券, auto_add 直进机, 受 ranch_buy_grass 控制)
+ * ⚠ 旧实现只读牧场背包 — 农场种的牧草永远读不到, 只会一路买成品烧金券。
  *
  * ⚠ force 语义(2026-11-22 线上 bug 修复): 到点 feed 动作是由 animals.grassBlocked=true
  *   触发的 —— 此时哪怕机器里还剩 1~19 根残草, 动物也已经吃不到(blocked)了,
@@ -4321,16 +4327,31 @@ async function autoFeedMachine(opts = {}) {
     const gap = Math.max(0, capacity - machine.stored);
     if (gap <= 0) return { fed: 0, stored: machine.stored, bought: 0, spent: 0 };
 
-    // 背包里的散装牧草(先用掉, 不白花钱)
-    const { getRanchBagDetail } = require('./warehouse');
+    // 背包里的散装牧草(先用掉, 不白花钱):
+    // 2026-11-24 改为农场背包优先 → 牧场背包(见函数头注释)
+    const { getRanchBagDetail, getBag, getBagItems } = require('./warehouse');
     let useFromBag = 0;
     let have = 0;
+    let farmGrass = 0;
     try {
-        const bag = await getRanchBagDetail();
-        const grass = bag.items.find(it => Number(it.id) === GRASS_ITEM_ID);
-        have = grass ? Number(grass.count) : 0;
-        useFromBag = Math.min(have, gap);
-    } catch { /* 背包查不到就全按买 */ }
+        // 1) 农场背包(农场种牧草收的草在这里)
+        const farmBag = getBagItems(await getBag());
+        const farmGrassItem = (farmBag || []).find(it => Number(it.id) === GRASS_ITEM_ID);
+        farmGrass = farmGrassItem ? Number(farmGrassItem.count) : 0;
+        useFromBag = Math.min(farmGrass, gap);
+    } catch { /* 农场背包查不到就退回牧场背包 */ }
+    let ranchGrass = 0;
+    if (useFromBag < gap) {
+        try {
+            // 2) 牧场背包(scene=2)的 7001(通常为 0, 兜底)
+            const bag = await getRanchBagDetail();
+            const grass = bag.items.find(it => Number(it.id) === GRASS_ITEM_ID);
+            ranchGrass = grass ? Number(grass.count) : 0;
+            const take = Math.min(ranchGrass, gap - useFromBag);
+            useFromBag += take;
+        } catch { /* 背包查不到就全按买 */ }
+    }
+    have = farmGrass + ranchGrass;
 
     // 还缺的数量 → 买(买的时候限购/单价由 buyGrass 自己查)
     let bought = 0;
@@ -4362,10 +4383,10 @@ async function autoFeedMachine(opts = {}) {
     if (fed + bought > 0) {
         const parts = [];
         if (bought > 0) parts.push(`买 ${bought}(花 ${spent})`);
-        if (fed > 0) parts.push(`背包补 ${fed}`);
+        if (fed > 0) parts.push(`背包补 ${fed}${farmGrass > 0 ? `(农场种${Math.min(farmGrass, fed)})` : ''}`);
         log('牧场', `${force ? `动物断粮(残草 ${machine.stored})` : '牧草没了'} → 一次性补满: ${parts.join(' + ')}, 牧草机现在 ${stored}/${capacity}`, {
             module: 'ranch', event: '牧草机加草', result: 'ok',
-            bought, spent, fed, stored, force,
+            bought, spent, fed, stored, force, farmGrass, ranchGrass,
         });
     } else if (!bought && !fed) {
         // 一根都没补上: 有缺口但背包无草且购买失败/未开

@@ -869,6 +869,11 @@ async function getRanchBagTabs() {
 
 // ============ 出售逻辑 ============
 
+// 自动出售排除的物品 id(2026-11-24): 7001 牧草是牧场饲料(农场种牧草种子收的),
+// 卖了只有 5 金币/根, 但喂牧草机保的是动物产出(蛋/崽) — 用户定案"补草优先用农场种植的",
+// 收获的牧草必须留在背包等 autoFeedMachine 优先灌入, 绝不能被 sellAllFruits 当果实卖掉。
+const SELL_EXCLUDED_ITEM_IDS = new Set([7001]);
+
 /**
  * 检查并出售所有果实
  */
@@ -913,6 +918,8 @@ async function sellAllFruits() {
             const itemInfo = getItemById(id);
             const itemType = itemInfo ? (Number(itemInfo.type) || 0) : 0;
             if (itemType !== 6 && itemType !== 17) continue;
+            // 牧草(7001)是牧场饲料, 不出售 — 留给 autoFeedMachine 优先灌牧草机
+            if (SELL_EXCLUDED_ITEM_IDS.has(id)) continue;
             // 品质变异果实默认保留, 是否出售由品种和设置决定
             let hasQualityMutant = false;
             if (item.mutant_types && item.mutant_types.length > 0) {

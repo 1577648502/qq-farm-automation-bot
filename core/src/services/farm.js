@@ -617,6 +617,46 @@ async function buyGrassSeed(count = 1) {
     return { ok: true, goodsId, price, count: n, getItems, costItems };
 }
 
+// 牧草种子自动补货节流(内存态, 重启清零): 商店偶尔限购/断货, 别每轮巡田都试
+let _grassSeedStockAt = 0;
+const GRASS_SEED_STOCK_INTERVAL_MS = 30 * 60 * 1000;
+// 低于 50 颗才补, 一次补到 100(种子 20 金币/颗, 100 颗 = 2000 金币, 够 2.5 牧草机容量)
+const GRASS_SEED_STOCK_MIN = 50;
+const GRASS_SEED_STOCK_TOPUP_TO = 100;
+
+/**
+ * 牧草种子库存自动补货("补草优先用农场种植的"上游):
+ * 背包 20040 < GRASS_SEED_STOCK_MIN → shop18 买到 GRASS_SEED_STOCK_TOPUP_TO。
+ * 30 分钟节流; 商店拉不到/限购/失败静默返回, 不打扰巡查日志。
+ */
+async function ensureGrassSeedStock() {
+    const now = Date.now();
+    if (now - _grassSeedStockAt < GRASS_SEED_STOCK_INTERVAL_MS) return { bought: 0, skipped: 'throttled' };
+    _grassSeedStockAt = now;
+
+    const { getBagSeeds } = require('./warehouse');
+    let have = 0;
+    try {
+        const seeds = await getBagSeeds();
+        have = (seeds.find(s => Number(s.seedId) === GRASS_SEED_ITEM_ID) || {}).count || 0;
+    } catch { /* 背包读不到就不补, 下轮再试 */ }
+    if (have >= GRASS_SEED_STOCK_MIN) return { bought: 0, have };
+
+    const need = GRASS_SEED_STOCK_TOPUP_TO - have;
+    try {
+        const r = await buyGrassSeed(need);
+        if (r.ok) {
+            log('商店', `牧草种子自动补货: 背包 ${have} → +${r.count} (目标 ${GRASS_SEED_STOCK_TOPUP_TO})`, {
+                module: 'farm', event: '牧草种子补货', result: 'ok', bought: r.count, have,
+            });
+            return { bought: r.count, have };
+        }
+        return { bought: 0, error: r.error };
+    } catch (e) {
+        return { bought: 0, error: e.message };
+    }
+}
+
 // ============ 种植 ============
 
 function encodePlantRequest(seedId, landIds, autoSlave = false) {
@@ -2193,6 +2233,20 @@ async function runFarmOperation(opType) {
         }
     }
 
+    // 7. 牧草种子自动补货(2026-11-24): 背包种子 < 阈值 → shop18 补买。
+    //    "补草优先用农场种植的"链路的上游 — 没种子就没草可收。
+    //    开关复用 ranch_buy_grass 的语义: 关掉 = 不要自动化补草(种子也不买)。
+    if (opType === 'all' && isAutomationOn('ranch_buy_grass')) {
+        try {
+            const seedBuy = await ensureGrassSeedStock();
+            if (seedBuy.bought > 0) {
+                actions.push(`买草种${seedBuy.bought}`);
+            }
+        } catch {
+            // 静默失败: 种子补货是锦上添花, 商店偶发失败不打扰巡查日志
+        }
+    }
+
     // 日志
     const actionStr = actions.length > 0 ? ` → ${actions.join('/')}` : '';
     if (actions.length > 0) {
@@ -2452,6 +2506,7 @@ module.exports = {
     buySeed,
     getGrassSeedGoods,
     buyGrassSeed,
+    ensureGrassSeedStock,
     runFarmOperation,
     operateSingleLand,
     runFertilizerByConfig,

@@ -263,23 +263,26 @@ proto.loadProto().then(async () => {
         check('容量 = 100', parsed.capacity === 100, parsed);
     }
 
-    section('8.5 牧草机补草: 检测到没草 → 一次性补满(2026-11-22 定案)');
+    section('8.5 牧草机补草: 检测到没草 → 一次性补满(2026-11-22 定案; 2026-11-24 农场背包优先)');
     {
         const ranch = require(`${SB}/src/services/ranch`);
         // ⚠ warehouse.js 在加载时解构 sendMsgAsync, 替换 network.sendMsgAsync 对它无效 ——
         //   GetBag 会走顶层回放桩, 抓包帧里背包有 2660 根草。
-        //   所以这里直接把 warehouse 的 getRanchBagDetail 打桩成"背包 30 根"。
+        //   所以农场背包(getBag, 2026-11-24 起优先读它)打桩成"农场 30 根",
+        //   牧场背包(getRanchBagDetail)打桩成 0 —— 两边合计 30 < 缺口 100, 才会走到买 70。
         // ⚠ mall.js 同理解构 — ShopInfo 走顶层回放桩, 断言只看最终行为 bought/spent。
         const warehouse = require(`${SB}/src/services/warehouse`);
-        const savedBag = warehouse.getRanchBagDetail;
+        const savedFarmBag = warehouse.getBag;
+        const savedRanchBag = warehouse.getRanchBagDetail;
         const savedSend = network.sendMsgAsync;
         let addFeedCount = -1;
         let bagQueried = false;
-        // 背包 30 根散草 + 缺口 100 → 期望: AddFeed 30 + 买 70(60*70=4200)
-        warehouse.getRanchBagDetail = async () => {
+        // 农场背包 30 根散草(农场种的) + 缺口 100 → 期望: AddFeed 30 + 买 70(60*70=4200)
+        warehouse.getBag = async () => {
             bagQueried = true;
-            return { items: [{ id: 7001, count: 30, uid: 0 }] };
+            return { item_bag: { items: [{ id: 7001, count: 30, uid: 0 }] } };
         };
+        warehouse.getRanchBagDetail = async () => ({ items: [{ id: 9999, count: 1, uid: 0 }] });
         network.sendMsgAsync = async (_s, method, body) => {
             const m = String(method).split('.').pop();
             if (m === 'GetFacilityDetail') {
@@ -313,7 +316,8 @@ proto.loadProto().then(async () => {
             check('花费 = 70 * 60 = 4200', r.spent === 4200, r);
         } finally {
             network.sendMsgAsync = savedSend;
-            warehouse.getRanchBagDetail = savedBag;
+            warehouse.getBag = savedFarmBag;
+            warehouse.getRanchBagDetail = savedRanchBag;
         }
     }
 

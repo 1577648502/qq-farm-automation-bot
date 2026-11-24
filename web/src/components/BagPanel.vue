@@ -96,6 +96,9 @@ function getPriceClass(item: any) {
 
 function canSell(item: any) {
   const itemType = Number(item?.itemType || 0)
+  // 牧草(7001)是牧场饲料: 自动出售已排除, 手动出售按钮也隐藏(防误卖)
+  if (Number(item?.id || 0) === 7001)
+    return false
   return itemType === 17 || itemType === 6
 }
 
