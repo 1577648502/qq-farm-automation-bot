@@ -273,7 +273,13 @@ async function claimSeeds() {
     if (before.state.seedClaimed) return { ok: true, skipped: true, reason: '今天已领过种子' };
 
     const r = await op(CMD_CLAIM_SEED, CMD_CLAIM_SEED + FIELD_OFFSET, Buffer.alloc(0));
-    if (!r.ok) return { ok: false, reason: `领种子失败 ${r.reason}` };
+    if (!r.ok) {
+        // code=1034177 "今日种子已领取" — 领取幂等: #130#1 标记滞后时以此兜底(实测 2026-11-25)
+        if (r.errorCode === 1034177 || /今日种子已领取/.test(r.reason || '')) {
+            return { ok: true, skipped: true, reason: '今天已领过种子' };
+        }
+        return { ok: false, reason: `领种子失败 ${r.reason}` };
+    }
     // 结果 #191 = {#1 {#1: 20307, #2: 28}}
     let seedCount = 0;
     const f = findField(resultFields(r), 191);
