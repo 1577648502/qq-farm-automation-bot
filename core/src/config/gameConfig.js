@@ -830,6 +830,16 @@ const ACTIVITY_PLANT_FALLBACK = new Map([
         size: 1,
         fruit: { id: 40165, count: 48 },
     }],
+    // 以薯换福(2026-11-25): 红薯种子 20307, ItemInfo/Plant.json 均未收录。
+    // 抓包实证: 种普通地, 收获给 40307 红薯 + 1032 蜜薯(每块 30); 无时长数据用通用 6h 占位。
+    [1020307, {
+        id: 1020307,
+        name: '红薯',
+        seed_id: 20307,
+        seasons: 1,
+        size: 1,
+        fruit: { id: 40307, count: 1 },
+    }],
 ]);
 
 /**
