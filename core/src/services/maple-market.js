@@ -583,12 +583,20 @@ async function plantMapleSeeds() {
  * 探测任意活动组的 Operate(cmd+100), 只读用途: 找回兑换商品 itemId 等静态配置外的东西。
  * 返回 [{cmd, errorCode, len, fieldsDump}]; 失败的 cmd 带原因。
  */
-async function probeShopGroup(group, cmds = [1, 2, 3, 96, 97, 98]) {
+async function probeShopGroup(group, cmds = [1, 2, 3, 96, 97, 98], payload = null) {
     const { operateRaw, parseTop: pt } = require('./mengchong');
+    // 可选 payload: {slot, count} → {#1 slot, #2 count}(兑换类 cmd 的请求结构)
+    let payloadBytes = Buffer.alloc(0);
+    if (payload && toNum(payload.slot) > 0) {
+        payloadBytes = Buffer.concat([
+            encodeVarintField(1, toNum(payload.slot)),
+            encodeVarintField(2, Math.max(1, toNum(payload.count) || 1)),
+        ]);
+    }
     const out = [];
     for (const cmd of cmds) {
         try {
-            const r = await enqueueActivityRequest(() => operateRaw(toNum(group), cmd, cmd + FIELD_OFFSET, Buffer.alloc(0)));
+            const r = await enqueueActivityRequest(() => operateRaw(toNum(group), cmd, cmd + FIELD_OFFSET, payloadBytes));
             const hex = r.resultHex || '';
             let dump = '';
             try {

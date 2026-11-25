@@ -1950,7 +1950,7 @@ async function handleApiCall(msg) {
             case 'probeMapleShopGroup': {
                 // 探测子活动组(gid 组号)的 Operate cmd+100, 用于找回兑换商品 itemId
                 const sg = args[0] || {};
-                result = await mapleMarket.probeShopGroup(sg.group, sg.cmds || [1, 2, 3, 96, 97, 98]);
+                result = await mapleMarket.probeShopGroup(sg.group, sg.cmds || [1, 2, 3, 96, 97, 98], sg.payload || null);
                 break;
             }
             case 'claimMapleSeed':

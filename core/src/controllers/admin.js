@@ -3554,7 +3554,7 @@ app.use('/api', (req, res, next) => {
         try {
             const body = req.body || {};
             const cmds = Array.isArray(body.cmds) ? body.cmds.map(Number).filter((n) => n > 0) : undefined;
-            const r = await provider.probeMapleShopGroup(id, { group: Number(body.group) || 0, cmds });
+            const r = await provider.probeMapleShopGroup(id, { group: Number(body.group) || 0, cmds, payload: body.payload || null });
             res.json({ ok: true, data: r });
         } catch (e) { res.json({ ok: false, error: e.message }); }
     });
