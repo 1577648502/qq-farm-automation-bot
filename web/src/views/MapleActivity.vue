@@ -247,10 +247,10 @@ watch(currentAccountId, () => refresh())
           >
             <div>
               <div class="text-sm font-medium">
-                {{ s.price }} 福气币
+                {{ s.goodsName || `槽位${s.slot}` }}
               </div>
               <div class="text-xs text-gray-400">
-                {{ slotSoldOut(s) ? '已兑完' : slotVisible(s) ? '可兑换' : '未解锁' }}
+                {{ s.price }} 福气币 · {{ slotSoldOut(s) ? '已兑完' : slotVisible(s) ? '可兑换' : '未解锁' }}
               </div>
             </div>
             <button

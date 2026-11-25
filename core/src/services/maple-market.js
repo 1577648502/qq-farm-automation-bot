@@ -63,6 +63,25 @@ const LOCAL_ITEM_NAMES = {
     [ITEM_COIN]: '福气币',
 };
 
+/**
+ * 兑换槽位 → 商品 (客户端静态配置 MapleMarketGoodsConfig, 2026-11-25 解出)。
+ * cmd97 兑换列表不带 itemId/名称, 官方客户端从这份配置渲染; 配置内容 XOR
+ * NQF_SHANGXIANDAMAI_#2026_SECURE 后藏在 mainscene bundle 的 TextAsset 里(已还原)。
+ * item_list "id:count" → 兑换得到的物品; 兑换成功还会动态学习(learnSlotGoods)兜底。
+ */
+const EXCHANGE_SLOT_GOODS = {
+    1: { name: '七彩花弦', itemId: 204013, count: 1 },
+    2: { name: '福气金豆礼包', itemId: 101627, count: 1 },
+    3: { name: '金币果', itemId: 20522, count: 1 },
+    4: { name: '经验蘑菇', itemId: 20523, count: 1 },
+    5: { name: '有机化肥(1小时)', itemId: 80011, count: 1 },
+    6: { name: '南瓜种子礼包', itemId: 101620, count: 1 },
+    7: { name: '荷风种子礼包', itemId: 101621, count: 1 },
+    8: { name: '千星种子礼包', itemId: 101622, count: 1 },
+    9: { name: '萌宠种子礼包', itemId: 101623, count: 1 },
+    10: { name: '化肥(1小时)', itemId: 80001, count: 1 },
+};
+
 function itemName(id) {
     const nid = toNum(id);
     if (!nid) return '';
@@ -188,14 +207,19 @@ function parseExchangeList(resultHex) {
     for (const x of rf) {
         if (x.f !== 1 || x.w !== 2) continue;
         const s = parseTop(x.v);
+        const slot = toInt((findField(s, 1) || {}).v) || 0;
+        const goods = EXCHANGE_SLOT_GOODS[slot] || null;
         out.slots.push({
-            slot: toInt((findField(s, 1) || {}).v) || 0,
+            slot,
             price: toInt((findField(s, 2) || {}).v) || 0,
             type: toInt((findField(s, 3) || {}).v) || 0,
             limit: toInt((findField(s, 4) || {}).v) || 0,
             extra5: toInt((findField(s, 5) || {}).v) || 0,
             extra6: toInt((findField(s, 6) || {}).v) || 0,
             visible: !!(toInt((findField(s, 7) || {}).v)),
+            // 商品信息(cmd97 不带, 静态配置 + 兑换回执学习)
+            goodsId: goods ? goods.itemId : 0,
+            goodsName: goods ? goods.name : '',
             // #7=1 的槽(实测槽5/槽10)是已解锁可兑换; 其余可见但 #7 缺失
         });
     }
@@ -219,6 +243,22 @@ function parseExchangeResult(resultHex) {
         if (itemId) got.push({ id: itemId, count, name: itemName(itemId) });
     }
     return { spend, got, coin };
+}
+
+/** 兑换槽位配置兜底: 静态表缺失时(配置变了), 用兑换回执学到的 itemId 补表 */
+function learnSlotGoods(slot, itemId, count) {
+    const s = toInt(slot);
+    const id = toInt(itemId);
+    if (!s || !id) return;
+    const cur = EXCHANGE_SLOT_GOODS[s];
+    if (!cur) {
+        EXCHANGE_SLOT_GOODS[s] = { name: itemName(id), itemId: id, count: toInt(count) || 1 };
+    } else if (cur.itemId !== id) {
+        // 服务端配置变了: 物品 id 以实际回执为准, 名称尝试从 ItemInfo 拿
+        cur.itemId = id;
+        cur.count = toInt(count) || 1;
+        cur.name = itemName(id) || cur.name;
+    }
 }
 
 // ===== 只读 =====
@@ -338,6 +378,8 @@ async function exchange(slot, count = 1) {
     const r = await op(CMD_EXCHANGE, CMD_EXCHANGE + FIELD_OFFSET, payloadBytes);
     if (!r.ok) return { ok: false, reason: `兑换失败 ${r.reason}` };
     const { spend, got, coin } = parseExchangeResult(r.resultHex);
+    // 静态商品表兜底: 回执里的 itemId 与表不一致(或表缺槽位)时动态修正
+    if (got[0]) learnSlotGoods(slot, got[0].id, got[0].count);
     const gotText = got.map((g) => `${g.name}×${g.count}`).join('、') || '空';
     log('活动', `以薯换福: 兑换成功 -${spend} 福气币 → ${gotText} (余额 ${coin})`, {
         module: 'activity', event: '以薯换福', result: 'ok',
