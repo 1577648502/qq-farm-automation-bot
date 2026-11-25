@@ -268,7 +268,12 @@ function createDataProvider(options) {
                 milkTeaInteractType: body.milkTeaInteractType,
                 milkTeaEmployerGid: body.milkTeaEmployerGid, // 仅兼容旧版前端配置
                 adGiftEnabled: body.adGiftEnabled,
-                sellGoldenFruit: body.sellGoldenFruit
+                sellGoldenFruit: body.sellGoldenFruit,
+                // 以薯换福
+                mapleEnabled: body.mapleEnabled,
+                mapleSell: body.mapleSell,
+                mapleAutoExchange: body.mapleAutoExchange,
+                mapleExchangeRules: body.mapleExchangeRules
             };
             store.applyConfigSnapshot(snapshot, { accountId });
             // 防封号参数变化后立即重排(开启→开始计时; 关闭→清理定时器)
@@ -542,6 +547,12 @@ function createDataProvider(options) {
         claimAdGift: (accountRef, opts) => callWorkerApi(resolveAccountRefId(accountRef), 'claimAdGift', opts || {}),
         // 奶茶热销中
         getMilkTeaStatus: (accountRef) => callWorkerApi(resolveAccountRefId(accountRef), 'getMilkTeaStatus'),
+        // 以薯换福
+        getMapleOverview: (accountRef) => callWorkerApi(resolveAccountRefId(accountRef), 'getMapleOverview', {}),
+        claimMapleSeed: (accountRef) => callWorkerApi(resolveAccountRefId(accountRef), 'claimMapleSeed', {}),
+        sellMaplePotato: (accountRef, opts) => callWorkerApi(resolveAccountRefId(accountRef), 'sellMaplePotato', opts || {}),
+        exchangeMaple: (accountRef, opts) => callWorkerApi(resolveAccountRefId(accountRef), 'exchangeMaple', opts || {}),
+        runMapleAuto: (accountRef) => callWorkerApi(resolveAccountRefId(accountRef), 'runMapleAuto', {}),
         getMilkTeaWork: (accountRef) => callWorkerApi(resolveAccountRefId(accountRef), 'getMilkTeaWork'),
         claimMilkTeaCashier: (accountRef) => callWorkerApi(resolveAccountRefId(accountRef), 'claimMilkTeaCashier'),
         craftMilkTea: (accountRef, opts) => callWorkerApi(resolveAccountRefId(accountRef), 'craftMilkTea', opts || {}),

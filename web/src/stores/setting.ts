@@ -118,6 +118,9 @@ export interface SettingsState {
   milkTeaInteractType: number
   sellGoldenFruit: boolean
   adGiftEnabled: boolean
+  mapleEnabled: boolean
+  mapleSell: boolean
+  mapleAutoExchange: boolean
 }
 
 function createDefaultSettings(): SettingsState {
@@ -184,6 +187,9 @@ function createDefaultSettings(): SettingsState {
     milkTeaInteractType: 2,
     sellGoldenFruit: false,
     adGiftEnabled: true,
+    mapleEnabled: true,
+    mapleSell: true,
+    mapleAutoExchange: false,
   }
 }
 
@@ -358,6 +364,9 @@ export const useSettingStore = defineStore('setting', () => {
       settings.value.milkTeaInteractType = Number(d.milkTeaInteractType) || 2
       settings.value.sellGoldenFruit = d.sellGoldenFruit ?? false
       settings.value.adGiftEnabled = d.adGiftEnabled ?? true
+      settings.value.mapleEnabled = d.mapleEnabled ?? true
+      settings.value.mapleSell = d.mapleSell ?? true
+      settings.value.mapleAutoExchange = !!d.mapleAutoExchange
       settingsAccountId.value = normalizedAccountId
       return { ok: true }
     }
@@ -447,6 +456,10 @@ export const useSettingStore = defineStore('setting', () => {
         milkTeaInteractType: newSettings.milkTeaInteractType,
         sellGoldenFruit: newSettings.sellGoldenFruit,
         adGiftEnabled: newSettings.adGiftEnabled,
+        // 以薯换福 —— 漏发就不会保存(与牧场幼崽策略同坑)
+        mapleEnabled: newSettings.mapleEnabled,
+        mapleSell: newSettings.mapleSell,
+        mapleAutoExchange: newSettings.mapleAutoExchange,
       }
 
       if (!isCurrentSave())

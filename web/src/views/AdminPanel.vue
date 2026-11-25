@@ -687,6 +687,7 @@ const localSystemConfig = ref({
   activityGongYiXiaoHongHua: true,
   activityMengChong: true,
   activityMilkTea: true,
+  activityMaple: true,
 })
 
 // 运行时实际生效的值(服务端 getRuntimeConfig 返回), 与"已保存"分开显示,
@@ -707,6 +708,7 @@ const defaultSystemConfig = ref({
   activityGongYiXiaoHongHua: true,
   activityMengChong: true,
   activityMilkTea: true,
+  activityMaple: true,
 })
 
 const activitySaving = ref(false)
@@ -722,6 +724,7 @@ async function handleSaveActivityConfig() {
       activityGongYiXiaoHongHua: localSystemConfig.value.activityGongYiXiaoHongHua,
       activityMengChong: localSystemConfig.value.activityMengChong,
       activityMilkTea: localSystemConfig.value.activityMilkTea,
+      activityMaple: localSystemConfig.value.activityMaple,
     })
     if (data?.ok) {
       showAlert('活动配置已保存，前端菜单已同步更新', 'primary')
@@ -746,6 +749,7 @@ async function handleResetActivityConfig() {
   localSystemConfig.value.activityGongYiXiaoHongHua = true
   localSystemConfig.value.activityMengChong = true
   localSystemConfig.value.activityMilkTea = true
+  localSystemConfig.value.activityMaple = true
   await handleSaveActivityConfig()
 }
 
@@ -926,6 +930,7 @@ const enabledActivityCount = computed(() => [
   localSystemConfig.value.activityGongYiXiaoHongHua,
   localSystemConfig.value.activityMengChong,
   localSystemConfig.value.activityMilkTea,
+  localSystemConfig.value.activityMaple,
 ].filter(Boolean).length)
 
 async function fetchQcbyAccountOptions() {
@@ -1989,6 +1994,20 @@ onMounted(() => {
                   </p>
                 </div>
                 <BaseSwitch v-model="localSystemConfig.activityMilkTea" />
+              </div>
+            </div>
+
+            <div class="border border-gray-200 rounded-lg p-4 dark:border-gray-700">
+              <div class="flex items-center justify-between gap-3">
+                <div class="min-w-0">
+                  <h5 class="text-sm text-gray-900 font-medium dark:text-white">
+                    以薯换福
+                  </h5>
+                  <p class="mt-0.5 truncate text-xs text-gray-500 dark:text-gray-400">
+                    限时活动入口
+                  </p>
+                </div>
+                <BaseSwitch v-model="localSystemConfig.activityMaple" />
               </div>
             </div>
 

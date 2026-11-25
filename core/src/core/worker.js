@@ -9,7 +9,7 @@ if (parentPort && workerData && workerData.startupMode === 'code_refresh') {
     process.env.FARM_STARTUP_MODE = 'code_refresh';
 }
 const { getLevelExpProgress } = require('../config/gameConfig');
-const { getAutomation, getPreferredSeed, getConfigSnapshot, applyConfigSnapshot, getBuyBookConfig, getAutumnWishConfig, getHappyShareEnabled, getMilkTeaConfig, getActivityStatus, getAdGiftEnabled, getLimitedPackConfig, getCollectionEnabled } = require('../models/store');
+const { getAutomation, getPreferredSeed, getConfigSnapshot, applyConfigSnapshot, getBuyBookConfig, getAutumnWishConfig, getHappyShareEnabled, getMilkTeaConfig, getActivityStatus, getAdGiftEnabled, getLimitedPackConfig, getCollectionEnabled, getMapleConfig } = require('../models/store');
 const { checkAndClaimEmails } = require('../services/email');
 const { getEmailDailyState } = require('../services/email');
 const { checkFarm, startFarmCheckLoop, stopFarmCheckLoop, refreshFarmCheckLoop, restartFertilizerBuyCheckTimer, getLandsDetail, getAvailableSeeds, buySeed, buyGrassSeed, runFarmOperation, runFertilizerByConfig, operateSingleLand } = require('../services/farm');
@@ -22,6 +22,7 @@ const treasureRob = require('../services/treasure-rob');
 const autumnWish = require('../services/autumn-wish');
 const happyShare = require('../services/happy-share');
 const milkTea = require('../services/milk-tea');
+const mapleMarket = require('../services/maple-market');
 const ranch = require('../services/ranch');
 const { startRanchCheckLoop, stopRanchCheckLoop } = ranch;
 const adGift = require('../services/ad-gift');
@@ -241,6 +242,7 @@ const FIREWORK_BREAKER = createFailureBreaker();
 const HAPPY_SHARE_BREAKER = createFailureBreaker();
 const AD_GIFT_BREAKER = createFailureBreaker();
 const MILK_TEA_BREAKER = createFailureBreaker();
+const MAPLE_BREAKER = createFailureBreaker();
 
 function stopDailyRoutineTimer() {
     workerScheduler.clear('daily_routine_interval');
@@ -254,6 +256,7 @@ function stopDailyRoutineTimer() {
     workerScheduler.clear('happy_share_interval');
     workerScheduler.clear('ad_gift_interval');
     workerScheduler.clear('milk_tea_interval');
+    workerScheduler.clear('maple_interval');
 }
 
 /**
@@ -372,6 +375,43 @@ async function runMilkTea(reason = 'interval') {
         const st = MILK_TEA_BREAKER.failure();
         if (st === 'open') log('活动', `奶茶热销中连续失败, 暂停30分钟后重试: ${e.message}`, { module: 'activity', event: '奶茶热销中', result: 'error', trigger: reason });
         else if (!st) log('活动', `奶茶热销中处理失败: ${e.message}`, { module: 'activity', event: '奶茶热销中', result: 'error', trigger: reason });
+        return { ok: false, reason: e.message };
+    }
+}
+
+/**
+ * 以薯换福(2026-11-25 新活动): 领种子 + 卖蜜薯 + 可选兑换(协议见 services/maple-market.js)
+ * 种地不在这里: 领到的红薯种子(20307)进背包, 由 farm 流程按"背包种子优先"或回退策略处理。
+ */
+async function runMaple(reason = 'interval') {
+    if (!canRunTasks()) return { skipped: true, reason: 'offline' };
+    if (MAPLE_BREAKER.isOpen()) return { skipped: true, reason: '熔断中' };
+    if (!getActivityStatus().mapleEnabled) return { skipped: true, reason: 'disabled' };
+    const cfg = getMapleConfig();
+    if (!cfg.enabled) return { skipped: true, reason: 'disabled' };
+    try {
+        const r = await mapleMarket.runAuto({
+            claimSeed: true,
+            sell: cfg.sell,
+            autoExchange: cfg.autoExchange,
+            exchangeRules: cfg.exchangeRules,
+        });
+        if (r.ok && (r.claimed || r.soldCount || (r.exchanged && r.exchanged.length))) {
+            log('活动', `以薯换福: 本轮 领种子×${r.claimed} 卖蜜薯×${r.soldCount}(+${r.income}福币) 兑换${(r.exchanged || []).length}笔`, {
+                module: 'activity', event: '以薯换福', result: 'ok', trigger: reason,
+            });
+        }
+        // ok=false 的业务失败已带 reason
+        if (r.ok === false) {
+            const st = MAPLE_BREAKER.failure();
+            if (st === 'open') log('活动', `以薯换福连续失败, 暂停30分钟后重试: ${r.reason}`, { module: 'activity', event: '以薯换福', result: 'error', trigger: reason });
+            else if (!st) log('活动', `以薯换福处理失败: ${r.reason}`, { module: 'activity', event: '以薯换福', result: 'error', trigger: reason });
+        }
+        return r;
+    } catch (e) {
+        const st = MAPLE_BREAKER.failure();
+        if (st === 'open') log('活动', `以薯换福连续失败, 暂停30分钟后重试: ${e.message}`, { module: 'activity', event: '以薯换福', result: 'error', trigger: reason });
+        else if (!st) log('活动', `以薯换福处理失败: ${e.message}`, { module: 'activity', event: '以薯换福', result: 'error', trigger: reason });
         return { ok: false, reason: e.message };
     }
 }
@@ -584,6 +624,10 @@ function startDailyRoutineTimer() {
     // 奶茶热销中: 每 15 分钟自查一次(收银台满载会停业, 这是最关键的一步)
     workerScheduler.setIntervalTask('milk_tea_interval', 15 * 60 * 1000, () => {
         runMilkTea('interval').catch(() => null);
+    }, { preventOverlap: true });
+    // 以薯换福: 每 20 分钟自查一次(领种子每天一次幂等 + 卖蜜薯有产出就卖)
+    workerScheduler.setIntervalTask('maple_interval', 20 * 60 * 1000, () => {
+        runMaple('interval').catch(() => null);
     }, { preventOverlap: true });
 }
 
@@ -1884,6 +1928,28 @@ async function handleApiCall(msg) {
             }
             case 'claimMilkTeaWage':
                 result = await milkTea.claimWage();
+                break;
+            case 'getMapleOverview': {
+                // 以薯换福总览: 状态+摊位+兑换列表 (串行, 服务内部已 300ms 节流)
+                result = await mapleMarket.getOverview();
+                break;
+            }
+            case 'claimMapleSeed':
+                result = await mapleMarket.claimSeeds();
+                break;
+            case 'sellMaplePotato': {
+                // args[0].count = 卖出数量, 0/缺省 = 全部
+                const mo = args[0] || {};
+                result = await mapleMarket.sellPotato(mo.count || 0);
+                break;
+            }
+            case 'exchangeMaple': {
+                const eo = args[0] || {};
+                result = await mapleMarket.exchange(eo.slot, eo.count || 1);
+                break;
+            }
+            case 'runMapleAuto':
+                result = await runMaple('manual');
                 break;
             case 'getMilkTeaCashier':
                 result = await milkTea.getCashierStatus();

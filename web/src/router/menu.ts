@@ -104,6 +104,15 @@ export const menuRoutes: MenuItem[] = [
   },
 
   {
+    path: 'maple-activity',
+    name: 'maple-activity',
+    label: '以薯换福',
+    icon: 'i-carbon-sprout',
+    activityKey: 'mapleEnabled',
+    component: () => import('@/views/MapleActivity.vue'),
+  },
+
+  {
     path: 'collection',
     name: 'collection',
     label: '典藏室',

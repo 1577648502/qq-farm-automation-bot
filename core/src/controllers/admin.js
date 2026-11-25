@@ -2398,6 +2398,10 @@ app.use('/api', (req, res, next) => {
             const milkTeaCfg = (id && typeof store.getMilkTeaConfig === 'function')
                 ? store.getMilkTeaConfig(id)
                 : { enabled: true, cashier: true, craft: true, speaker: false, storeName: '奶茶小铺', hireGids: [], autoHire: false, autoTask: false, autoInteract: false, autoWage: true, autoBuySeed: false, autoUpgrade: true, seedBuyCount: 1, interactType: 2 };
+            // 以薯换福(2026-11-25 新活动)
+            const mapleCfg = (id && typeof store.getMapleConfig === 'function')
+                ? store.getMapleConfig(id)
+                : { enabled: true, sell: true, autoExchange: false, exchangeRules: [] };
             const happyShareEnabled = (id && typeof store.getHappyShareEnabled === 'function')
                 ? store.getHappyShareEnabled(id)
                 : true;
@@ -2491,6 +2495,11 @@ app.use('/api', (req, res, next) => {
                     adGiftEnabled,
                     // 自动卖果实时是否连黄金果实一起卖
                     sellGoldenFruit: (id && typeof store.getSellGoldenFruit === 'function') ? store.getSellGoldenFruit(id) : false,
+                    // 以薯换福
+                    mapleEnabled: mapleCfg.enabled,
+                    mapleSell: mapleCfg.sell,
+                    mapleAutoExchange: !!mapleCfg.autoExchange,
+                    mapleExchangeRules: mapleCfg.exchangeRules || [],
                     ui,
                     offlineReminder,
                 },
@@ -2639,8 +2648,8 @@ app.use('/api', (req, res, next) => {
     // 保存系统配置
     app.post('/api/admin/system-config', authRequired, adminRequired, (req, res) => {
         try {
-            const { serverUrl, clientVersion, platform, os, activityHeFeng, activityQingNiang, activityQianXing, activityYuLuoChengShi, activityGongYiXiaoHongHua, activityMengChong, activityMilkTea } = req.body || {};
-            const newConfig = { serverUrl, clientVersion, platform, os, activityHeFeng, activityQingNiang, activityQianXing, activityYuLuoChengShi, activityGongYiXiaoHongHua, activityMengChong, activityMilkTea };
+            const { serverUrl, clientVersion, platform, os, activityHeFeng, activityQingNiang, activityQianXing, activityYuLuoChengShi, activityGongYiXiaoHongHua, activityMengChong, activityMilkTea, activityMaple } = req.body || {};
+            const newConfig = { serverUrl, clientVersion, platform, os, activityHeFeng, activityQingNiang, activityQianXing, activityYuLuoChengShi, activityGongYiXiaoHongHua, activityMengChong, activityMilkTea, activityMaple };
             const saved = store.setSystemConfig(newConfig);
             updateRuntimeConfig(saved);
             const current = getRuntimeConfig();
@@ -3514,6 +3523,21 @@ app.use('/api', (req, res, next) => {
         try { res.json({ ok: true, data: await provider.getMilkTeaStatus(id) }); }
         catch (e) { res.json({ ok: false, error: e.message }); }
     });
+    // ===== 以薯换福(2026-11-25 新活动) =====
+    const mapleRoute = (method, path, fn) => {
+        app[method](path, async (req, res) => {
+            const id = getAccId(req);
+            if (!id) return res.status(400).json({ ok: false, error: '缺少账号 ID' });
+            if (!checkAccountAccess(req, id)) return res.status(403).json({ ok: false, error: '无权访问此账号' });
+            try { res.json({ ok: true, data: await fn(id, req.body || {}) }); }
+            catch (e) { res.json({ ok: false, error: e.message }); }
+        });
+    };
+    mapleRoute('get', '/api/activity/maple', (id) => provider.getMapleOverview(id));
+    mapleRoute('post', '/api/activity/maple/claim-seed', (id) => provider.claimMapleSeed(id));
+    mapleRoute('post', '/api/activity/maple/sell', (id, body) => provider.sellMaplePotato(id, { count: Number(body.count) || 0 }));
+    mapleRoute('post', '/api/activity/maple/exchange', (id, body) => provider.exchangeMaple(id, { slot: Number(body.slot) || 0, count: Number(body.count) || 1 }));
+    mapleRoute('post', '/api/activity/maple/run-auto', (id) => provider.runMapleAuto(id));
     app.get('/api/activity/milk-tea/work', async (req, res) => {
         const id = getAccId(req);
         if (!id) return res.status(400).json({ ok: false, error: '缺少账号 ID' });

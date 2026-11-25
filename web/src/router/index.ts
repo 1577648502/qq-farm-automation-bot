@@ -120,6 +120,7 @@ router.beforeEach(async (to, _from) => {
     'charity-activity': 'gongYiXiaoHongHuaEnabled',
     'mengchong-activity': 'mengChongEnabled',
     'milk-tea-activity': 'milkTeaEnabled',
+    'maple-activity': 'mapleEnabled',
   }
   const activityKey = to.name ? activityRouteMap[String(to.name)] : undefined
   if (activityKey) {

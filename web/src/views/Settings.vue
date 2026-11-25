@@ -1193,6 +1193,10 @@ const localAutomationSettings = ref({
   milkTeaInteractType: 2,
   sellGoldenFruit: false,
   adGiftEnabled: true,
+  // 以薯换福
+  mapleEnabled: true,
+  mapleSell: true,
+  mapleAutoExchange: false,
   // 防封号(低调)模式
   stealthEnabled: false,
   stealthOnlineMinMinutes: 3,
@@ -1235,6 +1239,7 @@ const ACTIVITY_GATED_AUTOMATION: Record<string, string> = {
   mengchong_hunt: 'mengChongEnabled',
 }
 const isMilkTeaActivityGated = computed(() => activityStatus.value.milkTeaEnabled === false)
+const isMapleActivityGated = computed(() => activityStatus.value.mapleEnabled === false)
 
 function isAutomationGated(key: string): boolean {
   const flagKey = ACTIVITY_GATED_AUTOMATION[key]
@@ -1249,6 +1254,8 @@ function autoLabel(key: string, base: string): string {
 function applyActivityGate() {
   if (isMilkTeaActivityGated.value)
     localAutomationSettings.value.milkTeaEnabled = false
+  if (activityStatus.value.mapleEnabled === false)
+    localAutomationSettings.value.mapleEnabled = false
 
   const auto = localAutomationSettings.value.automation as any
   if (!auto)
@@ -1488,6 +1495,7 @@ async function fetchActivityStatus() {
         gongYiXiaoHongHuaEnabled: res.data.gongYiXiaoHongHuaEnabled !== false,
         mengChongEnabled: res.data.mengChongEnabled !== false,
         milkTeaEnabled: res.data.milkTeaEnabled !== false,
+        mapleEnabled: res.data.mapleEnabled !== false,
       }
       applyActivityGate()
     }
@@ -1545,6 +1553,9 @@ function syncLocalAutomationSettings(submitted?: any) {
     localAutomationSettings.value.milkTeaInteractType = settings.value.milkTeaInteractType ?? 2
     localAutomationSettings.value.sellGoldenFruit = settings.value.sellGoldenFruit ?? false
     localAutomationSettings.value.adGiftEnabled = settings.value.adGiftEnabled ?? true
+    localAutomationSettings.value.mapleEnabled = settings.value.mapleEnabled ?? true
+    localAutomationSettings.value.mapleSell = settings.value.mapleSell ?? true
+    localAutomationSettings.value.mapleAutoExchange = !!settings.value.mapleAutoExchange
     localAutomationSettings.value.fertilizerBuyOrganicCount = settings.value.fertilizerBuyOrganicCount ?? 1
     localAutomationSettings.value.fertilizerBuyOrganicThresholdHours = settings.value.fertilizerBuyOrganicThresholdHours ?? 10
     localAutomationSettings.value.fertilizerBuyNormalCount = settings.value.fertilizerBuyNormalCount ?? 1
@@ -3224,6 +3235,11 @@ async function onBackupFileChange(ev: Event) {
                   :label="isMilkTeaActivityGated ? '奶茶热销中（活动已在后台关闭）' : '奶茶热销中'"
                   :disabled="isMilkTeaActivityGated"
                 />
+                <BaseSwitch
+                  v-model="localAutomationSettings.mapleEnabled"
+                  :label="isMapleActivityGated ? '以薯换福（活动已在后台关闭）' : '以薯换福'"
+                  :disabled="isMapleActivityGated"
+                />
               </div>
             </section>
           </div>
@@ -3403,6 +3419,21 @@ async function onBackupFileChange(ev: Event) {
               </div>
               <template #note>
                 购买份数：永久限购累计达到该数量；日限购每天购买该数量。手动操作（领收益 / 制作奶茶 / 领工资 / 互动一次）和参数（店名、互动事项）都在左侧栏「奶茶热销中」页面。
+              </template>
+            </AutoTaskCard>
+
+            <!-- 以薯换福: 这里只放开关; 操作按钮在左侧栏「以薯换福」页面 -->
+            <AutoTaskCard
+              v-if="localAutomationSettings.mapleEnabled"
+              title="以薯换福（11/25 – 12/09）"
+              desc="自动领红薯种子（每天一次，种子进背包后走种植流程）+ 自动卖蜜薯到自己摊位（24:00 按 80 金清仓，远低于摊位价，所以有就卖）"
+            >
+              <div class="flex flex-wrap items-center gap-3 border border-gray-200 rounded px-2.5 py-2 dark:border-gray-700">
+                <BaseSwitch v-model="localAutomationSettings.mapleSell" label="自动卖蜜薯（全部卖出）" />
+                <BaseSwitch v-model="localAutomationSettings.mapleAutoExchange" label="自动兑换（按左侧活动页配置）" />
+              </div>
+              <template #note>
+                手动领种子 / 卖薯 / 兑换都在左侧栏「以薯换福」页面。摊位卖出价由服务端结算（基础价 + 持有溢价），自己摊位卖出不限量。
               </template>
             </AutoTaskCard>
 

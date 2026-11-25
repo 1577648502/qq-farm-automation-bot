@@ -328,6 +328,11 @@ const DEFAULT_ACCOUNT_CONFIG = {
     milkTeaEmployerGid: '',           // 旧版配置兼容字段；互动目标只认刷新 #168.#1
     sellGoldenFruit: false,           // 自动卖果实时是否连黄金果实一起卖(默认保留)
     adGiftEnabled: true,              // 每日自动领「看广告礼包」(跳过广告直接领, 化肥×5)
+    // ===== 以薯换福(2026-11-25 新活动) =====
+    mapleEnabled: true,               // 自动流程总开关(领种子 + 卖蜜薯)
+    mapleSell: true,                  // 自动卖蜜薯到自己摊位(服务端算价, 24:00 清仓价 80金 不划算 → 应天卖光)
+    mapleAutoExchange: false,         // 自动兑换(福气币花出去)
+    mapleExchangeRules: [],           // 兑换规则 [{slot, count}] (slot 来自兑换列表 1..10)
     // 背包种子优先顺序（seedId 数组）
     bagSeedPriority: [],
     // 背包种子用完后的回退策略
@@ -708,6 +713,16 @@ function normalizeAccountConfig(input, fallback = accountFallbackConfig) {
     if (src.adGiftEnabled !== undefined && src.adGiftEnabled !== null) {
         cfg.adGiftEnabled = !!src.adGiftEnabled;
     }
+    // 以薯换福
+    if (src.mapleEnabled !== undefined && src.mapleEnabled !== null) cfg.mapleEnabled = !!src.mapleEnabled;
+    if (src.mapleSell !== undefined && src.mapleSell !== null) cfg.mapleSell = !!src.mapleSell;
+    if (src.mapleAutoExchange !== undefined && src.mapleAutoExchange !== null) cfg.mapleAutoExchange = !!src.mapleAutoExchange;
+    if (Array.isArray(src.mapleExchangeRules)) {
+        cfg.mapleExchangeRules = src.mapleExchangeRules
+            .map((r) => ({ slot: Number(r && r.slot) || 0, count: Math.max(1, Math.min(999, Number(r && r.count) || 1)) }))
+            .filter((r) => r.slot > 0)
+            .slice(0, 20);
+    }
 
     // 有机化肥购买数量
     if (src.fertilizerBuyOrganicCount !== undefined && src.fertilizerBuyOrganicCount !== null) {
@@ -999,6 +1014,10 @@ function getConfigSnapshot(accountId) {
         milkTeaEmployerGid: cfg.milkTeaEmployerGid || '',
         sellGoldenFruit: !!cfg.sellGoldenFruit,
         adGiftEnabled: cfg.adGiftEnabled === undefined ? true : !!cfg.adGiftEnabled,
+        mapleEnabled: cfg.mapleEnabled === undefined ? true : !!cfg.mapleEnabled,
+        mapleSell: cfg.mapleSell === undefined ? true : !!cfg.mapleSell,
+        mapleAutoExchange: !!cfg.mapleAutoExchange,
+        mapleExchangeRules: [...(cfg.mapleExchangeRules || [])],
         stealDelaySeconds: Math.max(0, Math.min(300, Number(cfg.stealDelaySeconds) || 0)),
         plantOrderRandom: !!cfg.plantOrderRandom,
         plantDelaySeconds: Math.max(0, Math.min(60, Number(cfg.plantDelaySeconds) || 0)),
@@ -1758,6 +1777,16 @@ function getAdGiftEnabled(accountId) {
     return cfg.adGiftEnabled === undefined ? true : !!cfg.adGiftEnabled;
 }
 
+function getMapleConfig(accountId) {
+    const cfg = (typeof getConfigSnapshot === 'function' ? getConfigSnapshot(accountId) : (globalConfig.accountConfig || {})) || {};
+    return {
+        enabled: cfg.mapleEnabled === undefined ? true : !!cfg.mapleEnabled,
+        sell: cfg.mapleSell === undefined ? true : !!cfg.mapleSell,
+        autoExchange: !!cfg.mapleAutoExchange,
+        exchangeRules: [...(cfg.mapleExchangeRules || [])],
+    };
+}
+
 function getMilkTeaConfig(accountId) {
     const cfg = (typeof getConfigSnapshot === 'function' ? getConfigSnapshot(accountId) : (globalConfig.accountConfig || {})) || {};
     return {
@@ -1797,6 +1826,7 @@ function getActivityStatus() {
         gongYiXiaoHongHuaEnabled: cfg.activityGongYiXiaoHongHua !== false,
         mengChongEnabled: cfg.activityMengChong !== false,
         milkTeaEnabled: cfg.activityMilkTea !== false,
+        mapleEnabled: cfg.activityMaple !== false,
     };
 }
 
@@ -1819,6 +1849,7 @@ module.exports = {
     normalizeMilkTeaHireDuration,
     getSellGoldenFruit,
     getAdGiftEnabled,
+    getMapleConfig,
     getBagSeedPriority,
     getBagSeedFallbackStrategy,
     getRanchCubStrategy,

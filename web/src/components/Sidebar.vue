@@ -254,6 +254,7 @@ const activityStatus = ref({
   gongYiXiaoHongHuaEnabled: true,
   mengChongEnabled: true,
   milkTeaEnabled: true,
+  mapleEnabled: true,
 })
 // 活动菜单显隐状态(后端 /api/activities/status 为准, 默认全显)
 
@@ -269,6 +270,7 @@ async function loadActivityStatus() {
         gongYiXiaoHongHuaEnabled: res.data.gongYiXiaoHongHuaEnabled !== false,
         mengChongEnabled: res.data.mengChongEnabled !== false,
         milkTeaEnabled: res.data.milkTeaEnabled !== false,
+        mapleEnabled: res.data.mapleEnabled !== false,
       }
     }
   }
