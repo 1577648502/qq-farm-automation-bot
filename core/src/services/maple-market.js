@@ -159,7 +159,7 @@ function parseMainState(activityBuf) {
 
 /** #192 我的摊位: {#1 {#1 价格, #2 持有, #3 剩余接收额度, #4 {#1 gid, #2 昵称,...}}, #2 1} */
 function parseStall(resultHex) {
-    const out = { price: 0, holding: 0, quotaLeft: 0 };
+    const out = { price: 0, holding: 0, quotaLeft: 0, ownerGid: 0, ownerName: '' };
     const rf = resultFields({ resultHex });
     const stall = findField(rf, 192); // 结果字段号 = cmd+100
     if (!stall || stall.w !== 2) return out;
@@ -170,6 +170,13 @@ function parseStall(resultHex) {
     out.price = toInt((findField(s, 1) || {}).v) || 0;
     out.holding = toInt((findField(s, 2) || {}).v) || 0;
     out.quotaLeft = toInt((findField(s, 3) || {}).v) || 0;
+    const owner = findField(s, 4);
+    if (owner && owner.w === 2) {
+        const o = parseTop(owner.v);
+        out.ownerGid = toInt((findField(o, 1) || {}).v) || 0;
+        const nm = findField(o, 2);
+        out.ownerName = nm && nm.w === 2 ? nm.v.toString('utf8') : '';
+    }
     return out;
 }
 
@@ -217,15 +224,16 @@ function parseExchangeResult(resultHex) {
 
 // ===== 只读 =====
 
-/** 查状态(92): 主状态 + 我的摊位 */
-async function getState() {
-    const gid = toNum(getUserState().gid);
+/** 查状态(92): 传自己 gid = 查自己; **传好友 gid = 探测好友摊位价**(2026-11-25 假设, 待实测) */
+async function getState(gidOverride = 0) {
+    const gid = gidOverride ? toNum(gidOverride) : toNum(getUserState().gid);
     if (!gid) return { ok: false, reason: '未登录, 拿不到 gid' };
     const r = await op(CMD_GET_STATE, CMD_GET_STATE + FIELD_OFFSET, encodeVarintField(1, gid));
-    if (!r.ok) return { ok: false, reason: `查状态失败 ${r.reason}` };
+    if (!r.ok) return { ok: false, reason: `查状态失败 ${r.reason}`, gid };
     const state = parseMainState(r.activity);
     const stall = parseStall(r.resultHex);
-    return { ok: state.ok, state, stall };
+    // 摊位 owner(#192#1#4#1) 服务端回显: 若 != 请求的 gid 说明查询被重定向(比如永远查自己)
+    return { ok: state.ok, gid, state, stall, stallOwnerGid: stall.ownerGid || 0 };
 }
 
 /** 兑换列表(97) */
@@ -402,6 +410,59 @@ async function runAuto(cfg = {}, breaker = null) {
     }
 }
 
+// ===== 好友摊位探测(2026-11-25 加: 多账号互卖分析) =====
+
+/**
+ * cmd92 传好友 gid 探测好友摊位。
+ * 假设: 请求 {#1: 好友gid} → #192 回好友的摊位(价格/持有/额度/owner回显)。
+ * 失败可能性: 服务端强制按登录者处理(owner==自己) 或 errorCode 非零 → 按"不能查"处理。
+ */
+async function getFriendStall(friendGid) {
+    const fg = toNum(friendGid);
+    if (!fg) return { ok: false, reason: '好友 gid 无效' };
+    const r = await getState(fg);
+    if (!r.ok) return { ok: false, gid: fg, reason: r.reason };
+    // #130 是请求 gid 对应的玩家状态(含摊位); owner 回显用于判断服务端是否照查
+    return {
+        ok: true,
+        gid: fg,
+        queryGid: r.gid,
+        stallOwnerGid: r.stallOwnerGid,
+        redirected: r.stallOwnerGid > 0 && r.stallOwnerGid !== fg, // true = 服务端无视了好友gid
+        state: r.state,
+        stall: r.stall,
+    };
+}
+
+/**
+ * 批量探测好友摊位价 → {best, rows}。
+ * rows: [{gid, name, ok, price, holding, quotaLeft, redirected, reason}]
+ * best: 价格最高的可卖目标(不重定向 + 额度>0), null = 没人能卖。
+ */
+async function probeFriendStalls(friends, { maxProbe = 50 } = {}) {
+    const list = (Array.isArray(friends) ? friends : [])
+        .map((f) => ({ gid: toNum(f && f.gid), name: String((f && f.name) || (f && f.nick) || '') }))
+        .filter((f) => f.gid > 0)
+        .slice(0, maxProbe);
+    const rows = [];
+    for (const f of list) {
+        const r = await getFriendStall(f.gid);
+        rows.push({
+            gid: f.gid,
+            name: f.name,
+            ok: r.ok,
+            price: r.ok ? (r.stall.price || 0) : 0,
+            holding: r.ok ? (r.stall.holding || 0) : 0,
+            quotaLeft: r.ok ? (r.stall.quotaLeft || 0) : 0,
+            redirected: !!r.redirected,
+            reason: r.ok ? '' : (r.reason || ''),
+        });
+    }
+    const sellable = rows.filter((x) => x.ok && !x.redirected && x.quotaLeft > 0);
+    sellable.sort((a, b) => b.price - a.price);
+    return { rows, best: sellable[0] || null };
+}
+
 module.exports = {
     ACTIVITY_GROUP,
     FIELD_OFFSET,
@@ -418,6 +479,8 @@ module.exports = {
     LOCAL_ITEM_NAMES,
     itemName,
     getState,
+    getFriendStall,
+    probeFriendStalls,
     getExchangeList,
     getTodayInfo,
     claimSeeds,

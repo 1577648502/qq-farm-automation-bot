@@ -3534,6 +3534,14 @@ app.use('/api', (req, res, next) => {
         });
     };
     mapleRoute('get', '/api/activity/maple', (id) => provider.getMapleOverview(id));
+    mapleRoute('get', '/api/activity/maple/stalls', (id) => provider.probeMapleStalls(id, {}));
+    app.get('/api/activity/maple/stall/:gid', async (req, res) => {
+        const id = getAccId(req);
+        if (!id) return res.status(400).json({ ok: false, error: '缺少账号 ID' });
+        if (!checkAccountAccess(req, id)) return res.status(403).json({ ok: false, error: '无权访问此账号' });
+        try { res.json({ ok: true, data: await provider.probeMapleStall(id, { gid: Number(req.params.gid) || 0 }) }); }
+        catch (e) { res.json({ ok: false, error: e.message }); }
+    });
     mapleRoute('post', '/api/activity/maple/claim-seed', (id) => provider.claimMapleSeed(id));
     mapleRoute('post', '/api/activity/maple/sell', (id, body) => provider.sellMaplePotato(id, { count: Number(body.count) || 0 }));
     mapleRoute('post', '/api/activity/maple/exchange', (id, body) => provider.exchangeMaple(id, { slot: Number(body.slot) || 0, count: Number(body.count) || 1 }));

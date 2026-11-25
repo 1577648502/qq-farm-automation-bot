@@ -553,6 +553,8 @@ function createDataProvider(options) {
         sellMaplePotato: (accountRef, opts) => callWorkerApi(resolveAccountRefId(accountRef), 'sellMaplePotato', opts || {}),
         exchangeMaple: (accountRef, opts) => callWorkerApi(resolveAccountRefId(accountRef), 'exchangeMaple', opts || {}),
         runMapleAuto: (accountRef) => callWorkerApi(resolveAccountRefId(accountRef), 'runMapleAuto', {}),
+        probeMapleStalls: (accountRef, opts) => callWorkerApi(resolveAccountRefId(accountRef), 'probeMapleStalls', opts || {}),
+        probeMapleStall: (accountRef, opts) => callWorkerApi(resolveAccountRefId(accountRef), 'probeMapleStall', opts || {}),
         getMilkTeaWork: (accountRef) => callWorkerApi(resolveAccountRefId(accountRef), 'getMilkTeaWork'),
         claimMilkTeaCashier: (accountRef) => callWorkerApi(resolveAccountRefId(accountRef), 'claimMilkTeaCashier'),
         craftMilkTea: (accountRef, opts) => callWorkerApi(resolveAccountRefId(accountRef), 'craftMilkTea', opts || {}),

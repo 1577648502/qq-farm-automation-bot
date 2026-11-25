@@ -1934,6 +1934,18 @@ async function handleApiCall(msg) {
                 result = await mapleMarket.getOverview();
                 break;
             }
+            case 'probeMapleStalls': {
+                // 好友摊位价探测(cmd92 传好友 gid): 拿好友列表逐个查, 返回价格表+最高价目标
+                const friends = await getFriendsList(args[0] && args[0].force === true);
+                result = await mapleMarket.probeFriendStalls(friends, { maxProbe: 60 });
+                break;
+            }
+            case 'probeMapleStall': {
+                // 探测单个 gid 的摊位
+                const po = args[0] || {};
+                result = await mapleMarket.getFriendStall(po.gid);
+                break;
+            }
             case 'claimMapleSeed':
                 result = await mapleMarket.claimSeeds();
                 break;
