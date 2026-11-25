@@ -766,6 +766,17 @@ function getItemImageById(itemId) {
 const ACTIVITY_ITEM_FALLBACK = new Map([
     [1041, { id: 1041, name: '奶茶券', type: 2 }],
     [1042, { id: 1042, name: '宣传喇叭', type: 2 }],
+    // ⚠ 2026-11-25「以薯换福」: 20307 红薯种子 / 40307 红薯果实 —— 官方 ItemInfo 不收录,
+    //   无 asset_name 时背包/农场图片全空。asset_name=Crop_307 从游戏缓存 plant bundle
+    //   (config.28471.json model/v4/Crop_307_Seed) 实证; 贴图已提取进 seed_images_named/。
+    //   getItemImageById(40307) 靠 getFallbackPlantByFruitId(要求 type=6)反查到种子图。
+    [20307, { id: 20307, name: '红薯种子', type: 5, asset_name: 'Crop_307' }],
+    [40307, { id: 40307, name: '红薯', type: 6, asset_name: 'Crop_307' }],
+    // 以薯换福货币/兑换商品(ItemInfo 不收录; 图片已从 bundle 提取进 seed_images_named/)
+    [1032, { id: 1032, name: '蜜薯', type: 2 }],
+    [1033, { id: 1033, name: '福气币', type: 2 }],
+    [101627, { id: 101627, name: '福气金豆礼包', type: 11 }],
+    [204013, { id: 204013, name: '七彩花弦', type: 10 }],
     // 森野系列种子(奶茶热销中)
     [20525, { id: 20525, name: '森野甜莓种子', type: 5 }],
     [20526, { id: 20526, name: '森野白桃种子', type: 5 }],
