@@ -275,16 +275,20 @@ function getPlayerLevelForShed() {
 
 /**
  * 自动解锁棚(跟窝一样纳入 autoUpgradeBuildings 的自动升级/竣工):
- * AllCells.buildings 里出现棚(gid 6002001) = 已解锁, 不发请求;
- * 没有才发 ActivateFacility(10003)。解锁后下一轮 autoUpgradeBuildings 自然轮到它。
+ * AllCells.buildings 里出现**已激活**的棚 = 已解锁, 不发请求;
+ * 否则发 ActivateFacility(10003)。解锁后下一轮 autoUpgradeBuildings 自然轮到它。
  * ⚠ 2026-11-23 实锤: buildingId 会随升级变档(窝 6001001→6001002→…→6001004, 棚
- *   6002001→6002002), 判"已解锁"必须按 6002xxx 段而不是 ===6002001 ——
- *   旧判定把升级后的棚(6002002)当成未解锁, 每轮重复发 ActivateFacility 刷日志。
+ *   6002001→6002002), 判"已解锁"必须按段而不是 ===6002001。
+ * ⚠ 2026-11-26 二次实锤(润出去): 6002001 是**未激活壳** —— 棚必须先 ActivateFacility(10003)
+ *   才变成 6002002, 未激活时 UpgradeBuilding(10003) 报 1045110「该建筑还未解锁」。
+ *   北栎 11-23 13:21 日志: ActivateFacility 成功返回 gid=6002002, 之后升级才走得通。
+ *   所以"已解锁"= buildingId >= 6002002; 6002001 仍要发 ActivateFacility。
+ *   (旧判定 `>=6002001` 正是把 6002001 当已解锁 → 润出去/acc3/4/6 的棚永远停在档1。)
  * @returns {Promise<{activated:boolean, alreadyUnlocked:boolean, skipped?:string}>}
  */
 function isShedBuildingId(buildingId) {
     const id = Number(buildingId) || 0;
-    return id >= 6002001 && id <= 6002999;
+    return id >= 6002002 && id <= 6002999;
 }
 
 async function autoActivateShed() {
