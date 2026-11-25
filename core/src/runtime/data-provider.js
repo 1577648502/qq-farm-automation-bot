@@ -555,6 +555,7 @@ function createDataProvider(options) {
         runMapleAuto: (accountRef) => callWorkerApi(resolveAccountRefId(accountRef), 'runMapleAuto', {}),
         probeMapleStalls: (accountRef, opts) => callWorkerApi(resolveAccountRefId(accountRef), 'probeMapleStalls', opts || {}),
         probeMapleStall: (accountRef, opts) => callWorkerApi(resolveAccountRefId(accountRef), 'probeMapleStall', opts || {}),
+        probeMapleShopGroup: (accountRef, opts) => callWorkerApi(resolveAccountRefId(accountRef), 'probeMapleShopGroup', opts || {}),
         getMilkTeaWork: (accountRef) => callWorkerApi(resolveAccountRefId(accountRef), 'getMilkTeaWork'),
         claimMilkTeaCashier: (accountRef) => callWorkerApi(resolveAccountRefId(accountRef), 'claimMilkTeaCashier'),
         craftMilkTea: (accountRef, opts) => callWorkerApi(resolveAccountRefId(accountRef), 'craftMilkTea', opts || {}),

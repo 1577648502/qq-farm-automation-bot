@@ -3546,6 +3546,18 @@ app.use('/api', (req, res, next) => {
     mapleRoute('post', '/api/activity/maple/sell', (id, body) => provider.sellMaplePotato(id, { count: Number(body.count) || 0, targetGid: Number(body.targetGid) || 0 }));
     mapleRoute('post', '/api/activity/maple/exchange', (id, body) => provider.exchangeMaple(id, { slot: Number(body.slot) || 0, count: Number(body.count) || 1 }));
     mapleRoute('post', '/api/activity/maple/run-auto', (id) => provider.runMapleAuto(id));
+    // 调试探针: 探任意活动组的 Operate cmd(找兑换商品 itemId 等), POST {group, cmds?}
+    app.post('/api/activity/maple/probe-group', async (req, res) => {
+        const id = getAccId(req);
+        if (!id) return res.status(400).json({ ok: false, error: '缺少账号 ID' });
+        if (!checkAccountAccess(req, id)) return res.status(403).json({ ok: false, error: '无权访问此账号' });
+        try {
+            const body = req.body || {};
+            const cmds = Array.isArray(body.cmds) ? body.cmds.map(Number).filter((n) => n > 0) : undefined;
+            const r = await provider.probeMapleShopGroup(id, { group: Number(body.group) || 0, cmds });
+            res.json({ ok: true, data: r });
+        } catch (e) { res.json({ ok: false, error: e.message }); }
+    });
     app.get('/api/activity/milk-tea/work', async (req, res) => {
         const id = getAccId(req);
         if (!id) return res.status(400).json({ ok: false, error: '缺少账号 ID' });
