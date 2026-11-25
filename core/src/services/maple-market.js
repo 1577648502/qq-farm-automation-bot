@@ -371,7 +371,6 @@ async function getOverview() {
 async function runAuto(cfg = {}, breaker = null) {
     const out = { claimed: 0, planted: 0, soldCount: 0, income: 0, exchanged: [] };
     try {
-        let claimedJustNow = false;
         if (cfg.claimSeed !== false) {
             const r = await claimSeeds();
             if (!r.ok) {
@@ -380,11 +379,11 @@ async function runAuto(cfg = {}, breaker = null) {
             }
             if (!r.skipped) {
                 out.claimed = r.seedCount || 0;
-                claimedJustNow = true;
             }
         }
-        // 种红薯: 刚领到种子必种; 其它轮次背包还有存货+有空地也补种
-        if (cfg.plant !== false && (claimedJustNow || cfg.plantAlways)) {
+        // 种红薯: 每轮都尝试(内部幂等: 背包没 20307 或没空地直接 skip),
+        // 存货+空地释放后下一轮自动补种
+        if (cfg.plant !== false) {
             const r = await plantMapleSeeds();
             if (r.ok && !r.skipped) out.planted = r.planted || 0;
         }
