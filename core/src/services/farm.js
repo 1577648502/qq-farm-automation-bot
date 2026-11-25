@@ -2516,6 +2516,8 @@ module.exports = {
     sortBagSeedsForPlanting,
     getBagSeedPlantCapacity,
     encodePlantRequest,
+    plantSeeds,
+    analyzeLands,
     __privateFarmFns: {
         getOrganicFertilizerTargetsFromLands,
         getFastMatureLands,

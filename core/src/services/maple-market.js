@@ -369,15 +369,24 @@ async function getOverview() {
  * 返回 { ok, claimed, soldCount, income, exchanged }
  */
 async function runAuto(cfg = {}, breaker = null) {
-    const out = { claimed: 0, soldCount: 0, income: 0, exchanged: [] };
+    const out = { claimed: 0, planted: 0, soldCount: 0, income: 0, exchanged: [] };
     try {
+        let claimedJustNow = false;
         if (cfg.claimSeed !== false) {
             const r = await claimSeeds();
             if (!r.ok) {
                 if (breaker) breaker.failure();
                 return { ok: false, reason: r.reason };
             }
-            if (!r.skipped) out.claimed = r.seedCount || 0;
+            if (!r.skipped) {
+                out.claimed = r.seedCount || 0;
+                claimedJustNow = true;
+            }
+        }
+        // 种红薯: 刚领到种子必种; 其它轮次背包还有存货+有空地也补种
+        if (cfg.plant !== false && (claimedJustNow || cfg.plantAlways)) {
+            const r = await plantMapleSeeds();
+            if (r.ok && !r.skipped) out.planted = r.planted || 0;
         }
         if (cfg.sell !== false) {
             const r = await sellPotato(0);
@@ -472,6 +481,46 @@ async function probeFriendStalls(friends, { maxProbe = 50 } = {}) {
     return { rows, best: sellable[0] || null };
 }
 
+// ===== 红薯种植(2026-11-25 加: 20307 不进通用种植优先级, 活动流程自己种) =====
+
+/**
+ * 把背包里的红薯种子(20307)种到空地。
+ * 复用 farm 的 plantSeeds/analyzeLands; 只种 status=empty 的地, 不动牧草/其它策略的排程。
+ * 空地不够时剩余种子留给下一轮(地块释放后再种)。
+ */
+async function plantMapleSeeds() {
+    const farm = require('./farm');
+    const { getBagSeeds } = require('./warehouse');
+    let seeds;
+    try {
+        seeds = await getBagSeeds();
+    } catch (e) {
+        return { ok: false, reason: `读背包种子失败: ${e.message}` };
+    }
+    const potatoSeed = (seeds || []).find((s) => Number(s.seedId) === ITEM_SEED);
+    const have = potatoSeed ? toInt(potatoSeed.count) : 0;
+    if (have <= 0) return { ok: true, skipped: true, reason: '背包没有红薯种子' };
+
+    const landsReply = await farm.getAllLands();
+    const status = farm.analyzeLands ? farm.analyzeLands(landsReply.lands || []) : null;
+    const emptyIds = status && Array.isArray(status.empty) ? status.empty : [];
+    if (emptyIds.length === 0) return { ok: true, skipped: true, reason: `没有空地(种子 ${have} 个待种)` };
+
+    const plantCount = Math.min(have, emptyIds.length);
+    const r = await farm.plantSeeds(ITEM_SEED, emptyIds.slice(0, plantCount));
+    if (r.planted > 0) {
+        log('活动', `以薯换福: 种下红薯种子 ×${r.planted} (背包余 ${have - r.planted})`, {
+            module: 'activity', event: '以薯换福', result: 'ok',
+        });
+    }
+    return {
+        ok: true,
+        planted: r.planted || 0,
+        remaining: Math.max(0, have - (r.planted || 0)),
+        hadRealError: !!r.hadRealError,
+    };
+}
+
 module.exports = {
     ACTIVITY_GROUP,
     FIELD_OFFSET,
@@ -490,6 +539,7 @@ module.exports = {
     getState,
     getFriendStall,
     probeFriendStalls,
+    plantMapleSeeds,
     getExchangeList,
     getTodayInfo,
     claimSeeds,

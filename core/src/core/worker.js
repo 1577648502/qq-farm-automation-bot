@@ -392,12 +392,13 @@ async function runMaple(reason = 'interval') {
     try {
         const r = await mapleMarket.runAuto({
             claimSeed: true,
+            plant: true,      // 刚领到种子就直种空地(红薯不进通用优先级)
             sell: cfg.sell,
             autoExchange: cfg.autoExchange,
             exchangeRules: cfg.exchangeRules,
         });
-        if (r.ok && (r.claimed || r.soldCount || (r.exchanged && r.exchanged.length))) {
-            log('活动', `以薯换福: 本轮 领种子×${r.claimed} 卖蜜薯×${r.soldCount}(+${r.income}福币) 兑换${(r.exchanged || []).length}笔`, {
+        if (r.ok && (r.claimed || r.planted || r.soldCount || (r.exchanged && r.exchanged.length))) {
+            log('活动', `以薯换福: 本轮 领种子×${r.claimed} 种薯×${r.planted} 卖蜜薯×${r.soldCount}(+${r.income}福币) 兑换${(r.exchanged || []).length}笔`, {
                 module: 'activity', event: '以薯换福', result: 'ok', trigger: reason,
             });
         }
