@@ -4202,9 +4202,11 @@ async function autoBuyRotationShop(_opts = {}) {
         } catch (e) {
             // 1004012 等"当前买不了"(等级/限购/已过期)属正常业务状态, 不是故障:
             // 记 info 而不是 warn, 否则每轮刷一条 error 日志。
-            // 同一商品同一状态 6 小时只提示一次(等级不足/限购是静态条件, 每轮都刷)。
+            // ⚠ 2026-11-25: 等级不足/限购是**按日刷新的静态条件**, 提示一次没有信息量,
+            //   进程重启还会重现 → 跨天也只提示一次(以 itemId+日期做 signature 不行, 会天天报;
+            //   这里用 minIntervalMs=24h, 状态签名不变就不刷)。
             if (isRotationNotPurchasable(e)) {
-                if (shouldLogOnce('ranch_vendor_skip', String(g.itemId), 6 * 60 * 60 * 1000)) {
+                if (shouldLogOnce('ranch_vendor_skip', String(g.itemId), 24 * 60 * 60 * 1000)) {
                     log('游商', `${rotationGoodsLabel(g)} 当前不可购买(${rotationErrorHint(e)})，跳过`, {
                         module: 'ranch', event: '游商购买', result: 'skip', itemId: g.itemId,
                     });
