@@ -388,7 +388,18 @@ async function runAuto(cfg = {}, breaker = null) {
             if (r.ok && !r.skipped) out.planted = r.planted || 0;
         }
         if (cfg.sell !== false) {
-            const r = await sellPotato(0);
+            // 找最高价的卖(2026-11-25): 探测自己几个号的摊位, 谁价高卖谁;
+            // 没有比价结果(全离线/额度0)兜底卖自己摊。
+            let targetGid = 0;
+            let targetNote = '';
+            try {
+                const p = await probeSellTargets();
+                if (p.best) {
+                    targetGid = p.best.gid;
+                    targetNote = `→${p.best.name}(${p.best.price})`;
+                }
+            } catch { /* 探测失败不挡卖, 走自己摊 */ }
+            const r = await sellPotato(0, targetGid);
             if (!r.ok) {
                 if (breaker) breaker.failure();
                 return { ok: false, reason: r.reason };
@@ -396,6 +407,7 @@ async function runAuto(cfg = {}, breaker = null) {
             if (!r.skipped) {
                 out.soldCount = r.soldCount || 0;
                 out.income = r.income || 0;
+                out.sellTarget = targetNote || '自己摊';
             }
         }
         if (cfg.autoExchange && Array.isArray(cfg.exchangeRules) && cfg.exchangeRules.length > 0) {
@@ -428,6 +440,44 @@ async function runAuto(cfg = {}, breaker = null) {
 }
 
 // ===== 好友摊位探测(2026-11-25 加: 多账号互卖分析) =====
+
+/**
+ * 自动卖目标 = 自己登录的几个号(2026-11-25 定案基础价):
+ *   哈哈200 / 润出去142 / 南桕110 / 北栕99 / 你玩得像蔡徐坤一样88
+ * QQ/微信好友列表不互通, 但 cmd92/93 传任意 gid 都通(跨平台实测), 不需要好友关系。
+ */
+const SELL_TARGET_GIDS = [
+    { gid: 1253397809, name: '哈哈' },
+    { gid: 1097422979, name: '润出去' },
+    { gid: 1244632861, name: '南桕' },
+    { gid: 1229231763, name: '北栕' },
+    { gid: 1226530474, name: '你玩得像蔡徐坤一样' },
+];
+
+/**
+ * 探测固定目标摊位(SSELL_TARGET_GIDS, 排除自己) → 最高价可卖目标。
+ * best null = 别的摊都不可卖(离线/额度0/重定向), 兜底卖自己摊。
+ */
+async function probeSellTargets() {
+    const myGid = toNum(getUserState().gid);
+    const rows = [];
+    for (const t of SELL_TARGET_GIDS) {
+        if (t.gid === myGid) continue; // 自己摊做兜底, 不参与比价
+        const r = await getFriendStall(t.gid);
+        rows.push({
+            gid: t.gid,
+            name: t.name,
+            ok: r.ok,
+            price: r.ok ? ((r.stall && r.stall.price) || 0) : 0,
+            quotaLeft: r.ok ? ((r.stall && r.stall.quotaLeft) || 0) : 0,
+            redirected: !!r.redirected,
+            reason: r.ok ? '' : (r.reason || ''),
+        });
+    }
+    const sellable = rows.filter((x) => x.ok && !x.redirected && x.quotaLeft > 0);
+    sellable.sort((a, b) => b.price - a.price);
+    return { ok: true, rows, best: sellable[0] || null };
+}
 
 /**
  * cmd92 传好友 gid 探测好友摊位。
@@ -538,6 +588,7 @@ module.exports = {
     getState,
     getFriendStall,
     probeFriendStalls,
+    probeSellTargets,
     plantMapleSeeds,
     getExchangeList,
     getTodayInfo,

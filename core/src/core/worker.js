@@ -398,7 +398,7 @@ async function runMaple(reason = 'interval') {
             exchangeRules: cfg.exchangeRules,
         });
         if (r.ok && (r.claimed || r.planted || r.soldCount || (r.exchanged && r.exchanged.length))) {
-            log('活动', `以薯换福: 本轮 领种子×${r.claimed} 种薯×${r.planted} 卖蜜薯×${r.soldCount}(+${r.income}福币) 兑换${(r.exchanged || []).length}笔`, {
+            log('活动', `以薯换福: 本轮 领种子×${r.claimed} 种薯×${r.planted} 卖蜜薯×${r.soldCount}${r.sellTarget ? ` ${r.sellTarget}` : ""}(+${r.income}福币) 兑换${(r.exchanged || []).length}笔`, {
                 module: 'activity', event: '以薯换福', result: 'ok', trigger: reason,
             });
         }
