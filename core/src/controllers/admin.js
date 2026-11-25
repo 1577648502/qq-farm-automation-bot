@@ -3543,7 +3543,7 @@ app.use('/api', (req, res, next) => {
         catch (e) { res.json({ ok: false, error: e.message }); }
     });
     mapleRoute('post', '/api/activity/maple/claim-seed', (id) => provider.claimMapleSeed(id));
-    mapleRoute('post', '/api/activity/maple/sell', (id, body) => provider.sellMaplePotato(id, { count: Number(body.count) || 0 }));
+    mapleRoute('post', '/api/activity/maple/sell', (id, body) => provider.sellMaplePotato(id, { count: Number(body.count) || 0, targetGid: Number(body.targetGid) || 0 }));
     mapleRoute('post', '/api/activity/maple/exchange', (id, body) => provider.exchangeMaple(id, { slot: Number(body.slot) || 0, count: Number(body.count) || 1 }));
     mapleRoute('post', '/api/activity/maple/run-auto', (id) => provider.runMapleAuto(id));
     app.get('/api/activity/milk-tea/work', async (req, res) => {

@@ -1950,9 +1950,9 @@ async function handleApiCall(msg) {
                 result = await mapleMarket.claimSeeds();
                 break;
             case 'sellMaplePotato': {
-                // args[0].count = 卖出数量, 0/缺省 = 全部
+                // args[0].count = 卖出数量(0=全部); args[0].targetGid = 卖到哪个摊位(缺省自己)
                 const mo = args[0] || {};
-                result = await mapleMarket.sellPotato(mo.count || 0);
+                result = await mapleMarket.sellPotato(mo.count || 0, mo.targetGid || 0);
                 break;
             }
             case 'exchangeMaple': {

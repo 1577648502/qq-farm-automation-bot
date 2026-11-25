@@ -290,12 +290,16 @@ async function claimSeeds() {
 }
 
 /**
- * 卖蜜薯(93): count<=0 卖全部; 服务端算单价(基础价+持有溢价), 响应 #193:
- * {#1 实卖数, #2 单价, #3 总收入, #4 剩余接收额度, #5 福币余额}
+ * 卖蜜薯(93): count<=0 卖全部; targetGid 缺省=卖自己摊位, 传好友 gid = 卖到好友摊位
+ * (2026-11-25 实测: cmd92 传好友 gid 可查好友摊位, cmd93 同理待实测)
+ * 卖价 = 摊位基础价 + 卖家当前持有量(服务端算), 整批同价(抓包 30×264=7920 实证)
+ * 响应 #193: {#1 实卖数, #2 单价, #3 总收入, #4 剩余接收额度, #5 福币余额}
  */
-async function sellPotato(count = 0) {
-    const gid = toNum(getUserState().gid);
-    if (!gid) return { ok: false, reason: '未登录, 拿不到 gid' };
+async function sellPotato(count = 0, targetGid = 0) {
+    const myGid = toNum(getUserState().gid);
+    if (!myGid) return { ok: false, reason: '未登录, 拿不到 gid' };
+    const gid = targetGid ? toNum(targetGid) : myGid;
+    if (!gid) return { ok: false, reason: '目标 gid 无效' };
     const cur = await getState();
     if (!cur.ok) return { ok: false, reason: cur.reason || '查状态失败' };
     const holding = cur.state.holding;
@@ -304,7 +308,7 @@ async function sellPotato(count = 0) {
 
     const payloadBytes = Buffer.concat([encodeVarintField(1, gid), encodeVarintField(2, sellCount)]);
     const r = await op(CMD_SELL, CMD_SELL + FIELD_OFFSET, payloadBytes);
-    if (!r.ok) return { ok: false, reason: `卖蜜薯失败 ${r.reason}` };
+    if (!r.ok) return { ok: false, reason: `卖蜜薯失败 ${r.reason}`, targetGid: gid };
     const f = parseTop(Buffer.from(r.resultHex, 'hex'));
     const soldCount = toInt((findField(f, 1) || {}).v) || 0;
     const unitPrice = toInt((findField(f, 2) || {}).v) || 0;
@@ -312,11 +316,11 @@ async function sellPotato(count = 0) {
     const quotaLeft = toInt((findField(f, 4) || {}).v) || 0;
     const coin = toInt((findField(f, 5) || {}).v) || 0;
     if (soldCount > 0) {
-        log('活动', `以薯换福: 卖出蜜薯 ×${soldCount} @${unitPrice} = +${income} 福气币 (余额 ${coin})`, {
+        log('活动', `以薯换福: 卖出蜜薯 ×${soldCount} @${unitPrice} = +${income} 福气币 (余额 ${coin}, 摊位=${gid === myGid ? '自己' : `好友${gid}`})`, {
             module: 'activity', event: '以薯换福', result: 'ok', income,
         });
     }
-    return { ok: true, soldCount, unitPrice, income, quotaLeft, coin };
+    return { ok: true, soldCount, unitPrice, income, quotaLeft, coin, targetGid: gid, selfStall: gid === myGid };
 }
 
 /** 兑换(96): slot 来自 97 的 #1 slot (1..10); count 多数槽实测为 1 次 */

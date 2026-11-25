@@ -550,7 +550,7 @@ function createDataProvider(options) {
         // 以薯换福
         getMapleOverview: (accountRef) => callWorkerApi(resolveAccountRefId(accountRef), 'getMapleOverview', {}),
         claimMapleSeed: (accountRef) => callWorkerApi(resolveAccountRefId(accountRef), 'claimMapleSeed', {}),
-        sellMaplePotato: (accountRef, opts) => callWorkerApi(resolveAccountRefId(accountRef), 'sellMaplePotato', opts || {}),
+        sellMaplePotato: (accountRef, opts) => callWorkerApi(resolveAccountRefId(accountRef), 'sellMaplePotato', opts || { count: 0, targetGid: 0 }),
         exchangeMaple: (accountRef, opts) => callWorkerApi(resolveAccountRefId(accountRef), 'exchangeMaple', opts || {}),
         runMapleAuto: (accountRef) => callWorkerApi(resolveAccountRefId(accountRef), 'runMapleAuto', {}),
         probeMapleStalls: (accountRef, opts) => callWorkerApi(resolveAccountRefId(accountRef), 'probeMapleStalls', opts || {}),
