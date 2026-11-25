@@ -579,6 +579,34 @@ async function plantMapleSeeds() {
     };
 }
 
+/**
+ * 探测任意活动组的 Operate(cmd+100), 只读用途: 找回兑换商品 itemId 等静态配置外的东西。
+ * 返回 [{cmd, errorCode, len, fieldsDump}]; 失败的 cmd 带原因。
+ */
+async function probeShopGroup(group, cmds = [1, 2, 3, 96, 97, 98]) {
+    const { operateRaw, parseTop: pt } = require('./mengchong');
+    const out = [];
+    for (const cmd of cmds) {
+        try {
+            const r = await enqueueActivityRequest(() => operateRaw(toNum(group), cmd, cmd + FIELD_OFFSET, Buffer.alloc(0)));
+            const hex = r.resultHex || '';
+            let dump = '';
+            try {
+                const top = pt(Buffer.from(hex, 'hex'));
+                dump = JSON.stringify(top.slice(0, 30).map((x) => ({
+                    f: x.f,
+                    w: x.w,
+                    v: x.w === 0 ? toInt(x.v) : (x.v.length <= 64 ? x.v.toString('utf8').slice(0, 64) : `<${x.v.length}B>`),
+                })));
+            } catch { dump = ''; }
+            out.push({ cmd, errorCode: toInt(r.errorCode), len: hex.length / 2, dump });
+        } catch (e) {
+            out.push({ cmd, error: String(e.message).slice(0, 80) });
+        }
+    }
+    return { ok: true, group, results: out };
+}
+
 module.exports = {
     ACTIVITY_GROUP,
     FIELD_OFFSET,
@@ -606,5 +634,6 @@ module.exports = {
     exchange,
     getOverview,
     runAuto,
+    probeShopGroup,
     __testing: { parseMainState, parseStall, parseExchangeList, parseExchangeResult, op },
 };
