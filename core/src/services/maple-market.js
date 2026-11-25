@@ -396,7 +396,7 @@ async function runAuto(cfg = {}, breaker = null) {
                 const p = await probeSellTargets();
                 if (p.best) {
                     targetGid = p.best.gid;
-                    targetNote = `→${p.best.name}(${p.best.price})`;
+                    targetNote = `→${p.best.name}(现价${p.best.effPrice}=${p.best.basePrice}基础+${p.best.holding}存量)`;
                 }
             } catch { /* 探测失败不挡卖, 走自己摊 */ }
             const r = await sellPotato(0, targetGid);
@@ -455,7 +455,9 @@ const SELL_TARGET_GIDS = [
 ];
 
 /**
- * 探测固定目标摊位(SSELL_TARGET_GIDS, 排除自己) → 最高价可卖目标。
+ * 探测固定目标摊位(SELL_TARGET_GIDS, 排除自己) → 最高价可卖目标。
+ * 实卖单价 = 摊主基础价 + 摊上当前总量(effPrice), 2026-11-25 定案; 只比基础价会选错目标
+ * (例: 北栕 99+165=264 > 哈哈 200)。
  * best null = 别的摊都不可卖(离线/额度0/重定向), 兜底卖自己摊。
  */
 async function probeSellTargets() {
@@ -464,18 +466,22 @@ async function probeSellTargets() {
     for (const t of SELL_TARGET_GIDS) {
         if (t.gid === myGid) continue; // 自己摊做兜底, 不参与比价
         const r = await getFriendStall(t.gid);
+        const base = r.ok ? ((r.stall && r.stall.price) || 0) : 0;
+        const hold = r.ok ? ((r.stall && r.stall.holding) || 0) : 0;
         rows.push({
             gid: t.gid,
             name: t.name,
             ok: r.ok,
-            price: r.ok ? ((r.stall && r.stall.price) || 0) : 0,
+            basePrice: base,
+            holding: hold,
+            effPrice: base + hold,
             quotaLeft: r.ok ? ((r.stall && r.stall.quotaLeft) || 0) : 0,
             redirected: !!r.redirected,
             reason: r.ok ? '' : (r.reason || ''),
         });
     }
     const sellable = rows.filter((x) => x.ok && !x.redirected && x.quotaLeft > 0);
-    sellable.sort((a, b) => b.price - a.price);
+    sellable.sort((a, b) => b.effPrice - a.effPrice);
     return { ok: true, rows, best: sellable[0] || null };
 }
 
@@ -503,8 +509,8 @@ async function getFriendStall(friendGid) {
 
 /**
  * 批量探测好友摊位价 → {best, rows}。
- * rows: [{gid, name, ok, price, holding, quotaLeft, redirected, reason}]
- * best: 价格最高的可卖目标(不重定向 + 额度>0), null = 没人能卖。
+ * rows: [{gid, name, ok, basePrice, holding, effPrice, quotaLeft, redirected, reason}]
+ * best: 实卖价(基础+摊上总量)最高的可卖目标(不重定向 + 额度>0), null = 没人能卖。
  */
 async function probeFriendStalls(friends, { maxProbe = 50 } = {}) {
     const list = (Array.isArray(friends) ? friends : [])
@@ -514,19 +520,22 @@ async function probeFriendStalls(friends, { maxProbe = 50 } = {}) {
     const rows = [];
     for (const f of list) {
         const r = await getFriendStall(f.gid);
+        const base = r.ok ? (r.stall.price || 0) : 0;
+        const hold = r.ok ? (r.stall.holding || 0) : 0;
         rows.push({
             gid: f.gid,
             name: f.name,
             ok: r.ok,
-            price: r.ok ? (r.stall.price || 0) : 0,
-            holding: r.ok ? (r.stall.holding || 0) : 0,
+            basePrice: base,
+            holding: hold,
+            effPrice: base + hold,
             quotaLeft: r.ok ? (r.stall.quotaLeft || 0) : 0,
             redirected: !!r.redirected,
             reason: r.ok ? '' : (r.reason || ''),
         });
     }
     const sellable = rows.filter((x) => x.ok && !x.redirected && x.quotaLeft > 0);
-    sellable.sort((a, b) => b.price - a.price);
+    sellable.sort((a, b) => b.effPrice - a.effPrice);
     return { rows, best: sellable[0] || null };
 }
 
