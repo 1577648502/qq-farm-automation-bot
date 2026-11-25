@@ -157,13 +157,12 @@ function parseMainState(activityBuf) {
     return out;
 }
 
-/** #192 我的摊位: {#1 {#1 价格, #2 持有, #3 剩余接收额度, #4 {#1 gid, #2 昵称,...}}, #2 1} */
+/** #192 我的摊位: {#1 {#1 价格, #2 持有, #3 剩余接收额度, #4 {#1 gid, #2 昵称,...}}, #2 1}
+ *  ⚠ resultHex 已经是 #192 的内容(operateRaw 返回顶层第一个 f>100 的字段值), 直接 parseTop, 别再找 192 */
 function parseStall(resultHex) {
     const out = { price: 0, holding: 0, quotaLeft: 0, ownerGid: 0, ownerName: '' };
-    const rf = resultFields({ resultHex });
-    const stall = findField(rf, 192); // 结果字段号 = cmd+100
-    if (!stall || stall.w !== 2) return out;
-    const f = parseTop(stall.v);
+    if (!resultHex) return out;
+    const f = parseTop(Buffer.from(resultHex, 'hex'));
     const info = findField(f, 1);
     if (!info || info.w !== 2) return out;
     const s = parseTop(info.v);
