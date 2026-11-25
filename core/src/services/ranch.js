@@ -1431,40 +1431,66 @@ async function autoPlaceCubs(opts = {}) {
     }
 
     const maxPerRound = Math.max(1, toNum(opts.maxPerRound) || 8);
-    free = Math.min(free, maxPerRound);
 
-    // 3. 连续入栏。
-    // ⚠ 抓包定案: 请求里**没有 slot**, 服务端自己挑空位 —— 所以不用算空槽号,
-    //   直接连发(客户端抓包就是连发 4 条), 每条放一只。
-    for (let i = 0; i < free; i++) {
-        // 轮转使用背包里的幼崽
-        const cub = cubs[i % cubs.length];
+    // 3. 按栏舍类型(窝/棚)分开入栏。
+    // ⚠ 抓包定案: 请求里**没有 slot**, 服务端自己挑空位; placeAnimal 按 cub id
+    //   自动选窝(60xxx)/棚(70xxx) —— 所以空位也必须**按窝/棚分开算**。
+    // ⚠ 2026-11-25 线上死锁(84 只卡背包 36h): 旧代码只算总空位数 + 首个失败就 break,
+    //   收获在棚腾出 1 空位时, 优先级第一的窝幼崽发进满的窝 → 1045205 → break,
+    //   棚幼崽永远轮不到 → 空位一直空着 → "入栏被拒 → 暂停买幼崽"死循环刷屏。
+    const countKindFree = (v) => {
+        let coop = 0;
+        let pen = 0;
+        for (const g of (v && v.coops) || []) coop += Math.max(0, (toNum(g && g.capacity) || 0) - (toNum(g && g.animalCount) || 0));
+        for (const g of (v && v.pens) || []) pen += Math.max(0, (toNum(g && g.capacity) || 0) - (toNum(g && g.animalCount) || 0));
+        return { coop, pen };
+    };
+    const kindFree = countKindFree(view);
+    let freeLeft = kindFree.coop + kindFree.pen;
+    const cubLeft0 = cubs.reduce((n, c) => n + c.count, 0);
+    // 按优先级逐种放: 每种放到"该栏舍空位用完 / 该种用完 / 本轮上限"为止
+    for (const cub of cubs) {
+        if (freeLeft <= 0 || result.placed >= maxPerRound) break;
         if (!cub || cub.count <= 0) continue;
-        try {
-            await placeAnimal(cub.id);
-            result.placed += 1;
-            result.details.push(`${cub.name}`);
-            cub.count -= 1;
-            await sleep(300);
-        } catch (e) {
-            const code = parseRanchErrorCode(e);
-            // 1045205 = 服务端拒绝(栏满/动物状态不允许)。栏满时反复尝试只会刷这个错,
-            // 所以记一条 skip 而不是 error —— 等收获腾出位置后下一轮自然成功。
-            // ⚠ 2026-11-20 线上刷屏: 这条日志没走节流, 每轮巡查都打, 10 分钟刷几十条。
-            //   同状态 30 分钟内只提示一次(状态变化时立刻提示)。
-            if (code === 1045205) {
-                const cubLeft = cubs.reduce((n, c) => n + c.count, 0);
-                if (shouldLogOnce('ranch_place_reject', `${animals.length}/${capacity}#${cubLeft}`)) {
-                    log('牧场', `入栏被拒(栏位满或动物状态不允许): 背包还有 ${cubLeft} 只未入栏`, {
-                        module: 'ranch', event: '幼崽入栏', result: 'skip', code,
+        const isPen = toNum(cub.id) >= 70000 && toNum(cub.id) < 80000;
+        while (cub.count > 0 && result.placed < maxPerRound && (isPen ? kindFree.pen : kindFree.coop) > 0) {
+            try {
+                await placeAnimal(cub.id);
+                result.placed += 1;
+                result.details.push(`${cub.name}`);
+                cub.count -= 1;
+                freeLeft -= 1;
+                if (isPen) kindFree.pen -= 1; else kindFree.coop -= 1;
+                await sleep(300);
+            } catch (e) {
+                const code = parseRanchErrorCode(e);
+                // 1045205 = 服务端拒绝(栏满/动物状态不允许): 该栏舍类型本轮别再试,
+                // **换下一种幼崽继续**(另一种栏舍可能有空位); 等收获腾位后下一轮自然成功。
+                // ⚠ 2026-11-20 线上刷屏: 这条日志没走节流, 每轮巡查都打, 10 分钟刷几十条。
+                //   同状态 30 分钟内只提示一次(状态变化时立刻提示)。
+                if (code === 1045205) {
+                    if (isPen) kindFree.pen = 0; else kindFree.coop = 0;
+                    const cubLeft = cubs.reduce((n, c) => n + c.count, 0);
+                    if (shouldLogOnce('ranch_place_reject', `${animals.length}/${capacity}#${cubLeft}#${isPen ? 'pen' : 'coop'}`)) {
+                        log('牧场', `入栏被拒(${cub.name}→${isPen ? '棚' : '窝'}, 栏位满或动物状态不允许): 背包还有 ${cubLeft} 只未入栏`, {
+                            module: 'ranch', event: '幼崽入栏', result: 'skip', code,
+                        });
+                    }
+                } else if (!isExpectedRanchError(e)) {
+                    logWarn('牧场', `幼崽入栏失败 ${cub.name}: ${e.message}`, {
+                        module: 'ranch', event: '幼崽入栏', result: 'error', itemId: cub.id,
                     });
                 }
-            } else if (!isExpectedRanchError(e)) {
-                logWarn('牧场', `幼崽入栏失败 ${cub.name}: ${e.message}`, {
-                    module: 'ranch', event: '幼崽入栏', result: 'error', itemId: cub.id,
-                });
+                break; // 该种幼崽这轮到此为止, 换下一种
             }
-            break;
+        }
+    }
+    if (freeLeft > 0 && cubLeft0 > 0 && result.placed === 0) {
+        // 有空位却一只没放出去: 空位栏舍类型与背包幼崽类型对不上(或全被服务端拒) —— 提示一次
+        if (shouldLogOnce('ranch_place_kind_mismatch', `${kindFree.coop}/${kindFree.pen}#${cubLeft0}`)) {
+            log('牧场', `栏位有空(窝${kindFree.coop}/棚${kindFree.pen})但没有匹配的背包幼崽可放, 背包 ${cubLeft0} 只继续等待`, {
+                module: 'ranch', event: '幼崽入栏', result: 'skip',
+            });
         }
     }
 
@@ -4847,11 +4873,15 @@ async function autoBuyCubs(opts = {}) {
     //   其他策略(最大净利润/时等)下, 背包里堆着的幼崽不影响购买 ——
     //   按商店策略买新的, 背包里的留着用户自己处理(不自动入栏、不拦购买)。
     if (bagUsableCubs > 0 && strategyNow === 'bag_priority') {
-        log('牧场', `背包优先模式: 背包里已有 ${bagUsableCubs} 只可用幼崽未入栏, 暂停买幼崽(应先入栏)`,
-            {
-                module: 'ranch', event: '买幼崽', result: 'skip',
-                bagCubs: bagUsableCubs, bagExcluded: bagTotalCubs - bagUsableCubs, strategy: strategyNow,
-            });
+        // ⚠ 2026-11-25 线上刷屏: 背包 84 只卡着时这条每 20~25s 打一条, 一小时上百条。
+        //   同状态(数量变化才算变)30 分钟提示一次。
+        if (shouldLogOnce('ranch_buy_bag_first', `${bagUsableCubs}`)) {
+            log('牧场', `背包优先模式: 背包里已有 ${bagUsableCubs} 只可用幼崽未入栏, 暂停买幼崽(应先入栏)`,
+                {
+                    module: 'ranch', event: '买幼崽', result: 'skip',
+                    bagCubs: bagUsableCubs, bagExcluded: bagTotalCubs - bagUsableCubs, strategy: strategyNow,
+                });
+        }
         return result;
     }
     // 剩下的全是排外的 → 不买(与农场"背包种子均已排外"同一处理)
