@@ -263,6 +263,9 @@ async function activateFacility(slot) {
 const SHED_LEVEL_RETRY_MS = 30 * 60 * 1000;
 let _shedLevelBlock = { until: 0, levelSeen: 0 };
 let _shedUnlockedLogged = false;   // 解锁成功日志只打一次(2026-11-23 重复刷屏修复)
+// ⚠ 2026-11-26: "已激活但档1"和"未激活"的 buildingId 都是 6002001, 无法从 AllCells 区分。
+//   激活成功后在这里记住(进程内), 避免每轮重复发 ActivateFacility(重复发无害但刷日志)。
+const _shedActivated = new Set();
 
 function getPlayerLevelForShed() {
     try {
@@ -302,7 +305,7 @@ async function autoActivateShed() {
         }
         return result;
     }
-    if (buildings.some(b => isShedBuildingId(b.buildingId))) {
+    if (buildings.some(b => isShedBuildingId(b.buildingId)) || _shedActivated.has('10003')) {
         result.alreadyUnlocked = true;
         return result;
     }
@@ -315,6 +318,7 @@ async function autoActivateShed() {
         const r = await activateFacility(FACILITY_SHED_SLOT);
         result.activated = true;
         _shedLevelBlock = { until: 0, levelSeen: 0 };
+        _shedActivated.add(String(r.slot || FACILITY_SHED_SLOT));   // 记住已激活, 档1(6002001)也不重复发
         // 2026-11-23: 解锁成功日志只打一次(模块内记忆) —— 旧逻辑因 buildingId 变档误判,
         // 同一号 24h 刷了 50 条"棚已解锁"; 且响应里的 level(#3=7)是服务端内部值,
         // 不是小程序显示的棚档位(6002002 实显 Lv3), 打出来只会误导, 不再带等级。
