@@ -5604,6 +5604,37 @@ async function operateRanch(opts = {}) {
                 return { ok: true, action: '棚诊断', detail: JSON.stringify(probe) };
             }
             const slot = Number(opts.slot) || await f.getShedInstId();
+            // opts.place=true: 先 PlaceFacility 把棚实例绑定到场景(x/y 默认 #8/#9=5,5), 再激活
+            // ⚠ 假设E: #12=2 = 棚实例未绑定槽位(编辑器草稿), #12=3 = 已绑定待激活。
+            //   绑定动作 = PlaceFacility(棚实例, 坐标) → 服务端转正后 ActivateFacility 才认。
+            if (opts.place) {
+                const px = Number(opts.x) || 5;
+                const py = Number(opts.y) || 5;
+                let placed = null;
+                try {
+                    placed = await f.placeFacility(slot, px, py, 0);
+                } catch (e) {
+                    return {
+                        ok: true,
+                        action: '激活棚',
+                        detail: `PlaceFacility(${slot},${px},${py}) 失败: ${String(e.message).slice(0, 120)}`,
+                    };
+                }
+                await new Promise(r2 => setTimeout(r2, 400));
+                // 摆放后再查真实实例(可能被服务端转正成新号)
+                let inst = placed.instId || slot;
+                try {
+                    const all2 = await f.getAllCells();
+                    const shed2 = all2.buildings.find(b => b.buildingId >= 6002001 && b.buildingId <= 6002999);
+                    if (shed2) inst = shed2.instId;
+                } catch { /* 用 place 返回的 */ }
+                const r2 = await f.activateFacility(inst);
+                return {
+                    ok: true,
+                    action: '激活棚',
+                    detail: `place(${slot}->${inst}) slot=${r2.slot} gid=${r2.gid} level=${r2.level}`,
+                };
+            }
             const r = await f.activateFacility(slot);
             return {
                 ok: true,
