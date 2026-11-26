@@ -260,10 +260,10 @@ async function activateFacility(slot) {
 // 棚解锁有服务端等级门槛(2026-11-22 用户定案"到等级自动解锁就行"):
 // 1045134 牧场等级不足时记下当时玩家等级, 30 分钟窗口内不再发请求;
 // 玩家等级一变(升级了)立即放行重试 —— 等级一到就自动解锁, 不空打请求。
-// ⭐ 2026-11-26 用户实测确认: **激活(ActivateFacility)门槛 = 牧场21级**。
-//   润出去 Lv23 成功; acc3(20)/acc4(19)/acc6(18) 报 1045115「建筑不存在」
-//   = 服务端对 21 级以下隐藏棚, 不是 bug。升到 21 级自动放行。
-// ⚠ 升档(UpgradeBuilding)门槛 牧场25级: 润出去激活成功后升级报 1045134(当前23级)。
+// ⭐ 2026-11-26 二次修正: 激活门槛**不是21级**(账号3 21级实测仍 1045115)。
+//   重解润出去激活抓包: 物品1102(牧场经验)=205792 → 24级。24成功/21失败
+//   → 门槛 ∈ {22,23,24}, 见下方 SHED_ACTIVATE_LEVEL=22。
+// ⚠ 升档(UpgradeBuilding)门槛 牧场25级: 润出去激活成功后升级报 1045134。
 //   低等级账号每轮的 1045115 由 unlockShed breaker(3 次→30min 熔断)兜底, 不会刷屏。
 // ⚠ 已解锁判定: 已激活棚 buildingId 仍是 6002001(FacilitiesNotify 定案),
 //   区分标志是 instId=10003(激活后升格标准槽位); 未激活是编辑器实例 instId=3。
@@ -299,14 +299,19 @@ function getPlayerLevelForShed() {
  *   对激活但未升档的棚判"未解锁" → 每轮空发 ActivateFacility → 1045115(账号1 的日志根因)。
  *   可靠信号只有两个: RanchDetail 返回棚组, 或棚建筑 instId=10003(激活后升格标准槽位;
  *   未激活是编辑器实例 instId=3)。
- * ⚠ 激活门槛 = 牧场21级(用户 2026-11-26 实测确认): 21 级以下服务端直接 1045115,
- *   到级自动放行, 不用预先探。
- * ⚠ 2026-11-26 四次实锤(账号3 21级仍 1045115): ActivateFacility 的 #1 **不是固定 10003**,
- *   而是棚建筑实例号(AllCells.buildings 里 kind=pen 的 instId)。润出去激活成功时它的棚
- *   实例恰好是 10003; 3/4/6 的棚实例是 3, 传 10003 当然 1045115"建筑不存在"。
- *   → 激活前先查 AllCells 拿棚的真实 instId, 激活成功后它升格成 10003。
+ * ⚠ 激活门槛 = 牧场等级(用户 2026-11-26 认为21级): 21级以下服务端 1045115。
+ * ⚠ 2026-11-26 五次实锤(推翻21级结论): 重解润出去激活抓包, PlayerSceneLogin 里
+ *   物品1102(牧场经验)=205792 → 按 Lv9=10000 步进13000 的公式 = **24级**, 不是21!
+ *   20/19/18/21 级全 1045115, 24 级成功 → 真实门槛 ∈ {22,23,24}, 21 级不够。
+ *   取 SHED_ACTIVATE_LEVEL=22(最激进), 到级自动试, 1045115 走 expected 静默,
+ *   升到 23/24 后下一轮自然再试。#12 状态位: 1=已激活 3=可激活 2=不可激活(等级未达?)。
+ *   (#12 由 PlayerSceneLogin 响应解析, 3/4/6 的棚 #12=2; 润出去激活前 #12=3。)
  * @returns {Promise<{activated:boolean, alreadyUnlocked:boolean, skipped?:string}>}
  */
+
+// 棚激活最低牧场等级: 21级实测不够(账号3 1045115), 润出去24级(205792exp)成功。
+// 真实门槛 22/23/24 三选一, 取22最激进 — 失败是 expected 错误, 升级后自动重试。
+const SHED_ACTIVATE_LEVEL = 22;
 function isShedBuildingId(buildingId) {
     const id = Number(buildingId) || 0;
     return id >= 6002002 && id <= 6002999;
@@ -367,10 +372,10 @@ async function autoActivateShed() {
         result.alreadyUnlocked = true;
         return result;
     }
-    // ② 激活门槛 = 牧场21级(2026-11-26 用户实测确认), 不够直接等升级, 不空打请求
+    // ② 激活门槛 = 牧场等级(见 SHED_ACTIVATE_LEVEL 注释), 不够直接等升级, 不空打请求
     const lvl = getPlayerLevelForShed();
-    if (lvl > 0 && lvl < 21) {
-        result.skipped = `牧场${lvl}级<21级(激活门槛)`;
+    if (lvl > 0 && lvl < SHED_ACTIVATE_LEVEL) {
+        result.skipped = `牧场${lvl}级<${SHED_ACTIVATE_LEVEL}级(激活门槛)`;
         return result;
     }
     let buildings;

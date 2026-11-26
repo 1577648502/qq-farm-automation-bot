@@ -931,7 +931,7 @@ proto.loadProto().then(async () => {
         check('真帧: facility.type = 11', Number(dec.facility.type) === 11, Number(dec.facility.type));
 
         // 行为: buildings 里没有棚(gid 6002001) → 发 ActivateFacility(10003)
-        // 2026-11-26 判据改版: 先查 GetRanchDetail 棚组(可靠信号), 再查等级门槛(21级),
+        // 2026-11-26 判据改版: 先查 GetRanchDetail 棚组(可靠信号), 再查等级门槛(22级),
         // 都过不了才轮到 AllCells/ActivateFacility —— stub 要同时铺这三层。
         const allCellsNoShed = () => types.AllCellsReply.encode(types.AllCellsReply.create({
             buildings: [{ inst_id: 11, building_id: 6001001, level: 3, status: 9 }],
@@ -945,7 +945,7 @@ proto.loadProto().then(async () => {
             AllCells: allCellsNoShed,
             ActivateFacility: () => wire,
         });
-        network.getUserState = () => ({ level: 30 });   // 过 21 级门槛
+        network.getUserState = () => ({ level: 30 });   // 过 22 级门槛
         let r = await facility.autoActivateShed();
         check('无棚 → 调 ActivateFacility', calls.some(c => c.method === 'ActivateFacility'), calls.map(c => c.method));
         check('结果 activated = true', r.activated === true, r);
@@ -988,7 +988,7 @@ proto.loadProto().then(async () => {
         check('棚已升级 → alreadyUnlocked = true', r.alreadyUnlocked === true, r);
     }
 
-    section('24. 棚解锁"到等级自动解锁"(2026-11-26 改版): 21级门槛短路, 1045134 进窗口, 升级立即放行');
+    section('24. 棚解锁"到等级自动解锁"(2026-11-26 二次修正): 22级门槛短路, 1045134 进窗口, 升级立即放行');
     {
         const facility = freshFacility();
         const allCellsNoShed = () => types.AllCellsReply.encode(types.AllCellsReply.create({
@@ -1009,14 +1009,12 @@ proto.loadProto().then(async () => {
                 throw err;
             },
         });
-        // 21级门槛(2026-11-26 用户实测确认): 20 级直接短路, 不发 ActivateFacility
-        network.getUserState = () => ({ level: 20 });
+        // 22级门槛(SHED_ACTIVATE_LEVEL, 2026-11-26 二次修正): 21 级直接短路, 不发 ActivateFacility
+        network.getUserState = () => ({ level: 21 });
         await facility.autoActivateShed();
-        check('20级<21级门槛 → 不发 ActivateFacility(短路)', activateCount === 0, activateCount);
+        check('21级<22级门槛 → 不发 ActivateFacility(短路)', activateCount === 0, activateCount);
         check('结果 skipped 带原因', !!facility.autoActivateShed && true, true);
-        // 到 21 级: 放行 → 发 1 次激活(服务端回 1045134? 不, 21级=激活门槛, 这里直接成功场景不存在;
-        // 真实服务端对 21 级放行激活。stub 抛 1045134 模拟"激活成功但升档不够"的旧场景已不适用,
-        // 改为验证: 过门槛后发出请求)
+        // 到 25 级: 放行 → 发 1 次激活(过门槛后发出请求)
         network.getUserState = () => ({ level: 25 });
         await facility.autoActivateShed();
         check('25级 → 发了 1 次 ActivateFacility', activateCount === 1, activateCount);
