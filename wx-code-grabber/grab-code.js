@@ -18,7 +18,8 @@
  * 用法:
  *   node grab-code.js                  # 默认最多等 90s
  *   node grab-code.js --timeout 60
- *   node grab-code.js --reopen         # 自动关掉并重新唤起农场(默认不唤起, 自己手动打开)
+ *   node grab-code.js --reopen         # 自动关掉并重新唤起农场(默认不唤起, 自己手动打开), 抓完再关掉
+ *   node grab-code.js --reopen --keep-open   # 抓完把农场窗口留着不关
  *   node grab-code.js --json           # 只输出一行 JSON
  *   node grab-code.js --submit         # 抓到后提交到 submit.config.json 里的接口
  *   node grab-code.js --submit --no-start   # 提交后不自动启动账号（默认会）
@@ -80,6 +81,9 @@ let timeoutMs = 90 * 1000;
 // 2026-11-16 起默认不自动唤起/重启农场, 用户自己打开; 要旧行为加 --reopen
 // (自动唤起会 tencent:// 拉起小程序并先关掉已在跑的实例)
 let reopen = false;
+// 抓完是否关闭我们拉起的农场窗口: --reopen 时默认关(2026-11-26 用户要求"打开后要自动关"),
+// 手动开的窗口不动; 想留着看画面加 --keep-open
+let keepOpen = false;
 let jsonOnly = false;
 let submit = false;
 let cliNoStart = false;
@@ -91,6 +95,7 @@ for (let i = 0; i < argv.length; i++) {
     else if (a.startsWith('--timeout=')) { timeoutMs = Number(a.split('=')[1]) * 1000 || timeoutMs; }
     else if (a === '--reopen' || a === '--trigger') { reopen = true; }
     else if (a === '--no-reopen') { reopen = false; }
+    else if (a === '--keep-open' || a === '--no-close') { keepOpen = true; }
     else if (a === '--json') { jsonOnly = true; }
     else if (a === '--submit') { submit = true; }
     else if (a === '--no-start') { cliNoStart = true; }
@@ -172,6 +177,21 @@ function hasRunningFarm() {
 
 function closeRunningFarm() {
     try { execFileSync('pkill', ['-f', 'QQEXMiniProgram'], { timeout: 5000 }); } catch (_) { /* 无匹配时退出码 1 */ }
+}
+
+/**
+ * 关掉农场小程序并等它真的退干净。
+ * pkill 是异步的, 直接 ps 会抓到还在退出的进程(2026-11-26 实测残留 1 个, 200ms 后才消失),
+ * 所以这里补一次 -9 兜底再确认。
+ */
+async function closeFarmAndWait() {
+    closeRunningFarm();
+    await sleep(400);
+    if (hasRunningFarm()) {
+        try { execFileSync('pkill', ['-9', '-f', 'QQEXMiniProgram'], { timeout: 5000 }); } catch (_) { /* 同上 */ }
+        await sleep(250);
+    }
+    return !hasRunningFarm();
 }
 
 function fail(msg, detail, code) {
@@ -573,8 +593,16 @@ async function submitCode(code) {
         }
     }
 
+    // 收尾: --reopen 拉起的小程序抓完就关掉, 别把农场窗口挂在桌面上
+    // (2026-11-26 用户反馈"打开小程序后不自动关闭"; 手动打开的窗口不动它, --keep-open 可保留)
+    let closedAfter = false;
+    if (reopen && !keepOpen) {
+        try { closedAfter = await closeFarmAndWait(); } catch (_) { /* 关不掉不影响结果 */ }
+        if (!jsonOnly) log(closedAfter ? '已关闭 QQ 农场小程序' : '⚠️  小程序没关掉(可手动 pkill -f QQEXMiniProgram)');
+    }
+
     if (jsonOnly) {
-        console.log(JSON.stringify({ ok: true, code: captured.code, file: captured.file, submit: submitResult }));
+        console.log(JSON.stringify({ ok: true, code: captured.code, file: captured.file, closedAfter, submit: submitResult }));
         process.exit(0);
     }
 
@@ -583,7 +611,7 @@ async function submitCode(code) {
     console.log('code      : ' + captured.code);
     console.log('写入文件  : ' + captured.file);
     console.log('缓存目录  : ' + (patchInfo && patchInfo.patched[0] ? patchInfo.patched[0].folder : ''));
-    console.log('说明      : 来自注入的 qq.login()，小程序随取随退；QQ 复用未过期 code，重复抓同值属正常');
+    console.log('说明      : 来自注入的 qq.login()，' + (closedAfter ? '抓完已自动关闭小程序；' : '小程序保持打开（加 --keep-open 或非 --reopen 模式）；') + 'QQ 复用未过期 code，重复抓同值属正常');
     if (submitResult) {
         console.log('提交接口  : ' + submitResult.url + '  (mode=' + submitResult.mode + ', 账号=' + submitResult.accountId + ')');
         console.log('提交结果  : ' + (submitResult.ok ? 'HTTP ' + submitResult.status + (submitResult.relogin ? '（token 过期已自动重登）' : '') + (submitResult.viaProxy ? '（直连失败，经代理 ' + submitResult.viaProxy + '）' : '')

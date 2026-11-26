@@ -11,7 +11,8 @@
 # 用法:
 #   ./grab-now.sh                    # 默认 protocol 模式，最多等 90s
 #   ./grab-now.sh --timeout 180
-#   ./grab-now.sh --reopen           # (protocol) 自动关掉并重新唤起农场(默认不唤起)
+#   ./grab-now.sh --reopen           # (protocol) 自动关掉并重新唤起农场(默认不唤起), 抓完再关掉
+#   ./grab-now.sh --reopen --keep-open   # (protocol) 抓完把农场窗口留着
 #   ./grab-now.sh --json             # (protocol) 只输出一行 JSON
 #   ./grab-now.sh --submit           # (protocol) 抓到后提交到 submit.config.json 配置的接口
 #   ./grab-now.sh --no-start         # (protocol) 提交后不自动启动账号（默认没在跑就会启动）
@@ -65,6 +66,7 @@ while [ $# -gt 0 ]; do
     --timeout=*)   TIMEOUT="${1#*=}"; shift ;;
     --reopen)      PASSTHRU="$PASSTHRU --reopen"; shift ;;
     --no-reopen)   PASSTHRU="$PASSTHRU --no-reopen"; shift ;;  # 兼容旧名(现在就是默认)
+    --keep-open|--no-close) PASSTHRU="$PASSTHRU --keep-open"; shift ;;  # 抓完不关小程序
     --json)        PASSTHRU="$PASSTHRU --json"; shift ;;
     --submit)      PASSTHRU="$PASSTHRU --submit"; shift ;;
     --no-start)    PASSTHRU="$PASSTHRU --no-start"; shift ;;
