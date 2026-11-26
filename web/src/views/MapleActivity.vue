@@ -44,6 +44,10 @@ const claimedToday = computed(() => !!state.value.seedClaimed)
 const holding = computed(() => Number(state.value.holding) || 0)
 const basePrice = computed(() => Number(state.value.basePrice) || 0)
 const totalIncome = computed(() => Number(state.value.totalIncome) || 0)
+/** 实卖单价 = 基础价 + 摊上存量(服务端算, cmd98#3) */
+const sellPrice = computed(() => Number(state.value.sellPrice) || 0)
+/** 摊上存量(好友卖到你摊上的蜜薯, 也是溢价的来源) */
+const stallHolding = computed(() => Number(state.value.stallHolding) || 0)
 
 /** 槽位状态: #7=1 的槽实测是已解锁可兑换 */
 function slotVisible(s: any) {
@@ -178,7 +182,7 @@ watch(currentAccountId, () => refresh())
     </div>
     <div v-else-if="data" class="space-y-3">
       <!-- 概览卡片 -->
-      <div class="grid grid-cols-2 gap-3 lg:grid-cols-6 sm:grid-cols-3">
+      <div class="grid grid-cols-2 gap-3 lg:grid-cols-4 sm:grid-cols-3">
         <div class="border border-gray-200 rounded-lg bg-white p-3 dark:border-gray-700 dark:bg-gray-800">
           <div class="text-xs text-gray-400">
             福气币
@@ -189,7 +193,7 @@ watch(currentAccountId, () => refresh())
         </div>
         <div class="border border-gray-200 rounded-lg bg-white p-3 dark:border-gray-700 dark:bg-gray-800">
           <div class="text-xs text-gray-400">
-            持有蜜薯
+            拥有蜜薯
           </div>
           <div class="mt-1 text-xl font-bold">
             {{ holding }}
@@ -205,15 +209,29 @@ watch(currentAccountId, () => refresh())
         </div>
         <div class="border border-gray-200 rounded-lg bg-white p-3 dark:border-gray-700 dark:bg-gray-800">
           <div class="text-xs text-gray-400">
+            实卖单价
+          </div>
+          <div class="mt-1 text-xl font-bold">
+            {{ sellPrice }}
+          </div>
+          <div class="text-xs text-gray-400">
+            基础 {{ basePrice }} + 存量 {{ stallHolding }}
+          </div>
+        </div>
+        <div class="border border-gray-200 rounded-lg bg-white p-3 dark:border-gray-700 dark:bg-gray-800">
+          <div class="text-xs text-gray-400">
             今日种子
           </div>
           <div class="mt-1 text-xl font-bold" :class="claimedToday ? 'text-green-600' : 'text-amber-600'">
             {{ claimedToday ? '已领' : '未领' }}
           </div>
+          <div class="text-xs text-gray-400">
+            背包种子 {{ state.bagSeedCount ?? '—' }}
+          </div>
         </div>
         <div class="border border-gray-200 rounded-lg bg-white p-3 dark:border-gray-700 dark:bg-gray-800">
           <div class="text-xs text-gray-400">
-            摊位接收额度
+            剩余接收额度
           </div>
           <div class="mt-1 text-xl font-bold">
             {{ stall.quotaLeft ?? '—' }}

@@ -159,10 +159,21 @@ function parseMainState(activityBuf) {
         basePrice: 0,         // #5 今日基础价
         holding: 0,           // #6 持有蜜薯
         totalIncome: 0,       // #7 累计收益
+        raw130: '',           // 调试: #130 原始 hex
     };
     if (!activityBuf || !activityBuf.length) return out;
     try {
-        const f = parseTop(activityBuf);
+        // ⚠ 2026-11-26: Operate 的 activity 容器里装的是 **#130** 这个子消息,
+        //   旧代码直接在顶层找 #1/#3/#5 所以永远读到 0(线上 1/3/4 号全 0 实证)。
+        //   这里先下钻 #130, 找不到再退回顶层(兼容旧结构)。
+        let f = parseTop(activityBuf);
+        const inner = findField(f, 130);
+        if (inner && inner.w === 2) {
+            out.raw130 = inner.v.toString('hex');
+            f = parseTop(inner.v);
+        } else {
+            out.raw130 = Buffer.from(activityBuf).toString('hex');
+        }
         const claim = findField(f, 1);
         if (claim && claim.w === 2) {
             out.seedClaimed = toInt((findField(parseTop(claim.v), 1) || {}).v) === 1;
@@ -295,13 +306,37 @@ async function getTodayInfo() {
         seedId = toInt((findField(s, 1) || {}).v) || ITEM_SEED;
         seedLeft = toInt((findField(s, 2) || {}).v) || 0;
     }
+    // 2026-11-26 线上实测(1/3/4 号): #2=摊上存量(与 #192#1#2 一致), #3=**实卖单价**(=基础价+存量),
+    //   #5=累计收益。例: 北栎 基础167+存量33=200 / 南桉 114+66=180 / 哈哈 90+33=123。
     return {
         ok: true,
         seedId,
         seedLeft,
-        holding: toInt((findField(f, 2) || {}).v) || 0,
+        stallHolding: toInt((findField(f, 2) || {}).v) || 0,
         todayPrice: toInt((findField(f, 3) || {}).v) || 0,
+        totalIncome: toInt((findField(f, 5) || {}).v) || 0,
+        holding: toInt((findField(f, 2) || {}).v) || 0,
     };
+}
+
+/** 背包蜜薯(1032)/红薯种子(20307)数量 —— 游戏 UI「拥有蜜薯」同源; 读不到时 potato=-1 */
+async function getBagCounts() {
+    try {
+        const wh = require('./warehouse');
+        const bag = await wh.getBag();
+        const items = wh.getBagItems(bag) || [];
+        let potato = 0;
+        let seed = 0;
+        for (const it of items) {
+            const id = toInt(it && it.id);
+            const n = toInt(it && it.count) || 0;
+            if (id === ITEM_POTATO) potato += n;
+            else if (id === ITEM_SEED) seed += n;
+        }
+        return { potato, seed };
+    } catch {
+        return { potato: -1, seed: -1 };
+    }
 }
 
 // ===== 操作 =====
@@ -394,9 +429,30 @@ async function getOverview() {
     const st = await getState();
     if (!st.ok) return { ok: false, reason: st.reason || '查状态失败' };
     const list = await getExchangeList().catch(() => ({ ok: false, slots: [], coin: 0 }));
+    const today = await getTodayInfo().catch(() => ({ ok: false }));
+    const bag = await getBagCounts();
+
+    // ⭐ 2026-11-26 线上校准(#130 三个字段全 0, 面板数据全错):
+    //   持有蜜薯 = 背包 1032 总量(游戏 UI「拥有蜜薯」同源, 实测北栎 1290)
+    //   今日基础价 = #192#1#1 摊位基础价(游戏 UI「今日蜜薯收购价 普通 167」)
+    //   实卖单价 = cmd98#3(= 基础价 + 摊上存量, 实测 167+33=200)
+    //   累计收益 = cmd98#5(实测 11976/15789/13666)
+    const state = { ...st.state };
+    const stallPrice = Number(st.stall && st.stall.price) || 0;
+    const stallHolding = Number(st.stall && st.stall.holding) || 0;
+    if (bag.potato >= 0) state.holding = bag.potato;
+    state.bagSeedCount = bag.seed >= 0 ? bag.seed : null;
+    state.stallHolding = today.ok && today.stallHolding ? today.stallHolding : stallHolding;
+    if (stallPrice > 0) state.basePrice = stallPrice;
+    state.sellPrice = (today.ok && today.todayPrice) || (state.basePrice + state.stallHolding) || 0;
+    if (today.ok && today.totalIncome) state.totalIncome = today.totalIncome;
+    if (today.ok) {
+        state.seedLeft = today.seedLeft;
+        state.seedId = today.seedId;
+    }
     return {
         ok: true,
-        state: st.state,
+        state,
         stall: st.stall,
         exchangeSlots: list.slots || [],
         coin: (list.coin || 0) || (st.state.coin || 0),
@@ -649,7 +705,7 @@ async function probeShopGroup(group, cmds = [1, 2, 3, 96, 97, 98], payload = nul
                     v: x.w === 0 ? toInt(x.v) : (x.v.length <= 64 ? x.v.toString('utf8').slice(0, 64) : `<${x.v.length}B>`),
                 })));
             } catch { dump = ''; }
-            out.push({ cmd, errorCode: toInt(r.errorCode), len: hex.length / 2, dump });
+            out.push({ cmd, errorCode: toInt(r.errorCode), len: hex.length / 2, dump, activityHex: r.activity ? r.activity.toString('hex') : '' });
         } catch (e) {
             out.push({ cmd, error: String(e.message).slice(0, 80) });
         }
