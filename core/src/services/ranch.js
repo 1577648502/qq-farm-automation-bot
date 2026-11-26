@@ -5589,14 +5589,13 @@ async function operateRanch(opts = {}) {
                     const buf = Buffer.isBuffer(sceneBody) ? sceneBody : Buffer.from(sceneBody || []);
                     // 粗解析: 找 6002001 所在的 message 边界太复杂, 直接把含 6002001 的 30 字节 hex 上下文带回去
                     const hex = buf.toString('hex');
-                    const target = Buffer.from([0x41, 0x2c, 0x5b, 0x01]).toString('hex'); // varint 6002001
+                    const target = 'd1aaee02'; // varint(6002001) 正确编码(之前 412c5b01 是错的)
                     let ctx = null;
                     let ix = hex.indexOf(target);
-                    if (ix < 0) { ix = hex.indexOf('412c5b01'); }
                     if (ix >= 0) {
                         ctx = hex.slice(Math.max(0, ix - 200), ix + 200);
                     } else {
-                        ctx = '6002001-not-found-in-scene-login len=' + buf.length;
+                        ctx = '6002001-not-found-in-scene-login len=' + buf.length + ' head=' + hex.slice(0, 100);
                     }
                     probe.sceneLoginShed = { len: buf.length, ctx };
                 } catch (e) {
