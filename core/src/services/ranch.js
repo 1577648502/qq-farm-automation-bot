@@ -5559,8 +5559,28 @@ async function operateRanch(opts = {}) {
             // ⚠ 2026-11-26 实锤: #1 不是固定 10003, 是棚建筑实例号(AllCells.buildings 里
             //   kind=pen 的 instId)。润出去成功时恰好是 10003, 3/4/6 是 3 → 传 10003 报
             //   1045115"建筑不存在"。opts.slot 可指定, 不传自动查真实 instId。
+            // opts.probe=true 只做诊断不发激活: 对比 GetFacilityDetail(真实instId/10003) 的差异。
             const f = require('./ranch-facility');
             await enterRanchScene().catch(() => {});
+            if (opts.probe) {
+                const { __privateRanchFns } = module.exports;
+                const detail = __privateRanchFns.getFacilityDetailByInstance;
+                const all = await f.getAllCells();
+                const probe = {
+                    penBuildings: all.buildings.filter(b => (b.buildingId >= 6002001 && b.buildingId <= 6002999)),
+                    details: [],
+                };
+                for (const s of [probe.penBuildings[0] && probe.penBuildings[0].instId, 10003]) {
+                    if (!s) continue;
+                    try {
+                        const pf = await detail(s);
+                        probe.details.push({ queried: s, ok: true, detail: pf });
+                    } catch (e) {
+                        probe.details.push({ queried: s, ok: false, err: String(e.message).slice(0, 120) });
+                    }
+                }
+                return { ok: true, action: '棚诊断', detail: JSON.stringify(probe) };
+            }
             const slot = Number(opts.slot) || await f.getShedInstId();
             const r = await f.activateFacility(slot);
             return {
@@ -5698,5 +5718,6 @@ module.exports = {
         listFriendAnimals, strokeAnimal, putHazard,
         // 建筑档位: 供测试验证"窝/棚显示档位与小程序一致"(AllCells.level 不是显示档位)
         buildingTier, BUILDING_TIER,
+        getFacilityDetailByInstance,
     },
 };
