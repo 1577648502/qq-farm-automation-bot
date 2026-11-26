@@ -2233,19 +2233,9 @@ async function runFarmOperation(opType) {
         }
     }
 
-    // 7. 牧草种子自动补货(2026-11-24): 背包种子 < 阈值 → shop18 补买。
-    //    "补草优先用农场种植的"链路的上游 — 没种子就没草可收。
-    //    开关复用 ranch_buy_grass 的语义: 关掉 = 不要自动化补草(种子也不买)。
-    if (opType === 'all' && isAutomationOn('ranch_buy_grass')) {
-        try {
-            const seedBuy = await ensureGrassSeedStock();
-            if (seedBuy.bought > 0) {
-                actions.push(`买草种${seedBuy.bought}`);
-            }
-        } catch {
-            // 静默失败: 种子补货是锦上添花, 商店偶发失败不打扰巡查日志
-        }
-    }
+    // 7. 牧草种子自动补货 — 已移除(2026-11-26 用户定案): 不需要自动买种子,
+    //    "牧草"指成品(shop6 60金券, ranch_buy_grass 管的就是它)。
+    //    ensureGrassSeedStock/buyGrassSeed 保留导出, 只作手动 API 入口(admin.js)。
 
     // 日志
     const actionStr = actions.length > 0 ? ` → ${actions.join('/')}` : '';
