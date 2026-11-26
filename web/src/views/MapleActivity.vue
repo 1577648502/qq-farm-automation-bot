@@ -107,6 +107,19 @@ async function doAction(path: string, body: any, doneMsg: (d: any) => string) {
 }
 
 const claimSeed = () => doAction('/api/activity/maple/claim-seed', {}, () => '已领红薯种子')
+/** 分享暴击: 上报「分享收购价」→ 当日收购价上涨(每日首次) */
+function shareCrit() {
+  return doAction('/api/activity/maple/share-crit', {}, (d) => {
+    if (d?.ok === false)
+      return d?.reason || '分享未生效'
+    const before = d?.basePriceBefore ?? 0
+    const after = d?.basePriceAfter ?? 0
+    const crit = Number(d?.crit) || 0
+    if (crit > 0)
+      return `分享暴击生效：基础价 ${before} → ${after}（+${crit}）`
+    return `已分享（今日第 ${d?.shareCount ?? 1} 次），基础价 ${after} 未变（当日暴击可能已用过）`
+  })
+}
 function sellAll() {
   return doAction('/api/activity/maple/sell', { count: 0 }, d =>
     `已卖出蜜薯 ×${d?.soldCount || 0}（+${d?.income || 0} 福气币）`)
@@ -150,6 +163,16 @@ watch(currentAccountId, () => refresh())
         >
           <div class="i-carbon-gift" />
           领种子
+        </button>
+        <button
+          type="button"
+          class="min-h-[40px] inline-flex items-center gap-1.5 border border-rose-500 rounded-lg bg-rose-600 px-3 py-2 text-sm text-white font-medium transition hover:bg-rose-700 disabled:opacity-50"
+          :disabled="busy || loading"
+          title="分享收购价触发每日暴击涨价（每日首次）"
+          @click="shareCrit"
+        >
+          <div class="i-carbon-share" />
+          分享暴击
         </button>
         <button
           type="button"
@@ -284,7 +307,7 @@ watch(currentAccountId, () => refresh())
       </section>
 
       <div class="text-xs text-gray-400">
-        说明: 卖出价由服务端结算（今日基础价 + 持有量溢价）。每日 24:00 系统按 80 金收购剩余蜜薯并清仓，远低于摊位价 — 建议每天卖光。每日首次分享有暴击加成（未实现）。
+        说明: 卖出价由服务端结算（今日基础价 + 持有量溢价）。每日 24:00 系统按 80 金收购剩余蜜薯并清仓，远低于摊位价 — 建议每天卖光。每日首次分享收购价可暴击涨价（0 点重置），已接入自动流程。
       </div>
     </div>
   </div>

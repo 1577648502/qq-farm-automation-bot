@@ -1956,6 +1956,10 @@ async function handleApiCall(msg) {
             case 'claimMapleSeed':
                 result = await mapleMarket.claimSeeds();
                 break;
+            case 'reportMapleShare':
+                // 分享暴击: ShareService.ReportShare{share_type=28, scene=2017}(2026-11-26 抓包定案)
+                result = await mapleMarket.reportShareCrit(args[0] || {});
+                break;
             case 'sellMaplePotato': {
                 // args[0].count = 卖出数量(0=全部); args[0].targetGid = 卖到哪个摊位(缺省自己)
                 const mo = args[0] || {};

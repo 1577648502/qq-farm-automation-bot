@@ -3543,6 +3543,8 @@ app.use('/api', (req, res, next) => {
         catch (e) { res.json({ ok: false, error: e.message }); }
     });
     mapleRoute('post', '/api/activity/maple/claim-seed', (id) => provider.claimMapleSeed(id));
+    // 分享暴击: 上报「分享收购价」(ReportShare share_type=28 scene=2017), 每日首次触发涨价
+    mapleRoute('post', '/api/activity/maple/share-crit', (id) => provider.reportMapleShare(id));
     mapleRoute('post', '/api/activity/maple/sell', (id, body) => provider.sellMaplePotato(id, { count: Number(body.count) || 0, targetGid: Number(body.targetGid) || 0 }));
     mapleRoute('post', '/api/activity/maple/exchange', (id, body) => provider.exchangeMaple(id, { slot: Number(body.slot) || 0, count: Number(body.count) || 1 }));
     mapleRoute('post', '/api/activity/maple/run-auto', (id) => provider.runMapleAuto(id));

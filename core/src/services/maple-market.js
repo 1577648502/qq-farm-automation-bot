@@ -36,7 +36,8 @@
 const { log } = require('../utils/utils');
 const { toNum, toInt } = require('../utils/utils');
 const { getItemById } = require('../config/gameConfig');
-const { getUserState } = require('../utils/network');
+const { getUserState, sendMsgAsync } = require('../utils/network');
+const { types } = require('../utils/proto');
 const { operateRaw, parseTop, findField } = require('./mengchong');
 const { sleep } = require('../utils/utils');
 
@@ -319,6 +320,78 @@ async function getTodayInfo() {
     };
 }
 
+// ===== 分享暴击 (ShareService.ReportShare) =====
+// 2026-11-26 从抓包 20261125-105437 / 20261125-115051「新活动」定案:
+//   分享收购价 → ReportShare { #1 share_type=28, #4 scene=2017 }
+//   回包 result: { code=28, reward{#1=2} } + { code=1, reward{#1=8,#2=1} } + { code=102, reward{} }
+//   每日首次成功分享触发一次暴击涨价(0 点清零), 服务端直接改当日收购价, 无需领奖。
+//   参考其它活动 scene: 每日分享任务 42 / 微信礼包 0 / 奶茶 2009 / 快乐不独享 2004 / 牧场 2101、2201。
+const SHARE_TYPE_MAPLE = 28;
+const SHARE_SCENE_MAPLE = 2017;
+
+/** 每个 worker 进程只服务一个账号 → 模块级变量即"本账号"状态 */
+let lastShareDay = '';
+function dayKey() {
+    const d = new Date();
+    return `${d.getFullYear()}-${d.getMonth() + 1}-${d.getDate()}`;
+}
+
+/**
+ * 上报「分享收购价」→ 触发当日分享暴击。
+ * 幂等: 当天重复调用服务端只累加分享次数, 不会重复加价(实测 f1 1→2 价格不变),
+ * 所以进程内按天去重, 别每 20 分钟的自动流程都发一次; 手动按钮传 force=true 强制重发。
+ *
+ * 回包 code=28 的 reward#1 是**今日分享次数**(不是暴击值), 所以暴击效果只能靠
+ * 分享前后 #130#5(今日基础价) 的差值来判定 —— 抓包两天(1/3 号)分享前后 #5 都没变,
+ * 说明当日暴击此前已生效; 真·首分享日的对照由本函数自己打点。
+ * @param {{force?:boolean}} [opt] force=true 忽略当天去重
+ * @returns {object} {ok, crit, shareCount, basePriceBefore, basePriceAfter, skipped?, results?, reason?}
+ */
+async function reportShareCrit(opt = {}) {
+    if (!opt.force && lastShareDay === dayKey()) {
+        return { ok: true, skipped: true, crit: 0, shareCount: 0, basePriceBefore: 0, basePriceAfter: 0, reason: '今天已分享过' };
+    }
+    let before = null;
+    try {
+        before = await getState();
+    } catch { /* 打点失败不影响上报 */ }
+    const basePriceBefore = before && before.ok ? toInt(before.state.basePrice) : 0;
+
+    const req = types.ReportShareRequest.create({
+        share_type: SHARE_TYPE_MAPLE,
+        scene: SHARE_SCENE_MAPLE,
+    });
+    const body = types.ReportShareRequest.encode(req).finish();
+    let reply;
+    try {
+        const r = await sendMsgAsync('gamepb.sharepb.ShareService', 'ReportShare', body);
+        reply = types.ReportShareReply.decode(r.body);
+    } catch (e) {
+        return { ok: false, crit: 0, shareCount: 0, basePriceBefore, basePriceAfter: basePriceBefore, reason: `分享上报失败: ${String((e && e.message) || e).slice(0, 80)}` };
+    }
+    const results = (reply.result || []).map((x) => ({
+        code: Number(x.code) || 0,
+        reward: x.reward ? { f1: Number(x.reward.field1) || 0, f2: Number(x.reward.field2) || 0 } : null,
+    }));
+    // 本活动的 result code=28; reward#1 = 今日分享次数
+    const mine = results.find((x) => x.code === SHARE_TYPE_MAPLE) || null;
+    const shareCount = mine && mine.reward ? mine.reward.f1 : 0;
+
+    // 分享后重读基础价: 暴击生效 → #130#5 上涨, 差值就是暴击量
+    let basePriceAfter = basePriceBefore;
+    try {
+        const after = await getState();
+        if (after && after.ok) basePriceAfter = toInt(after.state.basePrice) || 0;
+    } catch { /* 忽略 */ }
+    const crit = basePriceAfter > basePriceBefore ? basePriceAfter - basePriceBefore : 0;
+    if (mine) lastShareDay = dayKey();
+
+    log('活动', `以薯换福: 分享收购价上报 → 今日第${shareCount}次, 基础价 ${basePriceBefore}→${basePriceAfter}${crit > 0 ? ` (暴击+${crit})` : ''}`, {
+        module: 'activity', event: '以薯换福', result: mine ? 'ok' : 'skip',
+    });
+    return { ok: !!mine, crit, shareCount, basePriceBefore, basePriceAfter, results };
+}
+
 /** 背包蜜薯(1032)/红薯种子(20307)数量 —— 游戏 UI「拥有蜜薯」同源; 读不到时 potato=-1 */
 async function getBagCounts() {
     try {
@@ -467,7 +540,7 @@ async function getOverview() {
  * 返回 { ok, claimed, soldCount, income, exchanged }
  */
 async function runAuto(cfg = {}, breaker = null) {
-    const out = { claimed: 0, planted: 0, soldCount: 0, income: 0, exchanged: [] };
+    const out = { claimed: 0, planted: 0, soldCount: 0, income: 0, exchanged: [], shareCrit: 0 };
     try {
         if (cfg.claimSeed !== false) {
             const r = await claimSeeds();
@@ -484,6 +557,13 @@ async function runAuto(cfg = {}, breaker = null) {
         if (cfg.plant !== false) {
             const r = await plantMapleSeeds();
             if (r.ok && !r.skipped) out.planted = r.planted || 0;
+        }
+        // 分享暴击(2026-11-26): 每日首次上报即涨价, 幂等; 放在卖之前, 当轮就吃到暴击价
+        if (cfg.share !== false) {
+            try {
+                const r = await reportShareCrit();
+                if (r.ok) out.shareCrit = r.crit || 0;
+            } catch { /* 分享失败不挡卖 */ }
         }
         if (cfg.sell !== false) {
             // 找最高价的卖(2026-11-25): 探测自己几个号的摊位, 谁价高卖谁;
@@ -735,6 +815,9 @@ module.exports = {
     plantMapleSeeds,
     getExchangeList,
     getTodayInfo,
+    reportShareCrit,
+    SHARE_TYPE_MAPLE,
+    SHARE_SCENE_MAPLE,
     claimSeeds,
     sellPotato,
     exchange,
