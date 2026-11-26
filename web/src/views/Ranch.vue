@@ -1317,11 +1317,11 @@ onUnmounted(() => {
                   <span>EXP</span>
                 </div>
                 <span class="min-w-0 break-words text-right tabular-nums">
-                  {{ overview.ranchLevel ? `${overview.ranchLevelExp} / ${overview.ranchLevelNeeded}` : `经验 ${overview.ranchExp}` }}
+                  {{ overview.ranchLevel && overview.ranchLevelNeeded ? `${overview.ranchLevelExp} / ${overview.ranchLevelNeeded}` : `总经验 ${overview.ranchExp ?? overview.ranchLevelExp ?? 0}` }}
                 </span>
               </div>
               <div
-                v-if="overview.ranchLevel"
+                v-if="overview.ranchLevel && overview.ranchLevelNeeded"
                 class="h-1.5 w-full overflow-hidden rounded-full bg-gray-100 dark:bg-gray-700"
               >
                 <div

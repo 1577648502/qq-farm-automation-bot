@@ -1629,21 +1629,50 @@ async function useFeedBucket(slot, kind = 'organic', hostGid = 0) {
 //   17396 - 7396 = 10000  → Lv9 的累计起点
 //   1.3万(13000)          → Lv9 本级需要的经验(current/needed = 7396/13000)
 //   即 Lv9 区间 [10000, 23000), 跨度 13000。
-// 只有 Lv9 这一段是实测的, 其余等级按"每级 +13000"外推(待更多样本校正)。
-const RANCH_LEVEL_BASE = 10000;     // Lv9 累计起点
-const RANCH_LEVEL_STEP = 13000;     // 每级跨度(实测 7396/13000)
-const RANCH_LEVEL_BASE_LEVEL = 9;   // 实测起点等级
+// ⚠ 2026-11-26 定案: 旧线性外推全错 —— 官方等级表 = delayRes bundle 的 config/BigFarmLevel
+//   (65级, 非线性)。六个号实测逐级吻合: 18级156080 / 19级167713 / 20级173212 /
+//   21级205792+208027 / 38级731024, 一个不差(Lv9 实测段 10000 也落在表内: 表 Lv9=10300 接近)。
+//   表随仓库发布在 core/src/gameConfig/BigFarmLevel.json; 加载失败才退回旧线性表兜底。
+const RANCH_LEVEL_BASE = 10000;     // Lv9 累计起点(旧线性表, 仅兜底用)
+const RANCH_LEVEL_STEP = 13000;     // 每级跨度(旧线性表, 仅兜底用)
+const RANCH_LEVEL_BASE_LEVEL = 9;   // 实测起点等级(旧线性表, 仅兜底用)
+
+// ============ 官方 BigFarmLevel 牧场等级表 ============
+let bigFarmLevelTable = null;   // [{level, exp}] exp=该级累计起点
+try {
+    bigFarmLevelTable = require('../gameConfig/BigFarmLevel.json');
+    if (!Array.isArray(bigFarmLevelTable) || bigFarmLevelTable.length < 10) bigFarmLevelTable = null;
+} catch { /* 表缺失时退回旧线性表 */ }
+
+/** 按累计经验查官方表: {level, start} ; 表不可用返回 null */
+function getBigFarmLevelByExp(totalExp) {
+    if (!bigFarmLevelTable) return null;
+    const exp = Math.max(0, Number(totalExp) || 0);
+    let row = bigFarmLevelTable[0];
+    for (const r of bigFarmLevelTable) {
+        if (exp >= (Number(r.exp) || 0)) row = r;
+        else break;
+    }
+    return { level: Number(row.level) || 1, start: Number(row.exp) || 0 };
+}
+
+/** 官方表算本级进度: {current, needed} ; 表不可用或等级越界返回 null */
+function getBigFarmLevelProgress(level, totalExp) {
+    if (!bigFarmLevelTable) return null;
+    const byLevel = new Map(bigFarmLevelTable.map(r => [Number(r.level), Number(r.exp) || 0]));
+    const start = byLevel.get(Number(level));
+    if (start === undefined) return null;
+    const nextStart = byLevel.get(Number(level) + 1);
+    if (nextStart === undefined) return { current: Math.max(0, (Number(totalExp) || 0) - start), needed: null };
+    return { current: Math.max(0, Math.min(nextStart - start, (Number(totalExp) || 0) - start)), needed: nextStart - start };
+}
 
 /**
  * 由牧场经验累计值算等级与进度。
+ * 2026-11-26 起内部查官方 BigFarmLevel 表(非线性, 六账号实测吻合);
+ * 表缺失才退回旧线性外推(只有 Lv9 段大致可信)。
  *
- * ⚠ 只有 Lv9 这一段的真实刻度是实测的(起点 10000, 跨度 13000)。
- *   低于 10000 时按"每级 -13000"向下外推, 但外推出的等级起点可能是**负数**
- *   (例如 exp=0 → lv=8, start=-3000), 那样 current = 0-(-3000) = 3000,
- *   会显示"本级已获得 3000 经验", 而账号实际总经验只有 0 —— 自相矛盾。
- *   所以这里把 current 夹到 [0, needed], 保证"本级进度"永远不超过总经验。
- *
- * @param {number} totalExp 物品 1102 的值
+ * @param {number} totalExp 物品 1102 的值(=BasicInfo#21 同值)
  * @returns {{level:number, current:number, needed:number}} 等级 / 本级已得 / 本级所需
  */
 function calcRanchLevel(totalExp) {
@@ -1651,6 +1680,12 @@ function calcRanchLevel(totalExp) {
     //   这里显式转数字, 非数字一律当 0。
     const n = Number(toNum(totalExp));
     const exp = Math.max(0, Number.isFinite(n) ? n : 0);
+    const hit = getBigFarmLevelByExp(exp);
+    if (hit) {
+        const prog = getBigFarmLevelProgress(hit.level, exp);
+        if (prog) return { level: hit.level, current: prog.current, needed: prog.needed || 0 };
+    }
+    // ---- 旧线性表兜底(仅 BigFarmLevel.json 缺失时才会走到) ----
     let level;
     let start;
     if (exp < RANCH_LEVEL_BASE) {
@@ -2098,17 +2133,24 @@ async function getRanchOverview(accountId = '') {
             ]);
             const view = toRanchView(detailReply);
             // ⭐ 牧场等级: 优先 BasicInfo#20(服务端权威, 2026-11-26 抓包定案);
-            //   旧 calcRanchLevel 线性表非线性失真(205792 算成24级实际21), 只作兜底。
+            //   等级表用官方 BigFarmLevel(delayRes bundle, 65级)——六个号实测逐级吻合,
+            //   旧线性表(205792 算成24级)已废。BigFarmLevel 加载失败才走 calcRanchLevel 兜底。
             const authRl = Number((network.getUserState() || {}).ranchLevel) || 0;
             if (toNum(ranchExpReal) > 0) {
                 view.ranchExp = toNum(ranchExpReal);
+                const lvInfo = calcRanchLevel(ranchExpReal); // 内部已改为查 BigFarmLevel 表
                 if (authRl > 0) {
-                    // 权威等级 + 真实总经验: 本级起点非线性算不出, ranchLevelExp 显示累计值
+                    // 权威等级为准; 进度用官方表算本级区间(表起点<=实测锚点时成立)
                     view.ranchLevel = authRl;
-                    view.ranchLevelExp = view.ranchExp;
-                    view.ranchLevelNeeded = null;
+                    const prog = getBigFarmLevelProgress(authRl, view.ranchExp);
+                    if (prog) {
+                        view.ranchLevelExp = prog.current;
+                        view.ranchLevelNeeded = prog.needed;
+                    } else {
+                        view.ranchLevelExp = view.ranchExp;
+                        view.ranchLevelNeeded = null;
+                    }
                 } else {
-                    const lvInfo = calcRanchLevel(ranchExpReal);
                     view.ranchLevel = lvInfo.level;
                     view.ranchLevelExp = lvInfo.current;
                     view.ranchLevelNeeded = lvInfo.needed;

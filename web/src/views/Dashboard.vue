@@ -880,7 +880,7 @@ watch(documentVisibility, (vis) => {
     </div>
 
     <!-- ===== 牧场区: 与农场上下分区, 未开牧场的账号整块不渲染 ===== -->
-    <template v-if="ranchSummary && ranchSummary.levelNeeded">
+    <template v-if="ranchSummary && ranchSummary.level">
       <div class="flex items-center justify-between">
         <div class="flex items-center gap-2 text-sm text-gray-500 font-medium">
           <div class="i-fas-paw text-amber-500" />
@@ -912,9 +912,9 @@ watch(documentVisibility, (vis) => {
                 <div class="i-fas-bolt text-amber-400" />
                 <span>EXP</span>
               </div>
-              <span class="min-w-0 break-words text-right tabular-nums">{{ formatNumber(ranchSummary.levelExp) }} / {{ formatNumber(ranchSummary.levelNeeded) }}</span>
+              <span class="min-w-0 break-words text-right tabular-nums">{{ ranchSummary.levelNeeded ? `${formatNumber(ranchSummary.levelExp)} / ${formatNumber(ranchSummary.levelNeeded)}` : `总经验 ${formatNumber(ranchSummary.levelExp)}` }}</span>
             </div>
-            <div class="h-1.5 w-full overflow-hidden rounded-full bg-gray-100 dark:bg-gray-700">
+            <div v-if="ranchSummary.levelNeeded" class="h-1.5 w-full overflow-hidden rounded-full bg-gray-100 dark:bg-gray-700">
               <div
                 class="h-full rounded-full bg-amber-500 transition-all duration-500"
                 :style="{ width: `${Math.min(100, Math.round((ranchSummary.levelExp / ranchSummary.levelNeeded) * 100))}%` }"
