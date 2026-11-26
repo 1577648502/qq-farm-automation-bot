@@ -4866,7 +4866,17 @@ async function autoBuyCubs(opts = {}) {
     //   **背包里还有可用(未排外)幼崽, 就先别买**, 把它们放完再说;
     //   排外的幼崽不算 "可用", 等于用户明确表示不养这种。
     // ⚠ 2026-11-19 改正: 原来只统计"数量", 不看排外, 也不看用户设的 pet 优先级。
-    let bagUsableCubs = 0;
+    // ⭐ 2026-11-26 线上定案: 暂停买必须**按窝/棚分开**, 且巨大幼崽不算"可用":
+    //   实况(账号1): 窝6/6 满 + 背包 76 火鸡(窝崽), 棚 6/0 全空 + 背包只有巨大水牛x2
+    //   (服务端 PlaceAnimal 拒收, 见 autoPlaceCubs 注释)。旧代码 bagUsableCubs=80
+    //   一刀切暂停 → 棚永远空着不买棚崽。改成:
+    //     bagUsableCoop = 60xxx 未排外非巨大(窝还能自己消化 → 暂停买窝崽)
+    //     bagUsablePen  = 70xxx 未排外非巨大(同上, 棚)
+    //     巨大(65xxx/75xxx)单独计数 —— 服务端当前不收, 放着不挡任何购买。
+    const GIANT_CUB_RE_BUY = /^(65|75)\d{3}$/;
+    let bagUsableCoop = 0;
+    let bagUsablePen = 0;
+    let bagGiantCubs = 0;
     let bagTotalCubs = 0;
     try {
         const warehouse = require('./warehouse');
@@ -4879,10 +4889,15 @@ async function autoBuyCubs(opts = {}) {
             const id = toNum(it.id);
             const info = getItemById ? getItemById(id) : null;
             if (!(info && Number(info.type) === 105)) continue;
-            bagTotalCubs += toNum(it.count);
-            if (!excludeSet.has(id)) bagUsableCubs += toNum(it.count);
+            const cnt = toNum(it.count);
+            bagTotalCubs += cnt;
+            if (excludeSet.has(id)) continue;   // 排外: 不算可用
+            if (GIANT_CUB_RE_BUY.test(String(id))) { bagGiantCubs += cnt; continue; }
+            if (id >= 70000 && id < 80000) bagUsablePen += cnt;
+            else bagUsableCoop += cnt;
         }
     } catch { /* 读不到背包就不做这个保护, 交给上限兜底 */ }
+    const bagUsableCubs = bagUsableCoop + bagUsablePen;   // 兼容旧字段语义(可消化幼崽)
 
     const strategyNow = (() => {
         try {
@@ -4896,21 +4911,33 @@ async function autoBuyCubs(opts = {}) {
     // ⭐ 2026-11-20 用户要求: **只有背包优先时才用背包**。
     //   其他策略(最大净利润/时等)下, 背包里堆着的幼崽不影响购买 ——
     //   按商店策略买新的, 背包里的留着用户自己处理(不自动入栏、不拦购买)。
-    if (bagUsableCubs > 0 && strategyNow === 'bag_priority') {
-        // ⚠ 2026-11-25 线上刷屏: 背包 84 只卡着时这条每 20~25s 打一条, 一小时上百条。
-        //   同状态(数量变化才算变)30 分钟提示一次。
-        if (shouldLogOnce('ranch_buy_bag_first', `${bagUsableCubs}`)) {
-            log('牧场', `背包优先模式: 背包里已有 ${bagUsableCubs} 只可用幼崽未入栏, 暂停买幼崽(应先入栏)`,
+    // ⭐ 2026-11-26: 暂停改**按栏舍分开** —— 窝有背包崽只暂停买窝, 棚照常买棚崽(反之亦然)。
+    //   旧的一刀切(bagUsableCubs>0 全停)让"窝满+棚空+棚崽全是拒收的巨大幼崽"的号棚永远空着。
+    if (strategyNow === 'bag_priority' && (bagUsableCoop > 0 || bagUsablePen > 0)) {
+        const pausedKinds = [];
+        if (bagUsableCoop > 0) pausedKinds.push(`窝${bagUsableCoop}只`);
+        if (bagUsablePen > 0) pausedKinds.push(`棚${bagUsablePen}只`);
+        // ⚠ 2026-11-25 线上刷屏: 同状态(数量变化才算变)30 分钟提示一次。
+        if (shouldLogOnce('ranch_buy_bag_first', `${bagUsableCoop}#${bagUsablePen}`)) {
+            log('牧场', `背包优先模式: 背包里已有未入栏幼崽(${pausedKinds.join('，')}), 暂停买对应栏舍${bagGiantCubs > 0 ? `; 另有 ${bagGiantCubs} 只巨大幼崽服务端暂不收, 不挡购买` : ''}`,
                 {
                     module: 'ranch', event: '买幼崽', result: 'skip',
-                    bagCubs: bagUsableCubs, bagExcluded: bagTotalCubs - bagUsableCubs, strategy: strategyNow,
+                    bagCoop: bagUsableCoop, bagPen: bagUsablePen, bagGiant: bagGiantCubs,
+                    bagExcluded: bagTotalCubs - bagUsableCoop - bagUsablePen - bagGiantCubs, strategy: strategyNow,
                 });
         }
-        return result;
+        // 真正的拦截在下面的购买循环里做(按 kindSlot 跳过有背包崽的栏舍)
     }
-    // 剩下的全是排外的 → 不买(与农场"背包种子均已排外"同一处理)
-    if (bagTotalCubs > 0 && bagUsableCubs === 0) {
-        if (shouldLogOnce('ranch_buy_all_excluded', `excluded#${bagTotalCubs}`)) {
+    // 剩下的全是排外的 → 不买(与农场"背包种子均已排外"同一处理)。
+    // ⚠ 巨大幼崽**不**算这一类: 它们只是服务端暂不收, 不该挡购买(否则窝崽放完后
+    //   巨大幼崽又把棚/窝的购买全部堵死)。只统计"排外且非巨大"。
+    const bagExcludedOnly = (() => {
+        // bagTotalCubs = 可用窝 + 可用棚 + 巨大 + 排外; 排外数 = 总 - 其余三项
+        const excl = bagTotalCubs - bagUsableCoop - bagUsablePen - bagGiantCubs;
+        return bagTotalCubs > 0 && bagUsableCubs === 0 && bagGiantCubs === 0 && excl > 0;
+    })();
+    if (bagExcludedOnly) {
+        if (shouldLogOnce('ranch_buy_all_excluded', `excluded#${bagTotalCubs}#giant${bagGiantCubs}`)) {
             log('牧场', `背包里的 ${bagTotalCubs} 只幼崽全部已排外, 不自动购买也不入栏`,
                 { module: 'ranch', event: '买幼崽', result: 'skip', bagCubs: bagTotalCubs });
         }
@@ -4932,6 +4959,10 @@ async function autoBuyCubs(opts = {}) {
         { key: 'pen', free: Math.min(penSlots, buyBudget), lo: 70000, hi: 80000 },
     ]) {
         if (kindSlot.free <= 0) continue;
+        // bag_priority: 该栏舍的背包幼崽还没消化完 → 这一栏舍不买(另一栏舍不受影响)。
+        // 巨大幼崽不计入(bagUsable* 已排除), 服务端拒收的崽不挡正常购买。
+        if (strategyNow === 'bag_priority' && kindSlot.key === 'coop' && bagUsableCoop > 0) continue;
+        if (strategyNow === 'bag_priority' && kindSlot.key === 'pen' && bagUsablePen > 0) continue;
         const kindUsable = usable.filter(g => g.animalId >= kindSlot.lo && g.animalId < kindSlot.hi);
         for (const g of kindUsable) {
             if (boughtPerKind[kindSlot.key] >= kindSlot.free || spend >= maxSpend) break;
