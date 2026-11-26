@@ -5601,6 +5601,16 @@ async function operateRanch(opts = {}) {
                 } catch (e) {
                     probe.sceneLoginShed = { err: String(e.message).slice(0, 120) };
                 }
+                // ShopProfiles(scene=2) 全商店 tab 列表(找建筑商店 shop_id)
+                try {
+                    const w = protobuf.Writer.create();
+                    w.uint32((1 << 3) | 0).int64(toLong(2));
+                    const { body: spBody } = await network.sendMsgAsync('gamepb.shoppb.ShopService', 'ShopProfiles', w.finish());
+                    const sb = Buffer.isBuffer(spBody) ? spBody : Buffer.from(spBody || []);
+                    probe.shopProfiles = sb.toString('hex').slice(0, 600);
+                } catch (e) {
+                    probe.shopProfiles = String(e.message).slice(0, 120);
+                }
                 return { ok: true, action: '棚诊断', detail: JSON.stringify(probe) };
             }
             const slot = Number(opts.slot) || await f.getShedInstId();
