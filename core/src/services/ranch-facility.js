@@ -260,6 +260,11 @@ async function activateFacility(slot) {
 // 棚解锁有服务端等级门槛(2026-11-22 用户定案"到等级自动解锁就行"):
 // 1045134 牧场等级不足时记下当时玩家等级, 30 分钟窗口内不再发请求;
 // 玩家等级一变(升级了)立即放行重试 —— 等级一到就自动解锁, 不空打请求。
+// ⚠ 2026-11-26 线上实测门槛分层(账号2/3/4/6 对比):
+//   激活(ActivateFacility)门槛 ~牧场22级: 润出去 Lv23 成功, acc3(20)/acc4(19)/acc6(18)
+//   一律报 1045115「建筑不存在」= 服务端对低等级隐藏了棚, 不是 bug。
+//   升档(UpgradeBuilding)门槛 牧场25级: 润出去激活成功后升级报 1045134(当前23级)。
+//   低等级账号每轮的 1045115 由 unlockShed breaker(3 次→30min 熔断)兜底, 不会刷屏。
 const SHED_LEVEL_RETRY_MS = 30 * 60 * 1000;
 let _shedLevelBlock = { until: 0, levelSeen: 0 };
 let _shedUnlockedLogged = false;   // 解锁成功日志只打一次(2026-11-23 重复刷屏修复)
