@@ -5593,7 +5593,7 @@ async function operateRanch(opts = {}) {
                     let ctx = null;
                     let ix = hex.indexOf(target);
                     if (ix >= 0) {
-                        ctx = hex.slice(Math.max(0, ix - 200), ix + 200);
+                        ctx = hex.slice(Math.max(0, ix - 60), ix + 800);
                     } else {
                         ctx = '6002001-not-found-in-scene-login len=' + buf.length + ' head=' + hex.slice(0, 100);
                     }
