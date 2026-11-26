@@ -51,6 +51,21 @@ async function claimTaskReward(taskId, doShared = false) {
     return types.ClaimTaskRewardReply.decode(replyBody);
 }
 
+/**
+ * 客户端上报任务进度(2026-11-26 抓包 20261117-144729_牧场流程验证 定案):
+ *   C->S {#1: task_id, #2: progress} → 服务端直接把任务进度置到该值并判完成。
+ * 用于"UI 行为类"任务(如 cond_type=20「打开好友面板」): 服务端无法从别的 RPC 推断
+ * 玩家打开过面板, 官方客户端就是在面板打开时上报 {task_id, 1}。
+ */
+async function clientReportProgress(taskId, progress) {
+    const body = types.ClientReportProgressRequest.encode(types.ClientReportProgressRequest.create({
+        task_id: toLong(taskId),
+        progress: toLong(progress),
+    })).finish();
+    const { body: replyBody } = await sendMsgAsync('gamepb.taskpb.TaskService', 'ClientReportProgress', body);
+    return types.ClientReportProgressReply.decode(replyBody);
+}
+
 async function claimDailyReward(type, pointIds) {
     if (!types.ClaimDailyRewardRequest || !types.ClaimDailyRewardReply) {
         return { items: [] };
@@ -352,6 +367,45 @@ async function checkAndClaimRanchTasks() {
 
         const claimable = analyzeTaskList(mcTasks, 'daily')
             .filter(t => t.progress >= t.totalProgress && !t.isClaimed);
+
+        // UI 行为类任务自动完成(2026-11-26 抓包定案): cond_type=20 的任务(如「打开好友面板」,
+        // 官方客户端在打开面板时发 ClientReportProgress {task_id, 1}), 服务端无法从其他 RPC
+        // 推断, 不上报就永远卡在 0/1 领不了奖。这里替玩家补上报 → 变可领 → 下面的领取循环收走。
+        const reportable = mcTasks.filter(t => {
+            const cond = toNum(t && t.cond_type);
+            const done = toNum(t && t.progress) >= toNum(t && t.total_progress);
+            return cond === 20 && !done && !(t && t.is_claimed);
+        });
+        for (const raw of reportable) {
+            try {
+                await clientReportProgress(toNum(raw.id), toNum(raw.total_progress) || 1);
+                result.tasks.push(`上报:${formatTask(raw, 'daily').desc}`);
+                await sleep(300);
+            } catch (e) {
+                logWarn('牧场', `上报任务进度失败(#${toNum(raw.id)}): ${e.message}`, {
+                    module: 'ranch', event: '牧场任务', result: 'error', taskId: toNum(raw.id),
+                });
+            }
+        }
+        // 上报后重新拉一次列表, 让刚完成的任务进入可领集合
+        if (reportable.length > 0) {
+            const fresh = await getTaskInfo({ sceneId: RANCH_SCENE_ID });
+            const ti2 = (fresh && fresh.task_info) || null;
+            if (ti2) {
+                const groups2 = [
+                    ...(Array.isArray(ti2.growth_tasks) ? ti2.growth_tasks : []),
+                    ...(Array.isArray(ti2.daily_tasks) ? ti2.daily_tasks : []),
+                    ...(Array.isArray(ti2.side_tasks) ? ti2.side_tasks : []),
+                    ...(Array.isArray(ti2.tasks) ? ti2.tasks : []),
+                ];
+                const mc2 = groups2.filter(t => MC_TYPES.has(toNum(t && t.task_type)));
+                const extra = analyzeTaskList(mc2, 'daily')
+                    .filter(t => t.progress >= t.totalProgress && !t.isClaimed);
+                const seen = new Set(claimable.map(t => t.id));
+                for (const t of extra) if (!seen.has(t.id)) claimable.push(t);
+            }
+        }
+
         result.claimable = claimable.length;
         if (claimable.length === 0) return result;
 
@@ -499,6 +553,7 @@ module.exports = {
     initTaskSystem,
     cleanupTaskSystem,
     claimTaskReward,
+    clientReportProgress,
     doClaim, // 供手动领取使用
     getTaskClaimDailyState: () => ({
         key: 'task_claim',
