@@ -5554,11 +5554,15 @@ async function operateRanch(opts = {}) {
             };
         }
         case 'activateshed': {
-            // 手动激活棚(调试/运维入口): 先强制切牧场场景, 再发 ActivateFacility(10003)。
+            // 手动激活棚(调试/运维入口): 先强制切牧场场景, 再发 ActivateFacility。
             // autoActivateShed 日常会自动做, 这个 case 用于绕过它的"已解锁"判定直接打协议。
+            // ⚠ 2026-11-26 实锤: #1 不是固定 10003, 是棚建筑实例号(AllCells.buildings 里
+            //   kind=pen 的 instId)。润出去成功时恰好是 10003, 3/4/6 是 3 → 传 10003 报
+            //   1045115"建筑不存在"。opts.slot 可指定, 不传自动查真实 instId。
             const f = require('./ranch-facility');
             await enterRanchScene().catch(() => {});
-            const r = await f.activateFacility(10003);
+            const slot = Number(opts.slot) || await f.getShedInstId();
+            const r = await f.activateFacility(slot);
             return {
                 ok: true,
                 action: '激活棚',

@@ -287,7 +287,7 @@ function getPlayerLevelForShed() {
 /**
  * 自动解锁棚(跟窝一样纳入 autoUpgradeBuildings 的自动升级/竣工):
  * 服务端 GetRanchDetail 返回棚组 = 已解锁, 不发请求;
- * 否则按牧场等级决定是否发 ActivateFacility(10003)。解锁后下一轮 autoUpgradeBuildings 自然轮到它。
+ * 否则按牧场等级决定是否发 ActivateFacility。解锁后下一轮 autoUpgradeBuildings 自然轮到它。
  *
  * 判据演变(全部线上实测, 勿回退):
  * ⚠ 2026-11-23: buildingId 会随升级变档(窝 6001001→…→6001004, 棚 6002001→6002002),
@@ -301,6 +301,10 @@ function getPlayerLevelForShed() {
  *   未激活是编辑器实例 instId=3)。
  * ⚠ 激活门槛 = 牧场21级(用户 2026-11-26 实测确认): 21 级以下服务端直接 1045115,
  *   到级自动放行, 不用预先探。
+ * ⚠ 2026-11-26 四次实锤(账号3 21级仍 1045115): ActivateFacility 的 #1 **不是固定 10003**,
+ *   而是棚建筑实例号(AllCells.buildings 里 kind=pen 的 instId)。润出去激活成功时它的棚
+ *   实例恰好是 10003; 3/4/6 的棚实例是 3, 传 10003 当然 1045115"建筑不存在"。
+ *   → 激活前先查 AllCells 拿棚的真实 instId, 激活成功后它升格成 10003。
  * @returns {Promise<{activated:boolean, alreadyUnlocked:boolean, skipped?:string}>}
  */
 function isShedBuildingId(buildingId) {
@@ -316,6 +320,29 @@ function isShedBuildingId(buildingId) {
  */
 let _shedGroupCheck = { at: 0, unlocked: false };
 const SHED_GROUP_CHECK_TTL = 10 * 60 * 1000;
+
+/**
+ * 从 AllCells.buildings 里找棚建筑(6002001~6002999 段)的真实实例号。
+ * 未激活棚是编辑器实例(实测 3/4/6 号都是 instId=3), 激活后升格成 10003。
+ * 查不到返回 0(调用方退回 FACILITY_SHED_SLOT=10003 兜底)。
+ */
+function getShedInstIdFromBuildings(buildings) {
+    const shed = (buildings || []).find(b => {
+        const id = Number(b.buildingId) || 0;
+        return id >= 6002001 && id <= 6002999;
+    });
+    return shed ? (Number(shed.instId) || 0) : 0;
+}
+
+/** 手动激活入口用: 实时查 AllCells 拿棚实例号(查不到退回 10003) */
+async function getShedInstId() {
+    try {
+        return getShedInstIdFromBuildings((await getAllCells()).buildings) || FACILITY_SHED_SLOT;
+    } catch {
+        return FACILITY_SHED_SLOT;
+    }
+}
+
 async function isShedGroupPresent() {
     if (Date.now() - _shedGroupCheck.at < SHED_GROUP_CHECK_TTL) return _shedGroupCheck.unlocked;
     try {
@@ -336,7 +363,7 @@ async function isShedGroupPresent() {
 async function autoActivateShed() {
     const result = { activated: false, alreadyUnlocked: false };
     // ① 最可靠信号: RanchDetail 有棚组 = 服务端已开放, 直接短路
-    if (_shedActivated.has('10003') || (await isShedGroupPresent())) {
+    if (_shedActivated.size > 0 || (await isShedGroupPresent())) {
         result.alreadyUnlocked = true;
         return result;
     }
@@ -364,18 +391,22 @@ async function autoActivateShed() {
         result.skipped = '等级不足(等待升级)';
         return result;
     }
+    // ⚠ #1 = 棚建筑实例号(AllCells.buildings 里 6002xxx 段的 instId), 不是固定 10003。
+    //   激活成功后该实例升格成 10003(润出去抓包实测); 传错号服务端回 1045115"建筑不存在"。
+    //   查不到真实实例号时退回 10003(兼容润出去型布局, 棚实例本来就是 10003 的号)。
+    const shedInst = getShedInstIdFromBuildings(buildings) || FACILITY_SHED_SLOT;
     try {
-        const r = await activateFacility(FACILITY_SHED_SLOT);
+        const r = await activateFacility(shedInst);
         result.activated = true;
         _shedLevelBlock = { until: 0, levelSeen: 0 };
-        _shedActivated.add(String(r.slot || FACILITY_SHED_SLOT));   // 记住已激活, 档1(6002001)也不重复发
+        _shedActivated.add(String(shedInst));                        // 记住已激活, 档1(6002001)也不重复发
         _shedGroupCheck = { at: Date.now(), unlocked: true };       // 激活成功, 同步刷新棚组缓存
         // 2026-11-23: 解锁成功日志只打一次(模块内记忆) —— 旧逻辑因 buildingId 变档误判,
         // 同一号 24h 刷了 50 条"棚已解锁"; 且响应里的 level(#3=7)是服务端内部值,
         // 不是小程序显示的棚档位(6002002 实显 Lv3), 打出来只会误导, 不再带等级。
         if (!_shedUnlockedLogged) {
             _shedUnlockedLogged = true;
-            log('牧场', `棚已解锁(slot=${r.slot || FACILITY_SHED_SLOT}, gid=${r.gid || FACILITY_SHED_GID})`, {
+            log('牧场', `棚已解锁(instId=${shedInst}, slot=${r.slot || shedInst}, gid=${r.gid || FACILITY_SHED_GID})`, {
                 module: 'ranch', event: '棚解锁', result: 'ok',
             });
         }
@@ -575,6 +606,7 @@ module.exports = {
     moveFacility,
     removeFacility,
     activateFacility,
+    getShedInstId,
     autoActivateShed,
     autoUpgradeBuildings,
     autoUnlockRegions,
