@@ -66,6 +66,37 @@ function slotSoldOut(s: any) {
 const exchangeableCount = computed(() =>
   slots.value.filter((s: any) => slotVisible(s) && !slotSoldOut(s)).length)
 
+/** 分享暴击状态(服务端落盘, 每日自动一次): todayDone=今天已分享过 */
+const shareState = computed<any>(() => data.value?.shareState || {})
+const shareDoneToday = computed(() => !!shareState.value.todayDone)
+
+/** ===== 兑换数量: 每槽独立, 默认 1, 上限 = limit-已购(无限制则 99) ===== */
+const exchangeCounts = ref<Record<number, number>>({})
+function maxExchange(s: any) {
+  const limit = Number(s.limit) || 0
+  const sold = Number(s.sold) || 0
+  const remain = limit > 0 ? Math.max(0, limit - sold) : 99
+  return Math.max(1, Math.min(remain, 99))
+}
+function exchangeCount(s: any) {
+  const v = Number(exchangeCounts.value[s.slot]) || 1
+  return Math.min(Math.max(1, v), maxExchange(s))
+}
+function setExchangeCount(s: any, v: any) {
+  const n = Math.min(Math.max(1, Number(v) || 1), maxExchange(s))
+  exchangeCounts.value = { ...exchangeCounts.value, [s.slot]: n }
+}
+function bumpExchange(s: any, delta: number) {
+  setExchangeCount(s, exchangeCount(s) + delta)
+}
+function onCountInput(s: any, ev: Event) {
+  setExchangeCount(s, (ev.target as HTMLInputElement).value)
+}
+/** 本次兑换总价 */
+function exchangeCost(s: any) {
+  return (Number(s.price) || 0) * exchangeCount(s)
+}
+
 async function refresh() {
   const id = currentAccountId.value
   if (!id)
@@ -194,8 +225,10 @@ function sellAll() {
 const runAuto = () => doAction('/api/activity/maple/run-auto', {}, () => '已执行自动流程（领种子+卖薯）')
 
 async function exchangeSlot(s: any) {
-  await doAction('/api/activity/maple/exchange', { slot: s.slot, count: 1 }, d =>
+  const count = exchangeCount(s)
+  await doAction('/api/activity/maple/exchange', { slot: s.slot, count }, d =>
     `兑换成功：${(d?.got || []).map((g: any) => `${itemName(g.id)}×${g.count}`).join('、') || '空'}（- ${d?.spend || 0} 福气币）`)
+  setExchangeCount(s, 1)
 }
 
 onMounted(refresh)
@@ -235,11 +268,15 @@ watch(currentAccountId, () => refresh())
           type="button"
           class="min-h-[40px] inline-flex items-center gap-1.5 border border-rose-500 rounded-lg bg-rose-600 px-3 py-2 text-sm text-white font-medium transition hover:bg-rose-700 disabled:opacity-50"
           :disabled="busy || loading"
-          title="上报「分享收购价」（游戏内每日首次可暴击；实测基础价不变）"
+          :title="`上报「分享收购价」（每日自动一次${shareDoneToday ? '，今天已分享' : ''}；实测基础价不变，保留按钮可手动补一次）`"
           @click="shareCrit"
         >
           <div class="i-carbon-share" />
           分享暴击
+          <span
+            v-if="shareDoneToday"
+            class="ml-0.5 rounded bg-white/25 px-1.5 py-0.5 text-[10px] font-normal"
+          >今日已分享</span>
         </button>
         <button
           type="button"
@@ -386,7 +423,7 @@ watch(currentAccountId, () => refresh())
           <div
             v-for="s in slots"
             :key="s.slot"
-            class="flex items-center justify-between border border-gray-200 rounded-lg px-3 py-2 dark:border-gray-700"
+            class="flex flex-col gap-2 border border-gray-200 rounded-lg px-3 py-2 dark:border-gray-700"
             :class="slotSoldOut(s) ? 'opacity-50' : ''"
           >
             <div>
@@ -395,16 +432,58 @@ watch(currentAccountId, () => refresh())
               </div>
               <div class="text-xs text-gray-400">
                 {{ s.price }} 福气币 · {{ slotSoldOut(s) ? '已兑完' : slotVisible(s) ? '可兑换' : '未解锁' }}
+                <span v-if="s.limit > 0"> · 已购 {{ num(s.sold) }}/{{ s.limit }}</span>
               </div>
             </div>
-            <button
-              type="button"
-              class="rounded-lg bg-amber-600 px-3 py-1.5 text-xs text-white font-medium transition disabled:cursor-not-allowed hover:bg-amber-700 disabled:opacity-40"
-              :disabled="busy || !slotVisible(s) || slotSoldOut(s) || coin < s.price"
-              @click="exchangeSlot(s)"
-            >
-              兑换
-            </button>
+            <div class="flex items-center justify-between gap-2">
+              <div class="flex items-center gap-1">
+                <button
+                  type="button"
+                  class="h-7 w-7 border border-gray-300 rounded-md text-sm leading-none transition dark:border-gray-600 hover:bg-gray-100 disabled:opacity-40 dark:hover:bg-gray-700"
+                  :disabled="busy || exchangeCount(s) <= 1"
+                  title="减少"
+                  @click="bumpExchange(s, -1)"
+                >
+                  −
+                </button>
+                <input
+                  type="number"
+                  class="h-7 w-12 border border-gray-300 rounded-md bg-white px-1 text-center text-xs dark:border-gray-600 dark:bg-gray-900"
+                  min="1"
+                  :max="maxExchange(s)"
+                  :value="exchangeCount(s)"
+                  :disabled="busy || !slotVisible(s) || slotSoldOut(s)"
+                  @input="onCountInput(s, $event)"
+                  @blur="setExchangeCount(s, exchangeCount(s))"
+                >
+                <button
+                  type="button"
+                  class="h-7 w-7 border border-gray-300 rounded-md text-sm leading-none transition dark:border-gray-600 hover:bg-gray-100 disabled:opacity-40 dark:hover:bg-gray-700"
+                  :disabled="busy || exchangeCount(s) >= maxExchange(s)"
+                  title="增加"
+                  @click="bumpExchange(s, 1)"
+                >
+                  +
+                </button>
+                <button
+                  type="button"
+                  class="h-7 border border-gray-300 rounded-md px-1.5 text-[11px] transition dark:border-gray-600 hover:bg-gray-100 disabled:opacity-40 dark:hover:bg-gray-700"
+                  :disabled="busy || exchangeCount(s) >= maxExchange(s)"
+                  title="买到上限"
+                  @click="setExchangeCount(s, maxExchange(s))"
+                >
+                  最大
+                </button>
+              </div>
+              <button
+                type="button"
+                class="rounded-lg bg-amber-600 px-3 py-1.5 text-xs text-white font-medium transition disabled:cursor-not-allowed hover:bg-amber-700 disabled:opacity-40"
+                :disabled="busy || !slotVisible(s) || slotSoldOut(s) || coin < exchangeCost(s)"
+                @click="exchangeSlot(s)"
+              >
+                兑换{{ exchangeCount(s) > 1 ? `×${exchangeCount(s)}` : '' }}（{{ num(exchangeCost(s)) }}）
+              </button>
+            </div>
           </div>
         </div>
       </section>

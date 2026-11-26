@@ -216,6 +216,8 @@ async function runDailyRoutines(force = false) {
         await runCollection('daily_routine');
         // 秋祈良愿: 每日祈愿领奖 + 可选放烟花
         await runAutumnWish('daily_routine');
+        // 以薯换福: 每日分享收购价(落盘去重, 每日只发一次)
+        await runMapleShareDaily('daily_routine');
         // 快乐不独享: 每日快乐值 + 档位奖励
         await runHappyShare('daily_routine');
         // 牧歌初启(11-17 新活动): 档位/助力/任务/分享奖励一键领取
@@ -257,6 +259,7 @@ function stopDailyRoutineTimer() {
     workerScheduler.clear('ad_gift_interval');
     workerScheduler.clear('milk_tea_interval');
     workerScheduler.clear('maple_interval');
+    workerScheduler.clear('maple_share_interval');
 }
 
 /**
@@ -375,6 +378,28 @@ async function runMilkTea(reason = 'interval') {
         const st = MILK_TEA_BREAKER.failure();
         if (st === 'open') log('活动', `奶茶热销中连续失败, 暂停30分钟后重试: ${e.message}`, { module: 'activity', event: '奶茶热销中', result: 'error', trigger: reason });
         else if (!st) log('活动', `奶茶热销中处理失败: ${e.message}`, { module: 'activity', event: '奶茶热销中', result: 'error', trigger: reason });
+        return { ok: false, reason: e.message };
+    }
+}
+
+/**
+ * 以薯换福「分享收购价」每日自动一次(2026-11-26 用户要求)。
+ * 独立于卖薯/领种子: 即使 runAuto 半路失败(比如领种子报错早退), 分享也不会被漏掉。
+ * 去重靠 maple-market 落盘的 data/maple-share-state/<账号>.json, 进程重启不会重发。
+ */
+async function runMapleShareDaily(reason = 'interval') {
+    if (!canRunTasks()) return { skipped: true, reason: 'offline' };
+    if (!getActivityStatus().mapleEnabled) return { skipped: true, reason: 'disabled' };
+    if (mapleMarket.hasSharedToday()) return { skipped: true, reason: '今天已分享' };
+    try {
+        const r = await mapleMarket.reportShareCrit();
+        if (r && r.ok && !r.skipped) {
+            log('活动', `以薯换福: 每日分享收购价 → 今日第${r.shareCount || 1}次, 基础价 ${r.basePriceBefore}→${r.basePriceAfter}`, {
+                module: 'activity', event: '以薯换福', result: 'ok', trigger: reason,
+            });
+        }
+        return r;
+    } catch (e) {
         return { ok: false, reason: e.message };
     }
 }
@@ -629,6 +654,10 @@ function startDailyRoutineTimer() {
     // 以薯换福: 每 20 分钟自查一次(领种子每天一次幂等 + 卖蜜薯有产出就卖)
     workerScheduler.setIntervalTask('maple_interval', 20 * 60 * 1000, () => {
         runMaple('interval').catch(() => null);
+    }, { preventOverlap: true });
+    // 以薯换福 分享收购价: 每天自动一次(落盘去重; 和 maple_interval 分开, 卖薯/领种子失败也照发)
+    workerScheduler.setIntervalTask('maple_share_interval', 20 * 60 * 1000, () => {
+        runMapleShareDaily('interval').catch(() => null);
     }, { preventOverlap: true });
 }
 

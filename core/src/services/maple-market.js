@@ -231,6 +231,8 @@ function parseExchangeList(resultHex) {
             price: toInt((findField(s, 2) || {}).v) || 0,
             type: toInt((findField(s, 3) || {}).v) || 0,
             limit: toInt((findField(s, 4) || {}).v) || 0,
+            // #5 = 已购数量(2026-11-26 实测: 兑 2 个化肥后 #5/#6 都变 2), 剩余可兑 = limit - sold
+            sold: toInt((findField(s, 5) || {}).v) || 0,
             extra5: toInt((findField(s, 5) || {}).v) || 0,
             extra6: toInt((findField(s, 6) || {}).v) || 0,
             visible: !!(toInt((findField(s, 7) || {}).v)),
@@ -334,27 +336,68 @@ async function getTodayInfo() {
 const SHARE_TYPE_MAPLE = 28;
 const SHARE_SCENE_MAPLE = 2017;
 
-/** 每个 worker 进程只服务一个账号 → 模块级变量即"本账号"状态 */
-let lastShareDay = '';
 function dayKey() {
     const d = new Date();
     return `${d.getFullYear()}-${d.getMonth() + 1}-${d.getDate()}`;
 }
 
+// 每日分享状态落盘(2026-11-26 用户要"分享暴击每日自动一次"):
+// 进程内存一重启就没了, 重启后又会重发一次 → 改成 data/maple-share-state/<账号id>.json 按天记。
+let shareStateCache = null;
+function shareStateFile() {
+    const accountId = String(process.env.FARM_ACCOUNT_ID || 'default').replace(/[^\w-]/g, '_');
+    return getDataFile(path.join('maple-share-state', `${accountId}.json`));
+}
+function loadShareState() {
+    if (shareStateCache) return shareStateCache;
+    try {
+        const j = readJsonFile(shareStateFile(), () => ({}));
+        shareStateCache = (j && typeof j === 'object') ? j : {};
+    } catch {
+        shareStateCache = {};
+    }
+    return shareStateCache;
+}
+function saveShareState(patch) {
+    shareStateCache = { ...loadShareState(), ...patch, updatedAt: Date.now() };
+    try { writeJsonFileAtomic(shareStateFile(), shareStateCache); } catch { /* 落盘失败不挡流程 */ }
+    return shareStateCache;
+}
+/** 只给测试用: 丢掉内存缓存, 模拟进程重启后从磁盘重读 */
+function resetShareStateCache() {
+    shareStateCache = null;
+}
+/**
+ * 今天是否已经分享过(自动流程据此每天只发一次)。
+ * 成功 → 当天不再发; 失败(网络/服务端没回本活动码)最多重试 MAX_SHARE_ATTEMPTS 次就收手, 免得每 20 分钟刷一次。
+ */
+const MAX_SHARE_ATTEMPTS = 3;
+function hasSharedToday() {
+    const st = loadShareState();
+    if (!st.day || st.day !== dayKey()) return false;
+    if (st.ok === true) return true;
+    return toInt(st.attempts) >= MAX_SHARE_ATTEMPTS;
+}
+
 /**
  * 上报「分享收购价」→ 触发当日分享暴击。
  * 幂等: 当天重复调用服务端只累加分享次数, 不会重复加价(实测 f1 1→2 价格不变),
- * 所以进程内按天去重, 别每 20 分钟的自动流程都发一次; 手动按钮传 force=true 强制重发。
+ * 所以**按天去重并且落盘**(重启也不会重复发), 自动流程每天自动发一次; 手动按钮传 force=true 强制重发。
  *
  * 回包 code=28 的 reward#1 是**今日分享次数**(不是暴击值), 所以暴击效果只能靠
- * 分享前后 #130#5(今日基础价) 的差值来判定 —— 抓包两天(1/3 号)分享前后 #5 都没变,
- * 说明当日暴击此前已生效; 真·首分享日的对照由本函数自己打点。
+ * 分享前后 #130#5(今日基础价) 的差值来判定 —— 2026-11-26 线上首分享实测 167→167 也没变,
+ * 即暴击不加在基础价/卖价上, 面板文案不要承诺涨价。
  * @param {{force?:boolean}} [opt] force=true 忽略当天去重
  * @returns {object} {ok, crit, shareCount, basePriceBefore, basePriceAfter, skipped?, results?, reason?}
  */
 async function reportShareCrit(opt = {}) {
-    if (!opt.force && lastShareDay === dayKey()) {
-        return { ok: true, skipped: true, crit: 0, shareCount: 0, basePriceBefore: 0, basePriceAfter: 0, reason: '今天已分享过' };
+    if (!opt.force && hasSharedToday()) {
+        const st = loadShareState();
+        return {
+            ok: true, skipped: true, crit: 0, shareCount: toInt(st.shareCount), basePriceBefore: toInt(st.basePriceAfter),
+            basePriceAfter: toInt(st.basePriceAfter),
+            reason: st.ok === true ? '今天已分享过' : `今天已尝试 ${toInt(st.attempts)} 次未成功, 今天不再发`,
+        };
     }
     let before = null;
     try {
@@ -372,6 +415,9 @@ async function reportShareCrit(opt = {}) {
         const r = await sendMsgAsync('gamepb.sharepb.ShareService', 'ReportShare', body);
         reply = types.ReportShareReply.decode(r.body);
     } catch (e) {
+        const prev = loadShareState();
+        const prevAttempts = prev.day === dayKey() ? toInt(prev.attempts) : 0;
+        saveShareState({ day: dayKey(), ok: false, attempts: prevAttempts + 1, at: Date.now(), basePriceBefore, basePriceAfter: basePriceBefore });
         return { ok: false, crit: 0, shareCount: 0, basePriceBefore, basePriceAfter: basePriceBefore, reason: `分享上报失败: ${String((e && e.message) || e).slice(0, 80)}` };
     }
     const results = (reply.result || []).map((x) => ({
@@ -389,7 +435,13 @@ async function reportShareCrit(opt = {}) {
         if (after && after.ok) basePriceAfter = toInt(after.state.basePrice) || 0;
     } catch { /* 忽略 */ }
     const crit = basePriceAfter > basePriceBefore ? basePriceAfter - basePriceBefore : 0;
-    if (mine) lastShareDay = dayKey();
+    // 落盘今天的分享状态: 成功即当天不再发; 没拿到本活动码则计一次尝试, 最多 3 次
+    const prev = loadShareState();
+    const prevAttempts = prev.day === dayKey() ? toInt(prev.attempts) : 0;
+    saveShareState({
+        day: dayKey(), ok: !!mine, attempts: prevAttempts + 1, at: Date.now(),
+        shareCount, crit, basePriceBefore, basePriceAfter,
+    });
 
     log('活动', `以薯换福: 分享收购价上报 → 今日第${shareCount}次, 基础价 ${basePriceBefore}→${basePriceAfter}${crit > 0 ? ` (暴击+${crit})` : ''}`, {
         module: 'activity', event: '以薯换福', result: mine ? 'ok' : 'skip',
@@ -680,11 +732,15 @@ async function sellPotato(count = 0, targetGid = 0, ctx = {}) {
 }
 
 /** 兑换(96): slot 来自 97 的 #1 slot (1..10); count 多数槽实测为 1 次 */
-async function exchange(slot, count = 1) {
-    const payloadBytes = Buffer.concat([
+/** 兑换请求 payload: {#1 slot, #2 count} —— 服务端一次就认 count(2026-11-26 count=2 实测扣 2 份) */
+function encodeExchangePayload(slot, count) {
+    return Buffer.concat([
         encodeVarintField(1, toInt(slot)),
         encodeVarintField(2, Math.max(1, toInt(count) || 1)),
     ]);
+}
+async function exchange(slot, count = 1) {
+    const payloadBytes = encodeExchangePayload(slot, count);
     const r = await op(CMD_EXCHANGE, CMD_EXCHANGE + FIELD_OFFSET, payloadBytes);
     if (!r.ok) return { ok: false, reason: `兑换失败 ${r.reason}` };
     const { spend, got, coin } = parseExchangeResult(r.resultHex);
@@ -733,6 +789,8 @@ async function getOverview() {
         coin: (list.coin || 0) || (st.state.coin || 0),
         // 本账号出售记录汇总(今日/累计), 来自 data/maple-sell-records/<id>.json
         sellSummary: listSellRecords({ limit: 1 }).summary,
+        // 每日分享状态(落盘): {day, ok, attempts, shareCount, basePriceBefore/After}
+        shareState: { ...loadShareState(), todayDone: hasSharedToday() },
     };
 }
 
@@ -1035,8 +1093,13 @@ module.exports = {
     probeShopGroup,
     listSellRecords,
     clearSellRecords,
+    hasSharedToday,
+    loadShareState,
     __testing: {
         parseMainState, parseStall, parseExchangeList, parseExchangeResult, op,
         addSellRecord, loadSellRecords, sellRecordsFile, nameOfGid,
+        // 分享状态(每日自动一次)落盘 → 便于测试重启/跨天/尝试上限
+        dayKey, shareStateFile, loadShareState, saveShareState, resetShareStateCache,
+        encodeExchangePayload,
     },
 };
