@@ -181,7 +181,7 @@ function shareCrit() {
     const crit = Number(d?.crit) || 0
     if (crit > 0)
       return `分享暴击生效：基础价 ${before} → ${after}（+${crit}）`
-    return `已分享（今日第 ${d?.shareCount ?? 1} 次），基础价 ${after} 未变（当日暴击可能已用过）`
+    return `已分享（今日第 ${d?.shareCount ?? 1} 次），基础价 ${after} 未变（实测首分享也不涨）`
   })
 }
 function sellAll() {
@@ -235,7 +235,7 @@ watch(currentAccountId, () => refresh())
           type="button"
           class="min-h-[40px] inline-flex items-center gap-1.5 border border-rose-500 rounded-lg bg-rose-600 px-3 py-2 text-sm text-white font-medium transition hover:bg-rose-700 disabled:opacity-50"
           :disabled="busy || loading"
-          title="分享收购价触发每日暴击涨价（每日首次）"
+          title="上报「分享收购价」（游戏内每日首次可暴击；实测基础价不变）"
           @click="shareCrit"
         >
           <div class="i-carbon-share" />
@@ -329,10 +329,13 @@ watch(currentAccountId, () => refresh())
         </div>
         <div class="border border-gray-200 rounded-lg bg-white p-3 dark:border-gray-700 dark:bg-gray-800">
           <div class="text-xs text-gray-400">
-            累计收益
+            游戏累计收益
           </div>
           <div class="mt-1 text-xl font-bold">
             {{ totalIncome }}
+          </div>
+          <div class="text-xs text-gray-400">
+            cmd98#5（实测不随卖薯变化）
           </div>
         </div>
         <div class="border border-gray-200 rounded-lg bg-white p-3 dark:border-gray-700 dark:bg-gray-800">
@@ -344,6 +347,17 @@ watch(currentAccountId, () => refresh())
           </div>
           <div class="text-xs text-gray-400">
             {{ num(recordSummary.todayBatches) }} 批
+          </div>
+        </div>
+        <div class="border border-gray-200 rounded-lg bg-white p-3 dark:border-gray-700 dark:bg-gray-800">
+          <div class="text-xs text-gray-400">
+            记录累计收入
+          </div>
+          <div class="mt-1 text-xl font-bold">
+            {{ num(recordSummary.income) }}
+          </div>
+          <div class="text-xs text-gray-400">
+            共 {{ recordTotal }} 批
           </div>
         </div>
         <div class="border border-gray-200 rounded-lg bg-white p-3 dark:border-gray-700 dark:bg-gray-800">
@@ -483,7 +497,7 @@ watch(currentAccountId, () => refresh())
       </section>
 
       <div class="text-xs text-gray-400">
-        说明: 卖出价由服务端结算（今日基础价 + 持有量溢价）。每日 24:00 系统按 80 金收购剩余蜜薯并清仓，远低于摊位价 — 建议每天卖光。每日首次分享收购价可暴击涨价（0 点重置），已接入自动流程。
+        说明: 卖出价由服务端结算（今日基础价 + 摊上存量）。每日 24:00 系统按 80 金收购剩余蜜薯并清仓，远低于摊位价 — 建议每天卖光。分享收购价已接入自动流程（游戏文案写「每日首次可暴击」，实测分享前后基础价不变，效果待观察）。
       </div>
     </div>
   </div>
