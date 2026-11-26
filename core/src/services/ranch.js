@@ -5056,7 +5056,7 @@ async function operateRanch(opts = {}) {
     // 便于定位"半更新"部署下 admin/worker 版本不一致的问题
     if (typeof opts === 'string') opts = { op: opts };
     const op = String((opts && opts.op) || '').trim();
-    if (op && !['harvest', 'produce', 'feed', 'feedmachine', 'buycub', 'rotation', 'rotationbuy', 'clean', 'steal', 'place', 'collect', 'harvestanimal', 'donate', 'hazard', 'stroke', 'autostroke', 'autohazard', 'upgrade', 'unlock', 'batch'].includes(op)) {
+    if (op && !['harvest', 'produce', 'feed', 'feedmachine', 'buycub', 'rotation', 'rotationbuy', 'clean', 'steal', 'place', 'collect', 'harvestanimal', 'donate', 'hazard', 'stroke', 'autostroke', 'autohazard', 'upgrade', 'unlock', 'batch', 'activateshed'].includes(op)) {
         logWarn('牧场', `收到未知操作: ${JSON.stringify(opts).slice(0, 200)}`, {
             module: 'ranch', event: '操作牧场', result: 'unknown_op', op,
         });
@@ -5508,6 +5508,18 @@ async function operateRanch(opts = {}) {
                 ok: true,
                 action: '建筑列表',
                 detail: all.buildings.map(b => `#${b.instId} Lv${b.level} ${buildingStatusText(b.status)}`).join('，') || '暂无建筑',
+            };
+        }
+        case 'activateshed': {
+            // 手动激活棚(调试/运维入口): 先强制切牧场场景, 再发 ActivateFacility(10003)。
+            // autoActivateShed 日常会自动做, 这个 case 用于绕过它的"已解锁"判定直接打协议。
+            const f = require('./ranch-facility');
+            await enterRanchScene().catch(() => {});
+            const r = await f.activateFacility(10003);
+            return {
+                ok: true,
+                action: '激活棚',
+                detail: `slot=${r.slot} gid=${r.gid} level=${r.level}`,
             };
         }
         case 'unlock': {
