@@ -436,8 +436,11 @@ function createWorkerManager(options) {
 
             // 超时处理
             // claimAdGift 要等满 30+ 秒(对齐"看广告"时长), 放宽到 60s; refreshCode 45s
+            // sellMaplePotato 要读背包 + 可能补好几刀(每刀 300ms 节流), 给 60s
         const timeoutMs = method === 'refreshCode' ? 45000
-            : (method === 'claimAdGift' ? 60000 : (method === 'reportMapleShare' ? 30000 : 10000));
+            : (method === 'claimAdGift' ? 60000
+                : (method === 'reportMapleShare' ? 30000
+                    : (method === 'sellMaplePotato' ? 60000 : 10000)));
             managerScheduler.setTimeoutTask(`api_timeout_${accountId}_${id}`, timeoutMs, () => {
                 if (worker.requests.has(id)) {
                     worker.requests.delete(id);

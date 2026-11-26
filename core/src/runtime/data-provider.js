@@ -552,7 +552,9 @@ function createDataProvider(options) {
         claimMapleSeed: (accountRef) => callWorkerApi(resolveAccountRefId(accountRef), 'claimMapleSeed', {}),
         // force=true: 手动触发不去重(当天已自动分享过也允许重发, 服务端幂等)
         reportMapleShare: (accountRef) => callWorkerApi(resolveAccountRefId(accountRef), 'reportMapleShare', { force: true }),
-        sellMaplePotato: (accountRef, opts) => callWorkerApi(resolveAccountRefId(accountRef), 'sellMaplePotato', opts || { count: 0, targetGid: 0 }),
+        listMapleSellRecords: (accountRef, opts) => callWorkerApi(resolveAccountRefId(accountRef), 'listMapleSellRecords', opts || {}),
+        clearMapleSellRecords: (accountRef) => callWorkerApi(resolveAccountRefId(accountRef), 'clearMapleSellRecords'),
+        sellMaplePotato: (accountRef, opts) => callWorkerApi(resolveAccountRefId(accountRef), 'sellMaplePotato', { count: 0, targetGid: 0, ...(opts || {}), source: 'manual' }),
         exchangeMaple: (accountRef, opts) => callWorkerApi(resolveAccountRefId(accountRef), 'exchangeMaple', opts || {}),
         runMapleAuto: (accountRef) => callWorkerApi(resolveAccountRefId(accountRef), 'runMapleAuto', {}),
         probeMapleStalls: (accountRef, opts) => callWorkerApi(resolveAccountRefId(accountRef), 'probeMapleStalls', opts || {}),

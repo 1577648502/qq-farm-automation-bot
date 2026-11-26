@@ -3545,6 +3545,23 @@ app.use('/api', (req, res, next) => {
     mapleRoute('post', '/api/activity/maple/claim-seed', (id) => provider.claimMapleSeed(id));
     // 分享暴击: 上报「分享收购价」(ReportShare share_type=28 scene=2017), 每日首次触发涨价
     mapleRoute('post', '/api/activity/maple/share-crit', (id) => provider.reportMapleShare(id));
+    // 蜜薯出售记录: 卖了多少钱 / 单价多少 / 卖给谁(按账号持久化)
+    app.get('/api/activity/maple/sell-records', async (req, res) => {
+        const id = getAccId(req);
+        if (!id) return res.status(400).json({ ok: false, error: '缺少账号 ID' });
+        if (!checkAccountAccess(req, id)) return res.status(403).json({ ok: false, error: '无权访问此账号' });
+        const limit = Math.min(Math.max(Number.parseInt(req.query.limit) || 50, 1), 500);
+        const offset = Math.max(Number.parseInt(req.query.offset) || 0, 0);
+        try { res.json({ ok: true, data: await provider.listMapleSellRecords(id, { limit, offset }) }); }
+        catch (e) { res.json({ ok: false, error: e.message }); }
+    });
+    app.delete('/api/activity/maple/sell-records', async (req, res) => {
+        const id = getAccId(req);
+        if (!id) return res.status(400).json({ ok: false, error: '缺少账号 ID' });
+        if (!checkAccountAccess(req, id)) return res.status(403).json({ ok: false, error: '无权访问此账号' });
+        try { res.json({ ok: true, data: await provider.clearMapleSellRecords(id) }); }
+        catch (e) { res.json({ ok: false, error: e.message }); }
+    });
     mapleRoute('post', '/api/activity/maple/sell', (id, body) => provider.sellMaplePotato(id, { count: Number(body.count) || 0, targetGid: Number(body.targetGid) || 0 }));
     mapleRoute('post', '/api/activity/maple/exchange', (id, body) => provider.exchangeMaple(id, { slot: Number(body.slot) || 0, count: Number(body.count) || 1 }));
     mapleRoute('post', '/api/activity/maple/run-auto', (id) => provider.runMapleAuto(id));

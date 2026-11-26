@@ -1960,10 +1960,18 @@ async function handleApiCall(msg) {
                 // 分享暴击: ShareService.ReportShare{share_type=28, scene=2017}(2026-11-26 抓包定案)
                 result = await mapleMarket.reportShareCrit(args[0] || {});
                 break;
+            case 'listMapleSellRecords':
+                // 蜜薯出售记录(数量/单价/收入/卖给谁), 按账号持久化
+                result = await mapleMarket.listSellRecords(args[0] || {});
+                break;
+            case 'clearMapleSellRecords':
+                result = await mapleMarket.clearSellRecords();
+                break;
             case 'sellMaplePotato': {
-                // args[0].count = 卖出数量(0=全部); args[0].targetGid = 卖到哪个摊位(缺省自己)
+                // args[0].count = 卖出数量(0=全部背包); args[0].targetGid = 卖到哪个摊位(缺省自己)
+                // args[0].source = auto/manual (出售记录里区分)
                 const mo = args[0] || {};
-                result = await mapleMarket.sellPotato(mo.count || 0, mo.targetGid || 0);
+                result = await mapleMarket.sellPotato(mo.count || 0, mo.targetGid || 0, { source: mo.source || 'manual' });
                 break;
             }
             case 'exchangeMaple': {

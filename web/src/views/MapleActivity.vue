@@ -21,6 +21,13 @@ const busy = ref(false)
 const error = ref('')
 const data = ref<any>(null)
 
+/** ===== 出售记录 ===== */
+const recordsLoading = ref(false)
+const records = ref<any[]>([])
+const recordSummary = ref<any>({})
+const recordLimit = ref(50)
+const recordTotal = ref(0)
+
 const ITEM_NAMES: Record<number, string> = {
   20307: '红薯种子',
   40307: '红薯',
@@ -73,6 +80,8 @@ async function refresh() {
     data.value = d.data
     if (data.value?.error)
       error.value = data.value.error
+    // 出售记录(独立文件持久化, 和主状态并行取)
+    await fetchRecords()
   }
   catch (e: any) {
     error.value = e?.response?.data?.error || e?.message || '获取失败'
@@ -80,6 +89,61 @@ async function refresh() {
   finally {
     loading.value = false
   }
+}
+
+/** 蜜薯出售记录: 数量/单价/收入/卖给谁 */
+async function fetchRecords() {
+  const id = currentAccountId.value
+  if (!id)
+    return
+  recordsLoading.value = true
+  try {
+    const res = await api.get('/api/activity/maple/sell-records', {
+      headers: { 'x-account-id': id },
+      params: { limit: recordLimit.value },
+    })
+    const d = res.data
+    if (!d?.ok)
+      throw new Error(d?.error || '获取出售记录失败')
+    records.value = d.data?.records || []
+    recordSummary.value = d.data?.summary || {}
+    recordTotal.value = Number(d.data?.total) || 0
+  }
+  catch {
+    records.value = []
+    recordSummary.value = {}
+    recordTotal.value = 0
+  }
+  finally {
+    recordsLoading.value = false
+  }
+}
+
+async function clearRecords() {
+  const id = currentAccountId.value
+  if (!id)
+    return
+  try {
+    await api.delete('/api/activity/maple/sell-records', { headers: { 'x-account-id': id } })
+    toast.success('出售记录已清空')
+    await fetchRecords()
+  }
+  catch (e: any) {
+    toast.error(e?.response?.data?.error || e?.message || '清空失败')
+  }
+}
+
+/** 时间戳 → MM-DD HH:mm */
+function fmtTime(ts: number) {
+  const n = Number(ts) || 0
+  if (!n)
+    return '—'
+  const d = new Date(n)
+  const p = (x: number) => String(x).padStart(2, '0')
+  return `${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`
+}
+function num(v: any) {
+  return Number(v) || 0
 }
 
 async function doAction(path: string, body: any, doneMsg: (d: any) => string) {
@@ -121,8 +185,11 @@ function shareCrit() {
   })
 }
 function sellAll() {
-  return doAction('/api/activity/maple/sell', { count: 0 }, d =>
-    `已卖出蜜薯 ×${d?.soldCount || 0}（+${d?.income || 0} 福气币）`)
+  return doAction('/api/activity/maple/sell', { count: 0 }, (d) => {
+    const where = d?.targetName ? `卖给 ${d.targetName}${d.selfStall ? '（自己摊）' : ''}，` : ''
+    const left = Number(d?.remaining) > 0 ? `，还剩 ${d.remaining} 个` : ''
+    return `已卖出蜜薯 ×${d?.soldCount || 0}（${where}+${d?.income || 0} 福气币）${left}`
+  })
 }
 const runAuto = () => doAction('/api/activity/maple/run-auto', {}, () => '已执行自动流程（领种子+卖薯）')
 
@@ -268,6 +335,28 @@ watch(currentAccountId, () => refresh())
             {{ totalIncome }}
           </div>
         </div>
+        <div class="border border-gray-200 rounded-lg bg-white p-3 dark:border-gray-700 dark:bg-gray-800">
+          <div class="text-xs text-gray-400">
+            今日卖出
+          </div>
+          <div class="mt-1 text-xl font-bold">
+            {{ num(recordSummary.todayCount) }}
+          </div>
+          <div class="text-xs text-gray-400">
+            {{ num(recordSummary.todayBatches) }} 批
+          </div>
+        </div>
+        <div class="border border-gray-200 rounded-lg bg-white p-3 dark:border-gray-700 dark:bg-gray-800">
+          <div class="text-xs text-gray-400">
+            今日收入
+          </div>
+          <div class="mt-1 text-xl text-amber-600 font-bold">
+            {{ num(recordSummary.todayIncome) }}
+          </div>
+          <div class="text-xs text-gray-400">
+            福气币
+          </div>
+        </div>
       </div>
 
       <!-- 兑换商店 -->
@@ -302,6 +391,93 @@ watch(currentAccountId, () => refresh())
             >
               兑换
             </button>
+          </div>
+        </div>
+      </section>
+
+      <!-- 出售记录: 卖了多少 / 单价 / 收入 / 卖给谁 -->
+      <section class="border border-gray-200 rounded-lg bg-white p-3 dark:border-gray-700 dark:bg-gray-800">
+        <div class="mb-2 flex flex-wrap items-center justify-between gap-2">
+          <h4 class="flex items-center gap-1.5 text-sm font-semibold">
+            <div class="i-carbon-receipt text-emerald-600" />
+            出售记录
+            <span class="text-xs text-gray-400 font-normal">
+              记录累计 {{ num(recordSummary.count) }} 个 · {{ num(recordSummary.income) }} 福气币 · 共 {{ recordTotal }} 批
+            </span>
+          </h4>
+          <div class="flex items-center gap-2">
+            <select v-model.number="recordLimit" class="border border-gray-300 rounded-lg bg-white px-2 py-1 text-xs dark:border-gray-600 dark:bg-gray-800" @change="fetchRecords">
+              <option :value="20">
+                最近 20
+              </option>
+              <option :value="50">
+                最近 50
+              </option>
+              <option :value="200">
+                最近 200
+              </option>
+            </select>
+            <button
+              type="button"
+              class="inline-flex items-center gap-1 border border-gray-300 rounded-lg px-2 py-1 text-xs transition dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-700"
+              :disabled="recordsLoading"
+              @click="fetchRecords"
+            >
+              <div class="i-carbon-renew" :class="{ 'animate-spin': recordsLoading }" />
+              刷新
+            </button>
+            <button
+              type="button"
+              class="inline-flex items-center gap-1 border border-red-300 rounded-lg px-2 py-1 text-xs text-red-600 transition dark:border-red-800 hover:bg-red-50 dark:hover:bg-red-900/20"
+              :disabled="recordsLoading || !records.length"
+              @click="clearRecords"
+            >
+              <div class="i-carbon-trash-can" />
+              清空
+            </button>
+          </div>
+        </div>
+
+        <div v-if="recordSummary.targets && recordSummary.targets.length" class="mb-2 flex flex-wrap gap-2">
+          <span
+            v-for="t in recordSummary.targets"
+            :key="t.name"
+            class="inline-flex items-center gap-1 border border-gray-200 rounded-full px-2 py-0.5 text-xs text-gray-600 dark:border-gray-700 dark:text-gray-300"
+          >
+            {{ t.name }}
+            <span class="text-gray-400">{{ t.count }} 个 / {{ t.income }} 币</span>
+          </span>
+        </div>
+
+        <div v-if="!records.length" class="py-6 text-center text-xs text-gray-400">
+          {{ recordsLoading ? '加载中…' : '还没有出售记录（自动流程卖出后会自动记账）' }}
+        </div>
+        <div v-else class="space-y-1.5">
+          <div
+            v-for="(r, i) in records"
+            :key="`${r.at}-${i}`"
+            class="flex flex-wrap items-center justify-between gap-2 border border-gray-100 rounded px-2.5 py-2 text-xs dark:border-gray-700"
+          >
+            <div class="flex items-center gap-2">
+              <span class="text-gray-400">{{ fmtTime(r.at) }}</span>
+              <span class="rounded bg-gray-100 px-1.5 py-0.5 text-[11px] text-gray-600 dark:bg-gray-700 dark:text-gray-300">
+                {{ r.source === 'auto' ? '自动' : '手动' }}
+              </span>
+              <span class="font-medium">×{{ r.soldCount }}</span>
+              <span class="text-gray-400">@</span>
+              <span class="font-medium">{{ r.unitPrice }}</span>
+              <span v-if="r.stallBasePrice != null" class="text-[11px] text-gray-400">
+                ({{ r.stallBasePrice }}基础 + {{ r.stallHolding ?? 0 }}存量)
+              </span>
+            </div>
+            <div class="flex items-center gap-3">
+              <span class="text-emerald-600 font-semibold">+{{ r.income }}</span>
+              <span class="text-gray-500">
+                卖给 <span class="font-medium">{{ r.targetName }}</span>
+                <span v-if="r.selfStall" class="text-[11px] text-gray-400">(自己摊)</span>
+              </span>
+              <span class="text-[11px] text-gray-400">余额 {{ r.coinAfter }}</span>
+            </div>
           </div>
         </div>
       </section>

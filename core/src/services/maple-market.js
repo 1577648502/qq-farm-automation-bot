@@ -33,12 +33,17 @@
  *   - 24:00 自动按最终价结算清仓(基础价 80 金, 不如卖摊位划算 → 应每天卖光)
  */
 
+const fs = require('node:fs');
+const path = require('node:path');
+const process = require('node:process');
 const { log } = require('../utils/utils');
 const { toNum, toInt } = require('../utils/utils');
 const { getItemById } = require('../config/gameConfig');
+const { getDataFile } = require('../config/runtime-paths');
 const { getUserState, sendMsgAsync } = require('../utils/network');
 const { types } = require('../utils/proto');
 const { operateRaw, parseTop, findField } = require('./mengchong');
+const { readJsonFile, writeJsonFileAtomic } = require('./json-db');
 const { sleep } = require('../utils/utils');
 
 const ACTIVITY_GROUP = 2026111708;
@@ -158,7 +163,7 @@ function parseMainState(activityBuf) {
         seedClaimed: false,   // #1 {#1: 1} 今天种子已领
         coin: 0,              // #3 福气币余额
         basePrice: 0,         // #5 今日基础价
-        holding: 0,           // #6 持有蜜薯
+        holding: 0,           // #6 摊上存量(⚠ 不是背包数量! 2026-11-26 实测 <背包 986~1467)
         totalIncome: 0,       // #7 累计收益
         raw130: '',           // 调试: #130 原始 hex
     };
@@ -443,38 +448,235 @@ async function claimSeeds() {
     return { ok: true, seedCount };
 }
 
+// ===== 出售记录 (2026-11-26: 卖了多少钱 / 单价多少 / 卖给谁) =====
+// 持久化: data/maple-sell-records/<账号id>.json —— worker 一账号一进程(FARM_ACCOUNT_ID 区分),
+// 只记**真卖出去**的批次(soldCount>0); 失败/空仓/跳过不落盘, 免得刷屏。
+const SELL_RECORD_LIMIT = 500;
+/** 一次卖薯最多补几刀(服务端单次上限未知, 回执 #1 是实卖数, 按差额续卖) */
+const MAX_SELL_ROUNDS = 8;
+let sellRecordsCache = null;
+
+function sellRecordsFile() {
+    const accountId = String(process.env.FARM_ACCOUNT_ID || 'default').replace(/[^\w-]/g, '_');
+    return getDataFile(path.join('maple-sell-records', `${accountId}.json`));
+}
+
+function loadSellRecords() {
+    if (sellRecordsCache) return sellRecordsCache;
+    sellRecordsCache = [];
+    try {
+        const file = sellRecordsFile();
+        if (fs.existsSync(file)) {
+            const j = readJsonFile(file, () => ({ records: [] }));
+            if (j && Array.isArray(j.records)) sellRecordsCache = j.records;
+        }
+    } catch {
+        sellRecordsCache = [];
+    }
+    return sellRecordsCache;
+}
+
+function saveSellRecords() {
+    try {
+        writeJsonFileAtomic(sellRecordsFile(), {
+            records: loadSellRecords().slice(-SELL_RECORD_LIMIT),
+            updatedAt: Date.now(),
+        });
+    } catch (e) {
+        log('活动', `以薯换福: 保存出售记录失败: ${e.message}`, { module: 'activity', event: '以薯换福', result: 'error' });
+    }
+}
+
+/** gid → 昵称: 自己的号用登录昵称, 其余查固定目标表, 都没有就留 gid */
+function nameOfGid(gid, myGid) {
+    const g = toNum(gid);
+    if (!g) return '未知';
+    if (g === toNum(myGid)) return getUserState().name || '自己';
+    const hit = SELL_TARGET_GIDS.find((t) => t.gid === g);
+    return hit ? hit.name : `gid:${g}`;
+}
+
+/**
+ * 追加一条出售记录。
+ * @param {object} entry soldCount/unitPrice/income/targetGid/stallBasePrice/stallHolding/quotaLeft/coin/source
+ * @returns {object} 落盘的记录
+ */
+function addSellRecord(entry = {}) {
+    const myGid = toNum(getUserState().gid);
+    const list = loadSellRecords();
+    const rec = {
+        at: Date.now(),
+        soldCount: toInt(entry.soldCount) || 0,
+        unitPrice: toInt(entry.unitPrice) || 0,
+        income: toInt(entry.income) || 0,
+        targetGid: toNum(entry.targetGid) || 0,
+        targetName: '',
+        selfStall: false,
+        stallBasePrice: entry.stallBasePrice == null ? null : toInt(entry.stallBasePrice),
+        stallHolding: entry.stallHolding == null ? null : toInt(entry.stallHolding),
+        quotaLeft: toInt(entry.quotaLeft) || 0,
+        coinAfter: toInt(entry.coin) || 0,
+        source: entry.source === 'auto' ? 'auto' : 'manual',
+    };
+    rec.selfStall = !rec.targetGid || rec.targetGid === myGid;
+    rec.targetName = entry.targetName || nameOfGid(rec.targetGid || myGid, myGid);
+    list.push(rec);
+    if (list.length > SELL_RECORD_LIMIT) list.splice(0, list.length - SELL_RECORD_LIMIT);
+    saveSellRecords();
+    return rec;
+}
+
+function dayKeyOf(ts) {
+    const d = new Date(ts || Date.now());
+    return `${d.getFullYear()}-${d.getMonth() + 1}-${d.getDate()}`;
+}
+
+/**
+ * 出售记录列表(最新在前) + 汇总
+ * @param {{limit?:number, offset?:number}} [options]
+ * @returns {object} {records, total, summary:{todayCount,todayIncome,todayBatches,count,income,targets}}
+ */
+function listSellRecords(options = {}) {
+    const limit = Math.min(Math.max(toInt(options.limit) || 50, 1), SELL_RECORD_LIMIT);
+    const offset = Math.max(toInt(options.offset) || 0, 0);
+    const all = loadSellRecords()
+        .map((r, i) => ({ r, i }))
+        .sort((a, b) => ((b.r.at || 0) - (a.r.at || 0)) || (b.i - a.i))
+        .map((x) => x.r);
+    const today = dayKeyOf();
+    const todayRows = all.filter((r) => dayKeyOf(r.at) === today);
+    const sum = (rows, key) => rows.reduce((n, r) => n + (toInt(r[key]) || 0), 0);
+    // 按摊位汇总(卖给谁的分布)
+    const targets = {};
+    for (const r of all) {
+        const k = r.targetName || `gid:${r.targetGid}`;
+        if (!targets[k]) targets[k] = { name: k, count: 0, income: 0 };
+        targets[k].count += toInt(r.soldCount) || 0;
+        targets[k].income += toInt(r.income) || 0;
+    }
+    return {
+        records: all.slice(offset, offset + limit),
+        total: all.length,
+        summary: {
+            todayCount: sum(todayRows, 'soldCount'),
+            todayIncome: sum(todayRows, 'income'),
+            todayBatches: todayRows.length,
+            count: sum(all, 'soldCount'),
+            income: sum(all, 'income'),
+            targets: Object.values(targets).sort((a, b) => b.income - a.income),
+        },
+    };
+}
+
+function clearSellRecords() {
+    sellRecordsCache = [];
+    saveSellRecords();
+    return { ok: true };
+}
+
 /**
  * 卖蜜薯(93): count<=0 卖全部; targetGid 缺省=卖自己摊位, 传好友 gid = 卖到好友摊位
  * (2026-11-25 实测: cmd92 传好友 gid 可查好友摊位, cmd93 同理待实测)
  * 卖价 = 摊位基础价 + 卖家当前持有量(服务端算), 整批同价(抓包 30×264=7920 实证)
  * 响应 #193: {#1 实卖数, #2 单价, #3 总收入, #4 剩余接收额度, #5 福币余额}
+ *
+ * ⚠ 2026-11-26 修: 可卖数量必须取**背包 1032 总数**, 不能用 `#130#6` ——
+ *   #6 是**摊上存量**(实测四个号 33/66), 而背包有 986~1467 个, 旧代码每次只卖 33 个,
+ *   账号1 1290 个卖完只剩 1257(=1290-33) 就是铁证。服务端若一次卖不完(回执 #1 < 请求数),
+ *   本函数按剩余量继续补刀, 最多 MAX_SELL_ROUNDS 轮, 每轮单独记一条出售记录(单价会随存量涨)。
+ *
+ * @param {number} [count] 数量, <=0 卖全部
+ * @param {number} [targetGid] 卖到哪个摊, 0=自己摊
+ * @param {{source?:string, targetName?:string, stallBasePrice?:number, stallHolding?:number}} [ctx]
+ *        source = auto/manual; 摊位快照由调用方(比价探测)带进来, 缺省用自己摊的 #130 值
+ * @returns {Promise<object>} {ok, soldCount, unitPrice, income, quotaLeft, coin, targetGid, selfStall, records}
  */
-async function sellPotato(count = 0, targetGid = 0) {
+async function sellPotato(count = 0, targetGid = 0, ctx = {}) {
     const myGid = toNum(getUserState().gid);
     if (!myGid) return { ok: false, reason: '未登录, 拿不到 gid' };
     const gid = targetGid ? toNum(targetGid) : myGid;
     if (!gid) return { ok: false, reason: '目标 gid 无效' };
     const cur = await getState();
     if (!cur.ok) return { ok: false, reason: cur.reason || '查状态失败' };
-    const holding = cur.state.holding;
-    if (holding <= 0) return { ok: true, skipped: true, reason: '没有蜜薯可卖' };
-    const sellCount = toInt(count) > 0 ? Math.min(toInt(count), holding) : holding;
+    // 背包蜜薯(1032) = 游戏 UI「拥有蜜薯」同源; 读不到背包时退回 #130#6(至少别不动)
+    const bag = await getBagCounts();
+    const available = bag.potato > 0 ? bag.potato : cur.state.holding;
+    if (available <= 0) return { ok: true, skipped: true, reason: '没有蜜薯可卖' };
+    const want = toInt(count) > 0 ? Math.min(toInt(count), available) : available;
 
-    const payloadBytes = Buffer.concat([encodeVarintField(1, gid), encodeVarintField(2, sellCount)]);
-    const r = await op(CMD_SELL, CMD_SELL + FIELD_OFFSET, payloadBytes);
-    if (!r.ok) return { ok: false, reason: `卖蜜薯失败 ${r.reason}`, targetGid: gid };
-    const f = parseTop(Buffer.from(r.resultHex, 'hex'));
-    const soldCount = toInt((findField(f, 1) || {}).v) || 0;
-    const unitPrice = toInt((findField(f, 2) || {}).v) || 0;
-    const income = toInt((findField(f, 3) || {}).v) || 0;
-    const quotaLeft = toInt((findField(f, 4) || {}).v) || 0;
-    const coin = toInt((findField(f, 5) || {}).v) || 0;
-    if (soldCount > 0) {
-        log('活动', `以薯换福: 卖出蜜薯 ×${soldCount} @${unitPrice} = +${income} 福气币 (余额 ${coin}, 摊位=${gid === myGid ? '自己' : `好友${gid}`})`, {
+    const selfStall = gid === myGid;
+    // 卖到别人摊且调用方没带摊位快照(手动卖): 补一次探测, 记录里才有基础价/存量和摊主昵称
+    if (!selfStall && ctx.stallBasePrice == null) {
+        try {
+            const fs2 = await getFriendStall(gid);
+            if (fs2.ok && fs2.stall && !fs2.redirected) {
+                ctx.stallBasePrice = ctx.stallBasePrice != null ? ctx.stallBasePrice : fs2.stall.price;
+                ctx.stallHolding = ctx.stallHolding != null ? ctx.stallHolding : fs2.stall.holding;
+                if (!ctx.targetName && fs2.stall.ownerName) ctx.targetName = fs2.stall.ownerName;
+            }
+        } catch { /* 探测失败不影响卖 */ }
+    }
+    const targetName = ctx.targetName || nameOfGid(gid, myGid);
+    const records = [];
+    let remaining = want;
+    let rounds = 0;
+    let soldTotal = 0;
+    let incomeTotal = 0;
+    let unitPrice = 0;
+    let quotaLeft = 0;
+    let coin = 0;
+
+    while (remaining > 0 && rounds < MAX_SELL_ROUNDS) {
+        rounds += 1;
+        const payloadBytes = Buffer.concat([encodeVarintField(1, gid), encodeVarintField(2, remaining)]);
+        const r = await op(CMD_SELL, CMD_SELL + FIELD_OFFSET, payloadBytes);
+        if (!r.ok) {
+            if (soldTotal > 0) break; // 已卖掉一部分, 剩下的下轮再说
+            return { ok: false, reason: `卖蜜薯失败 ${r.reason}`, targetGid: gid };
+        }
+        const f = parseTop(Buffer.from(r.resultHex, 'hex'));
+        const soldCount = toInt((findField(f, 1) || {}).v) || 0;
+        unitPrice = toInt((findField(f, 2) || {}).v) || 0;
+        const income = toInt((findField(f, 3) || {}).v) || 0;
+        quotaLeft = toInt((findField(f, 4) || {}).v) || 0;
+        coin = toInt((findField(f, 5) || {}).v) || 0;
+        if (soldCount <= 0) break; // 服务端不给卖了(额度满/没货), 别死循环
+
+        soldTotal += soldCount;
+        incomeTotal += income;
+        remaining -= soldCount;
+        // 出售记录: 数量/单价/收入/卖给谁 + 当时的摊位价构成(基础价+存量)
+        records.push(addSellRecord({
+            soldCount,
+            unitPrice,
+            income,
+            targetGid: gid,
+            targetName,
+            stallBasePrice: ctx.stallBasePrice != null ? ctx.stallBasePrice : (selfStall ? cur.state.basePrice : null),
+            stallHolding: ctx.stallHolding != null ? ctx.stallHolding : (selfStall ? cur.state.holding : null),
+            quotaLeft,
+            coin,
+            source: ctx.source,
+        }));
+        log('活动', `以薯换福: 卖出蜜薯 ×${soldCount} @${unitPrice} = +${income} 福气币 (余额 ${coin}, 卖给=${targetName}${selfStall ? '(自己摊)' : ''}${remaining > 0 ? `, 还剩 ${remaining}` : ''})`, {
             module: 'activity', event: '以薯换福', result: 'ok', income,
         });
     }
-    return { ok: true, soldCount, unitPrice, income, quotaLeft, coin, targetGid: gid, selfStall: gid === myGid };
+
+    return {
+        ok: true,
+        soldCount: soldTotal,
+        unitPrice,
+        income: incomeTotal,
+        quotaLeft,
+        coin,
+        targetGid: gid,
+        targetName,
+        selfStall,
+        remaining,
+        records,
+        record: records[0] || null,
+    };
 }
 
 /** 兑换(96): slot 来自 97 的 #1 slot (1..10); count 多数槽实测为 1 次 */
@@ -529,6 +731,8 @@ async function getOverview() {
         stall: st.stall,
         exchangeSlots: list.slots || [],
         coin: (list.coin || 0) || (st.state.coin || 0),
+        // 本账号出售记录汇总(今日/累计), 来自 data/maple-sell-records/<id>.json
+        sellSummary: listSellRecords({ limit: 1 }).summary,
     };
 }
 
@@ -570,14 +774,18 @@ async function runAuto(cfg = {}, breaker = null) {
             // 没有比价结果(全离线/额度0)兜底卖自己摊。
             let targetGid = 0;
             let targetNote = '';
+            const sellCtx = { source: 'auto' };
             try {
                 const p = await probeSellTargets();
                 if (p.best) {
                     targetGid = p.best.gid;
                     targetNote = `→${p.best.name}(现价${p.best.effPrice}=${p.best.basePrice}基础+${p.best.holding}存量)`;
+                    sellCtx.targetName = p.best.name;
+                    sellCtx.stallBasePrice = p.best.basePrice;
+                    sellCtx.stallHolding = p.best.holding;
                 }
             } catch { /* 探测失败不挡卖, 走自己摊 */ }
-            const r = await sellPotato(0, targetGid);
+            const r = await sellPotato(0, targetGid, sellCtx);
             if (!r.ok) {
                 if (breaker) breaker.failure();
                 return { ok: false, reason: r.reason };
@@ -585,7 +793,8 @@ async function runAuto(cfg = {}, breaker = null) {
             if (!r.skipped) {
                 out.soldCount = r.soldCount || 0;
                 out.income = r.income || 0;
-                out.sellTarget = targetNote || '自己摊';
+                out.sellTarget = targetNote || `自己摊(${r.targetName || ''})`;
+                out.unitPrice = r.unitPrice || 0;
             }
         }
         if (cfg.autoExchange && Array.isArray(cfg.exchangeRules) && cfg.exchangeRules.length > 0) {
@@ -824,5 +1033,10 @@ module.exports = {
     getOverview,
     runAuto,
     probeShopGroup,
-    __testing: { parseMainState, parseStall, parseExchangeList, parseExchangeResult, op },
+    listSellRecords,
+    clearSellRecords,
+    __testing: {
+        parseMainState, parseStall, parseExchangeList, parseExchangeResult, op,
+        addSellRecord, loadSellRecords, sellRecordsFile, nameOfGid,
+    },
 };
