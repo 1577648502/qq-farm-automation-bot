@@ -1449,10 +1449,22 @@ async function autoPlaceCubs(opts = {}) {
     let freeLeft = kindFree.coop + kindFree.pen;
     const cubLeft0 = cubs.reduce((n, c) => n + c.count, 0);
     // 按优先级逐种放: 每种放到"该栏舍空位用完 / 该种用完 / 本轮上限"为止
+    // ⚠ 2026-11-26 线上定案: **物品级拒绝 ≠ 栏位级拒绝**。
+    //   巨大幼崽(65xxx/75xxx, 活动/礼包产物)服务端一律拒收(1045205), 实测:
+    //   栏位全空(窝6/棚6)、显式 hostGid、窝/棚各试 → 全拒; 同请求普通幼崽(60xxx)秒成功;
+    //   传无库存的普通 id → 1045215"道具不足"(说明服务端认 65xxx 物品, 只是拒放)。
+    //   旧代码把首个 1045205 当"该栏舍满了"(kindFree.coop/pen = 0),
+    //   巨大鼹鼠→窝被拒后把窝空位清零 → 排后面的 79 火鸡+3 乌龟(窝有空位、能放)被连坐跳过
+    //   → 86 只全部卡背包 → bag_priority"暂停买幼崽"死锁。官方"照料巨大化"渠道产出
+    //   1065010(巨大鼹鼠崽) 的历史出售记录证明巨大动物本身可入栏, 只是这条协议路径不收。
+    //   修复: 1045205 只跳过**当前这种**幼崽(物品级), 不清栏位空位。
+    //   另外巨大幼崽服务端当前不收, 每种最多提示一次(独立节流 key)。
+    const GIANT_CUB_RE = /^(65|75)\d{3}$/;   // 65001~65016 / 75001~75012 巨大幼崽
     for (const cub of cubs) {
         if (freeLeft <= 0 || result.placed >= maxPerRound) break;
         if (!cub || cub.count <= 0) continue;
         const isPen = toNum(cub.id) >= 70000 && toNum(cub.id) < 80000;
+        const isGiant = GIANT_CUB_RE.test(String(cub.id));
         while (cub.count > 0 && result.placed < maxPerRound && (isPen ? kindFree.pen : kindFree.coop) > 0) {
             try {
                 await placeAnimal(cub.id);
@@ -1464,17 +1476,27 @@ async function autoPlaceCubs(opts = {}) {
                 await sleep(300);
             } catch (e) {
                 const code = parseRanchErrorCode(e);
-                // 1045205 = 服务端拒绝(栏满/动物状态不允许): 该栏舍类型本轮别再试,
-                // **换下一种幼崽继续**(另一种栏舍可能有空位); 等收获腾位后下一轮自然成功。
-                // ⚠ 2026-11-20 线上刷屏: 这条日志没走节流, 每轮巡查都打, 10 分钟刷几十条。
-                //   同状态 30 分钟内只提示一次(状态变化时立刻提示)。
+                // 1045205 = 服务端拒绝。只放弃**这一种**幼崽(换下一种继续), **不清栏位**:
+                //   栏位是否真满由 kindFree 的数量计算决定, 不由单次拒绝决定。
+                //   ⚠ 旧代码在这里把 kindFree 清零, 巨大幼崽被拒连坐了能放成功的普通幼崽。
                 if (code === 1045205) {
-                    if (isPen) kindFree.pen = 0; else kindFree.coop = 0;
-                    const cubLeft = cubs.reduce((n, c) => n + c.count, 0);
-                    if (shouldLogOnce('ranch_place_reject', `${animals.length}/${capacity}#${cubLeft}#${isPen ? 'pen' : 'coop'}`)) {
-                        log('牧场', `入栏被拒(${cub.name}→${isPen ? '棚' : '窝'}, 栏位满或动物状态不允许): 背包还有 ${cubLeft} 只未入栏`, {
-                            module: 'ranch', event: '幼崽入栏', result: 'skip', code,
-                        });
+                    // 巨大幼崽: 服务端当前不收(2026-11-26 实测), 单独节流, 不计入"栏位满"语义
+                    if (isGiant) {
+                        if (shouldLogOnce('ranch_place_giant_reject', `${isPen ? 'pen' : 'coop'}#${cub.id}`)) {
+                            const cubLeft = cubs.reduce((n, c) => n + c.count, 0);
+                            log('牧场', `巨大幼崽暂不能入栏(${cub.name}, 服务端拒收): 背包还有 ${cubLeft} 只, 等官方放开后再试`, {
+                                module: 'ranch', event: '幼崽入栏', result: 'skip', code, itemId: cub.id,
+                            });
+                        }
+                    } else {
+                        const cubLeft = cubs.reduce((n, c) => n + c.count, 0);
+                        // 节流签名**不含 cubLeft**(数量每次放掉一只就变, 签名跟着变 = 节流失效,
+                        // 2026-11-26 线上每 30s 刷一条): 同栏舍类型 30 分钟最多一条, 空位变化才立刻提示
+                        if (shouldLogOnce('ranch_place_reject', `${isPen ? 'pen' : 'coop'}#${Math.max(0, kindFree[isPen ? 'pen' : 'coop'])}`)) {
+                            log('牧场', `入栏被拒(${cub.name}→${isPen ? '棚' : '窝'}, 栏位满或动物状态不允许): 背包还有 ${cubLeft} 只未入栏`, {
+                                module: 'ranch', event: '幼崽入栏', result: 'skip', code,
+                            });
+                        }
                     }
                 } else if (!isExpectedRanchError(e)) {
                     logWarn('牧场', `幼崽入栏失败 ${cub.name}: ${e.message}`, {
@@ -5304,15 +5326,16 @@ async function operateRanch(opts = {}) {
             };
         }
         case 'place': {
-            // 幼崽入栏(opts.cubItemId / opts.count / opts.slot)
+            // 幼崽入栏(opts.cubItemId / opts.count / opts.slot / opts.hostGid)
             const cub = toNum(opts.cubItemId);
             if (!cub) throw new Error('缺少幼崽物品 id');
             // 一次放一只(抓包定案); 想放多只就多调几次
             const times = Math.max(1, Math.min(toNum(opts.count) || 1, 8));
+            const hostGid = toNum(opts.hostGid) || 0;   // 0 = 自动选窝/棚
             let placedN = 0;
             let lastAnimals = 0;
             for (let i = 0; i < times; i++) {
-                const r = await placeAnimal(cub);
+                const r = await placeAnimal(cub, hostGid);
                 placedN += 1;
                 lastAnimals = (r.ranches || []).reduce((n, x) => n + (x.animals || []).length, 0);
                 await sleep(300);
