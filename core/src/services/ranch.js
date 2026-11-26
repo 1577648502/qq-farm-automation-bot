@@ -1057,15 +1057,24 @@ async function placeAnimal(cubItemId, hostGid = 0) {
     //   写死/默认窝会把棚幼崽发进窝(服务端 1045xxx 拒收)。
     //   线上实测(2026-11-23): 服务端 BuyGoods auto_add 也会自动挑对栏舍,
     //   但背包优先策略的 PlaceAnimal 是我们自己发的, 必须自己选对。
+    // ⭐ 2026-11-26 抓包(20261126-122234_背包)定案 —— 巨大幼崽的 #2/#3 拆分:
+    //   巨大崽(65xxx/75xxx): target = {1:窝/棚gid, 2:基础动物id(70006 水牛), 3:巨大物品id(75006)}
+    //   服务端按 #2 定动物定义/挑空位, 按 #3 扣背包里的巨大幼崽。
+    //   只传 #2=65xxx/75xxx → 1045205(服务端没有该 id 的动物定义) —— 2026-11-26 上午
+    //   "巨大幼崽全被拒"的根因, 当时误判为"服务端不收巨大幼崽"。
+    //   普通崽(60xxx/70xxx): target = {1:gid, 2:物品id}(无 #3), 不变。
+    const cubId = toNum(cubItemId);
+    const isGiantCub = (cubId >= 65001 && cubId <= 65099) || (cubId >= 75001 && cubId <= 75099);
+    // 巨大 → 基础 id: 65010 巨大鼹鼠 → 60010 鼹鼠 / 75006 巨大水牛 → 70006 水牛
+    const baseAnimalId = isGiantCub ? cubId - 5000 : cubId;
+    const wantHt = baseAnimalId >= 70000 && baseAnimalId < 80000 ? 2 : 1;
     let gid = toNum(hostGid);
     if (gid <= 0) {
-        const cubId = toNum(cubItemId);
-        const wantHt = cubId >= 70000 && cubId < 80000 ? 2 : 1;
         gid = resolveRanchHostGid(0, wantHt);
     }
-    const body = types.PlaceAnimalRequest.encode(types.PlaceAnimalRequest.create({
-        target: { host_gid: toLong(gid), slot: toLong(toNum(cubItemId)) },
-    })).finish();
+    const target = { host_gid: toLong(gid), slot: toLong(baseAnimalId) };
+    if (isGiantCub) target.variant_item_id = toLong(cubId);
+    const body = types.PlaceAnimalRequest.encode(types.PlaceAnimalRequest.create({ target })).finish();
     const { body: replyBody } = await network.sendMsgAsync('gamepb.animalpb.AnimalService', 'PlaceAnimal', body);
     const _reply = types.PlaceAnimalReply.decode(replyBody)
     invalidateRanchOverviewCache();
@@ -1449,21 +1458,20 @@ async function autoPlaceCubs(opts = {}) {
     let freeLeft = kindFree.coop + kindFree.pen;
     const cubLeft0 = cubs.reduce((n, c) => n + c.count, 0);
     // 按优先级逐种放: 每种放到"该栏舍空位用完 / 该种用完 / 本轮上限"为止
-    // ⚠ 2026-11-26 线上定案: **物品级拒绝 ≠ 栏位级拒绝**。
-    //   巨大幼崽(65xxx/75xxx, 活动/礼包产物)服务端一律拒收(1045205), 实测:
-    //   栏位全空(窝6/棚6)、显式 hostGid、窝/棚各试 → 全拒; 同请求普通幼崽(60xxx)秒成功;
-    //   传无库存的普通 id → 1045215"道具不足"(说明服务端认 65xxx 物品, 只是拒放)。
-    //   旧代码把首个 1045205 当"该栏舍满了"(kindFree.coop/pen = 0),
-    //   巨大鼹鼠→窝被拒后把窝空位清零 → 排后面的 79 火鸡+3 乌龟(窝有空位、能放)被连坐跳过
-    //   → 86 只全部卡背包 → bag_priority"暂停买幼崽"死锁。官方"照料巨大化"渠道产出
-    //   1065010(巨大鼹鼠崽) 的历史出售记录证明巨大动物本身可入栏, 只是这条协议路径不收。
-    //   修复: 1045205 只跳过**当前这种**幼崽(物品级), 不清栏位空位。
-    //   另外巨大幼崽服务端当前不收, 每种最多提示一次(独立节流 key)。
+    // ⭐ 2026-11-26 定案: **物品级拒绝 ≠ 栏位级拒绝**。
+    //   1045205 只跳过**当前这种**幼崽(换下一种继续), **不清栏位空位** ——
+    //   栏位是否真满由 kindFree 的数量计算决定。旧代码把首个 1045205 当
+    //   "该栏舍满了"(kindFree 清零), 巨大鼹鼠→窝被拒后把窝空位清零,
+    //   排后面能成功的普通幼崽被连坐 → 86 只全卡背包 → bag_priority 死锁。
+    //   (当时巨大幼崽全被拒的真正根因是协议: 巨大崽要 target#2=基础id + #3=巨大物品id,
+    //   见 placeAnimal 注释; 只传 #2=65xxx 服务端找不到动物定义 → 1045205。)
     const GIANT_CUB_RE = /^(65|75)\d{3}$/;   // 65001~65016 / 75001~75012 巨大幼崽
     for (const cub of cubs) {
         if (freeLeft <= 0 || result.placed >= maxPerRound) break;
         if (!cub || cub.count <= 0) continue;
-        const isPen = toNum(cub.id) >= 70000 && toNum(cub.id) < 80000;
+        // 巨大崽的栏舍归属按**基础 id** 判: 65010 → 60010 鼹鼠(窝) / 75006 → 70006 水牛(棚)
+        const baseId = GIANT_CUB_RE.test(String(cub.id)) ? toNum(cub.id) - 5000 : toNum(cub.id);
+        const isPen = baseId >= 70000 && baseId < 80000;
         const isGiant = GIANT_CUB_RE.test(String(cub.id));
         while (cub.count > 0 && result.placed < maxPerRound && (isPen ? kindFree.pen : kindFree.coop) > 0) {
             try {
@@ -1478,25 +1486,16 @@ async function autoPlaceCubs(opts = {}) {
                 const code = parseRanchErrorCode(e);
                 // 1045205 = 服务端拒绝。只放弃**这一种**幼崽(换下一种继续), **不清栏位**:
                 //   栏位是否真满由 kindFree 的数量计算决定, 不由单次拒绝决定。
-                //   ⚠ 旧代码在这里把 kindFree 清零, 巨大幼崽被拒连坐了能放成功的普通幼崽。
                 if (code === 1045205) {
-                    // 巨大幼崽: 服务端当前不收(2026-11-26 实测), 单独节流, 不计入"栏位满"语义
-                    if (isGiant) {
-                        if (shouldLogOnce('ranch_place_giant_reject', `${isPen ? 'pen' : 'coop'}#${cub.id}`)) {
-                            const cubLeft = cubs.reduce((n, c) => n + c.count, 0);
-                            log('牧场', `巨大幼崽暂不能入栏(${cub.name}, 服务端拒收): 背包还有 ${cubLeft} 只, 等官方放开后再试`, {
-                                module: 'ranch', event: '幼崽入栏', result: 'skip', code, itemId: cub.id,
-                            });
-                        }
-                    } else {
-                        const cubLeft = cubs.reduce((n, c) => n + c.count, 0);
-                        // 节流签名**不含 cubLeft**(数量每次放掉一只就变, 签名跟着变 = 节流失效,
-                        // 2026-11-26 线上每 30s 刷一条): 同栏舍类型 30 分钟最多一条, 空位变化才立刻提示
-                        if (shouldLogOnce('ranch_place_reject', `${isPen ? 'pen' : 'coop'}#${Math.max(0, kindFree[isPen ? 'pen' : 'coop'])}`)) {
-                            log('牧场', `入栏被拒(${cub.name}→${isPen ? '棚' : '窝'}, 栏位满或动物状态不允许): 背包还有 ${cubLeft} 只未入栏`, {
-                                module: 'ranch', event: '幼崽入栏', result: 'skip', code,
-                            });
-                        }
+                    const cubLeft = cubs.reduce((n, c) => n + c.count, 0);
+                    // 节流签名**不含 cubLeft**(数量每次放掉一只就变, 签名跟着变 = 节流失效,
+                    // 2026-11-26 线上每 30s 刷一条): 同栏舍类型 30 分钟最多一条, 空位变化才立刻提示
+                    if (shouldLogOnce(isGiant ? 'ranch_place_giant_reject' : 'ranch_place_reject', `${isPen ? 'pen' : 'coop'}#${Math.max(0, kindFree[isPen ? 'pen' : 'coop'])}#${isGiant ? cub.id : 'n'}`)) {
+                        log('牧场', isGiant
+                            ? `巨大幼崽入栏被拒(${cub.name}→${isPen ? '棚' : '窝'}): 背包还有 ${cubLeft} 只未入栏`
+                            : `入栏被拒(${cub.name}→${isPen ? '棚' : '窝'}, 栏位满或动物状态不允许): 背包还有 ${cubLeft} 只未入栏`, {
+                            module: 'ranch', event: '幼崽入栏', result: 'skip', code, itemId: cub.id,
+                        });
                     }
                 } else if (!isExpectedRanchError(e)) {
                     logWarn('牧场', `幼崽入栏失败 ${cub.name}: ${e.message}`, {
@@ -4866,17 +4865,14 @@ async function autoBuyCubs(opts = {}) {
     //   **背包里还有可用(未排外)幼崽, 就先别买**, 把它们放完再说;
     //   排外的幼崽不算 "可用", 等于用户明确表示不养这种。
     // ⚠ 2026-11-19 改正: 原来只统计"数量", 不看排外, 也不看用户设的 pet 优先级。
-    // ⭐ 2026-11-26 线上定案: 暂停买必须**按窝/棚分开**, 且巨大幼崽不算"可用":
-    //   实况(账号1): 窝6/6 满 + 背包 76 火鸡(窝崽), 棚 6/0 全空 + 背包只有巨大水牛x2
-    //   (服务端 PlaceAnimal 拒收, 见 autoPlaceCubs 注释)。旧代码 bagUsableCubs=80
-    //   一刀切暂停 → 棚永远空着不买棚崽。改成:
-    //     bagUsableCoop = 60xxx 未排外非巨大(窝还能自己消化 → 暂停买窝崽)
-    //     bagUsablePen  = 70xxx 未排外非巨大(同上, 棚)
-    //     巨大(65xxx/75xxx)单独计数 —— 服务端当前不收, 放着不挡任何购买。
-    const GIANT_CUB_RE_BUY = /^(65|75)\d{3}$/;
+    // ⭐ 2026-11-26 定案: 暂停买**按窝/棚分开**统计 ——
+    //   窝满+背包一堆窝崽、棚空+没有棚崽时, 旧的一刀切会让棚永远不买。
+    //   巨大幼崽(65xxx/75xxx)**正常计入**可用窝/棚崽: 20261126-122234_背包 抓包定案
+    //   巨大崽入栏协议 = target{1:gid, 2:基础动物id, 3:巨大物品id}, 能正常入栏
+    //   (上午"服务端拒收巨大"是误判, 根因是我们只传了 #2=65xxx)。
+    //   65xxx(窝巨大) → bagUsableCoop, 75xxx(棚巨大) → bagUsablePen。
     let bagUsableCoop = 0;
     let bagUsablePen = 0;
-    let bagGiantCubs = 0;
     let bagTotalCubs = 0;
     try {
         const warehouse = require('./warehouse');
@@ -4892,7 +4888,6 @@ async function autoBuyCubs(opts = {}) {
             const cnt = toNum(it.count);
             bagTotalCubs += cnt;
             if (excludeSet.has(id)) continue;   // 排外: 不算可用
-            if (GIANT_CUB_RE_BUY.test(String(id))) { bagGiantCubs += cnt; continue; }
             if (id >= 70000 && id < 80000) bagUsablePen += cnt;
             else bagUsableCoop += cnt;
         }
@@ -4912,32 +4907,26 @@ async function autoBuyCubs(opts = {}) {
     //   其他策略(最大净利润/时等)下, 背包里堆着的幼崽不影响购买 ——
     //   按商店策略买新的, 背包里的留着用户自己处理(不自动入栏、不拦购买)。
     // ⭐ 2026-11-26: 暂停改**按栏舍分开** —— 窝有背包崽只暂停买窝, 棚照常买棚崽(反之亦然)。
-    //   旧的一刀切(bagUsableCubs>0 全停)让"窝满+棚空+棚崽全是拒收的巨大幼崽"的号棚永远空着。
+    //   旧的一刀切(bagUsableCubs>0 全停)让"窝满+棚空+没有棚崽"的号棚永远空着。
     if (strategyNow === 'bag_priority' && (bagUsableCoop > 0 || bagUsablePen > 0)) {
         const pausedKinds = [];
         if (bagUsableCoop > 0) pausedKinds.push(`窝${bagUsableCoop}只`);
         if (bagUsablePen > 0) pausedKinds.push(`棚${bagUsablePen}只`);
         // ⚠ 2026-11-25 线上刷屏: 同状态(数量变化才算变)30 分钟提示一次。
         if (shouldLogOnce('ranch_buy_bag_first', `${bagUsableCoop}#${bagUsablePen}`)) {
-            log('牧场', `背包优先模式: 背包里已有未入栏幼崽(${pausedKinds.join('，')}), 暂停买对应栏舍${bagGiantCubs > 0 ? `; 另有 ${bagGiantCubs} 只巨大幼崽服务端暂不收, 不挡购买` : ''}`,
+            log('牧场', `背包优先模式: 背包里已有未入栏幼崽(${pausedKinds.join('，')}), 暂停买对应栏舍`,
                 {
                     module: 'ranch', event: '买幼崽', result: 'skip',
-                    bagCoop: bagUsableCoop, bagPen: bagUsablePen, bagGiant: bagGiantCubs,
-                    bagExcluded: bagTotalCubs - bagUsableCoop - bagUsablePen - bagGiantCubs, strategy: strategyNow,
+                    bagCoop: bagUsableCoop, bagPen: bagUsablePen,
+                    bagExcluded: bagTotalCubs - bagUsableCoop - bagUsablePen, strategy: strategyNow,
                 });
         }
         // 真正的拦截在下面的购买循环里做(按 kindSlot 跳过有背包崽的栏舍)
     }
-    // 剩下的全是排外的 → 不买(与农场"背包种子均已排外"同一处理)。
-    // ⚠ 巨大幼崽**不**算这一类: 它们只是服务端暂不收, 不该挡购买(否则窝崽放完后
-    //   巨大幼崽又把棚/窝的购买全部堵死)。只统计"排外且非巨大"。
-    const bagExcludedOnly = (() => {
-        // bagTotalCubs = 可用窝 + 可用棚 + 巨大 + 排外; 排外数 = 总 - 其余三项
-        const excl = bagTotalCubs - bagUsableCoop - bagUsablePen - bagGiantCubs;
-        return bagTotalCubs > 0 && bagUsableCubs === 0 && bagGiantCubs === 0 && excl > 0;
-    })();
+    // 剩下的全是排外的 → 不买(与农场"背包种子均已排外"同一处理)
+    const bagExcludedOnly = bagTotalCubs > 0 && bagUsableCubs === 0 && (bagTotalCubs - bagUsableCubs) > 0;
     if (bagExcludedOnly) {
-        if (shouldLogOnce('ranch_buy_all_excluded', `excluded#${bagTotalCubs}#giant${bagGiantCubs}`)) {
+        if (shouldLogOnce('ranch_buy_all_excluded', `excluded#${bagTotalCubs}`)) {
             log('牧场', `背包里的 ${bagTotalCubs} 只幼崽全部已排外, 不自动购买也不入栏`,
                 { module: 'ranch', event: '买幼崽', result: 'skip', bagCubs: bagTotalCubs });
         }
