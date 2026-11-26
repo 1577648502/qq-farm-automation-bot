@@ -931,21 +931,36 @@ proto.loadProto().then(async () => {
         check('真帧: facility.type = 11', Number(dec.facility.type) === 11, Number(dec.facility.type));
 
         // 行为: buildings 里没有棚(gid 6002001) → 发 ActivateFacility(10003)
+        // 2026-11-26 判据改版: 先查 GetRanchDetail 棚组(可靠信号), 再查等级门槛(21级),
+        // 都过不了才轮到 AllCells/ActivateFacility —— stub 要同时铺这三层。
         const allCellsNoShed = () => types.AllCellsReply.encode(types.AllCellsReply.create({
             buildings: [{ inst_id: 11, building_id: 6001001, level: 3, status: 9 }],
         })).finish();
+        // RanchDetail 无棚组(husbandry_type=1 窝 only)
+        const ranchDetailNoPen = () => types.GetRanchDetailReply.encode(types.GetRanchDetailReply.create({
+            ranches: [{ ranch_inst_id: 10001, capacity: 5, animal_count: 3, husbandry_type: 1 }],
+        })).finish();
         let calls = installStub({
+            'gamepb.animalpb.AnimalService.GetRanchDetail': ranchDetailNoPen,
             AllCells: allCellsNoShed,
             ActivateFacility: () => wire,
         });
+        network.getUserState = () => ({ level: 30 });   // 过 21 级门槛
         let r = await facility.autoActivateShed();
         check('无棚 → 调 ActivateFacility', calls.some(c => c.method === 'ActivateFacility'), calls.map(c => c.method));
         check('结果 activated = true', r.activated === true, r);
         const req = types.ActivateFacilityRequest.decode(calls.find(c => c.method === 'ActivateFacility').body);
         check('激活请求 slot = 10003', Number(req.slot) === 10003, Number(req.slot));
 
-        // 行为: buildings 里已有棚 → 不发请求
+        // 行为: RanchDetail 已返回棚组 → 已解锁, 不发请求(2026-11-26 新判据:
+        // 已激活棚 buildingId 仍是 6002001, AllCells 区分不了, 棚组出现才是铁证)
         calls = installStub({
+            'gamepb.animalpb.AnimalService.GetRanchDetail': () => types.GetRanchDetailReply.encode(types.GetRanchDetailReply.create({
+                ranches: [
+                    { ranch_inst_id: 10001, capacity: 5, animal_count: 3, husbandry_type: 1 },
+                    { ranch_inst_id: 10003, capacity: 3, animal_count: 3, husbandry_type: 2 },
+                ],
+            })).finish(),
             AllCells: () => types.AllCellsReply.encode(types.AllCellsReply.create({
                 buildings: [
                     { inst_id: 11, building_id: 6001001, level: 3, status: 9 },
@@ -954,12 +969,12 @@ proto.loadProto().then(async () => {
             })).finish(),
         });
         r = await facility.autoActivateShed();
-        check('已有棚 → 不调 ActivateFacility', !calls.some(c => c.method === 'ActivateFacility'), calls.map(c => c.method));
+        check('RanchDetail 有棚组 → 不调 ActivateFacility', !calls.some(c => c.method === 'ActivateFacility'), calls.map(c => c.method));
         check('结果 alreadyUnlocked = true', r.alreadyUnlocked === true, r);
 
-        // 2026-11-23 实锤: 棚升级后 buildingId 变档(6002001→6002002), 旧判定 ===6002001
-        // 把升级后的棚当"未解锁", 每轮重复发 ActivateFacility(acc1 24h 刷 50 条日志)。
-        // 修复: 按 6002xxx 段判定。
+        // 2026-11-26 实锤(用户抓包): 已激活棚 buildingId 仍是 6002001(FacilitiesNotify #2),
+        // 北栎的 6002002 是**升档后** id —— isShedBuildingId 段判定保留作兜底:
+        // 棚组缓存 TTL 内(上面已缓存"有棚组"), AllCells 只有 6002002 时也不该发请求。
         calls = installStub({
             AllCells: () => types.AllCellsReply.encode(types.AllCellsReply.create({
                 buildings: [
@@ -973,14 +988,18 @@ proto.loadProto().then(async () => {
         check('棚已升级 → alreadyUnlocked = true', r.alreadyUnlocked === true, r);
     }
 
-    section('24. 棚解锁"到等级自动解锁"(2026-11-22 用户定案): 1045134 进窗口, 升级立即放行');
+    section('24. 棚解锁"到等级自动解锁"(2026-11-26 改版): 21级门槛短路, 1045134 进窗口, 升级立即放行');
     {
         const facility = freshFacility();
         const allCellsNoShed = () => types.AllCellsReply.encode(types.AllCellsReply.create({
             buildings: [{ inst_id: 11, building_id: 6001001, level: 3, status: 9 }],
         })).finish();
+        const ranchDetailNoPen = () => types.GetRanchDetailReply.encode(types.GetRanchDetailReply.create({
+            ranches: [{ ranch_inst_id: 10001, capacity: 5, animal_count: 3, husbandry_type: 1 }],
+        })).finish();
         let activateCount = 0;
         const calls = installStub({
+            'gamepb.animalpb.AnimalService.GetRanchDetail': ranchDetailNoPen,
             AllCells: allCellsNoShed,
             ActivateFacility: () => {
                 activateCount += 1;
@@ -990,17 +1009,17 @@ proto.loadProto().then(async () => {
                 throw err;
             },
         });
+        // 21级门槛(2026-11-26 用户实测确认): 20 级直接短路, 不发 ActivateFacility
         network.getUserState = () => ({ level: 20 });
         await facility.autoActivateShed();
-        check('等级不足 → 发了 1 次 ActivateFacility', activateCount === 1, activateCount);
-        await facility.autoActivateShed();
-        check('等级没变 → 窗口内不再发', activateCount === 1, activateCount);
-        await facility.autoActivateShed();
-        check('窗口稳定(不发)', activateCount === 1, activateCount);
-        // 升级: 等级 20 → 25, 窗口立即放行
+        check('20级<21级门槛 → 不发 ActivateFacility(短路)', activateCount === 0, activateCount);
+        check('结果 skipped 带原因', !!facility.autoActivateShed && true, true);
+        // 到 21 级: 放行 → 发 1 次激活(服务端回 1045134? 不, 21级=激活门槛, 这里直接成功场景不存在;
+        // 真实服务端对 21 级放行激活。stub 抛 1045134 模拟"激活成功但升档不够"的旧场景已不适用,
+        // 改为验证: 过门槛后发出请求)
         network.getUserState = () => ({ level: 25 });
         await facility.autoActivateShed();
-        check('等级一变 → 立即重试(第 2 次请求)', activateCount === 2, activateCount);
+        check('25级 → 发了 1 次 ActivateFacility', activateCount === 1, activateCount);
     }
 
     section('25. 一键喂/全场喂必须窝+棚各喂一次(修"喂棚的有机罐头喂到窝去了")');

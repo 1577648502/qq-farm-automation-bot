@@ -260,11 +260,14 @@ async function activateFacility(slot) {
 // 棚解锁有服务端等级门槛(2026-11-22 用户定案"到等级自动解锁就行"):
 // 1045134 牧场等级不足时记下当时玩家等级, 30 分钟窗口内不再发请求;
 // 玩家等级一变(升级了)立即放行重试 —— 等级一到就自动解锁, 不空打请求。
-// ⚠ 2026-11-26 线上实测门槛分层(账号2/3/4/6 对比):
-//   激活(ActivateFacility)门槛 ~牧场22级: 润出去 Lv23 成功, acc3(20)/acc4(19)/acc6(18)
-//   一律报 1045115「建筑不存在」= 服务端对低等级隐藏了棚, 不是 bug。
-//   升档(UpgradeBuilding)门槛 牧场25级: 润出去激活成功后升级报 1045134(当前23级)。
+// ⭐ 2026-11-26 用户实测确认: **激活(ActivateFacility)门槛 = 牧场21级**。
+//   润出去 Lv23 成功; acc3(20)/acc4(19)/acc6(18) 报 1045115「建筑不存在」
+//   = 服务端对 21 级以下隐藏棚, 不是 bug。升到 21 级自动放行。
+// ⚠ 升档(UpgradeBuilding)门槛 牧场25级: 润出去激活成功后升级报 1045134(当前23级)。
 //   低等级账号每轮的 1045115 由 unlockShed breaker(3 次→30min 熔断)兜底, 不会刷屏。
+// ⚠ 已解锁判定: 已激活棚 buildingId 仍是 6002001(FacilitiesNotify 定案),
+//   区分标志是 instId=10003(激活后升格标准槽位); 未激活是编辑器实例 instId=3。
+//   RanchDetail 返回棚组 = 已解锁, 这是唯一可靠信号(2026-11-26 润出去抓包实锤)。
 const SHED_LEVEL_RETRY_MS = 30 * 60 * 1000;
 let _shedLevelBlock = { until: 0, levelSeen: 0 };
 let _shedUnlockedLogged = false;   // 解锁成功日志只打一次(2026-11-23 重复刷屏修复)
@@ -283,15 +286,21 @@ function getPlayerLevelForShed() {
 
 /**
  * 自动解锁棚(跟窝一样纳入 autoUpgradeBuildings 的自动升级/竣工):
- * AllCells.buildings 里出现**已激活**的棚 = 已解锁, 不发请求;
- * 否则发 ActivateFacility(10003)。解锁后下一轮 autoUpgradeBuildings 自然轮到它。
- * ⚠ 2026-11-23 实锤: buildingId 会随升级变档(窝 6001001→6001002→…→6001004, 棚
- *   6002001→6002002), 判"已解锁"必须按段而不是 ===6002001。
- * ⚠ 2026-11-26 二次实锤(润出去): 6002001 是**未激活壳** —— 棚必须先 ActivateFacility(10003)
- *   才变成 6002002, 未激活时 UpgradeBuilding(10003) 报 1045110「该建筑还未解锁」。
- *   北栎 11-23 13:21 日志: ActivateFacility 成功返回 gid=6002002, 之后升级才走得通。
- *   所以"已解锁"= buildingId >= 6002002; 6002001 仍要发 ActivateFacility。
- *   (旧判定 `>=6002001` 正是把 6002001 当已解锁 → 润出去/acc3/4/6 的棚永远停在档1。)
+ * 服务端 GetRanchDetail 返回棚组 = 已解锁, 不发请求;
+ * 否则按牧场等级决定是否发 ActivateFacility(10003)。解锁后下一轮 autoUpgradeBuildings 自然轮到它。
+ *
+ * 判据演变(全部线上实测, 勿回退):
+ * ⚠ 2026-11-23: buildingId 会随升级变档(窝 6001001→…→6001004, 棚 6002001→6002002),
+ *   判"已解锁"必须按段而不是 ===6002001。(旧判定 `>=6002001` 把 6002001 当已解锁
+ *   → 润出去/acc3/4/6 的棚永远停在档1。)
+ * ⚠ 2026-11-26 三次实锤(用户抓包 20261126-134733_润出去 定案, 推翻"6002002=已激活"):
+ *   已激活棚 buildingId **仍是 6002001**(FacilitiesNotify #2=6002001, #10=capacity=3),
+ *   北栎 11-23 的 6002002 是**升档后**的 id, 不是激活后 —— isShedBuildingId(>=6002002)
+ *   对激活但未升档的棚判"未解锁" → 每轮空发 ActivateFacility → 1045115(账号1 的日志根因)。
+ *   可靠信号只有两个: RanchDetail 返回棚组, 或棚建筑 instId=10003(激活后升格标准槽位;
+ *   未激活是编辑器实例 instId=3)。
+ * ⚠ 激活门槛 = 牧场21级(用户 2026-11-26 实测确认): 21 级以下服务端直接 1045115,
+ *   到级自动放行, 不用预先探。
  * @returns {Promise<{activated:boolean, alreadyUnlocked:boolean, skipped?:string}>}
  */
 function isShedBuildingId(buildingId) {
@@ -299,8 +308,44 @@ function isShedBuildingId(buildingId) {
     return id >= 6002002 && id <= 6002999;
 }
 
+/**
+ * 棚是否已解锁 —— 可靠判据(2026-11-26 定案): 服务端 GetRanchDetail 返回棚组。
+ * 已激活棚 buildingId 仍是 6002001(AllCells 区分不了), 棚组出现 = 服务端已开放。
+ * RanchDetail 查询失败/场景未解锁时返回 false(调用方继续走激活尝试, 有等级窗口兜底)。
+ * 检测结果缓存 10min, 避免每轮激活检查都打一次 GetRanchDetail。
+ */
+let _shedGroupCheck = { at: 0, unlocked: false };
+const SHED_GROUP_CHECK_TTL = 10 * 60 * 1000;
+async function isShedGroupPresent() {
+    if (Date.now() - _shedGroupCheck.at < SHED_GROUP_CHECK_TTL) return _shedGroupCheck.unlocked;
+    try {
+        // 循环依赖不能 require('./ranch'), 直接发同一 RPC(空 body=看自己, 与 ranch.getRanchDetail 同形)
+        const body = types.GetRanchDetailRequest.encode(types.GetRanchDetailRequest.create({})).finish();
+        const { body: replyBody } = await network.sendMsgAsync('gamepb.animalpb.AnimalService', 'GetRanchDetail', body);
+        const reply = types.GetRanchDetailReply.decode(replyBody);
+        const hasPen = (reply.ranches || []).some(r => toNum(r.husbandry_type) === 2);
+        _shedGroupCheck = { at: Date.now(), unlocked: hasPen };
+        return hasPen;
+    } catch {
+        // 查询失败不当成"未解锁"(可能是场景/网络瞬时问题), 缓存一个短窗口避免重试风暴
+        _shedGroupCheck = { at: Date.now() - SHED_GROUP_CHECK_TTL + 60 * 1000, unlocked: _shedGroupCheck.unlocked };
+        return _shedGroupCheck.unlocked;
+    }
+}
+
 async function autoActivateShed() {
     const result = { activated: false, alreadyUnlocked: false };
+    // ① 最可靠信号: RanchDetail 有棚组 = 服务端已开放, 直接短路
+    if (_shedActivated.has('10003') || (await isShedGroupPresent())) {
+        result.alreadyUnlocked = true;
+        return result;
+    }
+    // ② 激活门槛 = 牧场21级(2026-11-26 用户实测确认), 不够直接等升级, 不空打请求
+    const lvl = getPlayerLevelForShed();
+    if (lvl > 0 && lvl < 21) {
+        result.skipped = `牧场${lvl}级<21级(激活门槛)`;
+        return result;
+    }
     let buildings;
     try {
         buildings = (await getAllCells()).buildings;
@@ -310,7 +355,7 @@ async function autoActivateShed() {
         }
         return result;
     }
-    if (buildings.some(b => isShedBuildingId(b.buildingId)) || _shedActivated.has('10003')) {
+    if (buildings.some(b => isShedBuildingId(b.buildingId))) {
         result.alreadyUnlocked = true;
         return result;
     }
@@ -324,6 +369,7 @@ async function autoActivateShed() {
         result.activated = true;
         _shedLevelBlock = { until: 0, levelSeen: 0 };
         _shedActivated.add(String(r.slot || FACILITY_SHED_SLOT));   // 记住已激活, 档1(6002001)也不重复发
+        _shedGroupCheck = { at: Date.now(), unlocked: true };       // 激活成功, 同步刷新棚组缓存
         // 2026-11-23: 解锁成功日志只打一次(模块内记忆) —— 旧逻辑因 buildingId 变档误判,
         // 同一号 24h 刷了 50 条"棚已解锁"; 且响应里的 level(#3=7)是服务端内部值,
         // 不是小程序显示的棚档位(6002002 实显 Lv3), 打出来只会误导, 不再带等级。
