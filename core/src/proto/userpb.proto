@@ -75,6 +75,11 @@ message BasicInfo {
     // map<int64, ShareInfo> share_infos = 12;
     int32 authorized_status = 13;
     bool disable_nudge = 14;
+    // ⭐ 2026-11-26 抓包定案(20261122-222723_解锁棚): 牧场等级/经验(服务端权威)。
+    //   润出去激活棚时 #20=21 #21=205792(=物品1102 同值) → 激活门槛=牧场21级无误,
+    //   旧 calcRanchLevel 线性表把 205792 算成 24级是错的(等级表非线性, 不再用它判门槛)。
+    int64 ranch_level = 20;
+    int64 ranch_exp = 21;
 }
 
 // QQ群信息

@@ -278,7 +278,11 @@ const _shedActivated = new Set();
 function getPlayerLevelForShed() {
     try {
         const { getUserState } = require('../utils/network');
-        return Number((getUserState() || {}).level) || 0;
+        const st = getUserState() || {};
+        // ⭐ 牧场等级(BasicInfo#20, 服务端权威) — 旧读 level=农场等级, 门槛判断全错
+        const rl = Number(st.ranchLevel) || 0;
+        if (rl > 0) return rl;
+        return Number(st.level) || 0;
     } catch {
         return 0;
     }
@@ -299,19 +303,19 @@ function getPlayerLevelForShed() {
  *   对激活但未升档的棚判"未解锁" → 每轮空发 ActivateFacility → 1045115(账号1 的日志根因)。
  *   可靠信号只有两个: RanchDetail 返回棚组, 或棚建筑 instId=10003(激活后升格标准槽位;
  *   未激活是编辑器实例 instId=3)。
- * ⚠ 激活门槛 = 牧场等级(用户 2026-11-26 认为21级): 21级以下服务端 1045115。
- * ⚠ 2026-11-26 五次实锤(推翻21级结论): 重解润出去激活抓包, PlayerSceneLogin 里
- *   物品1102(牧场经验)=205792 → 按 Lv9=10000 步进13000 的公式 = **24级**, 不是21!
- *   20/19/18/21 级全 1045115, 24 级成功 → 真实门槛 ∈ {22,23,24}, 21 级不够。
- *   取 SHED_ACTIVATE_LEVEL=22(最激进), 到级自动试, 1045115 走 expected 静默,
- *   升到 23/24 后下一轮自然再试。#12 状态位: 1=已激活 3=可激活 2=不可激活(等级未达?)。
- *   (#12 由 PlayerSceneLogin 响应解析, 3/4/6 的棚 #12=2; 润出去激活前 #12=3。)
+ * ⚠ 激活门槛 = 牧场21级(2026-11-26 三次实锤, 最终定案): PlayerLogin BasicInfo#20
+ *   = 牧场等级(服务端权威), 润出去激活时 #20=21。此前"22~24"推断是错的 —— 错因:
+ *   calcRanchLevel 线性表把 205792 exp 算成 24级(真实等级表非线性); 且
+ *   getPlayerLevelForShed() 读的是**农场等级**不是牧场等级, 门槛判断形同虚设。
+ *   账号3(牧场19级)激活失败的真因 = 牧场等级不够, 不是实例号问题。
+ *   (激活参数本身仍须传棚建筑实例号, 见 getShedInstIdFromBuildings。)
  * @returns {Promise<{activated:boolean, alreadyUnlocked:boolean, skipped?:string}>}
  */
 
-// 棚激活最低牧场等级: 21级实测不够(账号3 1045115), 润出去24级(205792exp)成功。
-// 真实门槛 22/23/24 三选一, 取22最激进 — 失败是 expected 错误, 升级后自动重试。
-const SHED_ACTIVATE_LEVEL = 22;
+// 棚激活最低牧场等级 = 21(用户最初结论, 抓包二次确认):
+// 润出去激活时 PlayerLogin BasicInfo#20(牧场等级)=21 #21=205792。旧结论"24级"错在
+// calcRanchLevel 线性表(等级表非线性)。账号3 21级失败的真因: 门槛判断读的是农场等级。
+const SHED_ACTIVATE_LEVEL = 21;
 function isShedBuildingId(buildingId) {
     const id = Number(buildingId) || 0;
     return id >= 6002002 && id <= 6002999;

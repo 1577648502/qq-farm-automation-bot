@@ -2097,13 +2097,22 @@ async function getRanchOverview(accountId = '') {
                 require('./warehouse').getRanchExp().catch(() => 0),
             ]);
             const view = toRanchView(detailReply);
-            // ⭐ 牧场经验/等级: 用物品 1102 的真实累计值(GetRanchDetailReply#2 实测不返回, 是假的 30)
+            // ⭐ 牧场等级: 优先 BasicInfo#20(服务端权威, 2026-11-26 抓包定案);
+            //   旧 calcRanchLevel 线性表非线性失真(205792 算成24级实际21), 只作兜底。
+            const authRl = Number((network.getUserState() || {}).ranchLevel) || 0;
             if (toNum(ranchExpReal) > 0) {
                 view.ranchExp = toNum(ranchExpReal);
-                const lvInfo = calcRanchLevel(ranchExpReal);
-                view.ranchLevel = lvInfo.level;
-                view.ranchLevelExp = lvInfo.current;
-                view.ranchLevelNeeded = lvInfo.needed;
+                if (authRl > 0) {
+                    // 权威等级 + 真实总经验: 本级起点非线性算不出, ranchLevelExp 显示累计值
+                    view.ranchLevel = authRl;
+                    view.ranchLevelExp = view.ranchExp;
+                    view.ranchLevelNeeded = null;
+                } else {
+                    const lvInfo = calcRanchLevel(ranchExpReal);
+                    view.ranchLevel = lvInfo.level;
+                    view.ranchLevelExp = lvInfo.current;
+                    view.ranchLevelNeeded = lvInfo.needed;
+                }
             }
 
             // ⭐ 2026-11-20 抓包定案: #2=上限, #3=已用, #4=剩余

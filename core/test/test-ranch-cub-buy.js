@@ -945,7 +945,7 @@ proto.loadProto().then(async () => {
             AllCells: allCellsNoShed,
             ActivateFacility: () => wire,
         });
-        network.getUserState = () => ({ level: 30 });   // 过 22 级门槛
+        network.getUserState = () => ({ level: 131, ranchLevel: 25 });   // 过 21 级门槛(看 ranchLevel)
         let r = await facility.autoActivateShed();
         check('无棚 → 调 ActivateFacility', calls.some(c => c.method === 'ActivateFacility'), calls.map(c => c.method));
         check('结果 activated = true', r.activated === true, r);
@@ -988,7 +988,7 @@ proto.loadProto().then(async () => {
         check('棚已升级 → alreadyUnlocked = true', r.alreadyUnlocked === true, r);
     }
 
-    section('24. 棚解锁"到等级自动解锁"(2026-11-26 二次修正): 22级门槛短路, 1045134 进窗口, 升级立即放行');
+    section('24. 棚解锁"到等级自动解锁"(2026-11-26 三次修正): 看牧场等级ranchLevel, 21级门槛短路');
     {
         const facility = freshFacility();
         const allCellsNoShed = () => types.AllCellsReply.encode(types.AllCellsReply.create({
@@ -1009,15 +1009,19 @@ proto.loadProto().then(async () => {
                 throw err;
             },
         });
-        // 22级门槛(SHED_ACTIVATE_LEVEL, 2026-11-26 二次修正): 21 级直接短路, 不发 ActivateFacility
-        network.getUserState = () => ({ level: 21 });
+        // 21级门槛(2026-11-26 三次修正): 门槛看牧场等级 ranchLevel(BasicInfo#20),
+        //   不再看农场 level —— 账号3 农场131级/牧场19级, 旧逻辑读农场等级形同虚设
+        network.getUserState = () => ({ level: 131, ranchLevel: 20 });
         await facility.autoActivateShed();
-        check('21级<22级门槛 → 不发 ActivateFacility(短路)', activateCount === 0, activateCount);
-        check('结果 skipped 带原因', !!facility.autoActivateShed && true, true);
-        // 到 25 级: 放行 → 发 1 次激活(过门槛后发出请求)
-        network.getUserState = () => ({ level: 25 });
+        check('牧场20级<21级门槛 → 不发 ActivateFacility(短路)', activateCount === 0, activateCount);
+        // 农场等级再高也没用: level=200 但牧场 20 级照样短路
+        network.getUserState = () => ({ level: 200, ranchLevel: 20 });
         await facility.autoActivateShed();
-        check('25级 → 发了 1 次 ActivateFacility', activateCount === 1, activateCount);
+        check('农场200级但牧场20级 → 仍不发(门槛只看牧场)', activateCount === 0, activateCount);
+        // 到牧场 21 级: 放行 → 发 1 次激活(过门槛后发出请求)
+        network.getUserState = () => ({ level: 131, ranchLevel: 21 });
+        await facility.autoActivateShed();
+        check('牧场21级 → 发了 1 次 ActivateFacility', activateCount === 1, activateCount);
     }
 
     section('25. 一键喂/全场喂必须窝+棚各喂一次(修"喂棚的有机罐头喂到窝去了")');

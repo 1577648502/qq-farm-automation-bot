@@ -509,6 +509,10 @@ async function sendLogin(onLoginSuccess) {
                 userState.gold = toNum(reply.basic.gold);
                 userState.exp = toNum(reply.basic.exp);
                 userState.diamond = toNum(reply.basic.diamond);
+                // 牧场等级/经验(BasicInfo #20/#21, 2026-11-26 抓包定案, 服务端权威):
+                // 旧 calcRanchLevel 线性表算出的等级是假的, 一切牧场门槛判断用这个。
+                userState.ranchLevel = toNum(reply.basic.ranch_level);
+                userState.ranchExp = toNum(reply.basic.ranch_exp);
 
                 // 更新状态栏
                 updateStatusFromLogin({
