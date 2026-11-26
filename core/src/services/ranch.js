@@ -5569,6 +5569,7 @@ async function operateRanch(opts = {}) {
                 const probe = {
                     penBuildings: all.buildings.filter(b => (b.buildingId >= 6002001 && b.buildingId <= 6002999)),
                     details: [],
+                    sceneLoginShed: null,
                 };
                 for (const s of [probe.penBuildings[0] && probe.penBuildings[0].instId, 10003]) {
                     if (!s) continue;
@@ -5578,6 +5579,28 @@ async function operateRanch(opts = {}) {
                     } catch (e) {
                         probe.details.push({ queried: s, ok: false, err: String(e.message).slice(0, 120) });
                     }
+                }
+                // PlayerSceneLogin{1:2} 响应里还有一份建筑(带 #12 状态位), 原样 dump 棚条目
+                try {
+                    const w = protobuf.Writer.create();
+                    w.uint32((1 << 3) | 0).int64(toLong(RANCH_SCENE_TYPE));
+                    const { body: sceneBody } = await network.sendMsgAsync(
+                        'gamepb.globalscenepb.GlobalSceneService', 'PlayerSceneLogin', w.finish());
+                    const buf = Buffer.isBuffer(sceneBody) ? sceneBody : Buffer.from(sceneBody || []);
+                    // 粗解析: 找 6002001 所在的 message 边界太复杂, 直接把含 6002001 的 30 字节 hex 上下文带回去
+                    const hex = buf.toString('hex');
+                    const target = Buffer.from([0x41, 0x2c, 0x5b, 0x01]).toString('hex'); // varint 6002001
+                    let ctx = null;
+                    let ix = hex.indexOf(target);
+                    if (ix < 0) { ix = hex.indexOf('412c5b01'); }
+                    if (ix >= 0) {
+                        ctx = hex.slice(Math.max(0, ix - 200), ix + 200);
+                    } else {
+                        ctx = '6002001-not-found-in-scene-login len=' + buf.length;
+                    }
+                    probe.sceneLoginShed = { len: buf.length, ctx };
+                } catch (e) {
+                    probe.sceneLoginShed = { err: String(e.message).slice(0, 120) };
                 }
                 return { ok: true, action: '棚诊断', detail: JSON.stringify(probe) };
             }
