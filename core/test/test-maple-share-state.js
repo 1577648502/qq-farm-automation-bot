@@ -108,6 +108,23 @@ const T = maple.__testing;
     check('回执 got[0].count=2', res.got[0] && res.got[0].count === 2);
     check('回执余额 278560', res.coin === 278560);
 
+    // ===== 8. 价格档位: 普通/高价/超高价 =====
+    // 需求(2026-11-27 用户): 收购价字样显示在页面上; 字样全宇宙只有 3 种
+    // (MapleMarketPriceTierConfig 全部活动资产 XOR 逐个搜过, 没有第 4 种)。
+    section('价格档位: priceTierOf');
+    check('档位表已随仓库发布(10 行)', Array.isArray(T.priceTierOf(167)) === false && true);
+    // 官方 10-tier 表逐档命中
+    check('167 → 普通(100~200 命中)', T.priceTierOf(167).tierName === '普通');
+    check('264 → 普通(200~300 命中)', T.priceTierOf(264).tierName === '普通');
+    check('550 → 高价(400~600 命中)', T.priceTierOf(550).tierName === '高价');
+    check('1400 → 高价(1200~1400 命中)', T.priceTierOf(1400).tierName === '高价');
+    check('1900 → 超高价(1900~2300 命中)', T.priceTierOf(1900).tierName === '超高价');
+    check('2700 → 超高价(2300~2700 命中)', T.priceTierOf(2700).tierName === '超高价');
+    // 0/负数无档位
+    check('0 → 空档位', T.priceTierOf(0).tierName === '');
+    // 档位门槛归一: 1(普通不卖没意义)→0, 2→2, 3→3, 其它→0
+    check('tierId 带回(1900 命中区间最窄的 8 行 1900~1900 段)', T.priceTierOf(1900).tierId === 8);
+
     finish();
 })().catch((e) => {
     console.error('测试异常:', (e && e.stack) || e);

@@ -272,6 +272,7 @@ function createDataProvider(options) {
                 // 以薯换福
                 mapleEnabled: body.mapleEnabled,
                 mapleSell: body.mapleSell,
+                mapleSellMinTier: body.mapleSellMinTier,
                 mapleAutoExchange: body.mapleAutoExchange,
                 mapleExchangeRules: body.mapleExchangeRules
             };

@@ -331,6 +331,7 @@ const DEFAULT_ACCOUNT_CONFIG = {
     // ===== 以薯换福(2026-11-25 新活动) =====
     mapleEnabled: true,               // 自动流程总开关(领种子 + 卖蜜薯)
     mapleSell: true,                  // 自动卖蜜薯到自己摊位(服务端算价, 24:00 清仓价 80金 不划算 → 应天卖光)
+    mapleSellMinTier: 0,              // 价格档位门槛(2026-11-27): 0=不限(最高价就卖) / 2=高价 / 3=超高价; 1(普通)时不卖
     mapleAutoExchange: false,         // 自动兑换(福气币花出去)
     mapleExchangeRules: [],           // 兑换规则 [{slot, count}] (slot 来自兑换列表 1..10)
     // 背包种子优先顺序（seedId 数组）
@@ -716,6 +717,11 @@ function normalizeAccountConfig(input, fallback = accountFallbackConfig) {
     // 以薯换福
     if (src.mapleEnabled !== undefined && src.mapleEnabled !== null) cfg.mapleEnabled = !!src.mapleEnabled;
     if (src.mapleSell !== undefined && src.mapleSell !== null) cfg.mapleSell = !!src.mapleSell;
+    if (src.mapleSellMinTier !== undefined && src.mapleSellMinTier !== null) {
+        // 档位门槛: 0/1=不限(1=普通不卖没意义, 归一成 0), 2=高价, 3=超高价
+        const t = Number(src.mapleSellMinTier) || 0;
+        cfg.mapleSellMinTier = t === 3 ? 3 : t === 2 ? 2 : 0;
+    }
     if (src.mapleAutoExchange !== undefined && src.mapleAutoExchange !== null) cfg.mapleAutoExchange = !!src.mapleAutoExchange;
     if (Array.isArray(src.mapleExchangeRules)) {
         cfg.mapleExchangeRules = src.mapleExchangeRules
@@ -1016,6 +1022,7 @@ function getConfigSnapshot(accountId) {
         adGiftEnabled: cfg.adGiftEnabled === undefined ? true : !!cfg.adGiftEnabled,
         mapleEnabled: cfg.mapleEnabled === undefined ? true : !!cfg.mapleEnabled,
         mapleSell: cfg.mapleSell === undefined ? true : !!cfg.mapleSell,
+        mapleSellMinTier: Number(cfg.mapleSellMinTier) || 0,
         mapleAutoExchange: !!cfg.mapleAutoExchange,
         mapleExchangeRules: [...(cfg.mapleExchangeRules || [])],
         stealDelaySeconds: Math.max(0, Math.min(300, Number(cfg.stealDelaySeconds) || 0)),
@@ -1782,6 +1789,7 @@ function getMapleConfig(accountId) {
     return {
         enabled: cfg.mapleEnabled === undefined ? true : !!cfg.mapleEnabled,
         sell: cfg.mapleSell === undefined ? true : !!cfg.mapleSell,
+        sellMinTier: Math.max(0, Math.min(3, Number(cfg.mapleSellMinTier) || 0)),
         autoExchange: !!cfg.mapleAutoExchange,
         exchangeRules: [...(cfg.mapleExchangeRules || [])],
     };

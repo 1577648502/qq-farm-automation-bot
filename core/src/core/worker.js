@@ -419,11 +419,17 @@ async function runMaple(reason = 'interval') {
             claimSeed: true,
             plant: true,      // 刚领到种子就直种空地(红薯不进通用优先级)
             sell: cfg.sell,
+            sellMinTier: cfg.sellMinTier,   // 价格档位门槛: 0=最高价就卖 / 2=高价 / 3=超高价
             autoExchange: cfg.autoExchange,
             exchangeRules: cfg.exchangeRules,
         });
         if (r.ok && (r.claimed || r.planted || r.soldCount || (r.exchanged && r.exchanged.length))) {
-            log('活动', `以薯换福: 本轮 领种子×${r.claimed} 种薯×${r.planted} 卖蜜薯×${r.soldCount}${r.sellTarget ? ` ${r.sellTarget}` : ""}(+${r.income}福币) 兑换${(r.exchanged || []).length}笔`, {
+            log('活动', `以薯换福: 本轮 领种子×${r.claimed} 种薯×${r.planted} 卖蜜薯×${r.soldCount}${r.sellTier ? `(${r.sellTier})` : ""}${r.sellTarget ? ` ${r.sellTarget}` : ""}(+${r.income}福币) 兑换${(r.exchanged || []).length}笔`, {
+                module: 'activity', event: '以薯换福', result: 'ok', trigger: reason,
+            });
+        } else if (r.ok && r.sellSkipped) {
+            // 档位门槛未到: 本轮不卖, 蜜薯留着; 20 分钟一轮属常态, 不另外刷屏(成功分支已含 skipNote)
+            log('活动', `以薯换福: 本轮不卖(${r.sellSkipped.reason})`, {
                 module: 'activity', event: '以薯换福', result: 'ok', trigger: reason,
             });
         }

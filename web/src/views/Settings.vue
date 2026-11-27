@@ -1196,6 +1196,7 @@ const localAutomationSettings = ref({
   // 以薯换福
   mapleEnabled: true,
   mapleSell: true,
+  mapleSellMinTier: 0,
   mapleAutoExchange: false,
   // 防封号(低调)模式
   stealthEnabled: false,
@@ -1555,6 +1556,7 @@ function syncLocalAutomationSettings(submitted?: any) {
     localAutomationSettings.value.adGiftEnabled = settings.value.adGiftEnabled ?? true
     localAutomationSettings.value.mapleEnabled = settings.value.mapleEnabled ?? true
     localAutomationSettings.value.mapleSell = settings.value.mapleSell ?? true
+    localAutomationSettings.value.mapleSellMinTier = Number(settings.value.mapleSellMinTier) || 0
     localAutomationSettings.value.mapleAutoExchange = !!settings.value.mapleAutoExchange
     localAutomationSettings.value.fertilizerBuyOrganicCount = settings.value.fertilizerBuyOrganicCount ?? 1
     localAutomationSettings.value.fertilizerBuyOrganicThresholdHours = settings.value.fertilizerBuyOrganicThresholdHours ?? 10
@@ -3431,6 +3433,17 @@ async function onBackupFileChange(ev: Event) {
               <div class="flex flex-wrap items-center gap-3 border border-gray-200 rounded px-2.5 py-2 dark:border-gray-700">
                 <BaseSwitch v-model="localAutomationSettings.mapleSell" label="自动卖蜜薯（全部卖出）" />
                 <BaseSwitch v-model="localAutomationSettings.mapleAutoExchange" label="自动兑换（按左侧活动页配置）" />
+              </div>
+              <div v-if="localAutomationSettings.mapleSell" class="mt-2 flex flex-wrap items-center gap-2 border border-gray-200 rounded px-2.5 py-2 dark:border-gray-700">
+                <span class="text-xs text-gray-500 dark:text-gray-400">价格门槛（多账号比价刷到最高的卖，不到门槛不卖）:</span>
+                <select
+                  v-model.number="localAutomationSettings.mapleSellMinTier"
+                  class="border border-gray-300 rounded bg-white px-2 py-1 text-xs dark:border-gray-600 dark:bg-gray-800"
+                >
+                  <option :value="0">不限（有就卖）</option>
+                  <option :value="2">高价（普通不卖）</option>
+                  <option :value="3">超高价（只卖最高）</option>
+                </select>
               </div>
               <template #note>
                 手动领种子 / 卖薯 / 兑换都在左侧栏「以薯换福」页面。摊位卖出价由服务端结算（基础价 + 持有溢价），自己摊位卖出不限量。

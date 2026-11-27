@@ -2498,6 +2498,7 @@ app.use('/api', (req, res, next) => {
                     // 以薯换福
                     mapleEnabled: mapleCfg.enabled,
                     mapleSell: mapleCfg.sell,
+                    mapleSellMinTier: Number(mapleCfg.sellMinTier) || 0,
                     mapleAutoExchange: !!mapleCfg.autoExchange,
                     mapleExchangeRules: mapleCfg.exchangeRules || [],
                     ui,

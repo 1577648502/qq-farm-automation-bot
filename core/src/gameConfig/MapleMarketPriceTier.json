@@ -1,0 +1,75 @@
+{
+  "_source": "游戏配置表 MapleMarketPriceTierConfig (mainscene bundle TextAsset, XOR NQF_SHANGXIANDAMAI_#2026_SECURE)",
+  "tiers": [
+    {
+      "activity_id": 2026111708,
+      "tier_id": 1,
+      "tier_name": "普通",
+      "price_min": 100,
+      "price_max": 200
+    },
+    {
+      "activity_id": 2026111708,
+      "tier_id": 2,
+      "tier_name": "普通",
+      "price_min": 200,
+      "price_max": 300
+    },
+    {
+      "activity_id": 2026111708,
+      "tier_id": 3,
+      "tier_name": "普通",
+      "price_min": 300,
+      "price_max": 400
+    },
+    {
+      "activity_id": 2026111708,
+      "tier_id": 4,
+      "tier_name": "高价",
+      "price_min": 400,
+      "price_max": 600
+    },
+    {
+      "activity_id": 2026111708,
+      "tier_id": 5,
+      "tier_name": "高价",
+      "price_min": 600,
+      "price_max": 800
+    },
+    {
+      "activity_id": 2026111708,
+      "tier_id": 6,
+      "tier_name": "高价",
+      "price_min": 800,
+      "price_max": 1000
+    },
+    {
+      "activity_id": 2026111708,
+      "tier_id": 7,
+      "tier_name": "高价",
+      "price_min": 1200,
+      "price_max": 1400
+    },
+    {
+      "activity_id": 2026111708,
+      "tier_id": 8,
+      "tier_name": "超高价",
+      "price_min": 1500,
+      "price_max": 1900
+    },
+    {
+      "activity_id": 2026111708,
+      "tier_id": 9,
+      "tier_name": "超高价",
+      "price_min": 1900,
+      "price_max": 2300
+    },
+    {
+      "activity_id": 2026111708,
+      "tier_id": 10,
+      "tier_name": "超高价",
+      "price_min": 2300,
+      "price_max": 2700
+    }
+  ]
+}

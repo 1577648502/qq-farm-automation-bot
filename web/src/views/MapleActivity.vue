@@ -53,6 +53,16 @@ const basePrice = computed(() => Number(state.value.basePrice) || 0)
 const totalIncome = computed(() => Number(state.value.totalIncome) || 0)
 /** 实卖单价 = 基础价 + 摊上存量(服务端算, cmd98#3) */
 const sellPrice = computed(() => Number(state.value.sellPrice) || 0)
+/** 价格档位字样(普通/高价/超高价): 服务端按官方 MapleMarketPriceTierConfig 定档 */
+const priceTier = computed(() => String(state.value.priceTier || ''))
+const priceTierClass = computed(() => {
+  const t = priceTier.value
+  if (t === '超高价')
+    return 'text-amber-600 dark:text-amber-400'
+  if (t === '高价')
+    return 'text-emerald-600 dark:text-emerald-400'
+  return 'text-gray-500 dark:text-gray-400'
+})
 /** 摊上存量(好友卖到你摊上的蜜薯, 也是溢价的来源) */
 const stallHolding = computed(() => Number(state.value.stallHolding) || 0)
 
@@ -337,6 +347,7 @@ watch(currentAccountId, () => refresh())
         <div class="border border-gray-200 rounded-lg bg-white p-3 dark:border-gray-700 dark:bg-gray-800">
           <div class="text-xs text-gray-400">
             实卖单价
+            <span v-if="priceTier" :class="priceTierClass" class="ml-1 font-medium">{{ priceTier }}</span>
           </div>
           <div class="mt-1 text-xl font-bold">
             {{ sellPrice }}

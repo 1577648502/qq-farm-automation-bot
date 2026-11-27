@@ -331,6 +331,43 @@ async function getTodayInfo() {
     };
 }
 
+// ===== 价格档位 (客户端静态配置 MapleMarketPriceTierConfig, 2026-11-27 解出) =====
+// 收购价字样全宇宙只有 3 种: 普通 / 高价 / 超高价(全部活动资产逐个 XOR 搜过, 没有第 4 种)。
+// 10-tier 表(当前生效版)已随仓库发布在 gameConfig/MapleMarketPriceTier.json;
+// 3-tier FinalPrice 表(80-235/236-395/396-550)是 UI 的「今日最终价」分档, 同样只有这 3 种字样。
+let maplePriceTierTable = null;
+try {
+    maplePriceTierTable = require('../gameConfig/MapleMarketPriceTier.json').tiers;
+    if (!Array.isArray(maplePriceTierTable) || !maplePriceTierTable.length) maplePriceTierTable = null;
+} catch { /* 表缺失时按价段兜底 */ }
+
+/**
+ * 收购价 → 档位字样 (普通/高价/超高价)。
+ * 优先查官方 10-tier 表(逐档命中: 表内普通段 100~400 与 FinalPrice 普通段 80~235 有重叠,
+ * 以**官方表的 tier_id 最大命中行**为准 —— 同字样多行时取价格区间最贴近的); 表不可用按
+ * FinalPrice 3 档兜底(80-235 普通 / 236-395 高价 / 396-550 超高价)。
+ */
+function priceTierOf(price) {
+    const p = Math.max(0, toInt(price) || 0);
+    if (!p) return { tierName: '', tierId: 0 };
+    let hit = null;
+    if (maplePriceTierTable) {
+        for (const t of maplePriceTierTable) {
+            const lo = toInt(t && t.price_min) || 0;
+            const hi = toInt(t && t.price_max) || 0;
+            if (p >= lo && p <= hi) {
+                // 同字样多行(普通×3/高价×4/超高价×3): 保留区间最窄的(最贴近现价)
+                if (!hit || (hi - lo) < (toInt(hit.price_max) - toInt(hit.price_min))) hit = t;
+            }
+        }
+    }
+    if (hit) return { tierName: String(hit.tier_name || ''), tierId: toInt(hit.tier_id) || 0 };
+    // 兜底: 官方 UI 的「今日最终价」3 档分位(MapleMarketFinalPriceTierConfig)
+    if (p <= 235) return { tierName: '普通', tierId: 1 };
+    if (p <= 395) return { tierName: '高价', tierId: 2 };
+    return { tierName: '超高价', tierId: 3 };
+}
+
 // ===== 分享暴击 (ShareService.ReportShare) =====
 // 2026-11-26 从抓包 20261125-105437 / 20261125-115051「新活动」定案:
 //   分享收购价 → ReportShare { #1 share_type=28, #4 scene=2017 }
@@ -780,6 +817,10 @@ async function getOverview() {
     state.stallHolding = today.ok && today.stallHolding ? today.stallHolding : stallHolding;
     if (stallPrice > 0) state.basePrice = stallPrice;
     state.sellPrice = (today.ok && today.todayPrice) || (state.basePrice + state.stallHolding) || 0;
+    // 价格档位字样(普通/高价/超高价): 按实卖单价定档, 游戏内「今日蜜薯收购价 普通 167」同源
+    const tier = priceTierOf(state.sellPrice);
+    state.priceTier = tier.tierName;
+    state.priceTierId = tier.tierId;
     if (today.ok && today.totalIncome) state.totalIncome = today.totalIncome;
     if (today.ok) {
         state.seedLeft = today.seedLeft;
@@ -834,17 +875,40 @@ async function runAuto(cfg = {}, breaker = null) {
         if (cfg.sell !== false) {
             // 找最高价的卖(2026-11-25): 探测自己几个号的摊位, 谁价高卖谁;
             // 没有比价结果(全离线/额度0)兜底卖自己摊。
+            // ⭐ 2026-11-27 价格档位门槛(用户要求): 字样只有 普通/高价/超高价 3 种。
+            //   cfg.sellMinTier = 普通时不卖, 高价时卖高价, 超高价时只卖超高价(刷到最高的卖);
+            //   档位按**目标摊实卖价**(基础+存量)定, 不按自己摊 —— 卖到谁就按谁的价算。
+            //   所有候选都不到门槛 → 本轮不卖(蜜薯留着, 下轮再刷), 不兜底卖自己摊。
+            const minTierId = toInt(cfg.sellMinTier) || 0;
             let targetGid = 0;
             let targetNote = '';
+            let targetTier = null;
             const sellCtx = { source: 'auto' };
             try {
                 const p = await probeSellTargets();
                 if (p.best) {
+                    // 候选列表也带上档位, 页面/日志用
+                    for (const row of p.rows) row.priceTier = priceTierOf(row.effPrice).tierName;
+                    const bestTier = priceTierOf(p.best.effPrice);
+                    if (minTierId > 0 && bestTier.tierId < minTierId) {
+                        // 不到门槛: 记录本轮跳过原因, 蜜薯留着
+                        out.sellSkipped = {
+                            reason: `最高可卖 ${p.best.effPrice}(${bestTier.tierName}) 不到门槛(${minTierId === 2 ? '高价' : minTierId === 3 ? '超高价' : `tier${minTierId}`})`,
+                            bestEffPrice: p.best.effPrice,
+                            bestTier: bestTier.tierName,
+                        };
+                        return { ok: true, ...out };
+                    }
                     targetGid = p.best.gid;
-                    targetNote = `→${p.best.name}(现价${p.best.effPrice}=${p.best.basePrice}基础+${p.best.holding}存量)`;
+                    targetTier = bestTier;
+                    targetNote = `→${p.best.name}(现价${p.best.effPrice}=${p.best.basePrice}基础+${p.best.holding}存量,${bestTier.tierName})`;
                     sellCtx.targetName = p.best.name;
                     sellCtx.stallBasePrice = p.best.basePrice;
                     sellCtx.stallHolding = p.best.holding;
+                } else if (minTierId > 0) {
+                    // 没有可卖的候选(全离线/额度0): 同样不卖, 别兜底砸自己摊
+                    out.sellSkipped = { reason: '没有可卖的候选摊位(全离线/额度0)', bestEffPrice: 0, bestTier: '' };
+                    return { ok: true, ...out };
                 }
             } catch { /* 探测失败不挡卖, 走自己摊 */ }
             const r = await sellPotato(0, targetGid, sellCtx);
@@ -857,6 +921,7 @@ async function runAuto(cfg = {}, breaker = null) {
                 out.income = r.income || 0;
                 out.sellTarget = targetNote || `自己摊(${r.targetName || ''})`;
                 out.unitPrice = r.unitPrice || 0;
+                if (targetTier) out.sellTier = targetTier.tierName;
             }
         }
         if (cfg.autoExchange && Array.isArray(cfg.exchangeRules) && cfg.exchangeRules.length > 0) {
@@ -1108,5 +1173,7 @@ module.exports = {
         // 分享状态(每日自动一次)落盘 → 便于测试重启/跨天/尝试上限
         dayKey, shareStateFile, loadShareState, saveShareState, resetShareStateCache,
         encodeExchangePayload,
+        // 价格档位(2026-11-27): 普通/高价/超高价
+        priceTierOf,
     },
 };

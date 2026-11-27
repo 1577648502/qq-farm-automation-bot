@@ -120,6 +120,7 @@ export interface SettingsState {
   adGiftEnabled: boolean
   mapleEnabled: boolean
   mapleSell: boolean
+  mapleSellMinTier: number
   mapleAutoExchange: boolean
 }
 
@@ -189,6 +190,7 @@ function createDefaultSettings(): SettingsState {
     adGiftEnabled: true,
     mapleEnabled: true,
     mapleSell: true,
+    mapleSellMinTier: 0,
     mapleAutoExchange: false,
   }
 }
@@ -366,6 +368,7 @@ export const useSettingStore = defineStore('setting', () => {
       settings.value.adGiftEnabled = d.adGiftEnabled ?? true
       settings.value.mapleEnabled = d.mapleEnabled ?? true
       settings.value.mapleSell = d.mapleSell ?? true
+      settings.value.mapleSellMinTier = Number(d.mapleSellMinTier) || 0
       settings.value.mapleAutoExchange = !!d.mapleAutoExchange
       settingsAccountId.value = normalizedAccountId
       return { ok: true }
@@ -459,6 +462,7 @@ export const useSettingStore = defineStore('setting', () => {
         // 以薯换福 —— 漏发就不会保存(与牧场幼崽策略同坑)
         mapleEnabled: newSettings.mapleEnabled,
         mapleSell: newSettings.mapleSell,
+        mapleSellMinTier: Number(newSettings.mapleSellMinTier) || 0,
         mapleAutoExchange: newSettings.mapleAutoExchange,
       }
 
