@@ -60,6 +60,8 @@ const HOME_ERR = {
     FARM_LEVEL_LOW: 1045134, // 牧场等级不足(实测)
     NOT_UNLOCKED: 1045110,   // 该建筑还未解锁(2026-11-28 日志: 棚 inst=10003 升级被拒 —
                              //   升级档位有前置条件, 服务端不认; 属正常业务状态, 静默跳过)
+    NO_CURRENCY: 1000019,    // 金券不足(2026-11-28 日志: 窝 inst=10001 升级被拒 —
+                             //   材料不足类, 每轮都会发生, 静默)
 };
 
 function parseHomeErrorCode(e) {
@@ -75,7 +77,7 @@ function isExpectedHomeError(e) {
         || c === HOME_ERR.NO_SUCH_INSTANCE || c === HOME_ERR.NO_SPACE
         || c === HOME_ERR.NOT_REMOVABLE || c === HOME_ERR.RATE_LIMITED
         || c === HOME_ERR.MAX_LEVEL_2 || c === HOME_ERR.FARM_LEVEL_LOW
-        || c === HOME_ERR.NOT_UNLOCKED;
+        || c === HOME_ERR.NOT_UNLOCKED || c === HOME_ERR.NO_CURRENCY;
 }
 
 async function call(method, RequestType, payload = {}) {
