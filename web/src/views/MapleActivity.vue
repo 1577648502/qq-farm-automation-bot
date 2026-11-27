@@ -432,7 +432,7 @@ watch(currentAccountId, () => refresh())
               </div>
               <div class="text-xs text-gray-400">
                 {{ s.price }} 福气币 · {{ slotSoldOut(s) ? '已兑完' : slotVisible(s) ? '可兑换' : '未解锁' }}
-                <span v-if="s.limit > 0"> · 已购 {{ num(s.sold) }}/{{ s.limit }}</span>
+                <span v-if="s.limit > 0"> · 已购 {{ num(s.sold) }}/{{ s.limit }}<template v-if="s.soldToday > 0">（今日 {{ num(s.soldToday) }}）</template></span>
               </div>
             </div>
             <div class="flex items-center justify-between gap-2">

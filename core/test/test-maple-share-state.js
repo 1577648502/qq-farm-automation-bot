@@ -8,7 +8,7 @@
  *   2) 成功当天 → hasSharedToday()=true, 自动流程跳过; 跨天自动失效;
  *   3) 失败重试封顶 MAX_SHARE_ATTEMPTS=3, 不会每 20 分钟无限刷;
  *   4) reportShareCrit() 去重命中时直接 skipped(不发协议, 因此无需 proto 环境);
- *   5) 兑换列表 #5 = 已购数量(sold), 剩余可兑 = limit - sold;
+ *   5) 兑换列表 #6 = 活动累计已购(sold, 限购 #4 的比较对象), #5 = 今日已购(每日重置, 仅展示);
  *   6) 兑换请求把 count 编进 payload #2, 服务端一次兑多个(线上实测 count=2 扣两份)。
  */
 const fs = require('node:fs');
@@ -67,21 +67,27 @@ const T = maple.__testing;
     const r2 = await maple.reportShareCrit();
     check('收手后不再发协议', r2 && r2.skipped === true && String(r2.reason || '').includes('未成功'));
 
-    // ===== 6. 兑换列表: #5 = 已购 =====
-    section('兑换列表: sold(#5) / limit(#4)');
+    // ===== 6. 兑换列表: #6 = 活动累计已购, #5 = 今日已购 =====
+    section('兑换列表: sold(#6 累计) / soldToday(#5) / limit(#4)');
     const hex = encodeExchangeList([
-        { slot: 10, price: 7000, limit: 5, sold: 2, visible: 1 },
-        { slot: 5, price: 12000, limit: 1, sold: 1, visible: 1 },
+        { slot: 10, price: 7000, limit: 50, soldToday: 1, soldTotal: 6, visible: 1 },
+        { slot: 1, price: 1000000, limit: 1, soldToday: 0, soldTotal: 1, visible: 0 },
     ], 278560);
     const parsed = T.parseExchangeList(hex);
     check('解析出 2 个槽位', parsed.slots.length === 2);
     check('福气币余额 278560', parsed.coin === 278560);
     const s10 = parsed.slots.find(s => s.slot === 10);
-    const s5 = parsed.slots.find(s => s.slot === 5);
-    check('槽10 limit=5', s10.limit === 5);
-    check('槽10 sold=2(#5 已购)', s10.sold === 2);
-    check('槽10 剩余可兑 3', s10.limit - s10.sold === 3);
-    check('槽5 已兑完(limit=sold=1)', s5.limit === 1 && s5.sold === 1);
+    const s1 = parsed.slots.find(s => s.slot === 1);
+    check('槽10 limit=50', s10.limit === 50);
+    check('槽10 sold=6(#6 活动累计已购)', s10.sold === 6);
+    check('槽10 soldToday=1(#5 今日已购)', s10.soldToday === 1);
+    check('槽10 剩余可兑 44(limit - 累计)', s10.limit - s10.sold === 44);
+    check('槽1 已兑完(limit=累计=1)', s1.limit === 1 && s1.sold === 1);
+    // 兼容: 服务端没给 #6 时, 用 #5 兜底(不会把已购显示成 0)
+    const only5 = T.parseExchangeList(encodeExchangeList([
+        { slot: 5, price: 8500, limit: 50, soldToday: 2, soldTotal: 0, visible: 1, omitTotal: true },
+    ], 100));
+    check('#6 缺失时 sold 回退 #5', only5.slots[0].sold === 2 && only5.slots[0].soldToday === 2, only5.slots[0]);
 
     // ===== 7. 兑换请求: count 进 payload #2 =====
     section('兑换请求: count 编入 payload');
@@ -129,7 +135,8 @@ function encodeExchangeList(slots, coin) {
         fVarint(2, s.price),
         fVarint(3, 1),
         fVarint(4, s.limit),
-        fVarint(5, s.sold),
+        fVarint(5, s.soldToday || 0),
+        ...(s.omitTotal ? [] : [fVarint(6, s.soldTotal || 0)]),
         fVarint(7, s.visible || 0),
     ])));
     parts.push(fVarint(2, coin));

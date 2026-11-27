@@ -226,15 +226,19 @@ function parseExchangeList(resultHex) {
         const s = parseTop(x.v);
         const slot = toInt((findField(s, 1) || {}).v) || 0;
         const goods = EXCHANGE_SLOT_GOODS[slot] || null;
+        // 2026-11-27 线上实测(count=1 兑换前后对比):
+        //   #5 = **今日已购**(0→1, 每天 0 点重置; 11-26 23:34 买 2 → 2, 次日回 0)
+        //   #6 = **活动累计已购**(5→6, 不随跨天重置) —— 限购 #4 约束的是累计数
+        //   旧实现把 #5 当已购 → 面板永远显示 0/50(用户报障: 买过了还是 0)
+        const soldToday = toInt((findField(s, 5) || {}).v) || 0;
+        const soldTotal = toInt((findField(s, 6) || {}).v) || soldToday;
         out.slots.push({
             slot,
             price: toInt((findField(s, 2) || {}).v) || 0,
             type: toInt((findField(s, 3) || {}).v) || 0,
             limit: toInt((findField(s, 4) || {}).v) || 0,
-            // #5 = 已购数量(2026-11-26 实测: 兑 2 个化肥后 #5/#6 都变 2), 剩余可兑 = limit - sold
-            sold: toInt((findField(s, 5) || {}).v) || 0,
-            extra5: toInt((findField(s, 5) || {}).v) || 0,
-            extra6: toInt((findField(s, 6) || {}).v) || 0,
+            sold: soldTotal,        // 已购(活动累计) = limit 的比较对象
+            soldToday,              // 今日已购(每日重置, 仅展示)
             visible: !!(toInt((findField(s, 7) || {}).v)),
             // 商品信息(cmd97 不带, 静态配置 + 兑换回执学习)
             goodsId: goods ? goods.itemId : 0,
@@ -864,6 +868,10 @@ async function runAuto(cfg = {}, breaker = null) {
                     if (!slot || remaining <= 0) continue;
                     const s = list.slots.find((x) => x.slot === slot);
                     if (!s) continue;
+                    // 剩余可兑按**活动累计已购**(#6)算, 不是今日已购(#5)
+                    const room = s.limit > 0 ? Math.max(0, s.limit - (toInt(s.sold) || 0)) : 99;
+                    if (room <= 0) continue;
+                    if (remaining > room) remaining = room;
                     while (remaining > 0) {
                         const r = await exchange(slot, 1);
                         if (!r.ok) {
@@ -872,7 +880,6 @@ async function runAuto(cfg = {}, breaker = null) {
                         }
                         out.exchanged.push({ slot, spend: r.spend, got: r.got });
                         remaining -= 1;
-                        if (out.exchanged.filter((x) => x.slot === slot).length >= s.limit) break;
                     }
                 }
             }
