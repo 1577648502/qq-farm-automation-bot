@@ -584,10 +584,11 @@ const pensView = computed<PenView[]>(() => {
     // 服务端没有这一组 = 该栏舍还没解锁(棚要更高等级)
     p.emptySlots = Math.max(0, (p.capacity || 0) - p.animals.length)
     p.locked = !p.exists || (p.capacity === 0 && p.animals.length === 0)
-    // 棚锁定提示: 建筑已放置(AllCells 有 6002001)但服务端不返回棚组 = 牧场等级不够
-    // 2026-11-22 实测: 牧场 Lv12/Lv18 的号 penCount 都是 0 → 未解锁档位在 Lv18 以上
+    // 棚锁定提示: 建筑已放置(AllCells 有 6002001)但服务端不返回棚组
+    // 2026-11-27 用户要求: 别在这里下"等级不够"的结论 —— 面板直接给「立即解锁棚」按钮,
+    //   让服务端回话(官方客户端能解锁 = 先怀疑我们的参数/流程, 不是硬门槛)。
     if (p.locked && p.key === 'pen')
-      p.lockedHint = ov.ranchLevel ? `建筑已放置，需更高牧场等级解锁（当前牧场 Lv${ov.ranchLevel}，实测 Lv18 仍未开放）` : '建筑已放置，需更高牧场等级解锁'
+      p.lockedHint = `建筑已放置${p.building?.instId ? `（实例 ${p.building.instId}）` : ''}，服务端暂未返回棚组 —— 点「立即解锁棚」发激活请求`
   }
   return pens
 })
@@ -696,6 +697,50 @@ async function runOp(op: string, slot = 0, extra: Record<string, any> = {}) {
 }
 
 watch(currentAccountId, () => refresh(true))
+
+// ============ 棚解锁(2026-11-27 用户要求: 棚卡片上直接给按钮) ============
+// 两级尝试, 每级都用 RanchDetail 的棚组验证:
+//   ① ActivateFacility(自动查棚建筑实例号)
+//   ② 先 PlaceFacility 把棚绑定到牧场场景, 再激活(老号"编辑器实例"状态要走这条)
+// ⚠ 服务端对"还不够等级"的激活请求会静默成功(回 facility 回显但不出棚组),
+//   所以绝不能拿请求成功当解锁 —— 只认 pens 里有没有棚组。
+const shedUnlocking = ref(false)
+const shedUnlockDetail = ref('')
+async function unlockShed() {
+  const id = currentAccountId.value
+  if (!id || shedUnlocking.value)
+    return
+  shedUnlocking.value = true
+  const logs: string[] = []
+  try {
+    const steps: Array<{ label: string, extra: Record<string, any> }> = [
+      { label: '激活', extra: {} },
+      { label: '摆放后激活', extra: { place: true } },
+    ]
+    for (const step of steps) {
+      try {
+        const r = await ranchStore.operate(id, { op: 'activateshed', ...step.extra })
+        logs.push(`${step.label}: ${r?.detail || r?.error || '无回包'}`)
+      }
+      catch (e: any) {
+        logs.push(`${step.label}失败: ${String(e?.message || e).slice(0, 120)}`)
+      }
+      await new Promise(res => setTimeout(res, 500))
+      await ranchStore.fetchOverview(id)
+      const pen = pensView.value.find(p => p.key === 'pen')
+      if (pen && !pen.locked) {
+        shedUnlockDetail.value = logs[logs.length - 1] || ''
+        toast.success(`棚已解锁（${shedUnlockDetail.value}）`)
+        return
+      }
+    }
+    shedUnlockDetail.value = logs.join(' / ')
+    toast.error(`棚还没解锁 —— ${shedUnlockDetail.value}`)
+  }
+  finally {
+    shedUnlocking.value = false
+  }
+}
 
 // ============ 出售动物(不可逆, 必须确认) ============
 const sellTarget = ref<any>(null)
@@ -1627,7 +1672,7 @@ onUnmounted(() => {
                 </div>
               </div>
 
-              <!-- 未解锁: 占位说明, 不渲染槽位 -->
+              <!-- 未解锁: 占位说明 + 解锁按钮(棚只有激活请求这一条路, 官方客户端能解锁就先发请求看服务端回话) -->
               <div
                 v-if="pen.locked"
                 class="min-h-[80px] flex flex-col items-center justify-center border border-gray-200 rounded-lg border-dashed p-4 text-gray-300 dark:border-gray-700"
@@ -1636,6 +1681,17 @@ onUnmounted(() => {
                 <div class="mt-2 text-[11px] text-gray-400">
                   {{ pen.lockedHint || '该栏舍尚未建造或未解锁' }}
                 </div>
+                <button
+                  v-if="pen.key === 'pen'"
+                  type="button"
+                  class="mt-2 min-h-[36px] inline-flex items-center gap-1.5 border border-emerald-500 rounded-lg bg-emerald-600 px-3 py-1.5 text-xs text-white font-medium transition active:scale-[0.98] disabled:cursor-not-allowed hover:bg-emerald-700 disabled:opacity-50"
+                  :disabled="shedUnlocking || opBusy !== ''"
+                  :title="shedUnlockDetail || '发 ActivateFacility；无棚组时自动改走「摆放后激活」'"
+                  @click="unlockShed"
+                >
+                  <div :class="shedUnlocking ? 'i-carbon-renew animate-spin' : 'i-carbon-unlocked'" />
+                  {{ shedUnlocking ? '解锁中…' : '立即解锁棚' }}
+                </button>
               </div>
 
               <div v-else class="grid grid-cols-2 gap-3 md:grid-cols-4 sm:grid-cols-3">
