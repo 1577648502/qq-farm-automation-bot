@@ -78,23 +78,6 @@ async function claimDailyReward(type, pointIds) {
     return types.ClaimDailyRewardReply.decode(replyBody);
 }
 
-/**
- * 按类别领图鉴奖励。
- * ⭐ 2026-11-20 抓包定案: 请求 #1 是图鉴类别(1=植物, 101=牧场动物「巨大」页签),
- *   不是 only_claimable —— 旧实现发 true 只领到植物类。
- * @param {number} listType 1=植物图鉴(默认); 101=牧场动物图鉴
- */
-async function claimAllIllustratedRewards(listType = 1) {
-    if (!types.ClaimAllRewardsV2Request || !types.ClaimAllRewardsV2Reply) {
-        return { items: [], bonus_items: [] };
-    }
-    const body = types.ClaimAllRewardsV2Request.encode(types.ClaimAllRewardsV2Request.create({
-        list_type: Number(listType) || 1,
-    })).finish();
-    const { body: replyBody } = await sendMsgAsync('gamepb.illustratedpb.IllustratedService', 'ClaimAllRewardsV2', body);
-    return types.ClaimAllRewardsV2Reply.decode(replyBody);
-}
-
 async function getTicketBalanceFromBag() {
     try {
         const { getBag, getBagItems } = require('./warehouse');

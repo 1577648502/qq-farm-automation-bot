@@ -541,7 +541,7 @@ function getIconAssetCandidates(item) {
     // animal bundle 的 texture 图标(2026-11-22 起接入):
     //   动物形态(60001_4) / 罐头便便(1028_1/1030_1) / 蛋类产物(asset=自身 id 1060001)
     // 正则放宽到 4~7 位数字(_数字后缀可选), 否则蛋类和便便永远抽不到图。
-    if (/^\d{4,7}(_\d+)?$/.test(assetName)) {
+    if (/^\d{4,7}(?:_\d+)?$/.test(assetName)) {
         candidates.unshift(`texture/${assetName}`);
     }
     return candidates;
