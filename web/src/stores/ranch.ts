@@ -211,7 +211,7 @@ export const useRanchStore = defineStore('ranch', () => {
     })
     if (!data?.ok)
       throw new Error(data?.error || '获取游商失败')
-    return data.data as { open: boolean, refreshAt: number, goods: RotationShopGoods[] }
+    return data.data as { open: boolean, refreshAt: number, groups?: Array<{ id: number, name: string, limit?: number }>, goods: RotationShopGoods[] }
   }
 
   async function operate(accountId: string, opts: { op: string, slot?: number, feedType?: number, count?: number, maxSpend?: number, batch?: string, goodsId?: number, cubItemId?: number, gid?: number, instId?: number, complete?: boolean, price?: number, uid?: number, animalInstId?: number, hostGid?: number, place?: boolean, x?: number, y?: number, probe?: boolean }) {

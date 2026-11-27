@@ -546,6 +546,50 @@ proto.loadProto().then(async () => {
             /ShelfStealDetail detail = 2/.test(protoSrc) && !/int64 base_num = 2/.test(protoSrc), null);
     }
 
+    section('18. AddFeed 回包解析: f=1 是 bytes(submsg) 时不产生 NaN(2026-11-28 面板实测)');
+    {
+        // 面板「补草」返回"存量 NaN": 线上 AddFeed 回包 f=1 不是 varint 而是 length-delim,
+        // 旧解析 Number(Buffer)=NaN。锁住: f=1 varint 直接取; f=1 bytes 深走 (21→1) 或 (1) 取存量;
+        // 找不到有限数时回 0(不 NaN)。
+        const ranch = require(`${SB}/src/services/ranch`);
+        const savedSend = network.sendMsgAsync;
+        const P = require('protobufjs');
+        try {
+            // 形状 A: f=1 varint(旧 mock / 可能的老服务端)
+            network.sendMsgAsync = async () => ({
+                body: P.Writer.create().uint32((1 << 3) | 0).uint64(1234).finish(),
+            });
+            let r = await ranch.addFeedToMachine(100);
+            check('f=1 varint → 存量 1234', r.stored === 1234, r);
+
+            // 形状 B: f=1 bytes 包着 {21:{1:存量}}(仿 GetFacilityDetail 的 #21 结构)
+            const storedBuf = P.Writer.create().uint32((1 << 3) | 0).uint64(987).finish();
+            const sub = P.Writer.create().uint32((21 << 3) | 2).bytes(storedBuf).finish();
+            network.sendMsgAsync = async () => ({
+                body: P.Writer.create().uint32((1 << 3) | 2).bytes(sub).finish(),
+            });
+            r = await ranch.addFeedToMachine(100);
+            check('f=1 bytes{21:{1:987}} → 存量 987(不再 NaN)', r.stored === 987, r);
+
+            // 形状 C: f=1 bytes 包着 {1:存量} 直接一层
+            const flat = P.Writer.create().uint32((1 << 3) | 0).uint64(654).finish();
+            network.sendMsgAsync = async () => ({
+                body: P.Writer.create().uint32((1 << 3) | 2).bytes(flat).finish(),
+            });
+            r = await ranch.addFeedToMachine(100);
+            check('f=1 bytes{1:654} → 存量 654', r.stored === 654, r);
+
+            // 形状 D: 完全认不出的结构 → 0(不是 NaN)
+            network.sendMsgAsync = async () => ({
+                body: P.Writer.create().uint32((2 << 3) | 0).uint64(1).finish(),
+            });
+            r = await ranch.addFeedToMachine(100);
+            check('认不出结构 → 存量 0(永不 NaN)', r.stored === 0, r);
+        } finally {
+            network.sendMsgAsync = savedSend;
+        }
+    }
+
     finish();
 }).catch(e => {
     console.log('测试异常:', e && e.message);

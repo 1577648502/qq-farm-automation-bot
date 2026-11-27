@@ -4398,11 +4398,30 @@ async function addFeedToMachine(count = 100, opts = {}) {
     w.uint32((4 << 3) | 0).int64(toLong(hostGid));
     const { body: replyBody } = await network.sendMsgAsync('gamepb.homesteadpb.FeedMachineService', 'AddFeed', w.finish());
     // 响应 {1:加完后的存量, 2:剩余?}
+    // ⭐ 2026-11-28 面板实测: 线上回包 f=1 不是 varint 而是 bytes(submsg), 旧解析 Number(Buffer)=NaN,
+    //   面板「补草」显示"存量 NaN"。f=1 是 varint 直接用; 是 bytes 就深一层找 (21→1 或 1) 的 varint 存量。
     const top = walkWire(Buffer.from(replyBody));
     let stored = 0;
-    for (const [f, , v] of top) {
-        if (f === 1) { stored = Number(v); break; }
+    const storedFrom = (buf) => {
+        for (const [f, wt, v] of walkWire(buf)) {
+            if (f === 1 && wt === 0) return Number(v);
+            if (f === 21 && wt === 2) {
+                const inner = storedFrom(v);
+                if (Number.isFinite(inner)) return inner;
+            }
+        }
+        return NaN;
+    };
+    for (const [f, wt, v] of top) {
+        if (f === 1) {
+            if (wt === 0) { stored = Number(v); break; }
+            if (wt === 2) {
+                const s = storedFrom(v);
+                if (Number.isFinite(s)) { stored = s; break; }
+            }
+        }
     }
+    if (!Number.isFinite(stored)) stored = 0;
     log('牧场', `牧草机添加牧草 x${count} → 存量 ${stored}`, {
         module: 'ranch', event: '牧草机加草', result: 'ok', count, stored,
     });
@@ -5151,7 +5170,18 @@ async function collectThenHarvest() {
         await triggerProduce(0).catch(() => null);
         await sleep(400);
     } catch { /* 催产失败继续尝试收获 */ }
-    const r = await harvestRanch(1);
+    let r;
+    try {
+        r = await harvestRanch(1);
+    } catch (e) {
+        // ⭐ 2026-11-28 面板测试发现: 可收 0 时手动「收获/全部收获」把原始
+        //   code=1045211 错误文本直接抛给 UI(自动化路径都吞掉了, 就这两处漏了)。
+        //   "没有可收"是正常状态, 转成空结果。
+        if (parseRanchErrorCode(e) === RANCH_ERR.NOTHING_TO_HARVEST) {
+            return { items: [], harvested: 0 };
+        }
+        throw e;
+    }
     const items = [];
     let harvested = 0;
     for (const gain of (r.gains || [])) {
@@ -5523,11 +5553,20 @@ async function operateRanch(opts = {}) {
                 return { ok: true, action: '全场收获', detail: items.join('，') || '没有可收的' };
             }
             if (sub === 'produce') {
-                const r = await triggerProduce(0);
-                let n = 0;
-                for (const p2 of (r.receipts || [])) n += toNum(p2.count);
-                if (n > 0) recordOperation('ranchProduce', n);
-                return { ok: true, action: '全场催产', detail: `${n} 个产物` };
+                try {
+                    const r = await triggerProduce(0);
+                    let n = 0;
+                    for (const p2 of (r.receipts || [])) n += toNum(p2.count);
+                    if (n > 0) recordOperation('ranchProduce', n);
+                    return { ok: true, action: '全场催产', detail: `${n} 个产物` };
+                } catch (e) {
+                    // ⭐ 2026-11-28 面板测试发现: 全场都没有可催产的动物时(1045232),
+                    //   原始协议错误直接甩给面板 —— 与单只催产的友好文案不一致。
+                    if (isExpectedRanchError(e)) {
+                        return { ok: true, action: '全场催产', detail: '没有可催产的动物(冷却中或未开轮)' };
+                    }
+                    throw e;
+                }
             }
             if (sub === 'clean') {
                 const r = await autoCleanOwnRanch();

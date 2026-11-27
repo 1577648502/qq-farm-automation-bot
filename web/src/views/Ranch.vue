@@ -50,6 +50,8 @@ const shopImageErrors = ref<Record<string | number, boolean>>({})
 
 // ===== 牧场商城(道具/幼崽分类) =====
 // 商店分工(抓包实证): shop5=幼崽, shop6=道具(牧草)
+// 2026-11-28: 固定拉 all —— 分类只是前端筛选。之前按当前分类拉,
+// 另一类的计数恒为 0(截图实证: 默认 item 时"幼崽 0", 后端明明有 28 只)。
 const ranchShopCategory = ref<'all' | 'item' | 'cub'>('item')
 const ranchShopItems = ref<any[]>([])
 const ranchShopLoading = ref(false)
@@ -57,17 +59,15 @@ const ranchShopError = ref('')
 const grassBuyCount = ref(10)
 const grassBuying = ref(false)
 
-async function loadRanchShop(category?: 'all' | 'item' | 'cub') {
+async function loadRanchShop() {
   const id = currentAccountId.value
   if (!id)
     return
-  if (category)
-    ranchShopCategory.value = category
   ranchShopLoading.value = true
   ranchShopError.value = ''
   try {
     const res = await api.get('/api/ranch/shop', {
-      params: { category: ranchShopCategory.value },
+      params: { category: 'all' },
       headers: { 'x-account-id': id },
     })
     const d = res.data
@@ -810,6 +810,7 @@ async function confirmSteal() {
 // 之前只有"一键自动兑换"按钮, 没有界面 —— 用户看不到卖什么、也没法手动挑。
 const rotationOpen = ref(false)
 const rotationRefreshAt = ref(0)
+const rotationGroups = ref<Array<{ id: number, name: string, limit?: number }>>([])
 const rotationGoods = ref<Array<{ group: number, seq: number, itemId: number, name?: string, image?: string, currencyId: number, price: number, discountPrice?: number, discountFrom?: number, discountTo?: number, limit: number, uid: number }>>([])
 const rotationLoading = ref(false)
 const rotationError = ref('')
@@ -825,6 +826,12 @@ const ROTATION_CURRENCY: Record<number, string> = {
 
 function rotationCurrencyName(id: number) {
   return ROTATION_CURRENCY[Number(id)] || `#${id}`
+}
+
+/** 分组名(便便特惠/农场精选): 后端 groups 里有就映射, 没有 fallback 到货币名 */
+function rotationGroupName(groupId: number) {
+  const g = rotationGroups.value.find(x => Number(x.id) === Number(groupId))
+  return g?.name || ''
 }
 
 /** 折扣是否生效: 有折后价且低于原价, 折扣窗口(#9=结束ms)内才显示 */
@@ -854,6 +861,7 @@ async function reloadRotation() {
     const r = await ranchStore.fetchRotationShop(id)
     rotationOpen.value = !!r.open
     rotationRefreshAt.value = Number(r.refreshAt) || 0
+    rotationGroups.value = Array.isArray(r.groups) ? r.groups : []
     rotationGoods.value = Array.isArray(r.goods) ? r.goods : []
   }
   catch (e: any) {
@@ -973,9 +981,10 @@ onUnmounted(() => {
           </BaseButton>
         </div>
         <p class="mt-1 text-xs text-gray-400">
-          仓鼠驿站每天 6:00-23:59 出摊，每次出摊换一批货。便便(7002)可兑换牧场道具。
+          仓鼠驿站每天 6:00-23:59 出摊，每次出摊换一批货。便便(7002)兑换牧场道具，松果币(1008)兑换农场道具。
           <span v-if="rotationRefreshAt" class="ml-1">
-            下次刷新 {{ new Date(rotationRefreshAt).toLocaleString() }}
+            <!-- 服务端字段语义: 在未来 = 下次换货; 已过去 = 本批货的刷新时刻(线上实测 11-28 凌晨拿到 11-27 00:00) -->
+            {{ rotationRefreshAt > Date.now() ? '下次刷新' : '本批刷新' }} {{ new Date(rotationRefreshAt).toLocaleString() }}
           </span>
         </p>
       </div>
@@ -1018,6 +1027,11 @@ onUnmounted(() => {
                   {{ g.name || itemLabel(g.itemId) }}
                 </div>
                 <div class="text-xs text-gray-400">
+                  <!-- 分组徽章(便便特惠/农场精选): 让人看清这单花的是便便还是松果币 -->
+                  <span
+                    v-if="rotationGroupName(g.group)"
+                    class="mr-1 rounded bg-violet-50 px-1 py-0.5 text-[10px] text-violet-600 dark:bg-violet-900/40 dark:text-violet-300"
+                  >{{ rotationGroupName(g.group) }}</span>
                   <span
                     v-if="rotationDiscountActive(g)"
                     class="mr-1 rounded bg-rose-50 px-1 py-0.5 text-[10px] text-rose-600 dark:bg-rose-900/40 dark:text-rose-300"
@@ -1077,13 +1091,13 @@ onUnmounted(() => {
             :class="ranchShopCategory === c.key
               ? 'bg-amber-500 text-white'
               : 'bg-gray-100 text-gray-600 hover:bg-gray-200 dark:bg-gray-700 dark:text-gray-300'"
-            @click="loadRanchShop(c.key as any)"
+            @click="ranchShopCategory = c.key as any"
           >
             {{ c.label }} <span class="opacity-70">{{ c.key === 'item' ? ranchShopCounts.item : ranchShopCounts.cub }}</span>
           </button>
           <div class="flex-1" />
           <span class="text-xs text-gray-400">
-            {{ ranchShopCategory === 'cub' ? '按收益比排序（整只回收 ÷ 幼崽成本）' : '牧场道具（牧草等）' }}
+            {{ ranchShopCategory === 'cub' ? '按收益比排序（整只回收 ÷ 幼崽成本）' : ranchShopCategory === 'item' ? '牧场道具（牧草等）' : '全部商品' }}
           </span>
           <BaseButton variant="secondary" size="sm" :loading="cubShopLoading || ranchShopLoading" @click="openShop">
             <span class="i-carbon-renew mr-1" />刷新
