@@ -260,9 +260,8 @@ async function activateFacility(slot) {
 // 棚解锁有服务端等级门槛(2026-11-22 用户定案"到等级自动解锁就行"):
 // 1045134 牧场等级不足时记下当时玩家等级, 30 分钟窗口内不再发请求;
 // 玩家等级一变(升级了)立即放行重试 —— 等级一到就自动解锁, 不空打请求。
-// ⭐ 2026-11-26 二次修正: 激活门槛**不是21级**(账号3 21级实测仍 1045115)。
-//   重解润出去激活抓包: 物品1102(牧场经验)=205792 → 24级。24成功/21失败
-//   → 门槛 ∈ {22,23,24}, 见下方 SHED_ACTIVATE_LEVEL=22。
+// ⭐ 门槛定案(2026-11-27 五号线上对照): **牧场22级**, 见下方 SHED_ACTIVATE_LEVEL 注释。
+//   (2026-11-26 的"21级"结论已被推翻: 21级的账号3/账号4 都没有棚组, 服务端也不报错。)
 // ⚠ 升档(UpgradeBuilding)门槛 牧场25级: 润出去激活成功后升级报 1045134。
 //   低等级账号每轮的 1045115 由 unlockShed breaker(3 次→30min 熔断)兜底, 不会刷屏。
 // ⚠ 已解锁判定: 已激活棚 buildingId 仍是 6002001(FacilitiesNotify 定案),
@@ -281,11 +280,30 @@ function getPlayerLevelForShed() {
         const st = getUserState() || {};
         // ⭐ 牧场等级(BasicInfo#20, 服务端权威) — 旧读 level=农场等级, 门槛判断全错
         const rl = Number(st.ranchLevel) || 0;
-        if (rl > 0) return rl;
+        // ⚠ 2026-11-27: #20 会滞后一级(账号2 服务端报 22, 按 BigFarmLevel 表 exp 236597 已是 23),
+        //   所以取两者较大值, 免得"经验够了但等级字段没刷新"把号卡在门槛外。
+        const byExp = levelFromRanchExp(st.ranchExp);
+        const best = Math.max(rl, byExp);
+        if (best > 0) return best;
         return Number(st.level) || 0;
     } catch {
         return 0;
     }
+}
+
+/** 按 BigFarmLevel 等级表从牧场经验反推等级(表来自 delayRes, 65 级非线性, 六号实测吻合) */
+let _bigFarmLevels = null;
+function levelFromRanchExp(ranchExp) {
+    const n = Number(ranchExp) || 0;
+    if (!(n > 0)) return 0;
+    if (!_bigFarmLevels) {
+        try { _bigFarmLevels = require('../gameConfig/BigFarmLevel.json'); } catch { _bigFarmLevels = []; }
+    }
+    let lvl = 0;
+    for (const row of _bigFarmLevels) {
+        if (n >= (Number(row.exp) || 0)) lvl = Math.max(lvl, Number(row.level) || 0);
+    }
+    return lvl;
 }
 
 /**
@@ -303,19 +321,22 @@ function getPlayerLevelForShed() {
  *   对激活但未升档的棚判"未解锁" → 每轮空发 ActivateFacility → 1045115(账号1 的日志根因)。
  *   可靠信号只有两个: RanchDetail 返回棚组, 或棚建筑 instId=10003(激活后升格标准槽位;
  *   未激活是编辑器实例 instId=3)。
- * ⚠ 激活门槛 = 牧场21级(2026-11-26 三次实锤, 最终定案): PlayerLogin BasicInfo#20
- *   = 牧场等级(服务端权威), 润出去激活时 #20=21。此前"22~24"推断是错的 —— 错因:
- *   calcRanchLevel 线性表把 205792 exp 算成 24级(真实等级表非线性); 且
- *   getPlayerLevelForShed() 读的是**农场等级**不是牧场等级, 门槛判断形同虚设。
- *   账号3(牧场19级)激活失败的真因 = 牧场等级不够, 不是实例号问题。
+ * ⚠ 激活门槛 = 牧场22级(2026-11-27 五号线上对照, 见 SHED_ACTIVATE_LEVEL 注释):
+ *   21级的账号3/账号4 都没有棚组(而且发 ActivateFacility 服务端不报错也不解锁),
+ *   22级的账号2、39级的账号1 有棚组 —— 旧"21级"结论来自一次字段滞后的抓包, 已推翻。
  *   (激活参数本身仍须传棚建筑实例号, 见 getShedInstIdFromBuildings。)
  * @returns {Promise<{activated:boolean, alreadyUnlocked:boolean, skipped?:string}>}
  */
 
-// 棚激活最低牧场等级 = 21(用户最初结论, 抓包二次确认):
-// 润出去激活时 PlayerLogin BasicInfo#20(牧场等级)=21 #21=205792。旧结论"24级"错在
-// calcRanchLevel 线性表(等级表非线性)。账号3 21级失败的真因: 门槛判断读的是农场等级。
-const SHED_ACTIVATE_LEVEL = 21;
+// 棚激活最低牧场等级 = 22(2026-11-27 五号线上对照定案, 推翻此前"21级"):
+//   有棚: 账号1 牧场39级(exp 785736, pen 6) / 账号2 牧场22级(exp 236597, pen 3)
+//   无棚: 账号3 牧场21级(exp 200457) / 账号4 牧场21级(exp 190403) / 账号6 牧场20级(exp 183830)
+//   BigFarmLevel 表 Lv22 门槛 = 208200 exp → 21 级(188800~208199)经验再高也没有棚组。
+//   ⚠ 21 级发 ActivateFacility(10003) 服务端**不报错也不解锁**(账号3 实测: 回 facility 回显,
+//     GetRanchDetail 仍无棚组) —— 别把"请求成功"当解锁, 判据只有 RanchDetail 的棚组。
+//   ⚠ 21 级往棚里放 75xxx 巨大崽报 1045206"该动物与栏舍类型不符", 那是棚不存在、
+//     请求落到窝上导致的, 不是幼崽选错。
+const SHED_ACTIVATE_LEVEL = 22;
 function isShedBuildingId(buildingId) {
     const id = Number(buildingId) || 0;
     return id >= 6002002 && id <= 6002999;
