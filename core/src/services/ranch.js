@@ -3656,17 +3656,22 @@ async function purchaseRotationGoods(uid, count = 1, refreshAtSec = 0) {
  * 1004012 是线上实际返回的错误码(含义未知, 但出现在 RotationBuyGoods 上),
  * 从商品带"最低等级"限制来看, 大概率是等级/限购/刷新条件不满足。
  * 这类情况每轮都会发生, 不该当故障刷 error 日志。
+ *
+ * 1004010 (2026-11-28 日志分析): 有机化肥(80011/80012/80013) 每轮必现,
+ * 1004xxx 段是商店业务码(1004008=场景不匹配), 1010 大概率是"该商品当前不可买"
+ * (限购满/未解锁/背包上限), 同样属正常业务状态。
  */
 function isRotationNotPurchasable(e) {
     const msg = String((e && e.message) || '');
-    // 已知的"买不了"错误码: 1004012(线上实际) + 1019 系列(限购/库存)
-    return /code=1004012|code=1004019|code=1004020/.test(msg)
+    // 已知的"买不了"错误码: 1004010(有机化肥线上实测) + 1004012(线上实际) + 1019 系列(限购/库存)
+    return /code=1004010|code=1004012|code=1004019|code=1004020/.test(msg)
         || /限购|已售罄|未达|等级不足/.test(msg);
 }
 
 /** 给"不可购买"一个可读原因, 便于日志里一眼看出该做什么 */
 function rotationErrorHint(e) {
     const msg = String((e && e.message) || '');
+    if (/code=1004010/.test(msg)) return '商品当前不可购买(限购满/未解锁/拥有上限)';
     if (/code=1004012/.test(msg)) return '等级不足或限购已满';
     if (/限购|已售罄/.test(msg)) return '限购已满';
     return msg.replace(/^.*code=\d+\s*/, '').trim() || '当前不可购买';

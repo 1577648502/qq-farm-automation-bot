@@ -189,6 +189,12 @@ proto.loadProto().then(async () => {
             new Error('code=1004012 未知错误: 1004012'))), rotationErrorHint(new Error('code=1004012 未知错误: 1004012')));
         check('限购类也归为不可购买',
             isRotationNotPurchasable(new Error('code=1004019 已售罄')) === true);
+        // 1004010 (2026-11-28 日志分析): 有机化肥每轮必现的业务拒绝, 同样归 skip 不刷 error
+        check('1004010 判定为不可购买',
+            isRotationNotPurchasable(new Error('gamepb.shoppb.ShopService.RotationBuyGoods 错误: code=1004010 未知错误: 1004010')) === true);
+        check('1004010 提示语可读',
+            /限购|解锁|上限/.test(rotationErrorHint(
+                new Error('code=1004010 未知错误: 1004010'))), rotationErrorHint(new Error('code=1004010 未知错误: 1004010')));
         // 真故障不能被吞成 skip
         check('网络错误不算"不可购买"',
             isRotationNotPurchasable(new Error('请求超时: RotationBuyGoods')) === false);
