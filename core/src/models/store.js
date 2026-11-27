@@ -331,7 +331,7 @@ const DEFAULT_ACCOUNT_CONFIG = {
     // ===== 以薯换福(2026-11-25 新活动) =====
     mapleEnabled: true,               // 自动流程总开关(领种子 + 卖蜜薯)
     mapleSell: true,                  // 自动卖蜜薯到自己摊位(服务端算价, 24:00 清仓价 80金 不划算 → 应天卖光)
-    mapleSellMinTier: 0,              // 价格档位门槛(2026-11-27): 0=不限(最高价就卖) / 2=高价 / 3=超高价; 1(普通)时不卖
+    mapleSellMinTier: 3,              // 价格档位门槛(2026-11-27 用户定默认**只卖超高价**): 0=不限(最高价就卖) / 2=高价 / 3=超高价
     mapleAutoExchange: false,         // 自动兑换(福气币花出去)
     mapleExchangeRules: [],           // 兑换规则 [{slot, count}] (slot 来自兑换列表 1..10)
     // 背包种子优先顺序（seedId 数组）
@@ -1789,7 +1789,7 @@ function getMapleConfig(accountId) {
     return {
         enabled: cfg.mapleEnabled === undefined ? true : !!cfg.mapleEnabled,
         sell: cfg.mapleSell === undefined ? true : !!cfg.mapleSell,
-        sellMinTier: Math.max(0, Math.min(3, Number(cfg.mapleSellMinTier) || 0)),
+        sellMinTier: Math.max(0, Math.min(3, Number(cfg.mapleSellMinTier) || 3)), // 缺省=只卖超高价(2026-11-27 用户定)
         autoExchange: !!cfg.mapleAutoExchange,
         exchangeRules: [...(cfg.mapleExchangeRules || [])],
     };

@@ -1196,7 +1196,7 @@ const localAutomationSettings = ref({
   // 以薯换福
   mapleEnabled: true,
   mapleSell: true,
-  mapleSellMinTier: 0,
+  mapleSellMinTier: 3,
   mapleAutoExchange: false,
   // 防封号(低调)模式
   stealthEnabled: false,
@@ -1556,7 +1556,7 @@ function syncLocalAutomationSettings(submitted?: any) {
     localAutomationSettings.value.adGiftEnabled = settings.value.adGiftEnabled ?? true
     localAutomationSettings.value.mapleEnabled = settings.value.mapleEnabled ?? true
     localAutomationSettings.value.mapleSell = settings.value.mapleSell ?? true
-    localAutomationSettings.value.mapleSellMinTier = Number(settings.value.mapleSellMinTier) || 0
+    localAutomationSettings.value.mapleSellMinTier = Number(settings.value.mapleSellMinTier) || 3
     localAutomationSettings.value.mapleAutoExchange = !!settings.value.mapleAutoExchange
     localAutomationSettings.value.fertilizerBuyOrganicCount = settings.value.fertilizerBuyOrganicCount ?? 1
     localAutomationSettings.value.fertilizerBuyOrganicThresholdHours = settings.value.fertilizerBuyOrganicThresholdHours ?? 10
