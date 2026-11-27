@@ -6,11 +6,15 @@ import { useAccountStore } from '@/stores/account'
 export const useBagStore = defineStore('bag', () => {
   const allItems = ref<any[]>([])
   const originalItems = ref<any[]>([])
+  // 后端从 items 里排除的牧场货币(1007 金券/1008 松果币等), 单独带回 ——
+  // Dashboard 牧场货币卡靠它(2026-11-28 回归修复)
+  const bagCurrencies = ref<any[]>([])
   const loading = ref(false)
 
   function clearBag() {
     allItems.value = []
     originalItems.value = []
+    bagCurrencies.value = []
   }
 
   const items = computed(() => {
@@ -30,8 +34,11 @@ export const useBagStore = defineStore('bag', () => {
     //   Bag 回包 89 项里明确带 {7003: 507411, 7004: 345665}(秒) = 140.9h / 96.0h;
     //   而牧场背包(GetBag{scene:2}, 只有 9 项)里**没有** 7003/7004。
     //   之前接到 /api/ranch/bag 上, 所以首页一直显示 0.0h。
+    // ⚠ 2026-11-28: 后端把 1007/1008 从 items 排除(11-22"其他分类不显牧场货币"),
+    //   这些货币改从 data.currencies 单独带回, 这里合成回同一形状。
     const targetIds = new Set([1011, 1012, 3001, 3002, 1007, 1008, 7003, 7004])
     return allItems.value.filter((it: any) => targetIds.has(Number(it.id || 0)))
+      .concat(bagCurrencies.value.filter((c: any) => targetIds.has(Number(c.id || 0))))
   })
 
   async function fetchBag(accountId: string) {
@@ -50,10 +57,12 @@ export const useBagStore = defineStore('bag', () => {
       if (res.data.ok && res.data.data) {
         allItems.value = Array.isArray(res.data.data.items) ? res.data.data.items : []
         originalItems.value = Array.isArray(res.data.data.originalItems) ? res.data.data.originalItems : []
+        bagCurrencies.value = Array.isArray(res.data.data.currencies) ? res.data.data.currencies : []
       }
       else if (res.data && res.data.ok === false && res.data.error) {
         allItems.value = []
         originalItems.value = []
+        bagCurrencies.value = []
       }
     }
     catch (e) {
@@ -62,6 +71,7 @@ export const useBagStore = defineStore('bag', () => {
       if (curId === requestedId) {
         allItems.value = []
         originalItems.value = []
+        bagCurrencies.value = []
       }
       console.error(e)
     }

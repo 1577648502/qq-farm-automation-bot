@@ -658,13 +658,22 @@ function buildBagDetailFromItems(rawItems, opts = {}) {
     const RANCH_ONLY_BAG_IDS = new Set([1007, 1008, 1102, 3003]);
     const originalItems = [];
     const merged = new Map();
+    // 被排除的牧场货币仍要带回数值(2026-11-28 回归修复):
+    //   11-22 的"农场背包其他不显示牧场货币"把 1007/1008 从 /api/bag 返回里整个剔掉了,
+    //   但 Dashboard 的金券/松果币卡片读的正是这个接口 → 首页从那天起一直显示 0。
+    //   折中: items 列表继续不展示(背包页干净), 另起 currencies 数组带回,
+    //   前端 bag store 用 items+currencies 合成 dashboardItems。
+    const currencies = [];
 
     for (const it of (rawItems || [])) {
         const id = toNum(it.id);
         const count = toNum(it.count);
         const uid = toNum(it.uid);
         if (id <= 0 || count <= 0) continue;
-        if (!isRanchScene && RANCH_ONLY_BAG_IDS.has(id)) continue;
+        if (!isRanchScene && RANCH_ONLY_BAG_IDS.has(id)) {
+            currencies.push({ id, count, name: '' });
+            continue;
+        }
         const itemMutantTypes = getItemMutantTypes(it, id);
         const bagGroupKey = getMutationGroupKey(it, id, itemMutantTypes);
         originalItems.push({ id, count, uid, bagGroupKey });
@@ -772,7 +781,12 @@ function buildBagDetailFromItems(rawItems, opts = {}) {
         if (ida !== idb) return ida - idb;
         return String(a.bagGroupKey || '').localeCompare(String(b.bagGroupKey || ''));
     });
-    return { totalKinds: items.length, items, originalItems };
+    // 被排除货币补名字(ItemInfo): 金券/松果币/牧场经验/动物收藏点
+    for (const c of currencies) {
+        const info = getItemById(c.id) || null;
+        c.name = info && info.name ? String(info.name) : `物品${c.id}`;
+    }
+    return { totalKinds: items.length, items, originalItems, currencies };
 }
 
 async function getBagDetail() {

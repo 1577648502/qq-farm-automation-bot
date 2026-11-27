@@ -335,6 +335,33 @@ proto.loadProto().then(async () => {
             farm.items[0].sellable === false, farm.items[0].sellable);
     }
 
+    section('13b. 农场背包排除牧场货币, 但数值经 currencies 带回(Dashboard 金券卡数据源)');
+    {
+        // 2026-11-28 回归: 11-22 的"其他分类不显牧场货币"(5ac0a29) 把 1007/1008 从
+        // /api/bag 整个剔掉, Dashboard 金券/松果币卡片从那天起一直显示 0。
+        const w = require(`${SB}/src/services/warehouse`);
+        const build = w.__privateWarehouseFns.buildBagDetailFromItems;
+        const farm = build([
+            { id: 1007, count: 12345 },   // 金券
+            { id: 1008, count: 6789 },    // 松果币
+            { id: 1102, count: 42 },      // 牧场经验
+            { id: 20089, count: 3 },      // 芦荟种子(普通农场物品)
+        ]);
+        check('farm items 不含 1007', !farm.items.some(it => Number(it.id) === 1007));
+        check('farm items 不含 1008', !farm.items.some(it => Number(it.id) === 1008));
+        check('farm items 不含 1102', !farm.items.some(it => Number(it.id) === 1102));
+        check('farm items 保留普通种子', farm.items.some(it => Number(it.id) === 20089));
+        const cur = new Map((farm.currencies || []).map(c => [Number(c.id), c]));
+        check('currencies 带回金券 12345', cur.get(1007) && Number(cur.get(1007).count) === 12345, farm.currencies);
+        check('currencies 带回松果币 6789', cur.get(1008) && Number(cur.get(1008).count) === 6789);
+        check('currencies 带回牧场经验 42', cur.get(1102) && Number(cur.get(1102).count) === 42);
+        check('currencies 有名字(金券)', cur.get(1007) && cur.get(1007).name === '金券', cur.get(1007));
+        // 牧场场景不过滤, currencies 为空(items 里本来就有)
+        const ranch = build([{ id: 1007, count: 1 }], { scene: 'ranch' });
+        check('ranch 场景不产生 currencies',
+            (ranch.currencies || []).length === 0 && ranch.items.some(it => Number(it.id) === 1007));
+    }
+
     section('14. 自动出售必须包含成品动物(106), 不只是蛋(107)');
     {
         const src = require('node:fs').readFileSync(
