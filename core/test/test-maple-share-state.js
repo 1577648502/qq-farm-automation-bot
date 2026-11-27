@@ -97,16 +97,20 @@ const T = maple.__testing;
     const p0 = T.encodeExchangePayload(5, 0);
     check('count=0 兜底成 1', hasVarint(p0, 2, 1));
     check('count=0 时不会带 #2=0', !hasVarint(p0, 2, 0));
-    // 兑换结果回执: #1 花费 / #2{#1 id,#2 count} / #3 余额
+    // 兑换结果回执: #1 花费 / #2{#1 id,#2 count} / #3 余额 / #4 今日已购 / #5 累计已购(2026-11-27 官方抓包补)
     const resHex = Buffer.concat([
         fVarint(1, 14000),
         fBytes(2, Buffer.concat([fVarint(1, 80001), fVarint(2, 2)])),
         fVarint(3, 278560),
+        fVarint(4, 1),
+        fVarint(5, 6),
     ]).toString('hex');
     const res = T.parseExchangeResult(resHex);
     check('回执 spend=14000(两份)', res.spend === 14000);
     check('回执 got[0].count=2', res.got[0] && res.got[0].count === 2);
     check('回执余额 278560', res.coin === 278560);
+    check('回执 boughtToday=1(#4)', res.boughtToday === 1);
+    check('回执 boughtTotal=6(#5)', res.boughtTotal === 6);
 
     // ===== 8. 价格档位: 普通/高价/超高价 =====
     // 需求(2026-11-27 用户): 收购价字样显示在页面上; 字样全宇宙只有 3 种

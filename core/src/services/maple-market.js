@@ -9,9 +9,16 @@
  *   CMD 92 查状态+摊位 req #192 {#1 gid}    rsp #130 主状态 + #192 我的摊位
  *   CMD 93 卖自己摊位  req #193 {#1 gid, #2 count} rsp #193 {#1 实卖, #2 单价, #3 总收入, #4 剩余额度, #5 福币余额}
  *   CMD 95 开活动页    req #195 ""          rsp #195 "" (空, 疑似开页上报/分享检查)
- *   CMD 96 兑换       req #196 {#1 slot, #2 count} rsp #196 {#1 price, #2 {#1 itemId, #2 count,...}, #3 福币余额}
+ *   CMD 96 兑换       req #196 {#1 slot, #2 count} rsp #196 {#1 price, #2 {#1 itemId, #2 count,...}, #3 福币余额, #4 今日已购, #5 累计已购}
  *   CMD 97 兑换列表    req #197 ""          rsp #197 {repeated #1 {#1 slot, #2 price, #3 类型(#3=2), #4 限购, #5 已购, #6/#7}, #2 福币余额}
  *   CMD 98 今日信息    req #198 ""          rsp #198 {#1 {#1 seedId, #2 剩余可领种子}, #2 持有蜜薯, #3 今日单价, #4 分享卡, #5 累计收益}
+ *
+ * 2026-11-27 全量抓包复核补充(官方帧里未接的字段, 别人别再重查):
+ *   92 摊位 #1#4 owner: {#1 gid, #2 昵称, #3{#13}(头像参数), #4=129/131/132 摊主侧版本号(买方无用)}
+ *   98 #4 = 微信分享卡片载荷(我们走 ReportShare 直发, 用不上); #6 偶发=1 无关
+ *   96 回执 #2{#3=18446744011573954816} = 未赋值的 .NET DateTime ticks(C# 默认值残留, 无业务意义);
+ *       #2{#6=74014,#7=1} 语义未知(不像价格/数量), 不解析
+ *   97 官方早期帧槽位只有 #1~#4(#5/#6/#7 是线上实测补的: 今日已购/累计已购/可见)
  *
  * #130 主状态 (reply activity #130):
  *   #1 {#1 done, #2 ?} 种子领取标记(1=已领)
@@ -255,9 +262,15 @@ function parseExchangeResult(resultHex) {
     const got = [];
     let spend = 0;
     let coin = 0;
+    // 2026-11-27 官方抓包(115630)补: 回执还有 #4/#5(当时值都=2) — 与 97 的 #5/#6 对齐,
+    //   即 #4=该槽今日已购, #5=该槽累计已购; 用于兑换后即时对账(不依赖 97 重查)
+    let boughtToday = 0;
+    let boughtTotal = 0;
     const rf = resultFields({ resultHex });
     spend = toInt((findField(rf, 1) || {}).v) || 0;
     coin = toInt((findField(rf, 3) || {}).v) || 0;
+    boughtToday = toInt((findField(rf, 4) || {}).v) || 0;
+    boughtTotal = toInt((findField(rf, 5) || {}).v) || 0;
     const gotMsg = findField(rf, 2);
     if (gotMsg && gotMsg.w === 2) {
         const g = parseTop(gotMsg.v);
@@ -265,7 +278,7 @@ function parseExchangeResult(resultHex) {
         const count = toInt((findField(g, 2) || {}).v) || 0;
         if (itemId) got.push({ id: itemId, count, name: itemName(itemId) });
     }
-    return { spend, got, coin };
+    return { spend, got, coin, boughtToday, boughtTotal };
 }
 
 /** 兑换槽位配置兜底: 静态表缺失时(配置变了), 用兑换回执学到的 itemId 补表 */
@@ -784,14 +797,14 @@ async function exchange(slot, count = 1) {
     const payloadBytes = encodeExchangePayload(slot, count);
     const r = await op(CMD_EXCHANGE, CMD_EXCHANGE + FIELD_OFFSET, payloadBytes);
     if (!r.ok) return { ok: false, reason: `兑换失败 ${r.reason}` };
-    const { spend, got, coin } = parseExchangeResult(r.resultHex);
+    const { spend, got, coin, boughtToday, boughtTotal } = parseExchangeResult(r.resultHex);
     // 静态商品表兜底: 回执里的 itemId 与表不一致(或表缺槽位)时动态修正
     if (got[0]) learnSlotGoods(slot, got[0].id, got[0].count);
     const gotText = got.map((g) => `${g.name}×${g.count}`).join('、') || '空';
-    log('活动', `以薯换福: 兑换成功 -${spend} 福气币 → ${gotText} (余额 ${coin})`, {
+    log('活动', `以薯换福: 兑换成功 -${spend} 福气币 → ${gotText} (余额 ${coin}${boughtTotal ? `, 已购 ${boughtTotal}${boughtToday ? `, 今日 ${boughtToday}` : ''}` : ''})`, {
         module: 'activity', event: '以薯换福', result: 'ok',
     });
-    return { ok: true, spend, got, coin };
+    return { ok: true, spend, got, coin, boughtToday, boughtTotal };
 }
 
 // ===== 组合: 总览(页面) + 自动流程(interval) =====
