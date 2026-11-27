@@ -602,10 +602,18 @@ function startDailyRoutineTimer() {
         lastDailyRunDate = today;
         runDailyRoutines(true).catch(() => null);
     });
-    // 神秘商店 NPC 会在一天中随时刷新，定时检测自动购买（开关关闭时内部直接返回）
+    // 神秘商店: 官方配置 MysteryShopParams.exist_duration = 86400s —— NPC(仓仔/鼠鼠)
+    // 每次出摊停留 24 小时, 到点走人换下一轮(出现时刻服务端随机, GetActiveNPC 回 expire_time)。
+    // 扫描节奏与农场对齐: **空窗期(无 NPC)30 分钟一查**(不出摊时白查); 查到 NPC 出摊中
+    // 10 分钟一查(买了就 sold_out, 高频只为第一时间买 + 接换摊)。
+    // 服务层按状态回 nextDelayMs, worker 用 rescheduleTask 动态调周期;
+    // 开关关闭时内部直接返回(回 30min, 不发请求)。
     workerScheduler.setIntervalTask('mystery_shop_interval', 10 * 60 * 1000, () => {
         if (!canRunTasks()) return;
-        checkAndBuyMysteryShop().catch(() => null);
+        checkAndBuyMysteryShop().then((r) => {
+            const d = Number(r && r.nextDelayMs) || 0;
+            if (d > 0) workerScheduler.rescheduleTask('mystery_shop_interval', d);
+        }).catch(() => null);
     }, { preventOverlap: true });
     // 夺宝: 60s 轮询一次, 内部按"配置的检查间隔"节流(这样改间隔不用重启 worker)
     workerScheduler.setIntervalTask('treasure_rob_interval', 60 * 1000, () => {

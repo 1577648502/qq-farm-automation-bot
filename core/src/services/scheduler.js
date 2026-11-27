@@ -149,17 +149,42 @@ function createScheduler(namespace = 'default') {
             running: false,
             preventOverlap,
             handle: null,
+            taskFn,   // rescheduleTask 重建 runner 时要用
         };
 
+        if (runImmediately) {
+            timers.set(key, entry);
+            startIntervalLoop(key, entry, delay);
+            Promise.resolve().then(entry.taskFn).catch(() => null);
+        } else {
+            startIntervalLoop(key, entry, delay);
+            timers.set(key, entry);
+        }
+        return entry.handle;
+    }
+
+    /** 动态改 interval 周期(下次触发起生效): 用于按状态调整扫描节奏(如神秘商店空窗放宽) */
+    function rescheduleTask(taskName, intervalMs) {
+        const key = String(taskName || '');
+        const entry = timers.get(key);
+        if (!entry || entry.kind !== 'interval') return false;
+        const delay = Math.max(1, toDelayMs(intervalMs, entry.delayMs));
+        if (delay === entry.delayMs) return true;   // 周期没变, 不重启计时器
+        entry.delayMs = delay;
+        clearInterval(entry.handle);
+        return startIntervalLoop(key, entry, delay);
+    }
+
+    function startIntervalLoop(key, entry, delay) {
         const runner = async () => {
             const current = timers.get(key);
-            if (!current) return;
-            if (preventOverlap && current.running) return;
+            if (!current || current.handle !== entry.handle) return;
+            if (entry.preventOverlap && current.running) return;
             current.running = true;
             current.lastRunAt = Date.now();
             current.runCount += 1;
             try {
-                await taskFn();
+                await entry.taskFn();
             } catch (e) {
                 schedulerLogger.warn(`[${name}] interval 任务执行失败: ${key}`, {
                     module: 'scheduler',
@@ -169,21 +194,15 @@ function createScheduler(namespace = 'default') {
                 });
             } finally {
                 const updated = timers.get(key);
-                if (updated) {
+                if (updated && updated.handle === entry.handle) {
                     updated.running = false;
                     updated.nextRunAt = Date.now() + delay;
                 }
             }
         };
-
-        if (runImmediately) {
-            Promise.resolve().then(runner).catch(() => null);
-        }
-
         const handle = setInterval(runner, delay);
         entry.handle = handle;
-        timers.set(key, entry);
-        return handle;
+        return true;
     }
 
     function has(taskName) {
@@ -202,6 +221,7 @@ function createScheduler(namespace = 'default') {
     return {
         setTimeoutTask,
         setIntervalTask,
+        rescheduleTask,
         clear,
         clearAll,
         has,

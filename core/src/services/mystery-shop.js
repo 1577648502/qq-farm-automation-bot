@@ -80,15 +80,21 @@ async function buyMysteryGoods(goodsId) {
 }
 
 // ============ 自动购买 ============
+// 扫描节奏(2026-11-27 与农场神秘商店出摊规则对齐):
+//   官方 MysteryShopParams.exist_duration = 86400s → NPC 每次出摊停留 24h, 到点换下一轮,
+//   出现时刻服务端随机(GetActiveNPC 回 expire_time)。
+//   无 NPC 空窗 → 返回 nextDelayMs=30min(worker 侧放宽); 有 NPC/快过期 → 10min 高频抢购。
 async function checkAndBuyMysteryShop() {
-    if (MYSTERY_BUY_BREAKER.isOpen()) return { bought: 0 };   // 连续失败熔断中: 静默跳过, 不发请求
-    if (!isAutomationOn('mystery_shop')) return { bought: 0 };
+    const idleDelay = 30 * 60 * 1000;   // 空窗期(无 NPC): 30 分钟一查
+    const hotDelay = 10 * 60 * 1000;    // 出摊期(有 NPC): 10 分钟一查(买完为止 + 接换摊)
+    if (MYSTERY_BUY_BREAKER.isOpen()) return { bought: 0, nextDelayMs: idleDelay };   // 连续失败熔断中: 静默跳过, 不发请求
+    if (!isAutomationOn('mystery_shop')) return { bought: 0, nextDelayMs: idleDelay };
     let bought = 0;
     try {
         const info = await getActiveMysteryShop();
-        if (!info.active || !info.goods.length) return { bought: 0 };
+        if (!info.active || !info.goods.length) return { bought: 0, nextDelayMs: idleDelay };
         const buyable = info.goods.filter((g) => !g.soldOut && g.goodsId > 0);
-        if (!buyable.length) return { bought: 0 };
+        if (!buyable.length) return { bought: 0, nextDelayMs: hotDelay };
         log('神秘商店', `发现 ${buyable.length} 个可购买商品，尝试自动购买...`, {
             module: 'mystery_shop', event: '扫描神秘商店', result: 'ok', count: buyable.length,
         });
@@ -108,6 +114,7 @@ async function checkAndBuyMysteryShop() {
                 });
             }
         }
+        return { bought, nextDelayMs: hotDelay };
     } catch (e) {
         // 独立定时器的周期检测: 连挂 3 次 → 暂停30分钟, 防持续故障刷屏
         const st = MYSTERY_BUY_BREAKER.failure();
@@ -117,8 +124,8 @@ async function checkAndBuyMysteryShop() {
                 module: 'mystery_shop', event: '扫描神秘商店', result: 'error',
             });
         }
+        return { bought, nextDelayMs: idleDelay };
     }
-    return { bought };
 }
 
 module.exports = {
