@@ -154,6 +154,42 @@ proto.loadProto().then(async () => {
             view.buildings && view.buildings.map(b => b.status));
     }
 
+    section('3b. 空棚兜底: 棚已放置但空着(RanchDetail 不返回棚组) → 用建筑容量补出棚组');
+    {
+        // 2026-11-27 用户截图实锤: 账号4(牧场21级)游戏里就是「棚 0/3」,
+        //   但 GetRanchDetail 只有窝组 —— 只凭"没有组"判锁会把已开的棚显示成未解锁,
+        //   幼崽入栏也会错落到窝(75xxx 报 1045206)。
+        const allCells = types.AllCellsReply.encode(types.AllCellsReply.create({
+            buildings: [
+                { inst_id: 10001, building_id: 6001001, level: 3, status: 0 },
+                { inst_id: 10003, building_id: 6002001, level: 7, status: 11 },
+            ],
+        })).finish();
+        installStub({
+            AllCells: () => allCells,
+            PlayerSceneLogin: () => Buffer.alloc(0),
+            // 只有窝组, 没有棚组(空棚的真实回包形态)
+            GetRanchDetail: () => types.GetRanchDetailReply.encode(types.GetRanchDetailReply.create({
+                ranches: [{ ranch_inst_id: 10001, capacity: 5, animal_count: 0, husbandry_type: 1 }],
+            })).finish(),
+            // 棚实例详情: 名称/等级/容量(=3, 与游戏内「棚 0/3」一致)
+            GetFacilityDetail: () => facilityDetailReply({ name: '棚', level: 1, capacity: 3, instanceId: 6002001 }),
+            GetRanchOpTimes: () => types.GetRanchOpTimesReply.encode(types.GetRanchOpTimesReply.create({})).finish(),
+            GetBag: () => Buffer.alloc(0),
+            GetRanchExp: () => Buffer.alloc(0),
+        });
+        const p = require.resolve(`${SB}/src/services/ranch`);
+        delete require.cache[p];
+        const ranch = require(p);
+        const view = await ranch.getRanchOverview(`ranch-pen-fallback-${Date.now()}`);
+        check('penCount 用建筑容量兜底 = 3', view.penCount === 3, view.penCount);
+        check('pens 补出一组(棚, 容量 3, 空)',
+            (view.pens || []).length === 1 && view.pens[0].capacity === 3 && view.pens[0].animalCount === 0,
+            view.pens);
+        check('棚组带 ranchInstId=10003(入栏要用)', view.pens && view.pens[0].ranchInstId === 10003, view.pens && view.pens[0].ranchInstId);
+        check('窝不受影响(coopCount=5)', view.coopCount === 5, view.coopCount);
+    }
+
     section('4. 协议里没有倒计时字段时, 视图不编造');
     {
         // AllCells 的 cell 只有 status(1=锁定 2=已解锁), 没有 remaining/timer。
@@ -180,3 +216,30 @@ proto.loadProto().then(async () => {
     console.error('测试异常:', e);
     process.exit(1);
 });
+
+// ===== 手拼 GetFacilityDetail 回包(测试内自足, 不依赖服务实现) =====
+// 解析口径见 ranch.js parseFeedMachineReply: 顶层 #1 = 建筑消息,
+//   内层 #2 名称(bytes) / #4 实例号 / #8 buildingId / #14 容量。
+function varint(n) {
+    const out = [];
+    let v = Number(n) >>> 0;
+    while (v > 0x7F) { out.push((v & 0x7F) | 0x80); v >>>= 7; }
+    out.push(v);
+    return Buffer.from(out);
+}
+function fVarint(field, n) {
+    return Buffer.concat([varint((field << 3) | 0), varint(n)]);
+}
+function fBytes(field, buf) {
+    return Buffer.concat([varint((field << 3) | 2), varint(buf.length), buf]);
+}
+function facilityDetailReply({ name, level, capacity, instanceId, buildingId }) {
+    const inner = Buffer.concat([
+        fBytes(2, Buffer.from(String(name || ''), 'utf8')),
+        fVarint(4, instanceId || 0),
+        ...(buildingId ? [fVarint(8, buildingId)] : []),
+        ...(level ? [fVarint(10, level)] : []),
+        fVarint(14, capacity || 0),
+    ]);
+    return fBytes(1, inner);
+}

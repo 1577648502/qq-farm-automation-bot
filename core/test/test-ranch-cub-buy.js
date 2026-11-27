@@ -988,51 +988,60 @@ proto.loadProto().then(async () => {
         check('棚已升级 → alreadyUnlocked = true', r.alreadyUnlocked === true, r);
     }
 
-    section('24. 棚解锁"到等级自动解锁"(2026-11-27 修正): 看牧场等级ranchLevel, 22级门槛短路');
+    section('24. 棚解锁判定(2026-11-27 最终): 已放置的建筑=已解锁, 不再看牧场等级');
     {
         const facility = freshFacility();
+        const ranchDetailCoopOnly = () => types.GetRanchDetailReply.encode(types.GetRanchDetailReply.create({
+            ranches: [{ ranch_inst_id: 10001, capacity: 5, animal_count: 3, husbandry_type: 1 }],
+        })).finish();
+        // 只放窝, 没有棚建筑
         const allCellsNoShed = () => types.AllCellsReply.encode(types.AllCellsReply.create({
             buildings: [{ inst_id: 11, building_id: 6001001, level: 3, status: 9 }],
         })).finish();
-        const ranchDetailNoPen = () => types.GetRanchDetailReply.encode(types.GetRanchDetailReply.create({
-            ranches: [{ ranch_inst_id: 10001, capacity: 5, animal_count: 3, husbandry_type: 1 }],
+        // 棚已放置(标准槽位 10003) —— 空棚时 RanchDetail 不返回棚组, 这正是线上 21 级号的真实状态
+        const allCellsPlacedShed = () => types.AllCellsReply.encode(types.AllCellsReply.create({
+            buildings: [
+                { inst_id: 11, building_id: 6001001, level: 3, status: 9 },
+                { inst_id: 10003, building_id: 6002001, level: 7, status: 11 },
+            ],
+        })).finish();
+        // 棚还是编辑器草稿(instId=3)
+        const allCellsDraftShed = () => types.AllCellsReply.encode(types.AllCellsReply.create({
+            buildings: [{ inst_id: 3, building_id: 6002001, level: 7, status: 11 }],
         })).finish();
         let activateCount = 0;
-        const calls = installStub({
-            'gamepb.animalpb.AnimalService.GetRanchDetail': ranchDetailNoPen,
-            AllCells: allCellsNoShed,
+        let allCellsFn = allCellsNoShed;
+        installStub({
+            'gamepb.animalpb.AnimalService.GetRanchDetail': ranchDetailCoopOnly,
+            AllCells: () => allCellsFn(),
             ActivateFacility: () => {
                 activateCount += 1;
-                // 抛服务端同款错误: code=1045134 牧场等级不足
                 const err = new Error('rpc error code=1045134');
                 err.code = 1045134;
                 throw err;
             },
         });
-        // 22级门槛(2026-11-27 五号线上对照定案): 门槛看牧场等级 ranchLevel(BasicInfo#20)/牧场经验反推,
-        //   不看农场 level —— 账号3 农场131级/牧场21级仍然没有棚, 22级才有(账号2)。
-        network.getUserState = () => ({ level: 131, ranchLevel: 20 });
-        await facility.autoActivateShed();
-        check('牧场20级<22级门槛 → 不发 ActivateFacility(短路)', activateCount === 0, activateCount);
-        // 农场等级再高也没用: level=200 但牧场 20 级照样短路
-        network.getUserState = () => ({ level: 200, ranchLevel: 20 });
-        await facility.autoActivateShed();
-        check('农场200级但牧场20级 → 仍不发(门槛只看牧场)', activateCount === 0, activateCount);
-        // 21 级仍然不够(账号3/账号4 实测无棚组, 服务端不报错也不解锁)
+        // 牧场等级不再参与判断(21 级照样能开棚)
         network.getUserState = () => ({ level: 131, ranchLevel: 21, ranchExp: 200457 });
-        await facility.autoActivateShed();
-        check('牧场21级 → 仍不发(21级没有棚, 实测)', activateCount === 0, activateCount);
-        // 经验反推 22 级(208200)但 #20 还停在 21(服务端等级字段滞后) → 也该放行
-        network.getUserState = () => ({ level: 131, ranchLevel: 21, ranchExp: 208200 });
-        await facility.autoActivateShed();
-        check('牧场exp够22级但字段滞后 → 放行并发 1 次', activateCount === 1, activateCount);
-        // 上一轮失败会落 30 分钟等级窗口(levelSeen=22), 换新模块实例测"22 级放行"
-        const facility22 = freshFacility();
+        allCellsFn = allCellsPlacedShed;
+        let r = await facility.autoActivateShed();
+        check('棚已放置(10003) → alreadyUnlocked, 不发 ActivateFacility', r.alreadyUnlocked === true && activateCount === 0, { r, activateCount });
+
+        // 换新模块 + 编辑器草稿棚: 要发激活
+        const facility2 = freshFacility();
         activateCount = 0;
-        // 到牧场 22 级: 放行 → 发 1 次激活(过门槛后发出请求)
-        network.getUserState = () => ({ level: 131, ranchLevel: 22, ranchExp: 236597 });
-        await facility22.autoActivateShed();
-        check('牧场22级 → 发了 1 次 ActivateFacility', activateCount === 1, activateCount);
+        allCellsFn = allCellsDraftShed;
+        r = await facility2.autoActivateShed();
+        check('棚是编辑器草稿(instId=3) → 发 1 次 ActivateFacility', activateCount === 1, { r, activateCount });
+
+        // 换新模块 + 完全没有棚建筑: 也发激活(失败后进冷却)
+        const facility3 = freshFacility();
+        activateCount = 0;
+        allCellsFn = allCellsNoShed;
+        r = await facility3.autoActivateShed();
+        check('没有棚建筑 → 发 1 次 ActivateFacility', activateCount === 1, { r, activateCount });
+        r = await facility3.autoActivateShed();
+        check('失败后冷却中 → 不再发', activateCount === 1 && String(r.skipped || '').includes('冷却'), { r, activateCount });
     }
 
     section('25. 一键喂/全场喂必须窝+棚各喂一次(修"喂棚的有机罐头喂到窝去了")');

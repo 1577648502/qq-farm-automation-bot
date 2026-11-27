@@ -1465,7 +1465,7 @@ async function autoPlaceCubs(opts = {}) {
     //   排后面能成功的普通幼崽被连坐 → 86 只全卡背包 → bag_priority 死锁。
     //   (当时巨大幼崽全被拒的真正根因是协议: 巨大崽要 target#2=基础id + #3=巨大物品id,
     //   见 placeAnimal 注释; 只传 #2=65xxx 服务端找不到动物定义 → 1045205。)
-    const GIANT_CUB_RE = /^(65|75)\d{3}$/;   // 65001~65016 / 75001~75012 巨大幼崽
+    const GIANT_CUB_RE = /^(?:65|75)\d{3}$/;   // 65001~65016 / 75001~75012 巨大幼崽
     for (const cub of cubs) {
         if (freeLeft <= 0 || result.placed >= maxPerRound) break;
         if (!cub || cub.count <= 0) continue;
@@ -2223,29 +2223,46 @@ async function getRanchOverview(accountId = '') {
                 view.regionQuota = toNum(all.quota);
                 view.regionSpeedUp = all.speedUp || [];
 
-                // ⭐ 从没进过牧场的号: GetRanchDetail 返回空 RanchInfo(窝0棚0牧草0),
-                //   但 AllCells / GetFacilityDetail 里的建筑是真实的。
-                //   用真实建筑的 capacity 兜底(不猜数值), 避免面板一片空白。
-                if (!view.coopCount && !view.penCount) {
-                    view.emptyRanchInfo = true;
-                    const coopFac = view.facilities.find(f => f.slot === 10001);
-                    view.coopCount = toNum(coopFac && coopFac.capacity) || view.coopBuildings.length;
-                    // 棚的 instId 不固定(实测 inst=3), 用真实实例查容量
+                // ⭐ 空栏舍兜底(2026-11-27 用户截图实锤: 21级号游戏里就是「棚 0/3」):
+                //   栏舍已解锁但**空着**时 GetRanchDetail 不返回该组 —— 只有栏里有动物的号才有组
+                //   (账号2 三头牛有组, 账号3/4 空棚没组)。只凭"没有组"判锁 → 面板把已开的棚
+                //   显示成"未解锁", 幼崽入栏也只会往窝里塞(75xxx 报 1045206 栏舍类型不符)。
+                //   判据: AllCells 里有对应建筑 = 已放好, 容量取 GetFacilityDetail(真实实例, 不猜)。
+                const hadCoop = !!view.coopCount;
+                const hadPen = !!view.penCount;
+                if (!hadCoop || !hadPen) {
+                    if (!hadCoop) {
+                        const coopFac = view.facilities.find(f => f.slot === 10001);
+                        view.coopCount = toNum(coopFac && coopFac.capacity) || view.coopBuildings.length;
+                    }
+                    // 棚的 instId 不固定(实测 10003 / 编辑器 3), 用真实实例查容量
                     const penB = view.penBuildings[0];
-                    if (penB) {
+                    if (!hadPen && penB) {
                         try {
                             const pf = await getFacilityDetailByInstance(penB.instId);
-                            view.penCount = toNum(pf.capacity) || 0;
-                            if (view.penCount > 0) {
-                                view.facilities.push({
-                                    slot: penB.instId, kind: 'pen', name: '棚',
-                                    level: toNum(pf.level), stored: 0,
-                                    capacity: view.penCount, buildingId: penB.buildingId,
-                                    buildingKind: 'pen', upgrading: false,
-                                });
+                            const cap = toNum(pf.capacity) || 0;
+                            if (cap > 0) {
+                                view.penCount = cap;
+                                view.pens = [{
+                                    ranchInstId: penB.instId,
+                                    husbandryType: 2,
+                                    capacity: cap,
+                                    animalCount: 0,
+                                    animals: [],
+                                }];
+                                if (!Array.isArray(view.facilities)) view.facilities = [];
+                                if (!view.facilities.some(f => f.slot === penB.instId)) {
+                                    view.facilities.push({
+                                        slot: penB.instId, kind: 'pen', name: pf.name || '棚',
+                                        level: toNum(pf.level), stored: toNum(pf.stored),
+                                        capacity: cap, buildingId: penB.buildingId,
+                                        buildingKind: 'pen', upgrading: false,
+                                    });
+                                }
                             }
-                        } catch { view.penCount = 0; }
+                        } catch { /* 查不到容量就保持"未解锁"(spawn 都没放好的号) */ }
                     }
+                    if (!hadCoop && !hadPen) view.emptyRanchInfo = true;
                 }
             } catch {
                 view.buildings = [];
@@ -5642,11 +5659,11 @@ async function operateRanch(opts = {}) {
                     const hex = buf.toString('hex');
                     const target = 'd1aaee02'; // varint(6002001) 正确编码(之前 412c5b01 是错的)
                     let ctx = null;
-                    let ix = hex.indexOf(target);
+                    const ix = hex.indexOf(target);
                     if (ix >= 0) {
                         ctx = hex.slice(Math.max(0, ix - 60), ix + 800);
                     } else {
-                        ctx = '6002001-not-found-in-scene-login len=' + buf.length + ' head=' + hex.slice(0, 100);
+                        ctx = `6002001-not-found-in-scene-login len=${buf.length} head=${hex.slice(0, 100)}`;
                     }
                     probe.sceneLoginShed = { len: buf.length, ctx };
                 } catch (e) {
