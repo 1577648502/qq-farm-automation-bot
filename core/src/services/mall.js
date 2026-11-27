@@ -701,7 +701,8 @@ async function autoBuyOrganicFertilizerViaMall() {
     const goodsId = toNum(goods.goods_id);
     if (goodsId <= 0) return 0;
     const singlePrice = parseMallPriceValue(goods.price);
-    let ticket = Math.max(0, toNum((getUserState() || {}).ticket));
+    // 同 autoBuyFertilizerViaMall: 点券余额是 userState.coupon, 没有 .ticket 字段
+    let ticket = Math.max(0, toNum((getUserState() || {}).coupon));
     let totalBought = 0;
     let perRound = BUY_PER_ROUND;
     if (singlePrice > 0 && ticket > 0) {
@@ -730,10 +731,9 @@ async function autoBuyOrganicFertilizerViaMall() {
                 error: msg,
             });
             if (msg.includes('余额不足') || msg.includes('点券不足') || msg.includes('code=1000019')) {
-                if (perRound > 1) {
-                    perRound = 1;
-                    continue;
-                }
+                // 点券不足与批量数无关(买不起 10 个也买不起 1 个), 降 perRound 再试
+                // 纯属多打一次必然失败的请求(2026-11-28 日志: 同一秒两条 1000019)。
+                // 真因单买可成、批量不行的只有"部分购买"类错误, 那不是 1000019。
                 buyPausedNoGoldDateKey = getDateKey();
             }
             break;
@@ -777,7 +777,12 @@ async function autoBuyFertilizerViaMall(type = 'organic', targetCount = 0) {
     const goodsId = toNum(goods.goods_id);
     if (goodsId <= 0) return 0;
     const singlePrice = parseMallPriceValue(goods.price);
-    let ticket = Math.max(0, toNum((getUserState() || {}).ticket));
+    // ⚠ userState 里没有 .ticket 字段(点券叫 .coupon, 见 network.js userState 定义),
+    //   读出来恒 undefined → ticket=0 → 上面的余额预拦全失效,
+    //   点券不足的号每轮检测都硬买一次刷 code=1000019(2026-11-28 日志, 26h 44 条)。
+    //   改读 .coupon; coupon=0 时 perRound 保持默认, 靠 catch 里
+    //   "点券不足 → perRound=1 再试一次 → 当天停购"兜底(coupon 没上报时不误停)。
+    let ticket = Math.max(0, toNum((getUserState() || {}).coupon));
     let totalBought = 0;
     let perRound = BUY_PER_ROUND;
     if (singlePrice > 0 && ticket > 0) {
@@ -820,10 +825,9 @@ async function autoBuyFertilizerViaMall(type = 'organic', targetCount = 0) {
                 type,
             });
             if (msg.includes('余额不足') || msg.includes('点券不足') || msg.includes('code=1000019')) {
-                if (perRound > 1) {
-                    perRound = 1;
-                    continue;
-                }
+                // 点券不足与批量数无关(买不起 10 个也买不起 1 个), 降 perRound 再试
+                // 纯属多打一次必然失败的请求(2026-11-28 日志: 同一秒两条 1000019)。
+                // 真因单买可成、批量不行的只有"部分购买"类错误, 那不是 1000019。
                 buyPausedNoGoldDateKey = getDateKey();
             }
             break;
