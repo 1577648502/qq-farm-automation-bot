@@ -12,6 +12,9 @@
  *   CMD 96 兑换       req #196 {#1 slot, #2 count} rsp #196 {#1 price, #2 {#1 itemId, #2 count,...}, #3 福币余额, #4 今日已购, #5 累计已购}
  *   CMD 97 兑换列表    req #197 ""          rsp #197 {repeated #1 {#1 slot, #2 price, #3 类型(#3=2), #4 限购, #5 已购, #6/#7}, #2 福币余额}
  *   CMD 98 今日信息    req #198 ""          rsp #198 {#1 {#1 seedId, #2 剩余可领种子}, #2 持有蜜薯, #3 今日单价, #4 分享卡, #5 累计收益}
+ *   CMD 99 领取提成    req #199 ""          rsp #199 {#1 提成金额, #3 提成笔数, #4 领取后福币余额}
+ *     (2026-11-28 抓包 101021 实证: 好友卖薯到你的摊, 摊主抽 2% 提成挂在 #130#11(待领金额)/
+ *      #130#13(待领笔数), 空请求 cmd99 一次性领走, 领后 #130#11/#13 清零, #130#3 涨到回执 #4 值)
  *
  * 2026-11-27 全量抓包复核补充(官方帧里未接的字段, 别人别再重查):
  *   92 摊位 #1#4 owner: {#1 gid, #2 昵称, #3{#13}(头像参数), #4=129/131/132 摊主侧版本号(买方无用)}
@@ -62,6 +65,7 @@ const CMD_SELL = 93;
 const CMD_EXCHANGE = 96;
 const CMD_EXCHANGE_LIST = 97;
 const CMD_TODAY_INFO = 98;
+const CMD_CLAIM_COMMISSION = 99;
 
 const ITEM_SEED = 20307;      // 红薯种子
 const ITEM_FRUIT = 40307;     // 红薯(果实)
@@ -172,6 +176,8 @@ function parseMainState(activityBuf) {
         basePrice: 0,         // #5 今日基础价
         holding: 0,           // #6 摊上存量(⚠ 不是背包数量! 2026-11-26 实测 <背包 986~1467)
         totalIncome: 0,       // #7 累计收益
+        commissionPending: 0, // #11 待领提成(好友卖薯到你摊, 摊主抽 2%; cmd99 领取)
+        commissionCount: 0,   // #13 待领提成笔数
         raw130: '',           // 调试: #130 原始 hex
     };
     if (!activityBuf || !activityBuf.length) return out;
@@ -195,6 +201,8 @@ function parseMainState(activityBuf) {
         out.basePrice = toInt((findField(f, 5) || {}).v) || 0;
         out.holding = toInt((findField(f, 6) || {}).v) || 0;
         out.totalIncome = toInt((findField(f, 7) || {}).v) || 0;
+        out.commissionPending = toInt((findField(f, 11) || {}).v) || 0;
+        out.commissionCount = toInt((findField(f, 13) || {}).v) || 0;
         out.ok = true;
     } catch { /* 解析失败按"读不到"处理 */ }
     return out;
@@ -554,6 +562,36 @@ async function claimSeeds() {
     return { ok: true, seedCount };
 }
 
+/**
+ * 领取摊位提成(99, 2026-11-28 抓包 101021 定案):
+ * 好友卖蜜薯到你的摊, 摊主抽 2% 提成, 挂在 #130#11(金额)/#130#13(笔数)。
+ * 空请求 cmd99 一次性领走 → 回执 #199 {#1 提成金额, #3 笔数, #4 领取后福币余额}。
+ * 先查状态, 无待领(#11=0)直接跳过不发请求。
+ */
+async function claimCommission() {
+    const st = await getState();
+    if (!st.ok) return { ok: false, reason: st.reason || '查状态失败' };
+    const pending = toInt(st.state.commissionPending) || 0;
+    const count = toInt(st.state.commissionCount) || 0;
+    if (pending <= 0) return { ok: true, skipped: true, reason: '没有待领提成' };
+    const r = await op(CMD_CLAIM_COMMISSION, CMD_CLAIM_COMMISSION + FIELD_OFFSET, Buffer.alloc(0));
+    if (!r.ok) return { ok: false, reason: `领提成失败 ${r.reason}` };
+    const f = findField(resultFields(r), 199);
+    let amount = pending;
+    let after = 0;
+    let n = count;
+    if (f && f.w === 2) {
+        const s = parseTop(f.v);
+        amount = toInt((findField(s, 1) || {}).v) || pending;
+        n = toInt((findField(s, 3) || {}).v) || count;
+        after = toInt((findField(s, 4) || {}).v) || 0;
+    }
+    log('活动', `以薯换福: 领到摊位提成 ${amount} 福气币(${n}笔, 余额${after})`, {
+        module: 'activity', event: '以薯换福', result: 'ok',
+    });
+    return { ok: true, amount, count: n, coinAfter: after };
+}
+
 // ===== 出售记录 (2026-11-26: 卖了多少钱 / 单价多少 / 卖给谁) =====
 // 持久化: data/maple-sell-records/<账号id>.json —— worker 一账号一进程(FARM_ACCOUNT_ID 区分),
 // 只记**真卖出去**的批次(soldCount>0); 失败/空仓/跳过不落盘, 免得刷屏。
@@ -860,7 +898,7 @@ async function getOverview() {
  * 返回 { ok, claimed, soldCount, income, exchanged }
  */
 async function runAuto(cfg = {}, breaker = null) {
-    const out = { claimed: 0, planted: 0, soldCount: 0, income: 0, exchanged: [], shareCrit: 0 };
+    const out = { claimed: 0, planted: 0, soldCount: 0, income: 0, exchanged: [], shareCrit: 0, commission: 0, commissionCount: 0 };
     try {
         if (cfg.claimSeed !== false) {
             const r = await claimSeeds();
@@ -871,6 +909,16 @@ async function runAuto(cfg = {}, breaker = null) {
             if (!r.skipped) {
                 out.claimed = r.seedCount || 0;
             }
+        }
+        // 领摊位提成(2026-11-28): 好友卖薯到你摊抽的 2%, 攒在 #130#11; 领种子之后顺带领走
+        if (cfg.claimCommission !== false) {
+            try {
+                const r = await claimCommission();
+                if (r.ok && !r.skipped) {
+                    out.commission = r.amount || 0;
+                    out.commissionCount = r.count || 0;
+                }
+            } catch { /* 提成失败不挡卖 */ }
         }
         // 种红薯: 每轮都尝试(内部幂等: 背包没 20307 或没空地直接 skip),
         // 存货+空地释放后下一轮自动补种
@@ -1154,6 +1202,7 @@ module.exports = {
     CMD_EXCHANGE,
     CMD_EXCHANGE_LIST,
     CMD_TODAY_INFO,
+    CMD_CLAIM_COMMISSION,
     ITEM_SEED,
     ITEM_FRUIT,
     ITEM_POTATO,
@@ -1171,6 +1220,7 @@ module.exports = {
     SHARE_TYPE_MAPLE,
     SHARE_SCENE_MAPLE,
     claimSeeds,
+    claimCommission,
     sellPotato,
     exchange,
     getOverview,
