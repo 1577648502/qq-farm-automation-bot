@@ -371,16 +371,64 @@ const net = require(`${SB}/src/utils/network`);
         await new Promise(r => setTimeout(r, 20));
     }
 
-    section('6. 排队硬上限 50');
+    section('6. 一次响应只放行一个(同步占槽)');
     {
-        // 占满 5, 排满 50, 第 51 个应直接拒绝"请求队列已满"
+        // 2026-11-28 线上事故回归: sendMsg 若在 await encodeMsg 之后才注册
+        // 回调, drain 的同步循环里 pendingCallbacks.size 不变, 一次响应会把
+        // 整个等待队列一次性放行 → 单连接几十并发 → 服务端踢下线(1006 风暴)。
+        // 锁住: 占满 5 + 排队 3, 回 1 个包 → 只放行 1 个, 剩 2 个继续等。
+        // ⚠ 方法名用唯一前缀: findByMethod 按名找帧, 撞了之前 section 的
+        //   同名帧会回错包(那些回调已消费, pending 不减, drain 不触发)。
+        const inflight = [];
+        for (let i = 0; i < 5; i++) {
+            inflight.push(net.sendMsgAsync('gamepb.userpb.UserService', `S6Hold${i}`, Buffer.alloc(0), 20000).catch(() => 'x'));
+        }
+        await new Promise(r => setTimeout(r, 30));
+        const before = fakeWsInstance.sent.length;
+        const q1 = net.sendMsgAsync('gamepb.userpb.UserService', 'S6Q1', Buffer.alloc(0), 20000).catch(() => 'x');
+        const q2 = net.sendMsgAsync('gamepb.userpb.UserService', 'S6Q2', Buffer.alloc(0), 20000).catch(() => 'x');
+        const q3 = net.sendMsgAsync('gamepb.userpb.UserService', 'S6Q3', Buffer.alloc(0), 20000).catch(() => 'x');
+        await new Promise(r => setTimeout(r, 30));
+        check(fakeWsInstance.sent.length === before, '3 个排队请求都还没上 wire');
+
+        // 回 1 个在途的包
+        const hold0 = fakeWsInstance.findByMethod('S6Hold0');
+        fakeWsInstance.replyTo(hold0.seq, hold0.method);
+        await new Promise(r => setTimeout(r, 40));
+        const wiredNow = fakeWsInstance.sent.length - before;
+        check(wiredNow === 1, `一次响应只放行 1 个排队请求 (实际 ${wiredNow})`);
+        check(!!fakeWsInstance.findByMethod('S6Q1'), '放行的是队头 S6Q1 (FIFO)');
+        check(!fakeWsInstance.findByMethod('S6Q2') && !fakeWsInstance.findByMethod('S6Q3'),
+            'S6Q2/S6Q3 仍在排队');
+
+        // 回 S6Q1 → 放行 S6Q2; 回 S6Q2 → 放行 S6Q3
+        let qw = fakeWsInstance.findByMethod('S6Q1');
+        fakeWsInstance.replyTo(qw.seq, qw.method);
+        await new Promise(r => setTimeout(r, 40));
+        check(!!fakeWsInstance.findByMethod('S6Q2') && !fakeWsInstance.findByMethod('S6Q3'),
+            'S6Q1 响应后放行 S6Q2');
+        qw = fakeWsInstance.findByMethod('S6Q2');
+        fakeWsInstance.replyTo(qw.seq, qw.method);
+        await new Promise(r => setTimeout(r, 40));
+        check(!!fakeWsInstance.findByMethod('S6Q3'), 'S6Q2 响应后放行 S6Q3');
+
+        // 清场
+        fakeWsInstance.replyAll();
+        await Promise.all([q1, q2, q3]).catch(() => {});
+        await new Promise(r => setTimeout(r, 20));
+        void inflight;
+    }
+
+    section('7. 排队硬上限 20');
+    {
+        // 占满 5, 排满 20, 第 21 个应直接拒绝"请求队列已满"
         const inflight = [];
         for (let i = 0; i < 5; i++) {
             inflight.push(net.sendMsgAsync('gamepb.userpb.UserService', `Hold${i}`, Buffer.alloc(0), 60000));
         }
         await new Promise(r => setTimeout(r, 20));
         const queued = [];
-        for (let i = 0; i < 50; i++) {
+        for (let i = 0; i < 20; i++) {
             queued.push(net.sendMsgAsync('gamepb.userpb.UserService', `Q${i}`, Buffer.alloc(0), 60000)
                 .catch(() => 'rejected'));
         }
@@ -389,8 +437,9 @@ const net = require(`${SB}/src/utils/network`);
         await net.sendMsgAsync('gamepb.userpb.UserService', 'OverLimit', Buffer.alloc(0), 60000)
             .then(() => { overRejected = 'resolved'; })
             .catch(e => { overRejected = e.message; });
-        check(overRejected && overRejected.includes('请求队列已满'), `第 51 个排队请求直接拒绝 (实际 ${overRejected})`);
-        check(overRejected && overRejected.includes('waiting=50'), `错误信息带等待队列长度 (实际 ${overRejected})`);
+        check(overRejected && overRejected.includes('请求队列已满'), `第 21 个排队请求直接拒绝 (实际 ${overRejected})`);
+        check(overRejected && overRejected.includes('waiting=20'), `错误信息带等待队列长度 (实际 ${overRejected})`);
+        void inflight;
     }
 
     net.cleanup('测试结束');

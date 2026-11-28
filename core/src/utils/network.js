@@ -39,7 +39,9 @@ const pendingCallbacks = new Map();
 const requestWaitQueue = [];
 // 排队硬上限: 超过说明下游真的积压(服务端卡死/大面积超时), 再排队只会把
 // 内存和超时雪崩拖大, 此时恢复旧的直接拒绝行为。
-const REQUEST_WAIT_QUEUE_MAX = 50;
+// (20 而不是更大: 重连成功瞬间整个队列会一次性放行, 队列越长对服务端
+//  的瞬时并发冲击越大 —— 单连接并发几十个请求会被踢)
+const REQUEST_WAIT_QUEUE_MAX = 20;
 // 排队等待上限: 请求自身的 timeout 加排队宽限。正常情况下槽位释放是秒级的
 // (一个响应回来立刻腾一个位置), 这个上限只是兜底"队列前头的请求挂死"。
 // (env 可覆盖, 回归测试用它把等待压到几百毫秒)
@@ -217,9 +219,30 @@ async function sendMsg(serviceName, methodName, bodyBytes, callback) {
     }
     const seq = clientSeq;
     clientSeq += 1;
-    const encoded = await encodeMsg(serviceName, methodName, bodyBytes, seq);
+    // ⚠ 回调必须**同步**注册进 pendingCallbacks(占槽):
+    //   drainRequestWaitQueue 靠 pendingCallbacks.size 判断有没有空槽, 如果等
+    //   encodeMsg 的 await 之后再 set, drain 的同步循环里 size 一直不变,
+    //   一次响应会把整个等待队列一次性全发出去 → 单连接几十并发 → 服务端直接
+    //   踢下线(2026-11-28 线上事故: 全账号 1006 掉线重连循环)。
     if (callback) pendingCallbacks.set(seq, callback);
-    // ws.send(encoded);
+    let encoded;
+    try {
+        encoded = await encodeMsg(serviceName, methodName, bodyBytes, seq);
+    } catch (err) {
+        if (callback) {
+            pendingCallbacks.delete(seq);
+            callback(err);
+        }
+        return false;
+    }
+    if (!ws || ws.readyState !== WebSocket.OPEN) {
+        // 编码期间连接断了: 死 socket 上 ws.send 会静默丢帧, 必须显式失败
+        if (callback) {
+            pendingCallbacks.delete(seq);
+            callback(new Error(`发送失败(连接已断): ${methodName}`));
+        }
+        return false;
+    }
     try {
         ws.send(encoded);
     } catch (err) {
