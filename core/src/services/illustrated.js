@@ -14,8 +14,12 @@ const SERVICE = 'gamepb.illustratedpb.IllustratedService';
 /**
  * 图鉴类别(GetIllustratedListV2 的 #2) —— 2026-11-20 抓包定案:
  *   1   = 农场植物/花卉图鉴(222 条, 请求 08001001)
- *   101 = **牧场动物图鉴**(28 条, id 2060001~2070012; 请求 1065)
- * 牧场图鉴页的「普通 / 巨大」两个页签对应的就是这两类。
+ *   101 = **牧场普通动物图鉴**(28 条, id 2060001~2070012 即鸡/鸭/…/羊驼; 请求 1065)
+ *
+ * ⚠ 2026-11-28 修正: 早期注释把 101 当成「巨大」页签 —— 错的。
+ *   101 的条目 id 全是普通动物(2060001 鸡 / 2070012 羊驼), 对应牧场图鉴的
+ *   **「普通」页签**; 「巨大」页签是重量分档总奖励(GetRanchWeightScoreV2),
+ *   两者走完全不同的接口。
  */
 const LIST_TYPE = {
     PLANT: 1,
@@ -41,11 +45,11 @@ async function getIllustratedList({ refresh = false, listType = LIST_TYPE.PLANT,
  * 领取全部图鉴奖励
  *
  * ⭐ 2026-11-20 抓包定案: 请求 #1 是**图鉴类别**(list_type), 不是 only_claimable:
- *   官方客户端领牧场动物图鉴发 0865 = {1:101}。
+ *   官方客户端领牧场普通动物图鉴发 0865 = {1:101}。
  *   旧实现发 true → 编码 {1:1} = 植物图鉴 —— 能领但只领植物那类,
- *   牧场动物图鉴(「巨大」页签)从来没领过。
+ *   牧场普通图鉴(以及它随附的总进度奖励)从来没领过。
  *
- * @param {number} [listType] 1=农场植物图鉴; 101=牧场动物图鉴
+ * @param {number} [listType] 1=农场植物图鉴; 101=牧场普通动物图鉴
  * @returns {Promise<object>} ClaimAllRewardsV2Reply 明文对象
  */
 async function claimAllRewards(listType = LIST_TYPE.PLANT) {
@@ -57,15 +61,44 @@ async function claimAllRewards(listType = LIST_TYPE.PLANT) {
 }
 
 /**
+ * 单条目是否可领奖
+ *
+ * ⭐ 2026-11-28 修正(线上: 普通图鉴的总奖励从来没自动领过):
+ *   旧判定 = planted && !has_reward && harvest_count >= planted_count。
+ *   但抓包实测(20261117-162604 / 20261120-232455 / 20261118-172140 等 616 条
+ *   牧场动物条目)**field5(harvest_count) 从未下发过** → 解码为 undefined,
+ *   比较恒为 false → 普通图鉴(101)既不领单条目, 也永远拿不到随之发放的
+ *   总进度奖励(官方客户端仅凭 planted && !has_reward 就发 ClaimAllRewardsV2,
+ *   回包里带 1002×200 的总奖励)。
+ *
+ *   植物图鉴(1)的 field5 正常下发(>0 时才编码), 基于收获数的节流保留 ——
+ *   避免 plant 了但没收到阈值时每 60s 空发一次领奖请求。
+ *
+ * @param {object} item IllustratedItem(decode 后的明文对象)
+ * @param {number} [listType] 1=植物; 101=牧场普通动物
+ */
+function isItemClaimable(item, listType) {
+    if (!item || !item.planted || item.has_reward) return false;
+    // 牧场动物图鉴: 协议不下发 harvest_count, 可领与否交给服务端判定
+    if (Number(listType) === LIST_TYPE.RANCH_ANIMAL) return true;
+    const need = toNum(item.planted_count);
+    if (need <= 0) return false;
+    return toNum(item.harvest_count) >= need;
+}
+
+/**
  * 把图鉴条目转成简洁结构, 便于展示/统计
  *
  * 字段语义(实测):
- *   planted      已解锁(种植过)
+ *   planted      已解锁(种植/养殖过)
  *   plantedCount 领奖所需收获数(按品质 10/40/80/200, 未解锁为 0)
  *   hasReward    奖励已领取
- *   canClaim     当前可领奖 = 已解锁 且 未领取 且 收获数达到阈值
+ *   canClaim     当前可领奖(见 isItemClaimable)
+ *
+ * @param {object} item
+ * @param {number} [listType] 不传按植物图鉴规则(兼容旧调用)
  */
-function formatItem(item) {
+function formatItem(item, listType) {
     const reward = item && item.reward
         ? { itemId: toNum(item.reward.item_id), count: toNum(item.reward.count) }
         : null;
@@ -81,9 +114,14 @@ function formatItem(item) {
         harvestCount,
         hasReward: rewardClaimed,
         rewardClaimed,
-        canClaim: planted && !rewardClaimed && plantedCount > 0 && harvestCount >= plantedCount,
+        canClaim: isItemClaimable(item, listType),
         reward,
     };
+}
+
+/** 总奖励档的奖励条目 {item_id,count} 转文本(日志用) */
+function fmtReward(r) {
+    return `${toNum(r && r.item_id)}x${toNum(r && r.count)}`;
 }
 
 /**
@@ -99,7 +137,7 @@ async function getIllustratedOverview(opts = {}) {
     for (const listType of typesToFetch) {
         try {
             const reply = await getIllustratedList({ listType });
-            const formatted = ((reply && reply.items) || []).map(formatItem)
+            const formatted = ((reply && reply.items) || []).map(it => formatItem(it, listType))
                 .map(it => ({ ...it, listType }));
             byType[listType] = {
                 total: formatted.length,
@@ -122,20 +160,12 @@ async function getIllustratedOverview(opts = {}) {
  * 手动领取图鉴奖励并打印结果
  */
 async function claimIllustratedRewards() {
-    // ⚠ 领奖接口本身没有"类别"参数, 但服务端会按当前**场景**结算:
-    //   农场场景领植物图鉴, 牧场场景领牧场动物图鉴。
-    //   所以这里必须两类都尝试一次, 否则「巨大」页签的奖励永远领不到。
+    // 领奖请求带 list_type(抓包: 领牧场普通动物图鉴发 {1:101})
+    // ⚠ 不预先用列表判断可领: 101 的总进度奖励与单条目 has_reward 无关,
+    //   列表里也没有对应字段(见 task.js checkAndClaimIllustratedRewards 注释)。
     const all = [];
     for (const listType of [LIST_TYPE.PLANT, LIST_TYPE.RANCH_ANIMAL]) {
         try {
-            // 先查一次该类图鉴, 没有可领的就不发领奖请求(避免无谓请求)
-            const list = await getIllustratedList({ refresh: false, listType });
-            const arr = (list && list.items) || [];
-            const claimable = arr.filter((it) => it && it.planted && !it.has_reward
-                && Number(it.planted_count) > 0
-                && Number(it.harvest_count) >= Number(it.planted_count));
-            if (claimable.length === 0) continue;
-            // ⭐ 领奖请求也要带类别(抓包: 领牧场动物图鉴发 {1:101})
             const reply = await claimAllRewards(listType);
             all.push(
                 ...(Array.isArray(reply && reply.items) ? reply.items : []),
@@ -198,7 +228,7 @@ async function claimAllRanchWeightScoreRewards() {
             const got = (r && r.rewards) || [];
             items.push(...got);
             claimedTiers.push(toNum(t.tier));
-            log('图鉴', `巨大图鉴总奖励档${toNum(t.tier)}领取成功: ${got.map(formatItem).join(', ') || `${got.length} 项`}`, {
+            log('图鉴', `巨大图鉴总奖励档${toNum(t.tier)}领取成功: ${got.map(fmtReward).join(', ') || `${got.length} 项`}`, {
                 module: 'task', event: 'illustrated_weight_claim', result: 'ok', tier: toNum(t.tier),
             });
         } catch (e) {
@@ -219,5 +249,6 @@ module.exports = {
     getRanchWeightScore,
     claimRanchWeightScoreReward,
     claimAllRanchWeightScoreRewards,
+    isItemClaimable,
     formatItem,
 };

@@ -15,7 +15,7 @@ export interface IllustratedItem {
   reward?: { itemId: number, count: number } | null
   name?: string
   image?: string
-  /** 图鉴类别: 1=农场植物/花卉, 101=牧场动物 */
+  /** 图鉴类别: 1=农场植物/花卉, 101=牧场普通动物(巨大图鉴走重量分档, 不在此列表) */
   listType?: number
 }
 

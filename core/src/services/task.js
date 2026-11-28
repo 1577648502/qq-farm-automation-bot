@@ -209,19 +209,21 @@ async function checkAndClaimIllustratedRewards(force = false) {
     lastIllustratedProbeAt = nowMs;
     try {
         const beforeTicket = await getTicketBalanceFromBag();
-        // ⭐ 两类图鉴都要领(抓包: 领奖请求 #1 = 类别, 1=植物 / 101=牧场动物「巨大」页签)
-        // 先查有没有可领的再发领奖请求(无可领时省一半请求; 2026-11-22)
-        const { getIllustratedList, claimAllRewards } = require('./illustrated');
+        // ⭐ 两类图鉴都要领(抓包: 领奖请求 #1 = 类别, 1=植物 / 101=牧场普通动物图鉴)
+        //
+        // ⚠ 2026-11-28 修正: 不能拿「单条目可领」当闸门!
+        //   抓包 20261117-162604_牧场1 idx127: 101 的 28 条条目全部 has_reward=1
+        //   (单条目早已领完), 官方客户端仍然发 ClaimAllRewardsV2 {1:101},
+        //   回包 items=1002×200 —— 这是**普通图鉴的总进度奖励**, 与单条目状态无关,
+        //   列表接口也没有任何字段能表示它可领(只能靠服务端回包)。
+        //   旧实现 "arr.some(可领) → 否则 continue" 因此把总奖励永久跳过。
+        //   现在每轮直接对两类各发一次(服务端无可领时回空), 原实现每轮的 2 次列表
+        //   查询正好省掉, 请求数不增; 且是串行 await, 不会抬高瞬时并发。
+        const { claimAllRewards } = require('./illustrated');
         const allItems = [];
         const claimedByType = { 1: 0, 101: 0 };
         for (const listType of [1, 101]) {
             try {
-                const list = await getIllustratedList({ listType });
-                const arr = (list && list.items) || [];
-                const hasClaimable = arr.some(it => it && it.planted && !it.has_reward
-                    && Number(it.planted_count) > 0
-                    && Number(it.harvest_count) >= Number(it.planted_count));
-                if (!hasClaimable) continue;
                 const reply = await claimAllRewards(listType);
                 const got = [
                     ...(Array.isArray(reply && reply.items) ? reply.items : []),
@@ -242,7 +244,7 @@ async function checkAndClaimIllustratedRewards(force = false) {
             allItems.push(...(wr.items || []));
         } catch { /* 总奖励失败不影响单条目 */ }
         const items = allItems;
-        // ⭐ 成功判定不能只看点券(2026-11-22): 巨大(牧场动物)图鉴的奖励是收藏点(3003),
+        // ⭐ 成功判定不能只看点券(2026-11-22): 牧场普通图鉴单条目奖励是收藏点(3003),
         //   不涨点券 —— 旧判定 gainTicket>=200 让牧场图鉴领奖**永远静默**(领了也不记日志/统计)。
         //   只要服务端返回了奖励条目就算成功。
         if (!items.length) return false;
@@ -250,7 +252,7 @@ async function checkAndClaimIllustratedRewards(force = false) {
         const gainTicket = Math.max(0, afterTicket - beforeTicket);
 
         const weightNote = weightClaimedTiers.length ? `, 总奖励档${weightClaimedTiers.join('/')}` : '';
-        log('任务', `图鉴奖励领取成功 ${items.length} 项${gainTicket > 0 ? `, 点券+${gainTicket}` : ''}${claimedByType[101] > 0 ? `(含巨大图鉴 ${claimedByType[101]})` : ''}${weightNote}`, {
+        log('任务', `图鉴奖励领取成功 ${items.length} 项${gainTicket > 0 ? `, 点券+${gainTicket}` : ''}${claimedByType[101] > 0 ? `(含牧场图鉴 ${claimedByType[101]})` : ''}${weightNote}`, {
             module: 'task',
             event: '图鉴奖励',
             result: 'ok',
@@ -260,7 +262,7 @@ async function checkAndClaimIllustratedRewards(force = false) {
         taskClaimDoneDateKey = getDateKey();
         taskClaimLastAt = Date.now();
         recordOperation('taskClaim', 1);
-        // 巨大(牧场动物)图鉴单独计数, 便于观察「巨大」页签的领取情况
+        // 牧场普通图鉴单独计数, 便于观察 101 类的领取情况
         if (claimedByType[101] > 0) recordOperation('ranchIllustrated', claimedByType[101]);
         // 总奖励档位单独计数
         if (weightClaimedTiers.length) recordOperation('ranchWeightReward', weightClaimedTiers.length);

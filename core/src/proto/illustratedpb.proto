@@ -8,10 +8,12 @@ message GetIllustratedListV2Request {
     bool refresh = 1;
     // ⭐ 2026-11-20 抓包定案: #2 不是 bool, 而是**图鉴类别**(varint)。
     //   · 发 {1:0, 2:1} (08001001)  → 222 条: 农场植物/花卉图鉴
-    //   · 发 {2:101}    (1065)      → 28 条: id 2060001~2070012 = **牧场动物图鉴**
-    //     (牧场图鉴页的「巨大」页签; 条目 id 是成品动物 id)
+    //   · 发 {2:101}    (1065)      → 28 条: id 2060001~2070012 = **牧场普通动物图鉴**
+    //     (牧场图鉴页的「普通」页签; 条目 id 是成品动物 id: 2060001=鸡 … 2070012=羊驼;
+    //      单条目奖励实测恒为 3003(动物普通收藏点)×10)
+    //     「巨大」页签不走这个接口, 而是 GetRanchWeightScoreV2 的重量分档总奖励(见文末)。
     //   旧定义写成 bool, 发 101 会被编码成 1, 永远只能拿到植物图鉴。
-    int64 list_type = 2;   // 1=农场植物图鉴(默认); 101=牧场动物图鉴
+    int64 list_type = 2;   // 1=农场植物图鉴(默认); 101=牧场普通动物图鉴
 }
 
 // 图鉴条目奖励 (抓包实测: field6 为嵌套消息 {item_id, count})
@@ -24,6 +26,8 @@ message IllustratedReward {
 //   1 seed_id, 2 unlock_status(品质/档位 1-4, 对应领奖阈值 10/40/80/200),
 //   3 planted(已解锁/种植过), 4 planted_count(领奖所需收获数, 未解锁为 0),
 //   5 harvest_count(收获数), 6 reward(嵌套), 7 has_reward(奖励已领取)
+// ⚠ 牧场普通动物图鉴(101)的条目**从不带 field5**, 可领判定 = planted && !has_reward;
+//   植物图鉴(1)才用 harvest_count >= planted_count 节流。
 message IllustratedItem {
     int64 seed_id = 1;
     int32 unlock_status = 2;
@@ -40,12 +44,13 @@ message GetIllustratedListV2Reply {
 
 message ClaimAllRewardsV2Request {
     // ⭐ 2026-11-20 抓包(20261120-232455_领奖励)定案: #1 不是 bool, 是**图鉴类别**!
-    //   官方客户端领「巨大」页签(牧场动物图鉴)发的是 0865 = {1:101};
+    //   官方客户端领牧场「普通」页签(普通动物图鉴)发的是 0865 = {1:101};
     //   领植物图鉴应是 {1:1}。旧定义 bool only_claimable 是错的 ——
     //   发 true 编码成 {1:1} 恰好等于 list_type=1, 所以植物图鉴能领,
-    //   而牧场动物图鉴(101)从来没被领过。
+    //   而牧场普通图鉴(101)从来没被领过。
     //   (服务端按类别领取; 只有可领的会返回奖励, 无需单独的 only_claimable 位)
-    int64 list_type = 1;   // 1=农场植物图鉴(默认); 101=牧场动物图鉴
+    // ⚠ 101 条目**从不下发 harvest_count(field5)**, 可领判定只能看 planted && !has_reward。
+    int64 list_type = 1;   // 1=农场植物图鉴(默认); 101=牧场普通动物图鉴
 }
 
 message ClaimAllRewardsV2Reply {

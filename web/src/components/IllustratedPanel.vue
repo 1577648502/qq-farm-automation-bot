@@ -17,7 +17,8 @@ const { status, realtimeConnected } = storeToRefs(statusStore)
 
 const imageErrors = ref<Record<number, boolean>>({})
 
-// 图鉴分两大类(服务端 list_type): 1=农场植物/花卉, 101=牧场动物(2026-11-20 抓包定案)。
+// 图鉴分两大类(服务端 list_type): 1=农场植物/花卉, 101=牧场普通动物(2026-11-20 抓包定案)。
+// 巨大图鉴不在列表里 —— 那是 GetRanchWeightScoreV2 的重量分档总奖励。
 // 2026-11-22 用户要求: 牧场图鉴别和农场混在一起, 加页签区分。
 const SCOPES = [
   { label: '农场图鉴', value: 'farm', listType: 1 },
