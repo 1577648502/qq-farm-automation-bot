@@ -4300,7 +4300,11 @@ async function autoBuyRotationShop(_opts = {}) {
             //   进程重启还会重现 → 跨天也只提示一次(以 itemId+日期做 signature 不行, 会天天报;
             //   这里用 minIntervalMs=24h, 状态签名不变就不刷)。
             if (isRotationNotPurchasable(e)) {
-                if (shouldLogOnce('ranch_vendor_skip', String(g.itemId), 24 * 60 * 60 * 1000)) {
+                // ⚠ 2026-11-28 修刷屏: key 必须带 itemId, 签名固定。
+                //   旧写法 key 固定 + 签名=itemId, 而 daily 巡查每轮固定打 80011+80012
+                //   两条 → 两个签名交替, "签名变了立刻放行"互相把对方顶掉, 24h 节流失效,
+                //   实测 6h 刷 736 条。key 带 itemId 后每商品独立记忆, 固定签名不互踢。
+                if (shouldLogOnce(`ranch_vendor_skip:${g.itemId}`, 'skip', 24 * 60 * 60 * 1000)) {
                     log('游商', `${rotationGoodsLabel(g)} 当前不可购买(${rotationErrorHint(e)})，跳过`, {
                         module: 'ranch', event: '游商购买', result: 'skip', itemId: g.itemId,
                     });

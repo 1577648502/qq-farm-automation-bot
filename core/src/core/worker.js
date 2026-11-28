@@ -428,10 +428,15 @@ async function runMaple(reason = 'interval') {
                 module: 'activity', event: '以薯换福', result: 'ok', trigger: reason,
             });
         } else if (r.ok && r.sellSkipped) {
-            // 档位门槛未到: 本轮不卖, 蜜薯留着; 20 分钟一轮属常态, 不另外刷屏(成功分支已含 skipNote)
-            log('活动', `以薯换福: 本轮不卖(${r.sellSkipped.reason})`, {
-                module: 'activity', event: '以薯换福', result: 'ok', trigger: reason,
-            });
+            // 档位门槛未到/没有候选摊: 本轮不卖, 蜜薯留着; 20 分钟一轮属常态。
+            // ⚠ 2026-11-28: "没有可卖的候选摊位"是静态状态(别的号不在线), 也要节流,
+            //   否则每 20 分钟刷一条(实测 6h 71 条)。签名带 reason, 状态变化立刻放行。
+            const { shouldLogOnce } = require('../utils/log-throttle');
+            if (shouldLogOnce('maple_sell_skip', String(r.sellSkipped.reason || ''), 6 * 60 * 60 * 1000)) {
+                log('活动', `以薯换福: 本轮不卖(${r.sellSkipped.reason})`, {
+                    module: 'activity', event: '以薯换福', result: 'ok', trigger: reason,
+                });
+            }
         }
         // ok=false 的业务失败已带 reason
         if (r.ok === false) {
