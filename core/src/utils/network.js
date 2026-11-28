@@ -33,6 +33,73 @@ let ws = null;
 let clientSeq = 1;
 let serverSeq = 0;
 const pendingCallbacks = new Map();
+// 队列满时排队的请求(FIFO): 在途响应/超时/断连释放槽位时按序放行。
+// 2026-11-28 改造: 原先 pending>=5 直接 reject, 单 worker 里农场巡检/活动/牧场/
+// 神秘商店/以薯换福撞车一波就打满, 任务直接丢一轮 —— 改成排队等槽位。
+const requestWaitQueue = [];
+// 排队硬上限: 超过说明下游真的积压(服务端卡死/大面积超时), 再排队只会把
+// 内存和超时雪崩拖大, 此时恢复旧的直接拒绝行为。
+const REQUEST_WAIT_QUEUE_MAX = 50;
+// 排队等待上限: 请求自身的 timeout 加排队宽限。正常情况下槽位释放是秒级的
+// (一个响应回来立刻腾一个位置), 这个上限只是兜底"队列前头的请求挂死"。
+// (env 可覆盖, 回归测试用它把等待压到几百毫秒)
+const REQUEST_WAIT_EXTRA_MS = Number(process.env.FARM_QUEUE_WAIT_EXTRA_MS) || 30000;
+
+/** 有槽位空出时按 FIFO 放行排队的请求; 返回实际放行数量 */
+function drainRequestWaitQueue() {
+    let dispatched = 0;
+    while (requestWaitQueue.length > 0 && pendingCallbacks.size < pendingLimitFor()) {
+        const item = requestWaitQueue.shift();
+        if (item.waitTimer) {
+            clearTimeout(item.waitTimer);
+            item.waitTimer = null;
+        }
+        dispatchQueuedRequest(item);
+        dispatched += 1;
+    }
+    return dispatched;
+}
+
+/** 心跳之外的请求在途上限; 心跳保活不受限(业务卡住时心跳被挤掉会被服务端断连) */
+function pendingLimitFor() {
+    return 5;
+}
+
+/** 把排队的请求真正发上 wire(复用 sendMsgAsync 的后半段逻辑) */
+function dispatchQueuedRequest(item) {
+    const { serviceName, methodName, bodyBytes, timeout, resolve, reject } = item;
+    const seq = clientSeq;
+    clientSeq += 1;
+    const timeoutKey = `request_timeout_${seq}`;
+    networkScheduler.setTimeoutTask(timeoutKey, timeout, () => {
+        pendingCallbacks.delete(seq);
+        const pending = pendingCallbacks.size;
+        reject(new Error(`请求超时: ${methodName} (seq=${seq}, pending=${pending})`));
+        // 超时也腾出了槽位(虽然此时队列大概率已被 drain 过)
+        drainRequestWaitQueue();
+    });
+
+    sendMsg(serviceName, methodName, bodyBytes, (err, body, meta) => {
+        networkScheduler.clear(timeoutKey);
+        if (err) reject(err);
+        else resolve({ body, meta });
+        // 响应回来 → 槽位空出 → 放行下一个排队的请求
+        drainRequestWaitQueue();
+    }).then((sent) => {
+        if (!sent) {
+            networkScheduler.clear(timeoutKey);
+            pendingCallbacks.delete(seq);
+            reject(new Error(`发送失败: ${methodName}`));
+            drainRequestWaitQueue();
+        }
+    }).catch((err) => {
+        networkScheduler.clear(timeoutKey);
+        pendingCallbacks.delete(seq);
+        reject(err);
+        drainRequestWaitQueue();
+    });
+}
+
 let wsErrorState = { code: 0, at: 0, message: '' };
 const networkScheduler = createScheduler('network');
 
@@ -46,7 +113,21 @@ function rejectAllPendingRequests(reason = '请求被中断') {
             // ignore callback failure
         }
     }
-    return entries.length;
+    // 排队中的请求一并释放: 断连/清理时它们还没发出去, 但上游不能永远挂着。
+    // 文案与在途请求保持一致, 上游的重试/容错逻辑无需区分两种情况。
+    const queued = requestWaitQueue.splice(0, requestWaitQueue.length);
+    for (const item of queued) {
+        if (item.waitTimer) {
+            clearTimeout(item.waitTimer);
+            item.waitTimer = null;
+        }
+        try {
+            item.reject(new Error(reason));
+        } catch {
+            // ignore
+        }
+    }
+    return entries.length + queued.length;
 }
 
 // ============ 用户状态 (登录后设置) ============
@@ -160,40 +241,29 @@ function sendMsgAsync(serviceName, methodName, bodyBytes, timeout = 20000) {
             return;
         }
 
-        // 如果待处理请求过多，拒绝新请求避免堆积
-        // 心跳是保活请求，允许它越过普通业务队列限制；否则业务请求卡住时，
-        // 心跳会被挤掉，服务端可能按“长时间未操作”断开连接。
+        // 心跳是保活请求, 永不排队(业务卡住时心跳被挤掉会被服务端按"长时间未操作"断连)
         const heartbeat = isHeartbeatRequest(serviceName, methodName);
-        const pendingLimit = heartbeat ? 8 : 5;
-        if (pendingCallbacks.size >= pendingLimit) {
-            reject(new Error(`请求队列已满: ${methodName} (pending=${pendingCallbacks.size})`));
+        if (!heartbeat && pendingCallbacks.size >= pendingLimitFor()) {
+            // 队列满: 排队等槽位(FIFO), 不再直接拒绝 —— 撞车任务最多晚几秒, 不丢请求。
+            if (requestWaitQueue.length >= REQUEST_WAIT_QUEUE_MAX) {
+                reject(new Error(`请求队列已满: ${methodName} (pending=${pendingCallbacks.size}, waiting=${requestWaitQueue.length})`));
+                return;
+            }
+            const item = { serviceName, methodName, bodyBytes, timeout, resolve, reject, waitTimer: null };
+            item.waitTimer = setTimeout(() => {
+                const idx = requestWaitQueue.indexOf(item);
+                if (idx >= 0) requestWaitQueue.splice(idx, 1);
+                // 文案含"请求超时": admin.isSoftRuntimeError 靠正则分类软错误,
+                // 排队超时和请求超时一样是"业务可预期"的运行时抖动, 不能变成 500
+                reject(new Error(`请求超时: ${methodName} (排队等待, waiting=${requestWaitQueue.length})`));
+            }, timeout + REQUEST_WAIT_EXTRA_MS);
+            requestWaitQueue.push(item);
             return;
         }
 
-        const seq = clientSeq;
-        const timeoutKey = `request_timeout_${seq}`;
-        networkScheduler.setTimeoutTask(timeoutKey, timeout, () => {
-            pendingCallbacks.delete(seq);
-            // 检查当前待处理的请求数
-            const pending = pendingCallbacks.size;
-            reject(new Error(`请求超时: ${methodName} (seq=${seq}, pending=${pending})`));
-        });
-
-        sendMsg(serviceName, methodName, bodyBytes, (err, body, meta) => {
-            networkScheduler.clear(timeoutKey);
-            if (err) reject(err);
-            else resolve({ body, meta });
-        }).then((sent) => {
-            if (!sent) {
-                networkScheduler.clear(timeoutKey);
-                pendingCallbacks.delete(seq);
-                reject(new Error(`发送失败: ${methodName}`));
-            }
-        }).catch((err) => {
-            networkScheduler.clear(timeoutKey);
-            pendingCallbacks.delete(seq);
-            reject(err);
-        });
+        // 心跳不排队直接发(业务卡死时心跳被挤掉会被服务端断连);
+        // 普通请求: 有槽位直接发, 没槽位在上面已排入等待队列
+        dispatchQueuedRequest({ serviceName, methodName, bodyBytes, timeout, resolve, reject });
     });
 }
 
@@ -237,6 +307,10 @@ function handleMessage(data) {
                 } else {
                     cb(null, msg.body, meta);
                 }
+                // 任何响应(含 Login 这类不走 sendMsgAsync 的)处理完都腾出了槽位,
+                // 在这里统一放行排队请求 —— 只在 dispatchQueuedRequest 的回调里
+                // drain 会漏掉 Login/心跳之外的直接 sendMsg 路径
+                drainRequestWaitQueue();
                 return;
             }
 
