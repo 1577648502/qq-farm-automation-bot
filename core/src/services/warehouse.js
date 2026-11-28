@@ -153,16 +153,44 @@ function isFruitItemId(id) {
     return !!getPlantByFruitId(Number(id));
 }
 
+/**
+ * 出售拦截判定。
+ * ⚠ 2026-11-28 抓包 161222 修: ItemInfo 表里大量活动果实 price=0(红薯40307/森野系列
+ *   40021/40525~40529/青梅41221/森野柿子41435), 旧逻辑判"无出售价格"全部不卖,
+ *   背包积压数万个。实际上 Bag 回包每格 #100.show.sell 带真实卖价({货币id, 单价}),
+ *   ItemInfo price 缺失时用它兜底 —— 活动结束后这些果实照样能卖金币。
+ * @param {object|number} itemOrId 背包物品(带 show)或纯 id
+ * @returns {string} '' = 可卖, 否则拦截原因
+ */
 function getSellBlockReason(itemOrId) {
-    const id = typeof itemOrId === 'object' ? toNum(itemOrId && itemOrId.id) : toNum(itemOrId);
+    const item = typeof itemOrId === 'object' ? itemOrId : null;
+    const id = item ? toNum(item.id) : toNum(itemOrId);
     if (!isFruitItemId(id)) return '不是果实';
     const info = getItemById(id) || {};
     const text = `${info.name || ''} ${info.desc || ''} ${info.effectDesc || ''}`;
     if (/不售卖|不可出售|不能出售|无法出售|禁止出售/.test(text)) return '活动期间不可出售';
     const price = Number(info.price) || 0;
     const priceId = Number(info.price_id) || 0;
-    if (price <= 0 && priceId <= 0) return '无出售价格';
-    return '';
+    if (price > 0 || priceId > 0) return '';
+    // ItemInfo 没价 → 看背包格子自带的卖价(#100.show.sell)
+    const sell = item && item.show && item.show.sell;
+    const bagPrice = toNum(sell && sell.price);
+    if (bagPrice > 0) return '';
+    return '无出售价格';
+}
+
+/** 背包物品的实卖单价与货币(ItemInfo 优先, 缺失用 #100.show.sell 兜底) */
+function getBagItemPrice(item) {
+    const id = toNum(item && item.id);
+    const info = getItemById(id) || {};
+    let price = Number(info.price) || 0;
+    let priceId = Number(info.price_id) || 0;
+    if (price <= 0 && priceId <= 0) {
+        const sell = item && item.show && item.show.sell;
+        priceId = toNum(sell && sell.currency_id) || 0;
+        price = toNum(sell && sell.price) || 0;
+    }
+    return { price, priceId };
 }
 
 function isSellableItem(itemOrId) {
@@ -1181,6 +1209,7 @@ module.exports = {
     isGoldenFruitItem,
     isSellableItem,
     getSellBlockReason,
+    getBagItemPrice,
     getBagItems,
     getBagSeeds,
     getContainerHoursFromBagItems,

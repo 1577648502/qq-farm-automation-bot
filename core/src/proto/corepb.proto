@@ -12,7 +12,20 @@ message Item {
     int64 uid = 6;          // UID
     bool is_new = 7;        // 是否新获得
     repeated int64 mutant_types = 8; // 变异类型
-    // ItemShow show = 100;  // 展示信息 (略)
+    // 2026-11-28 抓包 161222 补: Bag 回包每格带 #100 展示信息,
+    //   {4: {1: 货币id(1001=金币/1005=金豆豆), 2: 单价}} —— ItemInfo 表 price=0 的
+    //   活动果实(红薯40307/森野系列/青梅等)卖价在这里, 出售判定用它兜底
+    ItemShow show = 100;
+}
+
+message ItemShow {
+    // 1..3 未出现
+    SellPrice sell = 4;     // {1: 货币id, 2: 单价}
+}
+
+message SellPrice {
+    int64 currency_id = 1;  // 1001=金币 / 1005=金豆豆
+    int64 price = 2;        // 单价
 }
 
 // 背包（物品列表）
